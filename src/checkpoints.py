@@ -7,7 +7,7 @@ retained. A receipt acknowledges capture, never permission or assessment.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -16,6 +16,7 @@ from typing import Any
 
 CHECKPOINT_SCHEMA = "checkpoint.acceptance.v1"
 CHECKPOINT_EVENT_SCHEMA = "checkpoint.recorded.v1"
+CHECKPOINT_ACTIVITY_LIMIT = 10
 EPISTEMIC_CLASSES = frozenset({
     "agent_report", "substrate_observation", "substrate_interpretation",
     "prediction", "synthetic",
@@ -86,6 +87,23 @@ def checkpoint_digests(salt: bytes, key: str, payload: bytes | str) -> tuple[str
 
 
 @dataclass(frozen=True)
+class CheckpointActivity:
+    """Durable activity snapshot for refreshing admission's local cache.
+
+    This is an internal storage handoff, not part of the checkpoint wire
+    receipt. ``not_assessed`` is activity history, never a policy decision.
+    """
+
+    total_updates: int
+    last_update: str | None
+    recent_update_timestamps: tuple[str, ...]
+    recent_decisions: tuple[str, ...]
+    # Keep legacy total_updates as the assessed-update count. Neutral
+    # participation must never become synthetic EISV observation evidence.
+    neutral_updates: int = 0
+
+
+@dataclass(frozen=True)
 class CheckpointReceipt:
     checkpoint_id: str
     identity_id: int
@@ -95,6 +113,7 @@ class CheckpointReceipt:
     accepted_attempt_id: str
     replayed: bool
     retry_safe: bool
+    activity: CheckpointActivity | None = field(default=None, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -143,7 +143,7 @@ reviewer propose conditions if needed.
 
 ### Writing a Good Thesis
 
-- **Reasoning**: Explain your perspective with reference to EISV data, not feelings
+- **Reasoning**: Explain your perspective with attributed evidence; use EISV data when it was measured and is relevant.
 - **Root cause**: Be specific. "High entropy from complex refactoring task" is better than "I got paused for no reason"
 - **Proposed conditions**: Must be concrete and measurable. Tie them to live metrics or observable behavior, not vague intent.
 
@@ -165,7 +165,7 @@ dialectic(
 
 - **Reasoning**: Address the thesis directly. What does the data actually show?
 - **Concerns**: Be specific about risks. "I exceeds E by 0.3, indicating integrity debt" is useful.
-- **Observed metrics**: Include the actual EISV values backing your concerns
+- **Observed metrics**: Include actual measured values backing your concerns. Do not invent EISV values for a receipt-only check-in.
 
 ### Stamp where the verdict came from
 
@@ -445,7 +445,7 @@ finalized with.
 
 ## How to Participate Well
 
-- **Be honest about metrics.** The EISV data is right there. Denying it undermines your credibility.
+- **Be honest about metrics.** Distinguish measured values from missing assessment. A receipt-only check-in supplies no new EISV reading.
 - **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
 - **Do not treat the instrument as a judge.** A pause recommendation is data,
   not permission or a moral verdict. Analyze it only to the extent it helps the
@@ -456,7 +456,11 @@ finalized with.
   canonically) for the current values and inspect
   `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
   `policy_evaluation` and `enforcement` blocks come back on an assessment-bearing
-  `sync_state()` check-in, not a receipt-only retry or the metrics call. EISV is proprioceptive
+  `sync_state()` check-in, not a receipt-only delivery or the metrics call.
+  `assessment.status="not_requested"` means the operator disabled assessment
+  for that fresh delivery; `"not_repeated"` describes a keyed replay and makes
+  no claim about the original assessor. Neither clears an applied pause or
+  supplies evidence of healthy state. EISV is proprioceptive
   state estimation, not outcome truth; the ODE lens and legacy `C(V)` do not
   independently validate a claim.
 

@@ -78,7 +78,7 @@ class CheckpointBoundaryStop(ValueError):
         self.replay = replay
 
 
-async def accept_before_assessment(ctx) -> None:
+async def accept_checkpoint(ctx, *, record_activity: bool = False) -> None:
     """Called by the authenticated service after its existing admission gates."""
     from src.db import get_db
     from src.db.mixins.identity import CheckpointIdentityRefused
@@ -88,6 +88,11 @@ async def accept_before_assessment(ctx) -> None:
         identity = await db.get_identity(ctx.agent_id)
         if identity is None:
             raise CheckpointBoundaryStop("CHECKPOINT_REFUSED", "No durable identity exists for this check-in.")
+        if record_activity and ctx.meta is not None:
+            # Set before the await: a lost ACK or cancellation may follow COMMIT.
+            # A later request must refresh the cache even if mode changes.
+            ctx.meta._checkpoint_activity_unconfirmed = True
+        activity_options = {"record_activity": True} if record_activity else {}
         ctx.checkpoint_receipt = await db.accept_checkpoint(
             agent_id=ctx.agent_id,
             identity_id=identity.identity_id,
@@ -100,6 +105,7 @@ async def accept_before_assessment(ctx) -> None:
                 proof_origin=ctx.proof_origin or "unknown",
             ),
             attempt_id=ctx.checkpoint_attempt_id,
+            **activity_options,
         )
     except CheckpointConflict as exc:
         raise CheckpointBoundaryStop(
@@ -118,6 +124,12 @@ async def accept_before_assessment(ctx) -> None:
             "Checkpoint acceptance could not be confirmed. Retry the same content with the same explicit idempotency key; without one, a retry may create another record.",
         ) from exc
 
+    if record_activity:
+        activity = ctx.checkpoint_receipt.activity
+        if activity is not None:
+            _apply_checkpoint_activity(ctx, activity)
+        else:
+            await refresh_checkpoint_activity(ctx)
     if ctx.checkpoint_receipt.replayed:
         # Reading the prior receipt never returns a current monitor's verdict,
         # prediction or metrics and never claims/delivers an assessment again.
@@ -126,6 +138,36 @@ async def accept_before_assessment(ctx) -> None:
         )
     if isinstance(getattr(ctx, "agent_state", None), dict):
         ctx.agent_state["_checkpoint_id"] = ctx.checkpoint_receipt.checkpoint_id
+
+
+def _apply_checkpoint_activity(ctx, activity) -> None:
+    """Publish only a committed identity-owned activity snapshot to the cache."""
+    if ctx.meta is None:
+        return
+    ctx.meta.total_updates = activity.total_updates
+    ctx.meta.neutral_updates = activity.neutral_updates
+    if activity.last_update is not None:
+        ctx.meta.last_update = activity.last_update
+    ctx.meta.recent_update_timestamps = list(activity.recent_update_timestamps)
+    ctx.meta.recent_decisions = list(activity.recent_decisions)
+    ctx.meta._checkpoint_activity_unconfirmed = False
+
+
+async def refresh_checkpoint_activity(ctx) -> None:
+    """Refresh loop inputs after a possibly committed neutral acceptance."""
+    from src.db import get_db
+
+    activity = await get_db().get_checkpoint_activity(ctx.agent_id)
+    if activity is not None:
+        _apply_checkpoint_activity(ctx, activity)
+
+
+async def accept_before_assessment(ctx) -> None:
+    """Retain the existing separate acceptance/claim boundary for EISV."""
+    from src.db import get_db
+
+    await accept_checkpoint(ctx)
+    db = get_db()
     ctx.checkpoint_assessment = await db.claim_checkpoint_assessment(
         checkpoint_id=ctx.checkpoint_receipt.checkpoint_id, assessor=ASSESSOR,
     )
@@ -165,11 +207,20 @@ def checkpoint_response(ctx) -> dict | None:
             "acceptance_retry_idempotent": ctx.checkpoint_key is not None,
         }
     response = receipt.to_dict()
+    if receipt.replayed:
+        # The ledger does not attest to which mode originally accepted this.
+        response["assessment"] = {"status": "not_repeated", "automatic_replay": False}
+        return response
+    if getattr(ctx, "checkin_assessor", "eisv") == "none":
+        response["assessment"] = {
+            "status": "not_requested", "reason": "disabled_by_operator",
+            "automatic_replay": False,
+        }
+        return response
     claim = getattr(ctx, "checkpoint_assessment", None)
     response["assessment"] = {
         "assessor": ASSESSOR,
         "status": getattr(ctx, "checkpoint_assessment_status", None) or (
-            "not_repeated" if receipt.replayed else
             claim.status if claim is not None else "unconfirmed"
         ),
         "automatic_replay": False,
@@ -192,3 +243,12 @@ def checkpoint_boundary_response(ctx, *, code: str, message: str, replay: bool =
     else:
         payload.update(error_code=code, error=message)
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))]
+
+
+def checkpoint_recorded_response(ctx):
+    """Fresh neutral acknowledgement with no assessment or policy verdict."""
+    return [TextContent(type="text", text=json.dumps({
+        "success": True, "agent_id": ctx.agent_id,
+        "checkpoint": checkpoint_response(ctx), "assessment_repeated": False,
+        "message": "Checkpoint and activity recorded; assessment disabled by operator configuration.",
+    }, ensure_ascii=False))]

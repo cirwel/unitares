@@ -9,6 +9,7 @@ freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
   - unitares/src/agent_loop_detection.py
+  - unitares/src/checkin_assessment.py
   - unitares/governance_core/coherence.py
   - unitares/governance_core/parameters.py
   - unitares/src/auto_ground_truth.py
@@ -44,7 +45,9 @@ source_files:
 UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator federation kernel for agent identity, claims and
 evidence, review, outcomes, and reconstruction. This skill covers one instrument
-inside it, the check-in's state estimate.
+inside it, the check-in's state estimate. EISV is enabled by default. An operator
+may select `UNITARES_CHECKIN_ASSESSOR=none` in observe posture for receipt-only
+check-ins; the interpretation guidance below applies when assessment exists.
 
 That instrument provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists.
 
@@ -125,8 +128,11 @@ raw inferred recommendation; top-level `action` is the effective operational
 directive; and `enforcement.applied` says whether lifecycle authority actually
 crossed the boundary. The separate `verdict` field is a glossary wrapper
 (`{value, meaning, next_action, …}`), not any of those. Never read
-`verdict.value` as the action. A receipt-only retry or failed assessment supplies
-no fresh operational decision; use `governance-lifecycle` for checkpoint
+`verdict.value` as the action. A receipt-only retry, failed assessment or
+operator-disabled assessor supplies no fresh operational decision. An accepted
+disabled delivery reports `assessment.status="not_requested"`; a keyed replay
+reports `"not_repeated"` without identifying a historical assessor. Neither is
+a zero-valued or healthy reading. Use `governance-lifecycle` for checkpoint
 acceptance and retry guidance.
 
 | Action | Sub-action | Meaning | What to do |

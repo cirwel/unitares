@@ -265,7 +265,54 @@ def _last_decision_action(meta: Any) -> Optional[str]:
         # the identity record carries none. Claim only "not paused".
         return "not_paused" if (getattr(meta, "total_updates", 0) or 0) > 0 else None
     last = str(recent_decisions[-1]).lower()
+    if last == "not_assessed":
+        # Neutral activity advances admission history, not policy. Looking
+        # further back would revive a decision from an earlier assessment.
+        return None
     return "resumed" if last in {"pause", "reject"} else last
+
+
+def _latest_checkin_unassessed(meta: Any) -> bool:
+    recent = getattr(meta, "recent_decisions", None) or []
+    return bool(recent and recent[-1] == "not_assessed")
+
+
+def _mark_unassessed_checkin_read(data: Dict[str, Any], *, uninitialized: bool) -> Dict[str, Any]:
+    """Retain historical estimates without turning activity into policy advice."""
+    scope = "uninitialized" if uninitialized else "historical"
+    data["latest_checkin_assessed"] = False
+    data["eisv_scope"] = scope
+    for key in ("last_decision_action", "guidance", "reflection", "calibration_feedback"):
+        data.pop(key, None)
+    verdict = data.get("verdict")
+    if isinstance(verdict, dict):
+        verdict.pop("decision_action", None)
+        verdict.pop("next_action", None)
+        verdict["assessment_scope"] = scope
+    state = data.get("state")
+    if isinstance(state, dict):
+        state.pop("guidance", None)
+        state["assessment_scope"] = scope
+    semantics = data.get("state_semantics")
+    if isinstance(semantics, dict):
+        semantics["primary_eisv_role"] = (
+            "No assessment has been recorded; displayed values are initialization priors."
+            if uninitialized else
+            "Historical EISV from an earlier assessment; the latest check-in supplied no new estimate."
+        )
+    if not uninitialized and data.get("summary"):
+        data["summary"] = f"Historical assessment: {data['summary']}"
+    next_action = (
+        "The latest check-in was recorded without assessment. "
+        + ("No EISV assessment is available. " if uninitialized else "Displayed EISV is historical. ")
+    )
+    gate = data.get("write_gate") or {}
+    if gate.get("writes_held") is True:
+        next_action += str(gate.get("held") or "The current lifecycle gate holds writes.")
+    else:
+        next_action += "Read write_gate for current lifecycle holds; this read supplies no new policy decision."
+    data["next_action"] = next_action
+    return data
 
 
 async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], server=None) -> Dict[str, Any]:
@@ -322,6 +369,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         pass
 
     meta = server.agent_metadata.get(agent_id)
+    latest_checkin_unassessed = _latest_checkin_unassessed(meta)
     public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
         agent_id, meta
     )
@@ -543,7 +591,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         standard_metrics["_note"] = (
             "Use verbosity='full' for diagnostics; verbosity='minimal' is the default"
         )
-        return standard_metrics
+        return (
+            _mark_unassessed_checkin_read(standard_metrics, uninitialized=is_uninitialized)
+            if latest_checkin_unassessed else standard_metrics
+        )
 
     standardized_metrics["_debug_lite_received"] = lite
 
@@ -695,7 +746,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         from src.governance_glossary import EISV_INLINE_SUMMARY
         lite_metrics["eisv_contract"] = EISV_INLINE_SUMMARY
         lite_metrics["_note"] = "Use verbosity='standard' for interpreted state, or verbosity='full' for diagnostics"
-        return lite_metrics
+        return (
+            _mark_unassessed_checkin_read(lite_metrics, uninitialized=is_uninitialized)
+            if latest_checkin_unassessed else lite_metrics
+        )
 
     # The full read keeps the raw verdict string (its contract), so the decision
     # that verdict rode on travels beside it; the envelope reads it before the
@@ -716,7 +770,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     except Exception as e:
         logger.debug(f"Could not gather circuit breaker telemetry: {e}")
 
-    return standardized_metrics
+    return (
+        _mark_unassessed_checkin_read(standardized_metrics, uninitialized=is_uninitialized)
+        if latest_checkin_unassessed else standardized_metrics
+    )
 
 
 # Per-prefix scan ceiling for the `redis_cache.keys` health-check section.

@@ -8,6 +8,11 @@ from typing import Sequence
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.checkin_assessment import (
+    CheckinConfigurationError,
+    configured_checkin_assessor,
+    require_compatible_posture,
+)
 from src.services.update_response_service import (
     build_process_update_response_data,
     serialize_process_update_response,
@@ -15,10 +20,13 @@ from src.services.update_response_service import (
 from src.state_locking import LockTimeoutError
 from src.services.checkpoint_service import (
     CheckpointBoundaryStop,
+    accept_checkpoint,
     capture_checkpoint_request,
     checkpoint_boundary_response,
     checkpoint_response,
+    checkpoint_recorded_response,
     finish_checkpoint_assessment,
+    refresh_checkpoint_activity,
 )
 
 logger = get_logger(__name__)
@@ -28,9 +36,11 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
     """Execute the extracted process_agent_update workflow for a prepared UpdateContext."""
     from src.mcp_handlers.updates.phases import (
         execute_locked_update,
+        ensure_locked_agent,
         execute_post_update_effects,
         handle_onboarding_and_resume,
         prepare_unlocked_inputs,
+        normalize_checkpoint_inputs,
         resolve_identity_and_guards,
         transform_inputs,
     )
@@ -53,6 +63,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         _t_phase = now
 
     try:
+        ctx.checkin_assessor = configured_checkin_assessor()
         capture_checkpoint_request(ctx)
         early_exit = await resolve_identity_and_guards(ctx)
         _tick("resolve_identity")
@@ -64,13 +75,17 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         if early_exit:
             return early_exit
 
-        early_exit = transform_inputs(ctx)
-        _tick("transform")
-        if early_exit:
-            return early_exit
+        if ctx.checkin_assessor == "none":
+            normalize_checkpoint_inputs(ctx)
+            _tick("normalize_checkpoint")
+        else:
+            early_exit = transform_inputs(ctx)
+            _tick("transform")
+            if early_exit:
+                return early_exit
 
-        await prepare_unlocked_inputs(ctx)
-        _tick("prepare_unlocked")
+            await prepare_unlocked_inputs(ctx)
+            _tick("prepare_unlocked")
 
         try:
             async with ctx.mcp_server.lock_manager.acquire_agent_lock_async(ctx.agent_id, timeout=5.0, max_retries=3):
@@ -78,13 +93,17 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
                 # the (A.2) falsifier can attribute any p99 change to the lock itself
                 # rather than confounding it with the work under the lock.
                 _tick("lock_acquire")
-                early_exit = await execute_locked_update(ctx)
+                if ctx.checkin_assessor == "none":
+                    early_exit = await _execute_neutral_checkin(ctx, ensure_locked_agent)
+                else:
+                    early_exit = await execute_locked_update(ctx)
                 _tick("locked_update")
                 if early_exit:
                     return early_exit
 
                 # Capture monitor ref while lock guarantees consistent state
-                ctx.monitor = ctx.mcp_server.monitors.get(ctx.agent_id)
+                if ctx.checkin_assessor == "eisv":
+                    ctx.monitor = ctx.mcp_server.monitors.get(ctx.agent_id)
         except LockTimeoutError:
             # Only a lock-acquisition timeout. A TimeoutError from the locked
             # body (a slow query, a Redis wait) is not contention and must not
@@ -112,6 +131,9 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             )]
 
         # --- Everything below runs OUTSIDE the lock ---
+
+        if ctx.checkin_assessor == "none":
+            return checkpoint_recorded_response(ctx)
 
         # Grounding must run BEFORE persist + response-build read ctx.result.
         # (enrich_grounding still runs in the late pipeline but is idempotent.)
@@ -169,6 +191,11 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         )
         _tick("serialize")
         return result
+    except CheckinConfigurationError as exc:
+        return [error_response(
+            str(exc), error_code="CHECKIN_CONFIGURATION_ERROR",
+            error_category="system_error", arguments=ctx.arguments,
+        )]
     except CheckpointBoundaryStop as exc:
         return checkpoint_boundary_response(
             ctx, code=exc.code, message=str(exc), replay=exc.replay,
@@ -178,6 +205,12 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             raise
         # The neutral record survives failed or partial downstream execution.
         # Do not turn record acceptance into a synthetic operational verdict.
+        if ctx.checkin_assessor == "none":
+            logger.exception("Follow-up failed after neutral checkpoint acceptance")
+            return checkpoint_boundary_response(
+                ctx, code="CHECKPOINT_FOLLOWUP_FAILED",
+                message="Checkpoint accepted; acknowledgement follow-up did not complete. Retry the same key to recover its receipt. No assessment was requested.",
+            )
         await finish_checkpoint_assessment(ctx, failed=True)
         logger.exception("Assessment failed after checkpoint acceptance")
         return checkpoint_boundary_response(
@@ -187,4 +220,23 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
     finally:
         total_ms = int((time.perf_counter() - _t_total) * 1000)
         phases_str = " ".join(f"{k}={v}ms" for k, v in _phase_ms.items())
-        logger.info(f"[checkin_phases] total={total_ms}ms {phases_str}")
+        logger.info(
+            "[checkin_phases] assessor=%s total=%sms %s",
+            ctx.checkin_assessor, total_ms, phases_str,
+        )
+
+
+async def _execute_neutral_checkin(ctx, ensure_locked_agent):
+    """Use the shared admission gates, then commit zero-assessor accountability."""
+    from src.agent_loop_detection import validate_update_admission_async
+
+    early_exit = await ensure_locked_agent(ctx)
+    if early_exit:
+        return early_exit
+    await refresh_checkpoint_activity(ctx)
+    admission = await validate_update_admission_async(
+        ctx.agent_id, ctx.api_key, session_bound=True,
+    )
+    require_compatible_posture(ctx.checkin_assessor, admission.posture)
+    await accept_checkpoint(ctx, record_activity=True)
+    return None
