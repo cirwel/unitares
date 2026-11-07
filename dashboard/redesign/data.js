@@ -110,6 +110,18 @@
     return r.json();
   }
 
+  // No snapshot or credential persistence for connector management. Preserve
+  // actionable server errors rather than reducing setup failures to HTTP codes.
+  async function connectorRequest(path, options) {
+    const headers = { "Content-Type": "application/json", "X-Unitares-Csrf": "1" };
+    const op = operatorToken();
+    if (op) headers["X-Unitares-Operator"] = op;
+    const response = await fetch(path, Object.assign({}, options, { headers, credentials: "same-origin", cache: "no-store" }));
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Connector request failed. Try again.");
+    return body;
+  }
+
   async function callTool(name, args) {
     const body = JSON.stringify({ name, arguments: args || {} });
     const j = await authFetch("/v1/tools/call", {
@@ -724,6 +736,14 @@
     // Passkey security is live-only: rendering a snapshot of sessions or
     // credentials would be dangerously misleading. Views stay behind DATA,
     // but failures surface honestly instead of degrading to fixture data.
+    async connectors() { return connectorRequest("/auth/connectors"); },
+    async createConnector(details) {
+      return connectorRequest("/auth/connectors", { method: "POST", body: JSON.stringify(details) });
+    },
+    async revokeConnector(id) {
+      return connectorRequest("/auth/connectors/" + encodeURIComponent(id) + "/revoke", { method: "POST" });
+    },
+
     async passkeySecurity() {
       return authFetch("/auth/sessions", {
         headers: { "X-Unitares-Csrf": "1" },

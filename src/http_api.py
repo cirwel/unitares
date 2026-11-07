@@ -33,6 +33,7 @@ from src.dashboard_auth import (
     http_webauthn_register_verify,
     http_webauthn_verify,
 )
+from src.http_routes.connectors import http_connectors
 from src.broadcaster import broadcaster_instance  # noqa: F401  (singleton; tests reach it via this module)
 from src.logging_utils import get_logger
 
@@ -188,6 +189,8 @@ def register_http_routes(
     mcp_server_name: str = "unitares",
     server_build_sha: str = "unknown",
     mount_route_packs: bool = True,
+    oauth_provider=None,
+    oauth_settings=None,
 ):
     """
     Register all HTTP REST endpoints on the given Starlette ``app``.
@@ -217,6 +220,19 @@ def register_http_routes(
                 state["_http_api_mcp_server_name"] = mcp_server_name
             await self.app(scope, receive, send)
 
+    class _ConnectorContextMiddleware:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http" and scope.get("path", "").startswith("/auth/connectors"):
+                state = scope.setdefault("state", {})
+                state["oauth_provider"] = oauth_provider
+                state["oauth_issuer"] = getattr(oauth_settings, "issuer_url", "")
+                state["oauth_resource"] = getattr(oauth_settings, "resource_server_url", "")
+            await self.app(scope, receive, send)
+
+    app.add_middleware(_ConnectorContextMiddleware)
     app.add_middleware(_InjectContextMiddleware)
 
     class _DashboardSessionMiddleware:
@@ -250,6 +266,9 @@ def register_http_routes(
             await self.app(scope, receive, send)
 
     app.add_middleware(_DashboardSessionMiddleware)
+
+    app.routes.append(Route("/auth/connectors", http_connectors, methods=["GET", "POST"]))
+    app.routes.append(Route("/auth/connectors/{client_id}/revoke", http_connectors, methods=["POST"]))
 
     # Browser passkey auth. These precede dashboard static routes and do not
     # alter /mcp, /sse, the public health endpoints, or Host allowlisting.

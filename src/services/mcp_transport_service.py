@@ -518,6 +518,8 @@ def _register_application_routes(
         mcp_server_name=mcp.name,
         server_build_sha=server_build_sha,
         mount_route_packs=False,
+        oauth_provider=auth_config.oauth_provider,
+        oauth_settings=auth_config.auth_settings,
     )
     register_wave3a_probe_routes(app)
     register_wave3a_admin_routes(app)
@@ -593,6 +595,10 @@ def build_transport_runtime(
             else "OAuth now gates every /mcp request on the main listener",
         )
         auth_config = dataclasses.replace(auth_config, oauth_public_listener_only=False)
+    if getattr(auth_config.oauth_provider, "connector_registry", None) is not None:
+        from src.oauth_connector_transport import install_connector_transport
+
+        install_connector_transport(app, auth_config.oauth_provider)
     if auth_config.oauth_provider is not None and auth_config.static_client_id:
         from src.oauth_provider import StaticClientBasicAuthShim
 

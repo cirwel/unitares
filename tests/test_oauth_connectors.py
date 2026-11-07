@@ -1,0 +1,222 @@
+"""Runtime connector enrollment through the real SDK authorization/token flow."""
+import base64
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from mcp.server.auth.routes import create_auth_routes
+from mcp.server.auth.settings import ClientRegistrationOptions
+from pydantic import AnyHttpUrl
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.testclient import TestClient
+
+from src import oauth_connectors as registry_module
+from src.http_routes import connectors as routes
+from src.oauth_connector_transport import install_connector_transport
+from src.oauth_connectors import ConnectorRegistry, secret_digest, validate_registration
+from src.oauth_provider import GovernanceOAuthProvider
+
+ID = "unitares_connector_" + "a" * 32
+SECRET = "random-test-secret"
+CALLBACK = "https://client.example/callback/"
+
+
+class Registry:
+    def __init__(self):
+        self.record = {"client_id": ID, "name": "My connector", "redirect_uris": [CALLBACK],
+                       "secret_hash": secret_digest(SECRET)}
+        self.available = True
+
+    async def get(self, client_id):
+        if not self.available:
+            raise ConnectionError("database unavailable")
+        return self.record if self.record and client_id == ID else None
+
+    async def list(self):
+        if not self.available:
+            raise ConnectionError()
+        return []
+
+    async def create(self, name, redirects, actor):
+        validate_registration(name, redirects)
+        if not self.available:
+            raise ConnectionError()
+        return {"client_id": ID, "client_secret": SECRET, "name": name}
+
+    async def revoke(self, client_id, actor):
+        if client_id != ID:
+            return False
+        self.record = None
+        return True
+
+
+def provider(registry):
+    return GovernanceOAuthProvider(auto_approve=False, connector_registry=registry)
+
+
+def client_app(p):
+    app = Starlette(routes=create_auth_routes(
+        p, AnyHttpUrl("https://server.example"),
+        client_registration_options=ClientRegistrationOptions(enabled=False),
+    ))
+    install_connector_transport(app, p)
+    return TestClient(app)
+
+
+def code(client, **extra):
+    response = client.get("/authorize", params={
+        "client_id": ID, "redirect_uri": CALLBACK, "response_type": "code", **extra,
+    }, follow_redirects=False)
+    assert response.status_code == 302, response.text
+    return parse_qs(urlsplit(response.headers["location"]).query)["code"][0]
+
+
+def exchange(client, auth_code, secret=SECRET, basic=False, **extra):
+    data = {"grant_type": "authorization_code", "code": auth_code, "redirect_uri": CALLBACK, **extra}
+    headers = {}
+    if basic:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{ID}:{secret}".encode()).decode()
+    else:
+        data.update(client_id=ID, client_secret=secret)
+    return client.post("/token", data=data, headers=headers)
+
+
+@pytest.mark.parametrize("basic", [False, True])
+def test_created_client_can_authorize_without_restart_and_refresh(basic):
+    registry = Registry()
+    p = provider(registry)
+    client = client_app(p)
+    response = exchange(client, code(client), basic=basic)
+    assert response.status_code == 200, response.text
+    tokens = response.json()
+    assert "access_token" in tokens
+    refreshed = client.post("/token", data={
+        "client_id": ID, "client_secret": SECRET, "grant_type": "refresh_token",
+        "refresh_token": tokens["refresh_token"],
+    })
+    assert refreshed.status_code == 200
+    assert ID not in p._clients  # no stale managed credential cached as DCR
+    # A fresh provider sees the same durable registration.
+    other = client_app(provider(registry))
+    assert exchange(other, code(other)).status_code == 200
+
+
+@pytest.mark.parametrize("wrong", ["", "wrong", secret_digest(SECRET)])
+def test_secret_required_and_stored_hash_is_not_a_password(wrong):
+    client = client_app(provider(Registry()))
+    assert exchange(client, code(client), secret=wrong).status_code == 401
+
+
+def test_supplied_pkce_is_preserved_and_wrong_verifier_rejected():
+    import hashlib
+    verifier = "v" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    client = client_app(provider(Registry()))
+    auth_code = code(client, code_challenge=challenge, code_challenge_method="S256")
+    assert exchange(client, auth_code, code_verifier="wrong").status_code == 400
+    assert exchange(client, auth_code, code_verifier=verifier).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_revocation_and_database_outage_reject_cached_access_and_refresh():
+    registry = Registry()
+    p = provider(registry)
+    client = client_app(p)
+    token = exchange(client, code(client)).json()
+    assert await p.load_access_token(token["access_token"])
+    registry.available = False
+    assert await p.load_access_token(token["access_token"]) is None
+    assert exchange(client, "unused").status_code == 401
+    registry.available = True
+    assert await p.load_access_token(token["access_token"])
+    await registry.revoke(ID, "operator")
+    assert await p.load_access_token(token["access_token"]) is None
+    assert client.post("/token", data={"client_id": ID, "client_secret": SECRET,
+        "grant_type": "refresh_token", "refresh_token": token["refresh_token"]}).status_code == 401
+
+
+def test_exact_callback_and_conflicting_credentials_rejected():
+    client = client_app(provider(Registry()))
+    response = client.get("/authorize", params={"client_id": ID, "response_type": "code",
+        "redirect_uri": CALLBACK.rstrip("/")}, follow_redirects=False)
+    assert response.status_code == 400
+    auth = "Basic " + base64.b64encode(f"{ID}:{SECRET}".encode()).decode()
+    response = client.post("/token", headers={"Authorization": auth}, data={
+        "client_id": ID, "client_secret": SECRET, "grant_type": "refresh_token", "refresh_token": "fake",
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("uri", ["https://example.com/*", "https://example.com/#fragment",
+    "http://remote.example/callback", "https://user:secret@example.com/callback",
+    "https://example.com/call back", "https://example.com:bad/callback", "javascript:alert(1)"])
+def test_invalid_redirects(uri):
+    with pytest.raises(ValueError):
+        validate_registration("App", [uri])
+
+
+@pytest.mark.parametrize("uri", [CALLBACK, "http://127.0.0.1:4242/callback", "http://[::1]:4242/callback"])
+def test_redirects_are_kept_exact(uri):
+    assert validate_registration(" App ", [uri]) == ("App", [uri])
+
+
+@pytest.mark.asyncio
+async def test_registry_persists_hash_and_only_create_returns_secret(monkeypatch):
+    captured = {}
+    class Connection:
+        async def fetchrow(self, query, *args):
+            captured["args"] = args
+            return {"client_id": args[0], "name": args[1], "redirect_uris": args[3],
+                    "created_at": datetime.now(timezone.utc), "revoked_at": None}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+    monkeypatch.setattr(registry_module, "get_db", lambda: SimpleNamespace(acquire=Connection))
+    result = await ConnectorRegistry().create("App", [CALLBACK], "operator")
+    assert captured["args"][2] == secret_digest(result["client_secret"])
+    assert result["client_secret"] not in captured["args"]
+    assert "secret_hash" not in result
+
+
+def management_client(monkeypatch, registry, *, operator=False, session=False, fresh=False):
+    monkeypatch.setattr(routes.dashboard_auth, "_operator_token_authorized", lambda r: operator)
+    monkeypatch.setattr(routes.dashboard_auth, "dashboard_session_authenticated", lambda r: session)
+    monkeypatch.setattr(routes.dashboard_auth, "dashboard_session_is_fresh", lambda r: fresh)
+    monkeypatch.setattr(routes.dashboard_auth, "dashboard_session_write_authorized",
+                        lambda r: session and r.headers.get("x-unitares-csrf") == "1")
+    async def handler(request):
+        request.state.oauth_provider = provider(registry)
+        request.state.oauth_issuer = "https://server.example"
+        request.state.oauth_resource = "https://server.example/mcp/"
+        return await routes.http_connectors(request)
+    return TestClient(Starlette(routes=[Route("/auth/connectors", handler, methods=["GET", "POST"])]))
+
+
+def test_management_refuses_agent_bearer_and_cross_origin(monkeypatch):
+    client = management_client(monkeypatch, Registry())
+    assert client.get("/auth/connectors", headers={"Authorization": "Bearer agent"}).status_code == 403
+    client = management_client(monkeypatch, Registry(), operator=True)
+    assert client.post("/auth/connectors", headers={"Origin": "https://evil.example"}, json={}).status_code == 403
+
+
+def test_management_requires_fresh_session_and_csrf(monkeypatch):
+    payload = {"name": "App", "redirect_uris": [CALLBACK]}
+    client = management_client(monkeypatch, Registry(), session=True, fresh=False)
+    assert client.post("/auth/connectors", headers={"X-Unitares-Csrf": "1"}, json=payload).status_code == 403
+    client = management_client(monkeypatch, Registry(), session=True, fresh=True)
+    assert client.post("/auth/connectors", json=payload).status_code == 403
+    response = client.post("/auth/connectors", headers={"X-Unitares-Csrf": "1"}, json=payload)
+    assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["client_secret"] == SECRET
+    assert SECRET not in client.get("/auth/connectors").text
+
+
+def test_management_storage_failure_never_claims_success(monkeypatch):
+    registry = Registry()
+    registry.available = False
+    client = management_client(monkeypatch, registry, operator=True)
+    response = client.post("/auth/connectors", json={"name": "App", "redirect_uris": [CALLBACK]})
+    assert response.status_code == 503
+    assert "client_secret" not in response.text

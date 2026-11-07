@@ -71,6 +71,44 @@ The server binds to `127.0.0.1` by default. For LAN or remote access:
 
 See [`scripts/ops/`](../../scripts/ops/) for an example LaunchAgent plist with bind-all plus allowlists.
 
+## Add a connector without restarting
+
+Once public HTTPS and OAuth are configured, open the dashboard's **Connectors**
+tab. Sign in again if prompted, or use the operator credential in **Security**.
+
+1. In the app you want to connect, start adding a custom MCP server. Copy the
+   callback (also called redirect) URL it displays.
+2. In UNITARES, enter a recognizable connector name and paste that callback URL
+   exactly, including any trailing slash. Click **Create credentials**.
+3. Copy the displayed server URL, client ID and client secret into the app.
+   Choose **HTTP Basic / client_secret_basic** for token authentication. Form-body
+   authentication (`client_secret_post`) is also accepted. Keep the discovered
+   endpoints; the page supplies them and the `mcp:tools` scope if needed.
+4. Start the app's connection flow again. Registration takes effect immediately;
+   no environment edit or server restart is needed.
+
+Each connector has separate credentials. The secret is shown only when created;
+UNITARES stores its hash, so a lost secret requires disabling the connector and
+creating a replacement. **Disable** rejects its existing access and refresh
+tokens as well as new sign-ins. Registrations remain across restarts and do not
+expire from inactivity. HTTP callbacks are accepted only on loopback; remote
+callbacks require HTTPS. The form accepts any compatible client, with no vendor
+roster or prefilled callback addresses.
+
+Connector management requires an operator credential, or a recently authenticated
+passkey session with the dashboard's CSRF header. An MCP/API bearer alone cannot
+create or disable connectors. When Postgres is unavailable, managed clients fail
+closed and the form reports the failure; it never silently saves only in memory.
+Existing environment-configured clients continue to work and remain managed by
+their environment configuration. Dynamic client registration remains a separate,
+off-by-default facility.
+
+**Upgrading:** apply migration `082_oauth_connectors.sql` with the normal migration
+workflow when deploying this version. This is a one-time schema upgrade, not a
+step for each connector. Public HTTPS, OAuth issuer configuration and operator
+sign-in still need initial setup as described below. If OAuth is absent or the
+registry is unavailable, the Connectors tab names the setup problem.
+
 ## Remote connectors (hosted Claude.ai, Perplexity, etc.)
 
 A hosted MCP connector reaches the server over the public internet, usually via

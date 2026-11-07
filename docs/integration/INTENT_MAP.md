@@ -41,6 +41,14 @@ name they were never given a schema for.
 | Look at other agents or the fleet | `observe` *(hidden)* | `agent(action="list" \| "get")`, `dashboard`, `detect_stuck_agents`, `export` *(all hidden)* |
 | Operate the server | `health_check` *(hidden)* | `admin`, `get_workspace_health`, `config`, `set_thresholds`, `archive_orphan_agents`, `archive_old_test_agents` *(all hidden; several need operator authority)* |
 
+## Operator connector setup
+
+To authorize a new MCP client, use the dashboard **Connectors** tab (or the
+operator-authenticated `/auth/connectors` REST surface). This is server
+administration, not an agent MCP tool or a model channel. It adds durable OAuth
+client registrations to the existing transport; it does not grant operator
+privileges to an agent identity. See [the setup steps](MCP_CLIENTS.md#add-a-connector-without-restarting).
+
 ## Model calls
 
 Two inputs decide the route: **who answers**, and **whether it goes on the

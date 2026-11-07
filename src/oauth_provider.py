@@ -36,6 +36,8 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull
 
+from src.oauth_connectors import managed_client_id
+
 
 @dataclass
 class AuthCodeEntry:
@@ -189,6 +191,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         auth_code_ttl: int = 300,
         static_clients: list[OAuthClientInformationFull] | None = None,
         store: OAuthStateStore | None = None,
+        connector_registry=None,
         max_dynamic_clients: int = DEFAULT_MAX_DYNAMIC_CLIENTS,
         max_auth_codes: int = DEFAULT_MAX_AUTH_CODES,
         max_auth_codes_per_client: int = DEFAULT_MAX_AUTH_CODES_PER_CLIENT,
@@ -220,6 +223,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
         self._store = store
+        self.connector_registry = connector_registry
         self._static_client_ids = frozenset(self._clients)
         self._dynamic_client_expires_at: dict[str, float] = {}
         self._approved_dynamic_client_ids: set[str] = set()
@@ -394,7 +398,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     # -- persistence helpers ------------------------------------------------
 
     async def _persist_client(self, client: OAuthClientInformationFull) -> None:
-        if self._store is not None and client.client_id not in self._static_client_ids:
+        if (self._store is not None and client.client_id not in self._static_client_ids
+                and not managed_client_id(client.client_id)):
             await self._store.set(
                 f"client:{client.client_id}", client.model_dump_json(), CLIENT_STATE_TTL
             )
@@ -425,7 +430,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def _issued(self, client: OAuthClientInformationFull,
                       access: AccessToken, refresh: RefreshTokenEntry) -> None:
-        if client.client_id not in self._static_client_ids:
+        if (client.client_id not in self._static_client_ids
+                and not managed_client_id(client.client_id)):
             self._prune_expired_state()
             if (
                 client.client_id not in self._clients
@@ -460,7 +466,27 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         at = self._access_tokens.get(token)
         return at.client_id if at and hasattr(at, "client_id") else None
 
+    async def managed_connector(self, client_id: str) -> dict | None:
+        if self.connector_registry is None:
+            return None
+        try:
+            return await self.connector_registry.get(client_id)
+        except Exception:
+            logger.warning("Connector registry unavailable; managed client refused")
+            return None
+
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        if managed_client_id(client_id):
+            record = await self.managed_connector(client_id)
+            if record is None:
+                return None
+            return OAuthClientInformationFull(
+                client_id=client_id, client_name=record["name"],
+                redirect_uris=record["redirect_uris"],
+                token_endpoint_auth_method="client_secret_post",
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"], scope="mcp:tools",
+            )
         client = self._clients.get(client_id)
         if client is None and self._store is not None:
             raw = await self._store.get(f"client:{client_id}")
@@ -478,6 +504,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        if managed_client_id(client_info.client_id or ""):
+            raise RegistrationError(error="invalid_client_metadata", error_description="reserved client namespace")
         self._prune_expired_state()
         if not client_info.client_id:
             client_info.client_id = f"unitares_{secrets.token_hex(16)}"
@@ -508,8 +536,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams,
     ) -> str:
+        managed = managed_client_id(client.client_id or "")
+        if managed and await self.managed_connector(client.client_id) is None:
+            raise AuthorizeError(error="unauthorized_client", error_description="connector is disabled or unavailable")
         if (
-            not self._auto_approve
+            not managed
+            and not self._auto_approve
             and client.client_id not in self._static_client_ids
             and client.client_id not in self._approved_dynamic_client_ids
         ):
@@ -584,6 +616,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str,
     ) -> RefreshTokenEntry | None:
+        if managed_client_id(client.client_id) and await self.managed_connector(client.client_id) is None:
+            return None
         if _digest(refresh_token) in self._consumed_refresh:
             return None
         entry = self._refresh_tokens.get(refresh_token)
@@ -686,6 +720,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     return None
                 self._cache_access(entry)
         if entry is None:
+            return None
+        if managed_client_id(entry.client_id) and await self.managed_connector(entry.client_id) is None:
             return None
         if entry.expires_at and entry.expires_at < int(time.time()):
             self._access_tokens.pop(token, None)

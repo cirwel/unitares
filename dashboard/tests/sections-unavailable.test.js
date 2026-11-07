@@ -23,6 +23,7 @@ const SECTIONS = [
   ["EISV", "eisv", "eisv-mount"],
   ["Risk", "risk", "risk-mount"],
   ["Security", "security", "security-mount"],
+  ["Connectors", "connectors", "connectors-mount"],
 ];
 
 function boot(mountId) {
