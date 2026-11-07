@@ -608,7 +608,8 @@ class TestHandleObserveAgent:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("risk,source", [(0.0, "resolved"), (0.8, "resolved"), (None, None)])
-    async def test_analysis_toggle_preserves_risk_semantics(self, risk, source):
+    @pytest.mark.parametrize("phi_metrics", [{}, {"phi_risk_latest": None}, {"phi_risk_latest": 0.4}])
+    async def test_analysis_toggle_preserves_risk_semantics(self, risk, source, phi_metrics):
         from src.pattern_analysis import analyze_agent_patterns
         from src.mcp_handlers.observability.handlers import handle_observe_agent
 
@@ -622,7 +623,7 @@ class TestHandleObserveAgent:
         state.verdict_history = ["safe"] * 10
         monitor = _make_monitor(uuid, state=state, metrics={
             "risk_score": risk, "risk_score_source": source,
-            "phi_risk_latest": 0.918,
+            **phi_metrics,
         })
         server = _build_mock_server(agent_ids=[uuid], monitors_dict={uuid: monitor})
         server.analyze_agent_patterns.side_effect = analyze_agent_patterns
@@ -637,7 +638,7 @@ class TestHandleObserveAgent:
         for current in observations:
             assert current["risk_score"] == risk
             assert current["risk_score_source"] == source
-            assert current["phi_risk_latest"] == 0.918
+            assert current["phi_risk_latest"] == phi_metrics.get("phi_risk_latest")
 
     @pytest.mark.asyncio
     async def test_missing_target_agent_id(self):

@@ -252,7 +252,7 @@ def analyze_agent_patterns(
     # Match the non-analysis observe projection and the last verdict. The
     # rolling history below is Phi telemetry, not resolved decision risk.
     risk_score = current_metrics.get("risk_score")
-    phi_risk_latest = float(state.risk_history[-1]) if state.risk_history else None
+    phi_risk_latest = current_metrics.get("phi_risk_latest")
     current_state = {
         "E": pE,
         "I": pI,

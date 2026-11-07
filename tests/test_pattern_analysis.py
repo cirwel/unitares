@@ -217,7 +217,9 @@ class TestAnalyzeAgentPatterns:
     @pytest.mark.parametrize("risk,source", [(0.0, "resolved"), (0.7, "resolved"), (None, None)])
     def test_headline_risk_uses_verdict_metrics_not_phi_history(self, risk, source):
         monitor = self._make_mock_monitor(risk_history=[0.2] * 5 + [0.918] * 5)
-        monitor.get_metrics.return_value = {"risk_score": risk, "risk_score_source": source}
+        monitor.get_metrics.return_value = {
+            "risk_score": risk, "risk_score_source": source, "phi_risk_latest": 0.918,
+        }
         result = analyze_agent_patterns(monitor)
 
         assert result["current_state"]["risk_score"] == risk

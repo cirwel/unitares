@@ -14,12 +14,16 @@ AUTO_OUTCOME_RULE_VERSION = "guarded_clauses.v1"
 _QUOTED = re.compile(
     r"```[\s\S]*?(?:```|$)|`[^`]*(?:`|$)|"
     r'"[^"]*(?:"|$)|“[^”]*(?:”|$)|'
-    r"(?<!\w)'[\s\S]*?(?:'(?!\w)|$)|‘[\s\S]*?(?:’(?!\w)|$)"
+    r"(?<!\w)'(?!s\b)[\s\S]*?(?:'(?!\w)|$)|‘[\s\S]*?(?:’(?!\w)|$)"
 )
+# A plural possessive inside a single-quoted span can look like its end.
+# Residual closing quotes make the whole report ambiguous; do not infer from
+# a potentially leaked fragment. Interword apostrophes and possessive 's stay.
+_AMBIGUOUS_QUOTE = re.compile(r"['’](?!\w)")
 _BLOCKQUOTE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
 # Soft wraps and version/decimal dots must not shed a sentence's frame.
 # Keep question marks so the resulting sentence can still be rejected.
-_SENTENCES = re.compile(r"(?<!\d)\.(?!\d)|(?<=[!?;])")
+_SENTENCES = re.compile(r"(?<!\d)\.|\.(?!\d)|(?<=[!?;])")
 # Commas can introduce lists sharing a negation, so only explicit contrast
 # begins a new polarity scope. 'and'/'or' keep their inherited negation too.
 _CLAUSES = re.compile(r"\b(?:but|however|although)\b")
@@ -62,6 +66,8 @@ def infer_outcome_label(text: str) -> str | None:
     """
     labels = set()
     unquoted = _QUOTED.sub(" ", _BLOCKQUOTE.sub(" ", text.lower()))
+    if _AMBIGUOUS_QUOTE.search(unquoted):
+        return None
     for sentence in _SENTENCES.split(unquoted):
         if sentence.rstrip().endswith("?") or _INDIRECT.search(sentence):
             continue
