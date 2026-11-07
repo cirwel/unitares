@@ -214,6 +214,31 @@ class TestAnalyzeAgentPatterns:
         assert "coherence_trend" in result["patterns"]
         assert "trend" in result["patterns"]
 
+    @pytest.mark.parametrize("risk,source", [(0.0, "resolved"), (0.7, "resolved"), (None, None)])
+    def test_headline_risk_uses_verdict_metrics_not_phi_history(self, risk, source):
+        monitor = self._make_mock_monitor(risk_history=[0.2] * 5 + [0.918] * 5)
+        monitor.get_metrics.return_value = {"risk_score": risk, "risk_score_source": source}
+        result = analyze_agent_patterns(monitor)
+
+        assert result["current_state"]["risk_score"] == risk
+        assert result["current_state"]["risk_score_source"] == source
+        assert result["current_state"]["phi_risk_latest"] == 0.918
+        assert result["patterns"]["trend"] == "degrading"
+        assert result["patterns"]["trend_provenance"]["risk_source"] == "phi_history"
+        assert result["summary"]["mean_risk_source"] == "phi_history"
+        assert result["recent_history"]["risk_history_source"] == "phi_history"
+        for anomaly in result["anomalies"]:
+            if anomaly["type"] == "risk_spike":
+                assert anomaly["risk_source"] == "phi_history"
+
+    def test_unavailable_metrics_do_not_fabricate_zero_risk(self):
+        monitor = self._make_mock_monitor(risk_history=[])
+        monitor.get_metrics.side_effect = ValueError("unavailable")
+        state = analyze_agent_patterns(monitor)["current_state"]
+        assert state["risk_score"] is None
+        assert state["risk_score_source"] is None
+        assert state["phi_risk_latest"] is None
+
     def test_stable_patterns(self):
         monitor = self._make_mock_monitor()
         result = analyze_agent_patterns(monitor)

@@ -237,6 +237,30 @@ not authored by the agent, is deferred until after the read so that the window
 carries no second seam. Any producer change to this label stream before
 2026-12-01 gets its own dated disclosure here.
 
+## Auto-outcome producer repair — disclosed 2026-11-07
+
+Implementation on branch `codex/dogfood-risk-outcomes-1106` narrows the
+text-inferred `auto_checkin` labels. The previous keyword scan labelled a
+deliberately quoted claim that a system was "broken" as `task_failed`, and
+labelled "No errors occurred" the same way. The guarded clause heuristic
+abstains on quoted, conditional, reported, negated and mixed-polarity claims.
+It remains incomplete natural-language inference, with `claim_only` evidence;
+explicit result recording is unchanged. New emitted rows carry
+`detail.auto_outcome_rule_version = guarded_clauses.v1`.
+
+This changes which self-reported outcome rows can reach the behavioral E/I
+window, even though it changes no estimator equations or corroboration gates.
+Abstention can reduce coverage as well as false labels; post-change rows must
+not be treated as a homogeneous continuation of the old producer. The related
+`observe` repair changes only response projection and diagnostic provenance.
+
+This disclosure records implementation, not deployment. No deployment is
+performed by this change; the first effective production time must be recorded
+with the deployment commit/restart evidence. Historical rows are not rewritten.
+The existing `instrument_change_at = 2026-10-15T13:45:00Z`, registered inputs,
+thresholds and read outcomes remain unchanged. The read's fixed data boundary
+already precedes this repair.
+
 ## Power-characterisation correction — disclosed 2026-08-23
 
 The first database-free power audit reused `(agent, prior-state snapshot)`

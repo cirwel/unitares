@@ -98,3 +98,73 @@ async def test_low_complexity_still_emits_nothing():
 async def test_automatic_and_rollup_checkins_emit_no_auto_outcomes(text, epistemic_class):
     """#2418 Fix 2: non-authored check-ins and runtime tool-count rollups never emit task_completed/task_failed."""
     assert await _emitted_types(text, complexity=0.7, epistemic_class=epistemic_class) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", [
+    "Just wrote a deliberately contradictory critical-severity finding claiming "
+    "the system is both healthy and broken. Testing knowledge integrity and "
+    "whether governance reacts to adversarial self-reporting.",
+    "No errors occurred; all checks passed.",
+    "No crashes and errors occurred",
+    "The build may have failed",
+    "The patch will be deployed tomorrow",
+    "I'll have deployed the patch tomorrow",
+    "I expect the service to have crashed",
+    "0 errors and zero crashes",
+    "Errors: 0",
+    "Parser was not fixed",
+    "Never deployed to staging",
+    "The service isn't broken",
+    "The service isn’t broken",
+    "Not blocked on review anymore",
+    'Investigating why "Build failed on step 3" appears in old logs',
+    "The example says 'Fixed the parser'",
+    "```\nBuild failed\n```",
+    "`task failed`",
+    "“Service crashed twice”",
+    "‘Build failed’",
+    "Checking whether the service crashed",
+    "If the build failed, deployment is blocked",
+    "Did the build fail?",
+    "Build failed?",
+    "I am not claiming the task failed",
+    "I fixed the parser, but deployment failed",
+    "Fixed the parser. Build failed on step 3.",
+    "System is both resolved and broken",
+    "The errorless, fixedwidth report is ready",
+])
+async def test_non_assertions_and_mixed_results_abstain(text):
+    assert await _emitted_types(text) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,expected", [
+    ("No errors occurred, but deployment failed", "task_failed"),
+    ("Parser was not fixed; deployment failed", "task_failed"),
+    ("Completed the task with no errors", None),  # conservative single-clause abstention
+    ("Completed the task; no errors occurred", "task_completed"),
+    ("I deployed `backend` to staging", "task_completed"),
+    ("If the build failed, deployment would stop. Deployed to staging.", "task_completed"),
+])
+async def test_independent_result_clauses(text, expected):
+    assert await _emitted_types(text) == ([expected] if expected else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,expected", [
+    ("Fixed the parser", "task_completed"),
+    ("Build failed on step 3", "task_failed"),
+])
+async def test_guarded_labels_keep_weak_provenance_and_complexity_boundary(text, expected):
+    from src.auto_outcome_labels import AUTO_OUTCOME_RULE_VERSION
+
+    assert await _emitted_types(text, complexity=0.299) == []
+    db = MagicMock()
+    db.record_outcome_event = AsyncMock(return_value="outcome-1")
+    with patch("src.db.get_db", return_value=db):
+        await phases._post_update_auto_outcome(_ctx(text, complexity=0.3))
+    event = db.record_outcome_event.call_args.kwargs
+    assert event["outcome_type"] == expected
+    assert event["verification_source"] == "agent_reported_tool_result"
+    assert event["detail"]["auto_outcome_rule_version"] == AUTO_OUTCOME_RULE_VERSION

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from typing import Any, Dict, Optional
 
 from src import agent_storage as _default_agent_storage
+from src.auto_outcome_labels import (
+    COMPLETION_SIGNAL_RE as _COMPLETION_SIGNAL_RE,  # noqa: F401 — compatibility re-export for phases
+    FAILURE_SIGNAL_RE as _FAILURE_SIGNAL_RE,  # noqa: F401
+)
 from src.logging_utils import get_logger
 from .context import UpdateContext
 
@@ -738,23 +741,6 @@ async def _post_update_save_baseline(ctx: UpdateContext) -> None:
         logger.debug(f"Baseline save skipped: {e}")
 
 
-# Keyword signals for the auto-emitted outcome labels below. Each keyword must
-# start at a word boundary: a bare substring test let "unresolved" match
-# "resolved" and "unblocked" match "blocked", so a status line reporting open
-# problems was recorded as a completed task. Only the leading boundary is
-# required, so inflections ("errors", "crashed") still match as before.
-# Provenance: a resident that reports "N unresolved" with complexity 0.6 wrote
-# task_completed=1.0 on every check-in from 2026-09-12, which shifted its own
-# behavioral I and S for as long as any finding stayed open.
-_COMPLETION_SIGNAL_RE = re.compile(
-    r"\b(?:completed|implemented|deployed|finished|fixed|resolved|shipped"
-    r"|merged|built|created|added|refactored|migrated)"
-)
-_FAILURE_SIGNAL_RE = re.compile(
-    r"\b(?:failed|error|broken|reverted|blocked|stuck|crash|regression)"
-)
-
-
 async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     agent_id = ctx.agent_id
     # Auto-emitted outcomes are weak agent-reported labels inferred from text.
@@ -763,6 +749,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     # Non-authored substrate observations/interpretations and runtime tool-count
     # rollups ("N tool calls completed: ...") are not task-completion claims (#2418).
     from src.dual_log.continuity import is_automatic_or_rollup_checkin
+    from src.auto_outcome_labels import AUTO_OUTCOME_RULE_VERSION, infer_outcome_label
 
     ctx.outcome_event_id = None
     if is_automatic_or_rollup_checkin(
@@ -772,14 +759,15 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
         return
     try:
         if ctx.response_text and ctx.complexity >= 0.3:
-            _rt_lower = ctx.response_text.lower()
-            if _COMPLETION_SIGNAL_RE.search(_rt_lower):
+            label = infer_outcome_label(ctx.response_text)
+            if label == "task_completed":
                 from src.db import get_db
                 _db = get_db()
                 if _db:
                     _summary = ctx.response_text[:500] if len(ctx.response_text) > 500 else ctx.response_text
                     _detail = {
                         'source': 'auto_checkin',
+                        'auto_outcome_rule_version': AUTO_OUTCOME_RULE_VERSION,
                         'outcome_score_source': 'agent_reported_completion_label',
                         'coherence_used_for_outcome_score': False,
                         'complexity': ctx.complexity,
@@ -836,7 +824,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                                 logger.debug(f"Calibration from positive outcome skipped: {_ce}")
             # Auto-emit negative outcome event for failure signals
             if not ctx.outcome_event_id:
-                if _FAILURE_SIGNAL_RE.search(_rt_lower):
+                if label == "task_failed":
                     from src.db import get_db
                     _db = get_db()
                     if _db:
@@ -844,6 +832,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                         _bad_score = 0.0
                         _detail = {
                             'source': 'auto_checkin',
+                            'auto_outcome_rule_version': AUTO_OUTCOME_RULE_VERSION,
                             'outcome_score_source': 'agent_reported_failure_label',
                             'coherence_used_for_outcome_score': False,
                             'complexity': ctx.complexity,
