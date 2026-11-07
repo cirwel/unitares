@@ -7,13 +7,17 @@ from typing import Any, Dict, Optional
 
 from src import agent_storage as _default_agent_storage
 from src.auto_outcome_labels import (
-    COMPLETION_SIGNAL_RE as _COMPLETION_SIGNAL_RE,  # noqa: F401 — compatibility re-export for phases
-    FAILURE_SIGNAL_RE as _FAILURE_SIGNAL_RE,  # noqa: F401
+    COMPLETION_SIGNAL_RE,
+    FAILURE_SIGNAL_RE,
 )
 from src.logging_utils import get_logger
 from .context import UpdateContext
 
 logger = get_logger("src.mcp_handlers.updates.phases")
+
+# Compatibility re-exports for phases; the shared classifier owns the patterns.
+_COMPLETION_SIGNAL_RE = COMPLETION_SIGNAL_RE
+_FAILURE_SIGNAL_RE = FAILURE_SIGNAL_RE
 
 
 def _p_attr(name: str, default: Any = None) -> Any:
