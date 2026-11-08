@@ -8,7 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.safe_load((ROOT / '.github/workflows/homebrew-release-sync.yml').read_text())
-STEPS = WORKFLOW['jobs']['sync']['steps']
+STEPS = WORKFLOW['jobs']['source_archive']['steps']
 COMMIT = 'a' * 40
 
 
@@ -46,6 +46,7 @@ esac
             'TAG': 'v3.7.0', 'GITHUB_REF': 'refs/tags/v3.7.0',
             'GITHUB_SHA': COMMIT, 'EXPECTED_COMMIT': COMMIT,
             'RUNNER_TEMP': str(tmp_path), 'GITHUB_ENV': str(tmp_path / 'env'),
+            'GITHUB_OUTPUT': str(tmp_path / 'outputs'),
             'GITHUB_REPOSITORY': 'cirwel/unitares', 'CALLS': str(tmp_path / 'calls'),
             'UNITARES_VERSION': '3.7.0', 'UNITARES_COMMIT': COMMIT,
             'BAD_SIGNATURE': 'false', 'VERIFICATIONS': '[{"verificationResult":{}}]'}
@@ -93,3 +94,25 @@ def test_publisher_uses_fixed_signer_and_exact_source(release_env):
     assert '--source-ref refs/tags/v3.7.0' in calls
     assert '--deny-self-hosted-runners' in calls
     assert calls.index('attestation verify') < calls.index('release upload')
+
+
+def test_tap_code_cannot_inherit_upstream_signing_or_release_write_authority():
+    signing = WORKFLOW['jobs']['source_archive']
+    rendering = WORKFLOW['jobs']['sync']
+    assert signing['permissions'] == {'contents': 'write', 'id-token': 'write', 'attestations': 'write'}
+    assert rendering['permissions'] == {'contents': 'read', 'pull-requests': 'read'}
+    assert rendering['needs'] == 'source_archive'
+    assert all('_tap' not in s.get('working-directory', '') for s in signing['steps'])
+    assert not any(s.get('with', {}).get('repository') == 'cirwel/homebrew-unitares' for s in signing['steps'])
+    assert set(signing['outputs']) == {'version', 'commit', 'sha256', 'url'}
+    assert rendering['env']['UNITARES_COMMIT'] == '${{ needs.source_archive.outputs.commit }}'
+
+
+def test_archive_outputs_match_the_verified_source(release_env):
+    result = run_step('Build or verify', release_env)
+    assert result.returncode == 0, result.stderr
+    outputs = dict(line.split('=', 1) for line in Path(release_env['GITHUB_OUTPUT']).read_text().splitlines())
+    assert outputs['version'] == '3.7.0'
+    assert outputs['commit'] == COMMIT
+    assert len(outputs['sha256']) == 64
+    assert outputs['url'] == 'https://github.com/cirwel/unitares/releases/download/v3.7.0/unitares-3.7.0.tar.gz'

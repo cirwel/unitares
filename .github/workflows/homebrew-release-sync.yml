@@ -13,18 +13,21 @@ on:
         required: true
 
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
 
 concurrency:
   group: homebrew-release-sync
   cancel-in-progress: false
 
 jobs:
-  sync:
+  source_archive:
+    outputs:
+      version: ${{ steps.archive.outputs.version }}
+      commit: ${{ steps.archive.outputs.commit }}
+      sha256: ${{ steps.archive.outputs.sha256 }}
+      url: ${{ steps.archive.outputs.url }}
     permissions:
       contents: write
-      pull-requests: read
       id-token: write
       attestations: write
     if: >-
@@ -50,6 +53,7 @@ jobs:
           fetch-depth: 0
 
       - name: Build or verify the deterministic release archive
+        id: archive
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,6 +82,10 @@ jobs:
               exit 1
             }
           fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/cirwel/unitares/releases/download/$TAG/unitares-$version.tar.gz" >> "$GITHUB_OUTPUT"
           echo "UNITARES_VERSION=$version" >> "$GITHUB_ENV"
           echo "UNITARES_COMMIT=$commit" >> "$GITHUB_ENV"
           echo "UNITARES_ARCHIVE_SHA256=$digest" >> "$GITHUB_ENV"
@@ -107,6 +115,35 @@ jobs:
           else
             gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
           fi
+
+  # Tap main is a separate trust domain. Its renderer must never inherit the
+  # upstream signing identity or the credential that can replace release assets.
+  sync:
+    needs: source_archive
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: homebrew-release-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      UNITARES_VERSION: ${{ needs.source_archive.outputs.version }}
+      UNITARES_COMMIT: ${{ needs.source_archive.outputs.commit }}
+      UNITARES_ARCHIVE_SHA256: ${{ needs.source_archive.outputs.sha256 }}
+      UNITARES_ARCHIVE_URL: ${{ needs.source_archive.outputs.url }}
+    steps:
+      - name: Verify protected environment arming secret
+        env:
+          ARMED: ${{ secrets.UNITARES_HOMEBREW_RELEASE_SYNC_ARMED }}
+        run: test "$ARMED" = true
+
+      - name: Check out the verified release commit for the renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source_archive.outputs.commit }}
+          persist-credentials: false
+          fetch-depth: 0
 
       - name: Mint a tap-scoped App token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3

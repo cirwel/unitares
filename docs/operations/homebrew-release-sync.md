@@ -25,6 +25,9 @@ the fixed repository/workflow, tag, source and signer commit before uploading
 the archive, and only when the release has no asset by that name. An existing asset must be
 byte-identical and is never overwritten. It then runs the tap's offline release
 renderer and opens or updates the single `auto/homebrew-release-sync` draft PR.
+Signing/publication and tap rendering run in separate jobs. The renderer receives
+only the verified version, commit, digest and URL as job outputs, and has no
+upstream signing or release-write permission.
 That transition advances both `Formula/unitares.rb` and the release-coupled
 `Formula/unitares-lease-plane.rb` from the same immutable asset.
 
