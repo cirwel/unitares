@@ -206,6 +206,9 @@ jobs:
   # This credential-bearing job executes only this upstream workflow's fixed
   # shell and pinned actions. It applies a patch as data; it runs no tap code.
   sync:
+    if: >-
+      github.repository == 'cirwel/unitares' &&
+      vars.UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED == 'true'
     needs: [source_archive, render]
     permissions:
       contents: read
@@ -261,7 +264,7 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_TAP_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse origin/main)" = "$EXPECTED_TAP_COMMIT" || {
-            echo "tap main changed after rendering; rerun instead of applying a stale patch" >&2
+            echo "tap main changed after rendering; rerun all jobs or dispatch a new run at the release tag" >&2
             exit 1
           }
           branch=auto/homebrew-release-sync
@@ -284,11 +287,22 @@ jobs:
             git checkout -B "$branch" origin/main
           fi
           patch="$RUNNER_TEMP/tap-transition/release.patch"
-          test -f "$patch" && test ! -L "$patch"
+          test -f "$patch"
+          test ! -L "$patch"
           if [ -s "$patch" ]; then
-            git -c core.hooksPath=/dev/null apply --index \
-              --include='Formula/unitares.rb' --include='Formula/unitares-lease-plane.rb' \
-              --include='SOURCES.json' "$patch"
+            # Inspect NUL-delimited paths before writing anything. --include
+            # would silently drop out-of-scope edits instead of refusing them.
+            git apply --numstat -z "$patch" > "$RUNNER_TEMP/tap-patch-paths"
+            entries=0
+            while IFS=$'\t' read -r -d '' added deleted path; do
+              case "$path" in
+                Formula/unitares.rb|Formula/unitares-lease-plane.rb|SOURCES.json) ;;
+                *) echo "unexpected patch path: $path" >&2; exit 1 ;;
+              esac
+              entries=$((entries + 1))
+            done < "$RUNNER_TEMP/tap-patch-paths"
+            test "$entries" -gt 0
+            git -c core.hooksPath=/dev/null apply --index "$patch"
             # Restrict both names and modes; no code or Git configuration from
             # the renderer is executed on this credential-bearing runner.
             while IFS= read -r path; do

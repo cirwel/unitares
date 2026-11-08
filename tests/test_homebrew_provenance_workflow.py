@@ -111,6 +111,7 @@ def test_tap_code_cannot_inherit_upstream_signing_or_release_write_authority():
     assert source_checkout['with']['ref'] == '${{ github.sha }}'
     publishing = WORKFLOW['jobs']['sync']
     assert publishing['needs'] == ['source_archive', 'render']
+    assert "vars.UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED == 'true'" in publishing['if']
     assert publishing['permissions'] == {'contents': 'read', 'actions': 'read'}
     assert all('python' not in s.get('run', '') for s in publishing['steps'])
     assert all('_tap' not in s.get('working-directory', '') for s in signing['steps'])
@@ -136,19 +137,50 @@ def test_render_guard_refuses_a_repository_level_app_key(release_env):
         assert result.returncode == expected
 
 
-@pytest.mark.parametrize('path,mode,accepted', [
-    ('Formula/unitares.rb', '100644', True),
-    ('SOURCES.json', '100644', True),
-    ('Formula/unitares.rb', '120000', False),
-    ('scripts/release_sync.py', '100644', False),
-])
-def test_publisher_restricts_patch_paths_and_modes(tmp_path, path, mode, accepted):
+@pytest.mark.parametrize('mode', ['regular', 'extra_only', 'mixed_extra', 'symlink', 'deletion', 'missing', 'empty'])
+def test_publisher_patch_policy_with_real_git(tmp_path, mode):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', *args],
+                                       cwd=repo, stderr=subprocess.DEVNULL)
+
+    git('init', '-q')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    target = repo / 'Formula/unitares.rb'
+    target.parent.mkdir()
+    target.write_text('original\n')
+    (repo / 'Formula/unitares-lease-plane.rb').write_text('original\n')
+    (repo / 'SOURCES.json').write_text('{}\n')
+    git('add', '.')
+    git('commit', '-qm', 'baseline')
+    outside = tmp_path / 'untouched'
+    outside.write_text('outside unchanged\n')
+    if mode in ('regular', 'mixed_extra'):
+        target.write_text('candidate\n')
+    if mode in ('extra_only', 'mixed_extra'):
+        (repo / 'scripts').mkdir()
+        (repo / 'scripts/untrusted.py').write_text('raise RuntimeError("must never execute")\n')
+    if mode in ('symlink', 'deletion'):
+        target.unlink()
+        if mode == 'symlink':
+            target.symlink_to(outside)
+    git('add', '-A')
+    patch_dir = tmp_path / 'tap-transition'
+    patch_dir.mkdir()
+    if mode != 'missing':
+        (patch_dir / 'release.patch').write_bytes(git('diff', '--cached', '--binary'))
+    git('reset', '--hard', 'HEAD')
     publishing = WORKFLOW['jobs']['sync']['steps'][-1]['run']
-    end = 'done < <(git diff --cached --name-only)'
-    policy = publishing[publishing.index('while IFS= read -r path; do'):publishing.index(end) + len(end)]
-    binary = tmp_path / 'git'
-    binary.write_text('#!/bin/bash\ncase "$1" in\n  diff) printf "%s\\n" "$TEST_PATH" ;;\n  ls-files) printf "%s abc 0\\t%s\\n" "$TEST_MODE" "$TEST_PATH" ;;\nesac\n')
-    binary.chmod(0o755)
-    result = subprocess.run(['bash', '-euc', policy], env={**os.environ,
-        'PATH': f'{tmp_path}:{os.environ["PATH"]}', 'TEST_PATH': path, 'TEST_MODE': mode}, capture_output=True)
-    assert (result.returncode == 0) == accepted
+    policy = publishing[publishing.index('patch="$RUNNER_TEMP'):publishing.index('git config user.name')]
+    result = subprocess.run(['bash', '-euc', policy], cwd=repo,
+                            env={**os.environ, 'RUNNER_TEMP': str(tmp_path)}, capture_output=True, text=True)
+    assert (result.returncode == 0) == (mode in ('regular', 'empty')), result.stderr
+    assert outside.read_text() == 'outside unchanged\n'
+    assert not (repo / 'scripts/untrusted.py').exists()
+    if mode in ('extra_only', 'mixed_extra', 'missing', 'empty'):
+        assert git('diff', '--cached', '--name-only') == b''
+    if mode == 'regular':
+        assert git('diff', '--cached', '--name-only').decode().strip() == 'Formula/unitares.rb'

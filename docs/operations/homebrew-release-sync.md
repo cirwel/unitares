@@ -16,7 +16,15 @@ The workflow also fails closed unless the repository variable
 `UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED` is exactly `true`; enabling it is an
 explicit operator rollout decision after the environment protection, its
 environment-scoped `UNITARES_HOMEBREW_RELEASE_SYNC_ARMED=true` secret, and the
-App grant have been checked.
+App grant have been checked. Before arming either privileged stage:
+
+- Store `UNITARES_AGENT_APP_PRIVATE_KEY` only in the protected environment;
+  remove any copy from repository or organization secret scope. Otherwise the
+  renderer refuses after source publication, leaving no tap PR.
+- Configure the environment's deployment rules to permit the release tags
+  (`v*` tag rule), with required reviewers. A branch-only policy blocks the
+  mandatory tag-context runs; restrict deployment refs rather than relying on
+  approval alone.
 
 The workflow checks out the exact tag, verifies that the workflow event's ref
 and SHA match that tag and commit, and creates `unitares-VERSION.tar.gz` with
@@ -58,8 +66,11 @@ installed acceptance run.
 
 ## Recovery and reruns
 
-Rerunning with the same tag is idempotent: the archive must match and the draft
-branch is regenerated from current tap `main`. A different existing asset is a
+A full rerun ("Re-run all jobs") or a new dispatch at the same tag is
+idempotent: the archive must match and the draft branch is regenerated from
+current tap `main`. "Re-run failed jobs" reuses the earlier renderer outputs;
+if tap `main` advanced, publication keeps refusing until all jobs are rerun or
+a new tagged dispatch renders the new base. A different existing asset is a
 hard failure and requires investigation. The tap also provides a protected
 manual `release-sync.yml` recovery workflow using the same evidence contract.
 Dispatch the upstream workflow at the release tag, for example
