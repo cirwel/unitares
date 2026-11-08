@@ -79,17 +79,7 @@ veto by removing the label.
   initial delivery owner; a completed handover or adoption transfers delivery
   responsibility within its recorded scope, while original authorship remains
   unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
-  session's UNITARES identity. Preserve prior contributors' `Model:` /
-  `UNITARES agent:` signatures in the PR body when the terminal owner footer
-  changes. Add a successor's signature to the body only when it contributes
-  commits, so review routing sees every author family; a delivery-only
-  successor records its identity and scope in a PR comment without claiming
-  authorship. A bounded amendment or delivery-only grant leaves the terminal
-  branch-owner footer unchanged; only an explicit branch-ownership handover
-  changes it. Delivery-only successors use the manual PR path, not
-  `ship.sh --resume`. A footer or comment is a pointer, not proof of a grant
-  or queue-entry authority.
-  Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
+  session's UNITARES identity. Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
   do not distinguish sessions reliably.
   You may act on another session's PR only within a verified handover or
   operator grant, or after completing the stuck-queue adoption below. To
@@ -828,11 +818,11 @@ explicitly provisioned `GH_TOKEN`/`GITHUB_TOKEN`; it refuses an implicit
 fallback to the interactive `gh` login). It neither commits nor pushes, starts
 no local full test run, and never updates the base or arms auto-merge.
 
-The PR's ownership footer must match `UNITARES_AGENT_UUID`. That match is
-necessary for `--resume`, not proof of a handover or queue-entry authority:
-a successor may use it only after a verified branch-ownership handover with
-readiness and queue-entry grants; delivery-only successors must use the manual
-PR path. The command does not verify grants.
+Use `--resume` only for a PR opened and still owned by your session. The
+PR's ownership footer must match `UNITARES_AGENT_UUID`, but the command does
+not verify handovers, adoption conditions or grant scopes and always marks
+ready and enters the queue. Successors and adopters use the manual PR path;
+a readiness-only successor leaves the PR unlabeled.
 Automatic completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
 `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and `.github/workflows/`.
 Paths in `second_family_paths` remain eligible only after passing their required
