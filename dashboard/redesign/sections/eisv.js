@@ -204,6 +204,64 @@
     return isNaN(d) ? "" : (d.getMonth() + 1) + "/" + d.getDate();
   }
 
+  const recordedSource = (s) => typeof s === "string" && s.length > 0 && !["unknown", "unknown_legacy"].includes(s);
+
+  function trajectoryProducer(point, dimension) {
+    const t = point.telemetry || {};
+    const legacy = t.schema === "eisv.telemetry.summary.legacy";
+    if (dimension === "coherence") {
+      const known = !legacy && recordedSource(t.coherence_source) && recordedSource(t.coherence_role);
+      return { key: known ? JSON.stringify([t.coherence_source, t.coherence_role, legacy]) : "unrecorded", known,
+        label: known ? (t.coherence_role === "ode_control_feedback" ? "ODE control feedback" : t.coherence_source) : "source unrecorded",
+        detail: `Source: ${t.coherence_source || "unrecorded"} · role: ${t.coherence_role || "unrecorded"}` };
+    }
+    const primary = t.primary_source, input = t.measurement_source;
+    const known = !legacy && recordedSource(primary) && recordedSource(input);
+    const label = !known ? "source unrecorded"
+      : primary === "ode_fallback" ? "ODE startup"
+      : primary === "behavioral" ? `Behavioral / ${input.replaceAll("_", " ")}`
+      : `${primary} / ${input}`;
+    // Unknown producers share one points-only legend item; each observation's
+    // raw provenance remains available in its tooltip without implying a line.
+    return { key: known ? JSON.stringify([primary, input, legacy]) : "unrecorded", known, label,
+      detail: `Estimator: ${primary || "unrecorded"} · consumed source: ${input || "unrecorded"}${legacy ? " (legacy inference)" : ""}` };
+  }
+
+  function trajectoryDatasets(dimension, label, color) {
+    const producers = trajPoints.map((point) => trajectoryProducer(point, dimension));
+    const lanes = new Map(producers.map((producer) => [producer.key, producer]));
+    const segmentField = dimension === "coherence" ? "coherence" : "eisv";
+    const segmentAt = (index) => (trajPoints[index].chart_segments || {})[segmentField];
+    return Array.from(lanes.values()).map((lane) => ds(`${label} · ${lane.label}`,
+      trajPoints.map((point, index) => producers[index].key === lane.key && Number.isFinite(point[dimension]) ? point[dimension] : null), color, {
+        fill: false, tension: 0, spanGaps: false, showLine: lane.known,
+        pointRadius: 2.5, pointHoverRadius: 4,
+        pointStyle: lane.known ? (lane.label === "ODE startup" ? "triangle" : "circle") : "crossRot",
+        borderDash: dimension === "coherence" || lane.label === "ODE startup" ? [5, 4] : [],
+        // Adjacent plotted points can hide a different source in the sampled
+        // history. Older servers without run IDs get points, never invented
+        // continuity. Explicit nulls also break paths (spanGaps=false).
+        segment: { borderColor: (ctx) => Number.isInteger(segmentAt(ctx.p0DataIndex))
+          && segmentAt(ctx.p0DataIndex) === segmentAt(ctx.p1DataIndex) ? color : "transparent" },
+      }));
+  }
+
+  function trajectoryOptions(y) {
+    const options = baseOptions(y);
+    options.plugins.tooltip.callbacks = {
+      title: (items) => items.length ? trajPoints[items[0].dataIndex].t : "",
+      afterBody: (items) => {
+        if (!items.length) return [];
+        const point = trajPoints[items[0].dataIndex];
+        const t = point.telemetry || {};
+        return [trajectoryProducer(point, "E").detail,
+          `Behavioral input: ${t.behavioral_source || "unrecorded"}`,
+          trajectoryProducer(point, "coherence").detail];
+      },
+    };
+    return options;
+  }
+
   function buildTrajectory() {
     if (trajUpper) { trajUpper.destroy(); trajUpper = null; }
     if (trajLower) { trajLower.destroy(); trajLower = null; }
@@ -212,23 +270,29 @@
     const E = cssVar("--eisv-e"), I = cssVar("--eisv-i"), S = cssVar("--eisv-s"), V = cssVar("--eisv-v");
     const C = cssVar("--eisv-c"), muted = cssVar("--muted");
     const labels = trajPoints.map((p) => fmtT(p.t));
+    const upperDatasets = [
+      ...trajectoryDatasets("E", "Energy", E),
+      ...trajectoryDatasets("I", "Integrity", I),
+      ...trajectoryDatasets("coherence", "Coherence", C),
+    ];
+    const lowerDatasets = [
+      ...trajectoryDatasets("S", "Entropy", S),
+      ...trajectoryDatasets("V", "Valence", V),
+    ];
+    // On narrow screens the source-labelled legend needs one row per series.
+    // Reserve its space so startup/source lanes cannot crowd out the plot.
+    upperCanvas.parentElement.style.height = `${180 + upperDatasets.length * 22}px`;
+    lowerCanvas.parentElement.style.height = `${180 + lowerDatasets.length * 22}px`;
     trajUpper = new Chart(upperCanvas, {
       type: "line",
-      data: { labels, datasets: [
-        ds("Energy", trajPoints.map((p) => p.E), E),
-        ds("Integrity", trajPoints.map((p) => p.I), I),
-        ds("Coherence", trajPoints.map((p) => p.coherence), C, { fill: false, borderDash: [5, 4], borderWidth: 1.5 }),
-      ] },
-      options: baseOptions({ min: 0, max: 1 }),
+      data: { labels, datasets: upperDatasets },
+      options: trajectoryOptions({ min: 0, max: 1 }),
       plugins: [refLine(MODEL.coherenceEq, muted)],
     });
     trajLower = new Chart(lowerCanvas, {
       type: "line",
-      data: { labels, datasets: [
-        ds("Entropy", trajPoints.map((p) => p.S), S),
-        ds("Valence", trajPoints.map((p) => p.V), V),
-      ] },
-      options: baseOptions({ min: -1, max: 1 }),
+      data: { labels, datasets: lowerDatasets },
+      options: trajectoryOptions({ min: -1, max: 1 }),
       plugins: [refLine(0, muted)],
     });
   }
@@ -406,7 +470,8 @@
     else if (trajLoading) inner = headHTML("loading…") + note("Loading trajectory…");
     else if (!trajPoints.length) inner = headHTML("no history") + note("No observation history available" + (trajSource === "snapshot" ? " offline." : "."));
     else inner = headHTML(trajPoints.length + " state observations · " + esc(trajectorySources())) +
-      `<div style="height:210px"><canvas id="eisv-traj-upper"></canvas></div>
+      `<p class="sub">Each estimate is shown only where it supplied the reported values. Lines stop at recorded estimator, input-source, or instrument-version changes; unrecorded provenance is shown as points. ODE control feedback has its own source. These are sampled observations, spaced by observation order.</p>
+       <div style="height:250px"><canvas id="eisv-traj-upper"></canvas></div>
        <div style="height:170px;margin-top:var(--space-3)"><canvas id="eisv-traj-lower"></canvas></div>
        ${trajectoryContextHTML()}`;
     if (selectedId && !trajLoading) inner += `<div style="margin-top:var(--space-4)"><button id="eisv-inspect-latest" class="theme-toggle" aria-expanded="false" aria-controls="eisv-observation-inspector">Inspect latest observation</button><div id="eisv-observation-inspector" style="margin-top:var(--space-3)"></div></div>`;

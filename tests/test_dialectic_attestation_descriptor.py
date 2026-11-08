@@ -270,24 +270,26 @@ class TestAttachAttestation:
         import re
         from pathlib import Path
 
-        handlers = (
+        dialectic_dir = (
             Path(__file__).resolve().parents[1]
             / "src"
             / "mcp_handlers"
             / "dialectic"
-            / "handlers.py"
         )
-        lines = handlers.read_text().split("\n")
-        serving = [
-            i
-            for i, ln in enumerate(lines)
-            if re.fullmatch(r'\s*result\["resolution"\] = resolution\.to_dict\(\)', ln)
-        ]
-        assert serving, "expected handlers.py to still build resolution responses"
-        for i in serving:
-            assert "attach_attestation(result)" in lines[i + 1], (
-                f"handlers.py:{i + 1} serves a resolution without the descriptor"
-            )
+        total_serving = 0
+        for mod_name in ("handlers.py", "phase_submission.py", "resolution_helpers.py"):
+            lines = (dialectic_dir / mod_name).read_text().split("\n")
+            serving = [
+                i
+                for i, ln in enumerate(lines)
+                if re.fullmatch(r'\s*result\["resolution"\] = resolution\.to_dict\(\)', ln)
+            ]
+            total_serving += len(serving)
+            for i in serving:
+                assert "attach_attestation(result)" in lines[i + 1], (
+                    f"{mod_name}:{i + 1} serves a resolution without the descriptor"
+                )
+        assert total_serving, "expected dialectic handlers to still build resolution responses"
 
 
 class TestNoForgeableFallbackKey:
@@ -332,13 +334,14 @@ class TestNoForgeableFallbackKey:
         import pathlib
         import re
 
-        handlers = (
+        dialectic_dir = (
             pathlib.Path(__file__).resolve().parents[1]
-            / "src" / "mcp_handlers" / "dialectic" / "handlers.py"
+            / "src" / "mcp_handlers" / "dialectic"
         )
-        for i, line in enumerate(handlers.read_text().splitlines(), 1):
-            if line.lstrip().startswith("#"):
-                continue
-            assert not re.search(r'f"llm-\{agent_uuid', line), (
-                f"handlers.py:{i} re-derives a signing key from a public uuid"
-            )
+        for mod_name in ("handlers.py", "phase_submission.py", "resolution_helpers.py"):
+            for i, line in enumerate((dialectic_dir / mod_name).read_text().splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                assert not re.search(r'f"llm-\{agent_uuid', line), (
+                    f"{mod_name}:{i} re-derives a signing key from a public uuid"
+                )

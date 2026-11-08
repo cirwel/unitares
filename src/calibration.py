@@ -568,6 +568,121 @@ class CalibrationChecker:
                 next(iter(reasons)) if len(reasons) == 1 else 'unavailable'
             )
         return result
+
+    def compute_agent_tactical_calibration_channel(
+        self,
+        agent_id: str,
+        *,
+        now: Optional[datetime] = None,
+        max_staleness_days: float = 30.0,
+    ) -> Dict[str, Any]:
+        """Reported per-agent tactical calibration channel beside I (#2818 §3.0).
+
+        Reads ``tactical_bins_by_agent`` (populated only by hard-exogenous
+        tactical decisions with ``include_in_aggregate=True``, never by the
+        strategic ``trajectory_health`` proxy or self-relative drift checks)
+        and computes the sample-weighted binned ECE across all populated bins
+        without the ``count >= 5`` per-bin cliff that zeroed out 100% of agents
+        in ``compute_agent_calibration_candidate`` (#2818 §3.1).
+
+        When ``n_verified_pairs == 0``, reports ``value=None``,
+        ``calibration_error=None``, ``evidence_status="unavailable"``, and
+        ``default_reason="no_verified_agent_pairs"`` rather than substituting a
+        numeric ``0.75`` stand-in.
+        """
+        if not math.isfinite(max_staleness_days) or max_staleness_days < 0:
+            raise ValueError('max_staleness_days must be finite and nonnegative')
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError('now must carry a timezone')
+        now = now.astimezone(timezone.utc)
+        identity = agent_id if isinstance(agent_id, str) and agent_id.strip() else None
+        result: Dict[str, Any] = {
+            'schema': 'agent_tactical_calibration_channel.v1',
+            'mode': 'measurement_only',
+            'policy_applied': False,
+            'scope': 'agent',
+            'agent_id': identity,
+            'estimator': 'sample_weighted_tactical_bin_ece',
+            'evidence_channel': 'tactical_hard_exogenous',
+            'value': None,
+            'calibration_error': None,
+            'coverage': 'none',
+            'n_verified_pairs': 0,
+            'populated_bin_count': 0,
+            'newest_pair_at': None,
+            'age_days': None,
+            'freshness_status': 'unknown',
+            'max_staleness_days': max_staleness_days,
+            'evidence_status': 'unavailable' if identity else 'missing_identity',
+            'default_reason': (
+                'no_verified_agent_pairs' if identity else 'missing_identity'
+            ),
+            'excluded_bins': {},
+        }
+        if identity is None:
+            return result
+        bins = getattr(self, 'tactical_bins_by_agent', {}).get(identity, {})
+        if not bins:
+            return result
+
+        weighted_gap_sum = 0.0
+        total_pairs = 0
+        populated_bins = 0
+        newest = None
+        for key, stats in bins.items():
+            try:
+                count = int(stats['count'])
+                if count <= 0:
+                    raise ValueError('nonpositive count')
+                expected = float(stats['confidence_sum']) / count
+                actual = float(stats['actual_correct']) / count
+                if not all(math.isfinite(v) and 0 <= v <= 1 for v in (expected, actual)):
+                    raise ValueError('invalid bin probabilities')
+            except (KeyError, TypeError, ValueError, OverflowError):
+                result['excluded_bins'][key] = 'invalid_statistics'
+                continue
+
+            timestamp = stats.get('last_observed_at')
+            if timestamp is not None:
+                try:
+                    observed = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                    if observed.tzinfo is None or observed.utcoffset() is None:
+                        raise ValueError('timestamp has no timezone')
+                    observed = observed.astimezone(timezone.utc)
+                    age = (now - observed).total_seconds() / 86400.0
+                    if age >= 0:
+                        newest = max(newest, observed) if newest is not None else observed
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    pass
+
+            gap = abs(expected - actual)
+            weighted_gap_sum += count * gap
+            total_pairs += count
+            populated_bins += 1
+
+        if newest is not None:
+            result['newest_pair_at'] = newest.isoformat()
+            result['age_days'] = (now - newest).total_seconds() / 86400.0
+            result['freshness_status'] = (
+                'recent' if result['age_days'] <= max_staleness_days else 'stale'
+            )
+
+        if total_pairs > 0:
+            cal_err = max(0.0, min(1.0, weighted_gap_sum / total_pairs))
+            result['calibration_error'] = cal_err
+            result['value'] = max(0.0, min(1.0, 1.0 - cal_err))
+            result['n_verified_pairs'] = total_pairs
+            result['populated_bin_count'] = populated_bins
+            result['evidence_status'] = 'available'
+            result['default_reason'] = None
+            if total_pairs < 5:
+                result['coverage'] = 'low'
+            elif total_pairs < 20:
+                result['coverage'] = 'medium'
+            else:
+                result['coverage'] = 'high'
+        return result
     
     def record_complexity_discrepancy(self, discrepancy: float, reported_complexity: Optional[float] = None,
                                      derived_complexity: Optional[float] = None):

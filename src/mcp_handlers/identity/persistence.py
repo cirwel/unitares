@@ -809,6 +809,7 @@ async def ensure_agent_persisted(
 
         identity = await db.get_identity(agent_uuid)
         agent_record = await db.get_agent(agent_uuid)
+        fresh_agent = identity is None and agent_record is None
 
         public_agent_id = None
         structured_id = None
@@ -949,6 +950,27 @@ async def ensure_agent_persisted(
                 metadata=identity_metadata,
             )
             identity = await db.get_identity(agent_uuid)
+
+            # Match resolution.py's fresh-mint registration: durable rows
+            # alone do not make a nameless identity visible to the runtime
+            # registry used by metrics and strict check-ins. Register before
+            # the next await, and never overwrite an existing cache entry.
+            # Do NOT hydrate older/partial or nonactive rows here: check-ins
+            # have already run their lifecycle gate before calling us.
+            if fresh_agent and getattr(identity, "status", None) == "active":
+                from src.agent_metadata_persistence import register_minted_agent_in_dict
+
+                register_minted_agent_in_dict(
+                    agent_uuid,
+                    status="active",
+                    label=label,
+                    public_agent_id=public_agent_id,
+                    structured_id=structured_id,
+                    parent_agent_id=parent_agent_id,
+                    spawn_reason=spawn_reason,
+                    thread_id=thread_id,
+                    node_index=thread_position or 1,
+                )
 
         # Create session binding once we have a durable identity row.
         if identity:

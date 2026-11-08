@@ -41,13 +41,20 @@ make install PG_CONFIG="$PG_CONFIG"
 #### 3. Create database, extensions, relational schema, and graph
 
 ```bash
+set -e
 createdb -h localhost -p 5432 -U postgres governance
 
 export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
 export DB_AGE_GRAPH=governance_graph
 
 # Dry-run by default; --apply executes the DDL
-scripts/install/bootstrap_postgres.sh --apply --db-url "$DB_POSTGRES_URL"
+# Mark only the database just created successfully above, never an existing DB.
+export UNITARES_INSTALL_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+psql -X "$DB_POSTGRES_URL" -v ON_ERROR_STOP=1 -v install_id="$UNITARES_INSTALL_ID" <<'SQL'
+SELECT format('COMMENT ON DATABASE %I IS %L', current_database(),
+              'unitares-install:' || :'install_id' || ':prepared') \gexec
+SQL
+scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID" --db-url "$DB_POSTGRES_URL"
 ```
 
 The bootstrap applies, in order: `init-extensions.sql`, `schema.sql`, `knowledge_schema.sql`, both embeddings schemas, the pre-partition numbered migrations, `partitions.sql`, `graph_schema.sql`, the remaining numbered migrations, and finally `scripts/dev/apply_migrations.py --check`. Applying only a subset of these files leaves the server able to boot but missing tables and columns it depends on.

@@ -299,6 +299,7 @@ async def test_failed_canary_prevents_scored_calls_and_retains_receipt(tmp_path,
     monkeypatch.setattr(probe, "input_hashes", lambda: {})
     monkeypatch.setattr(probe, "transport_canary", lambda _: {"passed": False, "turns": [{"error": "bad resume"}]})
     plan = {"inputs": {}, "model_selected": "fixture", "schedule": [{"task": "replacement", "condition": "before"}],
+            "scope_preflight": probe.scope_preflight(probe.load_tasks()),
             "limits": {"turns": probe.MAX_TURNS, "turn_seconds": probe.TURN_SECONDS,
                        "episode_seconds": probe.EPISODE_SECONDS}}
     output = tmp_path / "result"
@@ -307,3 +308,165 @@ async def test_failed_canary_prevents_scored_calls_and_retains_receipt(tmp_path,
     assert not list(output.glob("episode-*.json"))
     assert json.loads((output / "aggregate.json").read_text())["completed_episode_receipts"] == 0
     assert json.loads((output / "transport-canary.json").read_text())["passed"] is False
+
+
+def test_scope_preflight_detects_an_excluded_answer_without_search_or_autofill():
+    supplied = task("tag_scope")
+    supplied["scope"]["capture_ids"] = ["r502"]
+    before = deepcopy(supplied)
+    report = probe.scope_preflight([supplied])
+    assert not report["ok"]
+    assert report["tasks"][0]["catalog_count"] == 2
+    assert report["tasks"][0]["capture_count"] == 1
+    assert report["tasks"][0]["missing_control_ids"] == ["r501"]
+    assert report["tasks"][0]["unresolved_control_ids"] == []
+    assert supplied == before
+    # Omitting the expected source from explicit controls cannot bypass it.
+    supplied["scope"]["required_source_ids"] = []
+    assert probe.scope_preflight([supplied])["tasks"][0]["missing_control_ids"] == ["r501"]
+
+
+def test_scope_preflight_separates_unknown_catalog_ids_and_binds_content_and_controls():
+    supplied = task("tag_scope")
+    original = probe.scope_preflight([supplied])
+    supplied["scope"]["capture_ids"].append("unknown-capture")
+    supplied["scope"]["required_source_ids"].append("unknown-control")
+    row = probe.scope_preflight([supplied])["tasks"][0]
+    assert row["unresolved_capture_ids"] == ["unknown-capture"]
+    assert row["unresolved_control_ids"] == ["unknown-control"]
+    assert row["missing_control_ids"] == ["unknown-control"]
+    assert row["controls_sha256"] != original["tasks"][0]["controls_sha256"]
+    supplied = task("tag_scope")
+    supplied["records"][0]["details"] += " A changed receipt."
+    changed = probe.scope_preflight([supplied])
+    assert changed["inputs_sha256"] != original["inputs_sha256"]
+    assert changed["tasks"][0]["catalog_sha256"] != original["tasks"][0]["catalog_sha256"]
+    assert changed["tasks"][0]["capture_sha256"] != original["tasks"][0]["capture_sha256"]
+
+
+@pytest.mark.parametrize("change", [
+    lambda t: t["records"].append(deepcopy(t["records"][0])),
+    lambda t: t["scope"].update(capture_ids=["r501", "r501"]),
+    lambda t: t["scope"].update(required_source_ids=["r501", "r501"]),
+    lambda t: t["scope"].update(membership_source=""),
+    lambda t: t.update(query_byte_limit=True),
+    lambda t: t.update(search_ids=["unknown"]),
+])
+def test_scope_preflight_rejects_ambiguous_membership(change):
+    supplied = task("tag_scope")
+    change(supplied)
+    assert not probe.scope_preflight([supplied])["ok"]
+
+
+@pytest.mark.asyncio
+async def test_scope_failure_prevents_transport_and_model_calls(tmp_path, monkeypatch):
+    supplied = task("tag_scope")
+    supplied["scope"]["capture_ids"] = ["r502"]
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps({"tasks": [supplied]}))
+    monkeypatch.setattr(probe, "TASKS", path)
+    monkeypatch.setattr(probe, "input_hashes", lambda: {})
+
+    def forbidden(*_):
+        pytest.fail("scope failure must precede even the provider transport canary")
+
+    monkeypatch.setattr(probe, "transport_canary", forbidden)
+    plan = {"inputs": {}, "model_selected": "fixture", "schedule": [],
+            "limits": {"turns": probe.MAX_TURNS, "turn_seconds": probe.TURN_SECONDS,
+                       "episode_seconds": probe.EPISODE_SECONDS}}
+    with pytest.raises(ValueError, match="scope preflight failed"):
+        await probe.run(plan, tmp_path / "result")
+    assert not (tmp_path / "result").exists()
+
+
+@pytest.mark.asyncio
+async def test_changed_or_missing_scope_receipt_blocks_execution(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "input_hashes", lambda: {})
+    monkeypatch.setattr(probe, "transport_canary", lambda _: pytest.fail("provider must not run"))
+    plan = {"inputs": {}, "model_selected": "fixture", "schedule": [],
+            "limits": {"turns": probe.MAX_TURNS, "turn_seconds": probe.TURN_SECONDS,
+                       "episode_seconds": probe.EPISODE_SECONDS}}
+    for scope in (None, {**probe.scope_preflight(probe.load_tasks()), "ok": False}):
+        plan["scope_preflight"] = scope
+        with pytest.raises(ValueError, match="frozen scope controls"):
+            await probe.run(plan, tmp_path / "result")
+    assert not (tmp_path / "result").exists()
+
+
+@pytest.mark.asyncio
+async def test_tag_filter_is_exact_and_broadening_requires_a_separate_request():
+    fixture = probe.Fixture(task("tag_scope"), probe.build_experience_envelope)
+    filtered = request("search_shared_memory", query="storage acknowledgement",
+                       tags=["example-project"], response_mode="full")
+    original = deepcopy(filtered)
+    miss = await fixture.call(filtered)
+    assert miss["raw_governance"]["discoveries"] == []
+    assert filtered == original
+    broad = await fixture.call(request("search_shared_memory", query="storage acknowledgement", response_mode="full"))
+    assert [r["id"] for r in broad["raw_governance"]["discoveries"]] == ["r501"]
+    either_tag = await fixture.call(request("search_shared_memory", query="storage acknowledgement",
+                                           tags=["example-project", "persistence"], response_mode="full"))
+    assert [r["id"] for r in either_tag["raw_governance"]["discoveries"]] == ["r501"]
+
+
+@pytest.mark.asyncio
+async def test_tag_miss_recovery_receipts_and_evidence_read_are_preserved():
+    filtered = request("search_shared_memory", query="storage", tags=["example-project"])
+    broad = request("search_shared_memory", query="storage")
+    result = await probe.episode(task("tag_scope"), probe.build_experience_envelope,
+                                ScriptedConversation([filtered, broad,
+                                    request(action="details", discovery_id="r501"), final("tag_scope")]))
+    assert result["task_success"]
+    assert result["tool_calls"] == 3
+    assert [t["reply"] for t in result["turns"][:2]] == [filtered, broad]
+    assert not result["turns"][0]["tool_response"].get("memory_suggestions")
+
+
+@pytest.mark.asyncio
+async def test_query_error_retains_diagnostic_and_allows_explicit_reformulation():
+    too_long = request("search_shared_memory", query="x" * 109)
+    shorter = request("search_shared_memory", query="retry limit")
+    result = await probe.episode(task("query_recovery"), probe.build_experience_envelope,
+                                ScriptedConversation([too_long, shorter,
+                                    request(action="details", discovery_id="r601"), final("query_recovery")]))
+    assert result["task_success"]
+    assert result["tool_errors"] == 1 and result["tool_calls"] == 3
+    assert len(result["turns"]) == 4
+    assert result["turns"][0]["reply"] == too_long
+    error = result["turns"][0]["tool_response"]["error"]
+    assert "109 UTF-8 bytes" in error and "100" in error
+    assert result["turns"][1]["reply"] == shorter
+
+
+@pytest.mark.asyncio
+async def test_query_limits_count_utf8_bytes_without_truncating_valid_queries():
+    fixture = probe.Fixture(task("query_recovery"), probe.build_experience_envelope)
+    accepted = await fixture.call(request("search_shared_memory", query="é" * 50, response_mode="full"))
+    assert accepted["raw_governance"]["query"] == "é" * 50
+    rejected = await fixture.call(request("search_shared_memory", query="é" * 51))
+    assert rejected["success"] is False and "102 UTF-8 bytes" in rejected["error"]
+    # The 100-byte cap belongs only to its regression fixture, not production.
+    normal = probe.Fixture(task("replacement"), probe.build_experience_envelope)
+    long_query = "retry configuration " * 10
+    response = await normal.call(request("search_shared_memory", query=long_query, response_mode="full"))
+    assert response["raw_governance"]["query"] == long_query
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_queries_still_terminate_at_the_turn_bound():
+    conversation = ScriptedConversation([request("search_shared_memory", query="x" * 101)] * probe.MAX_TURNS)
+    result = await probe.episode(task("query_recovery"), probe.build_experience_envelope, conversation)
+    assert result["termination"] == "turn_limit"
+    assert result["tool_errors"] == result["tool_calls"] == conversation.calls == probe.MAX_TURNS
+
+
+@pytest.mark.asyncio
+async def test_newer_unsupported_note_does_not_replace_checked_configuration():
+    fixture = probe.Fixture(task("newer_unsupported_note"), probe.build_experience_envelope)
+    found = await fixture.call(request("search_shared_memory", query="transfer route"))
+    pointer = found["memory_suggestions"][0]["resolution_notes"]
+    await fixture.call(request(action="details", discovery_id="r701", offset=pointer["latest_offset"]))
+    assert not fixture.score(final("newer_unsupported_note"))["evidence_read"]
+    assert not fixture.score({"answer": "east", "source_ids": ["r701"]})["task_success"]
+    await fixture.call(request(action="details", discovery_id="r701", offset=pointer["first_offset"]))
+    assert fixture.score(final("newer_unsupported_note"))["task_success"]

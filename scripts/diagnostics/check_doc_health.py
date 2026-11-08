@@ -735,6 +735,9 @@ _DEMOTION_SKIP_ONTOLOGY = {
     "plan.md",
     "paper-positioning.md",
     "glossary.md",
+    "eisv-proprioception-contract.md",
+    "eisv-tested-claims-ledger.md",
+    "eisv-decision-records.md",
 }
 
 # A doc that already labels itself historical/archived/superseded is honest

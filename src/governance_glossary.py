@@ -433,8 +433,9 @@ _STOP_ACTIONS = frozenset({"pause", "reject"})
 
 _NON_STOP_HIGH_RISK_NEXT_ACTION = (
     "The decision was {action}, so this check-in does not block. A reading this "
-    "high can still pause a later check-in; keep scope tight and sync_state "
-    "after your next substantial step."
+    "high can still pause a later check-in; keep scope tight and sync_state only "
+    "at a meaningful milestone when you also hold a judgment the substrate "
+    "cannot infer."
 )
 
 # The agent was resumed after a pause and has not checked in since: no
@@ -442,7 +443,8 @@ _NON_STOP_HIGH_RISK_NEXT_ACTION = (
 _RESUMED_HIGH_RISK_NEXT_ACTION = (
     "The agent was resumed and nothing blocks it now. This reading predates "
     "the resume and can still pause a later check-in; keep scope tight and "
-    "sync_state after your next substantial step."
+    "sync_state only at a meaningful milestone when you also hold a judgment "
+    "the substrate cannot infer."
 )
 
 # Active, checked in before, but no decision is held in this server process:
@@ -451,8 +453,8 @@ _RESUMED_HIGH_RISK_NEXT_ACTION = (
 _NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
     "The agent is not paused and nothing blocks it now. No decision since "
     "this reading is recorded, and a reading this high can still pause a "
-    "later check-in; keep scope tight and sync_state after your next "
-    "substantial step."
+    "later check-in; keep scope tight and sync_state only at a meaningful "
+    "milestone when you also hold a judgment the substrate cannot infer."
 )
 
 # Says what was decided, not that a hold is in force: the decision and its

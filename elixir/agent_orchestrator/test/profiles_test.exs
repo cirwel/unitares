@@ -33,6 +33,7 @@ defmodule AgentOrchestrator.ProfilesTest do
   alias AgentOrchestrator.ProfilesTest.FlakyLedger
 
   @moduletag :tmp_dir
+  @moduletag :capture_log
   @token "test-bearer-token"
   @secret "s3cret-value-for-redaction"
 

@@ -9,6 +9,7 @@ freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
   - unitares/src/agent_loop_detection.py
+  - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
@@ -24,6 +25,9 @@ source_files:
   - unitares/src/mcp_handlers/updates/phases.py
   - unitares/src/outcomes.py
   - unitares/src/state_persistence.py
+  - unitares/src/checkpoints.py
+  - unitares/src/db/mixins/checkpoint.py
+  - unitares/src/services/checkpoint_service.py
   - unitares/src/services/update_response_service.py
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
@@ -75,8 +79,9 @@ contract `2.2.0` on 2026-10-26.
    Follow
    `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
    describe state, not outcomes.
-3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
-   not after every tool call. Use `store_finding` / `update_finding` for durable
+3. **Use each record for its job.** Call `sync_state` only at a meaningful
+   milestone when you also hold a judgment the substrate cannot infer, not
+   after every tool call. Use `store_finding` / `update_finding` for durable
    knowledge and `record_result` only for an outcome that actually occurred.
 4. **Reuse durable knowledge safely.** Search before `store_finding`. If
    authorized, update or supersede an existing finding rather than duplicate
@@ -102,7 +107,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
 | Start a fresh process identity | `start_session(force_new=true, ...)` | `onboard` |
-| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check in at a meaningful milestone with an agent-held judgment | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
 | Check your working state | `check_working_state(client_session_id=...)` | `get_governance_metrics` |
 | Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
 | Record what actually happened | `record_result(...)` | `outcome_event` |
@@ -166,11 +171,12 @@ Avoid these patterns:
 
 ## Check-ins
 
-Call `sync_state()` after meaningful work:
+Call `sync_state()` only at a meaningful milestone when you also hold a
+judgment the substrate cannot infer:
 
 ~~~text
 sync_state(
-  response_text: "Brief summary of what you did",
+  response_text: "Your judgment and the relevant work, concise and secret-free",
   complexity: 0.0-1.0,   # Task difficulty estimate
   confidence: 0.0-1.0    # OPTIONAL — omit unless you are genuinely stating a
                          # belief about your own work. Any value you pass mints
@@ -193,10 +199,14 @@ excerpt is your own report, not a verified claim; a durable claim still needs
 
 ### When to Check In
 
-- After completing a meaningful unit of work
-- Before and after high-complexity tasks
-- When you feel uncertain or notice drift
-- **Not** after every single tool call — use judgment between these bounds
+- Check in only at a meaningful milestone when you also hold a judgment the
+  substrate cannot infer: a self-correction, revised belief, material change
+  in uncertainty or complexity, or handoff assessment after substantive work.
+- A boundary before or after high-risk or high-complexity work qualifies only
+  when it meets both conditions. One check-in may cover a coherent unit of work.
+- There is no fixed time-, turn-, or tool-count cadence. Completion, generated
+  output, reminders, session start or exit, and automatic substrate observations
+  alone do not call for a check-in. Do not manufacture a report to echo them.
 
 ### What You Get Back
 
@@ -242,15 +252,36 @@ Cold-start action summaries carry a provisional headline. A `proceed` action
 before the behavioral baseline forms is permission to continue under the current
 policy, not a validated all-clear. The default state read preserves the verdict.
 
+New servers return `checkpoint` when neutral acceptance is known. Its
+`status: accepted`, `checkpoint_id`, and per-identity `seq` acknowledge an
+immutable record committed before assessment; they are not a verdict or proof
+that later effects completed. For retry recovery, supply an `idempotency_key`
+on the original call and reuse it with the same submitted content. The reply's
+`acceptance_retry_idempotent: true` covers that identity-scoped acceptance:
+a retry returns the original receipt without repeating assessment. Changed
+content conflicts. The same key under a new identity is a different scope.
+Current identity, lifecycle and cooldown gates still apply to retries. A
+receipt-only replay carries no fresh policy action or prediction. Do not infer
+operational permission from its `success: true`.
+
+An acceptance `status: unconfirmed` may follow a committed record whose
+acknowledgement was lost. Without an explicit key, another call can create a
+new record. The checkpoint's separate `assessment.status` reports execution:
+`completed` means execution returned, not atomic durability of every effect;
+`failed` may have partial effects. A crash can leave `started` ambiguous.
+Keyed retries never restart these deliveries, including those that never
+started. Recovery of an incomplete assessment is outside this increment.
+
 On completed check-ins that reach the state writer, `state_persistence`
 describes the assessment-row acknowledgement. `status: recorded` and a positive
 `state_id` confirm that the writer acknowledged that row; they do not confirm
 every other check-in effect. `status: unconfirmed` and `state_id: null` mean no
 valid acknowledgement arrived. The row may still exist if the commit completed
 before the connection failed. Read this receipt separately from top-level
-`success`. `checkin_retry_idempotent: false` means repeating the full check-in
-can duplicate estimator updates and effects; do not automatically repeat it to
-recover a missing acknowledgement. Early refusals and older servers can omit
+`success`. Its legacy `checkin_retry_idempotent: false` describes the assessment
+writer, which does not deduplicate itself. Use the independent checkpoint
+acceptance contract above when available; without it, repeating the full
+check-in can duplicate estimator updates and effects. Early refusals and older servers can omit
 the receipt; absence does not establish that nothing was written. This is an
 assessment-write receipt, not a neutral checkpoint ID.
 

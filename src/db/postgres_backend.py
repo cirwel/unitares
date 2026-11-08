@@ -31,6 +31,7 @@ from .mixins import (
     KnowledgeGraphMixin,
     BaselineMixin,
     ThreadMixin,
+    CheckpointMixin,
 )
 from src.logging_utils import get_logger
 
@@ -178,6 +179,7 @@ class PostgresBackend(
     KnowledgeGraphMixin,
     BaselineMixin,
     ThreadMixin,
+    CheckpointMixin,
     DatabaseBackend,
 ):
     """
@@ -509,8 +511,7 @@ class PostgresBackend(
                 )
 
             try:
-                await conn.execute("LOAD 'age'")
-                await conn.execute(f"SET search_path = ag_catalog, core, audit, public")
+                await self._prepare_age_connection(conn)
             except Exception as e:
                 logger.error(f"LOAD 'age' failed; lineage and graph queries will error: {e}")
 

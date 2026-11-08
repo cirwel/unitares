@@ -7,6 +7,13 @@ and the [component boundary proposal](../proposals/active/federation-component-b
 It changes no runtime behavior or authorization and does not certify the full
 checkpoint extraction gate.
 
+The execution trace below is the legacy baseline at that revision. The later
+[neutral acceptance increment](#neutral-checkpoint-acceptance-2026-11-02-increment)
+adds a separate commit boundary before assessment; its guarantees and remaining
+limits are stated separately rather than attributed to the legacy state insert.
+The [synchronous invocation increment](#synchronous-eisv-invocation-2026-11-03-increment)
+records the subsequent adapter extraction and its remaining dependencies.
+
 ## What the existing boundary actually guarantees
 
 `run_process_update_workflow` holds an agent lock around the authenticated
@@ -80,8 +87,9 @@ graph. Search the owners and their callers again before each migration.
 | Audit: `audit_db.py`, `AuditMixin`, `AuditLogger` | Enrichments, monitor/policy paths and lifecycle operations emit records; resident/Elixir observers and operator scripts read them. Preserve the distinction between local logging and durable DB receipt. |
 
 [`check_component_boundaries.py`](../../scripts/dev/check_component_boundaries.py)
-already ratchets baselined imports/SQL. Its `TABLE_OWNERS` is a finite list:
-prediction-binding and calibration-delivery tables are not currently included.
+already ratchets baselined imports/SQL. Its `TABLE_OWNERS` is a finite list
+(including `audit.outcome_prediction_bindings` and
+`audit.outcome_calibration_deliveries` under `outcomes`).
 B4 scans server and Elixir library source; general analysis/operations scripts
 are not all covered (B1/B2 separately follow resident-launched scripts). A green
 ratchet does not establish complete ownership or portability.
@@ -190,3 +198,211 @@ atomic sequence/checkpoint/outbox allocation, ambiguous-commit replay, and the
 relationship to gates that still run inside the estimator service. The partial
 preservation and replay gates above remain incomplete; this receipt does not
 fulfil them or authorize asynchronous EISV.
+
+## Neutral checkpoint acceptance (2026-11-02 increment)
+
+The operator authorized this bounded next increment after the state-persistence
+receipt. [Boundary proposal Section 13.1](../proposals/active/eisv-core-boundary-v0.md#131-bounded-neutral-acceptance-increment-2026-11-02)
+records its scope and the historical governed-review disposition. The unit of
+acceptance is now a neutral immutable checkpoint. The existing
+`state_persistence` field continues to acknowledge only the later assessment
+row, so the two receipts can truthfully report different outcomes.
+
+### Admission and replay
+
+Transport validation and identity binding, the existing lifecycle guards, and
+the authenticated service's ownership, deployment-posture, archive and
+loop-cooldown checks precede checkpoint acceptance. Refusal at one of these
+gates does not mint an accepted checkpoint. An early refusal can still follow
+identity, metadata or cooldown writes; it is not a promise that the entire
+request had no effects. This increment does not provide a complete durable
+ledger of refused, deferred, cancelled or unauthenticated attempts.
+As of [PR #3174](https://github.com/cirwel/unitares/pull/3174), merged
+2026-11-03, legacy preparation computes behavioral inputs and passes call-local
+`_outcome_history` in `ctx.agent_state` before acceptance without mutating
+`monitor._cached_outcome_history` on the shared monitor until assessment runs
+(at which point `GovernanceMonitor.process_update` refreshes
+`monitor._cached_outcome_history` for fallback use on later check-ins).
+The new boundary precedes monitor creation/advancement in the authenticated
+service and the later check-in effects; it does not yet move every
+assessment-related read behind capture.
+
+An explicit `idempotency_key` (a nonblank string of at most 200 characters) is
+scoped to the resolved identity. Reusing it with the same canonical submitted
+request returns the original acceptance; reusing it
+with different semantic input is a conflict. The request digest is captured
+before estimator transformations so a later complexity cap, confidence damping
+or changed estimator state cannot redefine what the caller originally submitted.
+The versioned input allowlist in
+[`checkpoint_service.py`](../../src/services/checkpoint_service.py) includes
+submitted report, assessment/evidence inputs and descriptive provenance. It
+excludes response presentation and identity proofs; embedded credentials are
+scrubbed before hashing. This fingerprint is for request equivalence, not a
+complete assessor replay snapshot. Omitting the key allocates a new occurrence
+on every call and reports `acceptance_retry_idempotent: false`.
+Current admission requirements such as `require_strong_identity` remain gates,
+rather than fingerprint fields. The response-only `include_memory_suggestions`
+option is also excluded; submitted `trajectory_signature` and the versioned
+allowlist of descriptive provenance are included.
+
+Replay still passes the current write-admission gates. A pause, archive or
+cooldown that arose after the original acceptance can therefore refuse a retry
+until the identity is writable again. The stored receipt is evidence of a past
+acceptance, not permission to operate under a current hold. There is no separate
+read-only receipt-recovery tool in this increment. A replay that passes these
+gates returns the accepted checkpoint without rerunning its assessment or later
+workflow state/outcome/enrichment effects. Transport auditing and the handler's
+presence heartbeat can still run on a retry; this is acceptance idempotency,
+not a claim that the entire request is free of repeated effects.
+
+### Atomic record and receipt
+
+The checkpoint owner uses a PostgreSQL transaction to allocate the identity's
+next sequence and predecessor, insert the immutable checkpoint, advance its
+stream head, and insert the immutable `checkpoint.recorded.v1` event into
+`core.checkpoint_outbox`. Commit makes these records visible together; rollback
+leaves none of them accepted. Sequence establishes checkpoint order independently
+of wall-clock order. It does not establish the order in which all legacy
+post-update effects finish. New appends additionally lock and recheck the
+durable identity's active lifecycle state through the identity owner in that
+same transaction. The storage implementation is
+[`CheckpointMixin`](../../src/db/mixins/checkpoint.py); its schema is
+[`081_neutral_checkpoints.sql`](../../db/postgres/migrations/081_neutral_checkpoints.sql).
+Database triggers reject updates to checkpoint and outbox rows. No application
+deletion API or automatic pruning is introduced; deliberate administrative
+deletion remains possible, so these records are not deletion-resistant storage.
+
+`core.checkpoint_streams` holds a per-identity random digest salt. The stored
+retry-key and canonical-request digests use domain-separated HMAC-SHA256; raw
+retry keys, complete request text, API keys and session proofs are not stored
+in the checkpoint. Its report field uses the existing bounded,
+credential-scrubbed excerpt policy. Neutral provenance records the epistemic
+class, identity tier, proof origin, transport and producer version. EISV metrics,
+policy output, computed sensors and assessor-input snapshots are not part of
+the neutral event.
+
+The top-level `checkpoint` object carries this acceptance receipt:
+
+| Acceptance receipt field | Meaning |
+|---|---|
+| `schema: checkpoint.acceptance.v1`, `status: accepted` | The neutral checkpoint transaction was acknowledged. |
+| `checkpoint_id`, `event_id` | The immutable occurrence and its neutral outbox event; the event uses the checkpoint ID. |
+| `identity_id`, `seq`, `prev_checkpoint_id`, `recorded_at` | The resolved identity, durable per-identity position, predecessor and UTC record time. |
+| `accepted_attempt_id` | The attempt that first committed this checkpoint, retained on replay. |
+| `idempotent_replay` | This call recovered an already accepted checkpoint. |
+| `acceptance_retry_idempotent` | An explicit key can recover this acceptance without rerunning effects; it does not promise successful or exactly-once assessment. |
+
+A lost acknowledgement can follow a successful commit. Such an exception is
+not proof that no checkpoint exists: retrying with the same explicit key can
+recover the original acceptance once current admission permits. The client must
+retain that key. A fresh key represents a new occurrence and cannot deduplicate
+the earlier request. An unconfirmed response has `status: unconfirmed`, the
+current `attempt_id`, and `acceptance_retry_idempotent` indicating whether the
+client supplied an explicit key; it does not invent a checkpoint ID or assert
+rollback.
+
+### Synchronous assessment and incomplete delivery
+
+The first acknowledged new acceptance continues through EISV synchronously.
+Before invoking it, a separate assessor-owned `assessment.checkpoint_deliveries` record claims
+the delivery from `pending` to `started`. Assessment and the existing state,
+outcome, prediction, calibration and audit effects do not share the checkpoint
+transaction. The neutral event therefore survives estimator failure, a failed
+legacy state insert, cancellation, or response-serialization failure after
+acceptance.
+
+`completed` means the workflow reached response construction after its effects
+and enrichments, not that every legacy write committed atomically or response
+serialization succeeded. `failed` records a delivery failure; a remaining
+`started` record can mean work is still running, a process stopped, or an acknowledgement
+was lost after effects. Neither state is automatically reclaimed or rerun by a
+retry. Cancellation propagates and leaves an already started claim ambiguous.
+A delivery whose claim or completion acknowledgement is unavailable is reported
+as `unconfirmed`. The receipt's nested `assessment` object reports this execution
+state separately from checkpoint acceptance; a retry reports `not_repeated`
+without inventing a current verdict, metrics or prediction.
+
+Even an accepted checkpoint that never started assessment is receipt-only on
+retry. For example, losing the checkpoint commit acknowledgement can prevent
+the original request from claiming delivery at all. Recovering its receipt does
+not restart delivery; that needs a future explicit recovery contract. There is
+no asynchronous consumer, automatic recovery loop, or exact EISV replay promise
+in this increment.
+
+The outbox is a durable neutral event record, not proof of successful delivery
+to an assessor. Existing outcome-binding and calibration-delivery transactions
+retain their separate ownership and retry contracts. Predictions remain owned
+by the monitor; accepted checkpoints with failed assessment need not have a
+prediction or assessment row. The rest of Stage 3, including neutral prediction
+ownership, outcome rebinding, legacy-reader migration and export, remains work
+to do at this increment's boundary. The dated prediction-registry follow-up
+below records the subsequent change rather than attributing it to #3172.
+
+### Evidence and remaining limits
+
+The required verification for this increment is real PostgreSQL commit and
+rollback behavior, identical and conflicting retries, simultaneous requests,
+restart and lost-acknowledgement recovery, plus workflow checks that admission
+refusal creates no new checkpoint and estimator failure leaves an accepted record.
+Response-mode and serializer checks must preserve the acceptance receipt even
+when no assessment receipt exists. This is narrower than the full preservation
+and replay inventory above. It does not certify production latency, mixed-version
+compatibility, external readers, complete estimator inputs, or exactly-once
+assessment. The fixed registered-read cutoff and archived inputs remain
+unchanged.
+
+## Synchronous EISV invocation (2026-11-03 increment)
+
+The next extraction follows item 3 of the staged changes above: an internal
+synchronous invocation interface in [`src/eisv/adapter.py`](../../src/eisv/adapter.py).
+`execute_admitted_update_async` delegates monitor creation, database hydration
+and `monitor.process_update` to `assess_eisv`. The caller still owns the agent
+lock, admission, checkpoint acceptance and delivery claim. It awaits the
+adapter at the same point before applying policy posture and existing effects.
+This is a behavior-preserving ownership extraction under the continued
+refactor instruction, not a new optional-runtime setting or blanket
+authorization for the rest of Stage 3 or Stage 4.
+
+`EisvRequest` carries the agent ID, confidence and exact call-local
+`agent_state` mapping. It is constructed after the checkpoint callback, so
+`_checkpoint_id` is present when that callback supplied one. The frozen
+dataclass does not copy, normalize or recursively freeze the mapping. In
+particular, missing `_outcome_history` still permits the monitor's cached
+fallback, explicit `None` supplies no history for this call without refreshing
+that cache, and a supplied list refreshes it during assessment. The existing
+`agent_state["task_type"]` value continues to take precedence over the separate
+authenticated-service argument; an absent field means `mixed`.
+
+The adapter preserves default-executor dispatch, hydration order and the
+`ode.monitor_setup_ms` / `ode.numpy_step_ms` spans. `EisvAssessment` returns the
+original result and live monitor. Those are mutable objects used by the
+caller's existing policy and persistence operations, not an immutable stored
+assessment. Errors and cancellation propagate. Cancelling the await does not
+stop a monitor update already running in an executor thread.
+
+The checkpoint service retains `eisv-sync-v1` claim and completion tracking.
+Admission refusals and checkpoint replay/conflict paths stop before adapter
+invocation. Policy actuation, monitor saves, grounding, legacy state receipts,
+outcomes and enrichments remain under their existing owners and ordering.
+The completion receipt still describes the whole synchronous workflow reaching
+its completion point; adapter return alone does not complete that delivery.
+
+Two preceding changes are relevant to this handoff. [PR #3174](https://github.com/cirwel/unitares/pull/3174)
+made outcome history call-local before acceptance. [PR #3178](https://github.com/cirwel/unitares/pull/3178),
+also merged 2026-11-03, added the per-agent prediction registry and checkpoint
+linkage in [`monitor_prediction.py`](../../src/monitor_prediction.py). Predictions
+can now be minted and resolved without a monitor; that fallback is process-local
+until adopted by a monitor or expired. Monitor-backed predictions continue to
+travel with monitor snapshots. This is not durable assessor-independent
+prediction storage or a complete outcome-schema cutover.
+
+This adapter owns invocation only. Existing input preparation still reads
+assessment state before acceptance, and the monitor still reads its clock,
+history and other internal inputs. The handoff is neither a complete replay
+snapshot nor a pure estimator. There is no asynchronous delivery, automatic
+recovery, zero-assessor public path, new schema, response/default change or
+scientific read in this increment. The registered cutoff, archived inputs and
+historical review record remain unchanged. Tests must preserve object identity,
+input key presence, admission/capture/invocation order, failure and cancellation
+behavior, policy effects and existing workflow receipts; they do not establish
+production timing equivalence or complete instrument preservation.

@@ -11,8 +11,84 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+class CheckpointIdentityRefused(ValueError):
+    """A new checkpoint cannot be accepted under this durable lifecycle state."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        agent_status: Optional[str] = None,
+        identity_status: Optional[str] = None,
+    ) -> None:
+        self.reason = reason
+        self.agent_status = agent_status
+        self.identity_status = identity_status
+        super().__init__(f"Checkpoint identity admission refused: {reason}")
+
+
 class IdentityMixin:
     """Identity CRUD operations."""
+
+    async def verify_checkpoint_identity_scope(
+        self, conn, agent_id: str, identity_id: int,
+    ) -> None:
+        """Check attributed scope for both receipt reads and new acceptance.
+
+        Receipt replay may read an inactive identity's prior record, so this
+        check deliberately imposes no lifecycle gate. The new-acceptance path
+        separately locks and checks lifecycle before inserting a checkpoint.
+        """
+        if type(identity_id) is not int or identity_id <= 0:
+            raise CheckpointIdentityRefused("identity_scope_mismatch")
+        stored_identity_id = await conn.fetchval(
+            "SELECT identity_id FROM core.identities WHERE agent_id = $1",
+            agent_id,
+        )
+        if stored_identity_id is None:
+            raise CheckpointIdentityRefused("durable_identity_missing")
+        if stored_identity_id != identity_id:
+            raise CheckpointIdentityRefused("identity_scope_mismatch")
+
+    async def lock_active_checkpoint_identity(self, conn, agent_id: str) -> int:
+        """Lock and validate identity inside the caller's acceptance transaction.
+
+        The caller must already hold a transaction on ``conn`` and retain it
+        through the checkpoint insert. Match the pause/resume writers' joined
+        row-lock order so acceptance and lifecycle transitions serialize. Both
+        durable copies must exist, agree, and be active; this operation never
+        repairs or resumes lifecycle state. Receipt replay is a read and must
+        be resolved before invoking this new-acceptance gate.
+        """
+        row = await conn.fetchrow(
+            """
+            SELECT a.status AS agent_status,
+                   i.status AS identity_status,
+                   i.identity_id
+              FROM core.agents a
+              JOIN core.identities i ON i.agent_id = a.id
+             WHERE a.id = $1
+             FOR UPDATE OF a, i
+            """,
+            agent_id,
+        )
+        if row is None:
+            raise CheckpointIdentityRefused("durable_identity_missing")
+        agent_status = row["agent_status"]
+        identity_status = row["identity_status"]
+        if agent_status != identity_status:
+            raise CheckpointIdentityRefused(
+                "durable_status_mismatch",
+                agent_status=agent_status,
+                identity_status=identity_status,
+            )
+        if agent_status != "active":
+            raise CheckpointIdentityRefused(
+                "identity_not_active",
+                agent_status=agent_status,
+                identity_status=identity_status,
+            )
+        return row["identity_id"]
 
     async def upsert_identity(
         self,
@@ -1477,4 +1553,50 @@ async def fetch_timeline_identities(
         WHERE identity_id = ANY($1::bigint[]) OR agent_id = ANY($2::text[])
         """,
         identity_ids, agent_ids,
+    )
+
+
+async def fetch_identity_ids_for_resident_uuids(
+    conn, resident_uuids: List[str]
+) -> list:
+    """Resolve `identity_id` -> `agent_id` for a list of resident UUID strings."""
+    if not resident_uuids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT identity_id, agent_id::text AS uuid
+          FROM core.identities
+         WHERE agent_id = ANY($1::text[])
+        """,
+        resident_uuids,
+    )
+
+
+async def resolve_identity_ids_for_agent_handle(
+    conn, agent_id: str
+) -> List[int]:
+    """Resolve all `identity_id` rows matching an agent UUID or structured MCP handle."""
+    rows = await conn.fetch(
+        """
+        SELECT identity_id FROM core.identities WHERE agent_id = $1
+        UNION
+        SELECT identity_id FROM core.identities
+         WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
+           AND agent_id ~ '^[0-9a-f]{8}-'
+           AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
+        """,
+        agent_id,
+    )
+    return [int(r["identity_id"]) for r in rows]
+
+
+async def fetch_identity_tier_counts(conn) -> list:
+    """Count identities grouped by cached `trust_tier.name` in `core.identities`."""
+    return await conn.fetch(
+        """
+        SELECT COALESCE(NULLIF(metadata->'trust_tier'->>'name', ''), 'unknown') AS tier,
+               count(*) AS n
+        FROM core.identities
+        GROUP BY 1
+        """
     )

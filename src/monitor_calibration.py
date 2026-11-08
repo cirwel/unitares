@@ -5,7 +5,7 @@ Retrospective trajectory validation + strategic/tactical calibration.
 
 import math
 import time as _time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.calibration import calibration_checker
 from src.logging_utils import get_logger
@@ -13,7 +13,14 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-def run_calibration_recording(monitor, confidence: Optional[float], decision: Dict, drift_vector) -> Optional[Dict]:
+def run_calibration_recording(
+    monitor,
+    confidence: Optional[float],
+    decision: Dict,
+    drift_vector,
+    *,
+    checkpoint_id: Optional[str] = None,
+) -> Optional[Dict]:
     """Retrospective trajectory validation + strategic/tactical calibration.
 
     Compares previous verdict to current drift norm to assess whether the
@@ -88,7 +95,15 @@ def run_calibration_recording(monitor, confidence: Optional[float], decision: Di
     # on omission without invalidating earlier predictions awaiting outcomes.
     monitor._last_prediction_id = None
     if confidence is not None:
-        monitor.register_tactical_prediction(confidence, decision_action=decision.get('action'))
+        kwargs: Dict[str, Any] = {"decision_action": decision.get("action")}
+        if checkpoint_id is not None:
+            kwargs["checkpoint_id"] = checkpoint_id
+        try:
+            monitor.register_tactical_prediction(confidence, **kwargs)
+        except TypeError:
+            monitor.register_tactical_prediction(
+                confidence, decision_action=decision.get("action")
+            )
 
     # The former tool-usage feeder is deliberately gone (#1321). It graded
     # reported confidence against the agent's MCP tool-invocation success rate

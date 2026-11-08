@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 
 def require(condition: bool, message: str) -> None:
@@ -216,10 +217,20 @@ def main() -> None:
     env = runtime_environment(work, args.db_url, args.redis_url)
     verify_dotenv_isolation(env)
     empty_database(psql, args.db_url, args.expected_database)
+    # This harness owns an explicitly named disposable acceptance database.
+    # Mark it only after the existing empty/writer checks, never adopt a prior
+    # bootstrap marker (including an interrupted attempt).
+    require(query(psql, args.db_url, "SELECT coalesce(shobj_description(oid,'pg_database'),'') FROM pg_database WHERE datname=current_database();") == '',
+            'Acceptance database already has an ownership marker; use a fresh database')
+    install_id = str(uuid.uuid4())
+    query(psql, args.db_url,
+          "SELECT format('COMMENT ON DATABASE %I IS %L', current_database(), "
+          f"'unitares-install:{install_id}:prepared') \\gexec\n")
     work.mkdir(parents=True)
     app = work / "app"
     copy_artifact(source, app)
-    bootstrap = ["bash", str(app / "scripts/install/bootstrap_postgres.sh"), "--apply", "--db-url", args.db_url]
+    bootstrap = ["bash", str(app / "scripts/install/bootstrap_postgres.sh"), "--apply",
+                 "--install-id", install_id, "--db-url", args.db_url]
     runner = [sys.executable, str(app / "scripts/dev/apply_migrations.py"), "--db-url", args.db_url]
     interrupted = args.scenario == "interrupted"
     wrapper_dir = work / "psql-bin"

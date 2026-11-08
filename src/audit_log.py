@@ -728,9 +728,10 @@ class AuditLogger:
         pruned. The cost is the documented fire-and-forget loss window: with
         no running event loop the row is dropped.
 
-        This row does not replace the ``auto_attest`` decision that the
-        inference layer's Energy accounting writes for the same call; it is
-        the only row that says a consultation produced it.
+        Inference calls no longer run a synthetic Energy-accounting
+        ``process_update`` or write an ``auto_attest`` row (#2484); this event
+        records ``consult`` calls, and ``log_inference_call`` records direct
+        ``call_model`` and ``delegate_inference`` calls.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -740,6 +741,33 @@ class AuditLogger:
             # (get_latest_confidence_before, outcome calibration scoring)
             # take the newest row with confidence > 0 of any type, and a
             # consultation is not a confidence claim by the agent.
+            confidence=0.0,
+            details=record,
+        )
+        self._schedule_postgres_write(asdict(entry))
+
+    def log_inference_call(
+        self,
+        *,
+        agent_id: Optional[str],
+        record: Dict,
+    ) -> None:
+        """Record a direct ``call_model`` or ``delegate_inference`` call (#2484).
+
+        Replaces the synthetic ``process_update`` / ``auto_attest`` write that
+        the raw inference services previously ran on caller state. Carries
+        route, privacy class, and outcome metadata (built by
+        ``inference_outcome.build_inference_call_record``), never prompt or
+        response text.
+
+        Postgres only with ``confidence=0.0`` for the same reasons as
+        :meth:`log_consultation`: JSONL and Postgres confidence readers must
+        not mistake an inference tool call for an agent check-in or forecast.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="inference_call",
             confidence=0.0,
             details=record,
         )

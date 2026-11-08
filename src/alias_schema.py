@@ -120,6 +120,15 @@ ALIAS_SCHEMA_KEEP = {
 }
 
 
+# These pinned actions require an input that the multi-action router must keep
+# optional. Promote it only on the alias, so callers and the typed MCP wrapper
+# can reject missing/null inputs before dispatch. Keep this module runtime-free.
+ALIAS_SCHEMA_REQUIRED = {
+    "store_finding": ("summary",),
+    "update_finding": ("discovery_id",),
+}
+
+
 # Two values repeated from runtime modules rather than imported, because this
 # module stays free of runtime imports so the standalone tool-surface audit can
 # load it. tests/test_mcp_schema_parity.py pins each to its source so neither can
@@ -464,4 +473,19 @@ def build_alias_input_schema(
         field_descriptions=resolve_field_description_mode(field_descriptions),
         budget=resolve_brief_budget(budget),
     )
+    for parameter in ALIAS_SCHEMA_REQUIRED.get(alias_name, ()):
+        definition = alias_schema["properties"][parameter]
+        variants = definition.pop("anyOf", None)
+        if variants is not None:
+            non_null = [variant for variant in variants if variant.get("type") != "null"]
+            if len(non_null) == 1:
+                # Keep constraints from the string branch as well as the
+                # property's description/title; do not replace it with bare str.
+                definition.update(non_null[0])
+            else:
+                definition["anyOf"] = non_null
+        definition.pop("default", None)
+        required = alias_schema.setdefault("required", [])
+        if parameter not in required:
+            required.append(parameter)
     return alias_schema

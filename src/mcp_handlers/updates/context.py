@@ -71,6 +71,14 @@ class UpdateContext:
     outcome_event_id: Optional[str] = None
     # Acknowledgement of this call's state write, independent of later effects.
     state_persistence: StatePersistenceReceipt | None = None
+    # Neutral acceptance is distinct from the later EISV state-row write.
+    checkpoint_request: bytes | None = None
+    checkpoint_key: str | None = None
+    checkpoint_attempt_id: str | None = None
+    checkpoint_receipt: Any = None
+    checkpoint_unconfirmed: bool = False
+    checkpoint_assessment: Any = None
+    checkpoint_assessment_status: str | None = None
 
     # ── Response accumulator (Phase 6) ─────────────────────────────
     response_data: Dict[str, Any] = field(default_factory=dict)
@@ -102,6 +110,19 @@ class UpdateContext:
     mcp_server: Optional[Any] = None # mcp_server_std module (from core.py's patched ref)
 
 
+def _unavailable_agent_channel(agent_id: Optional[str]) -> Dict[str, Any]:
+    """Fallback record when the per-agent tactical calibration estimator failed to run."""
+    return {
+        "scope": "agent",
+        "agent_id": agent_id or None,
+        "value": None,
+        "calibration_error": None,
+        "n_verified_pairs": None,
+        "evidence_status": "unavailable",
+        "default_reason": "estimator_unavailable",
+    }
+
+
 def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
     """Return the deployed fleet error and cache its observational provenance.
 
@@ -123,6 +144,12 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
         candidate = calibration_checker.compute_agent_calibration_candidate(
             ctx.agent_id
         )
+        try:
+            agent_channel = calibration_checker.compute_agent_tactical_calibration_channel(
+                ctx.agent_id
+            )
+        except Exception:
+            agent_channel = _unavailable_agent_channel(ctx.agent_id)
         ctx._calibration_signal = {
             "schema": "eisv.calibration-signal.v1",
             "mode": "measurement_only",
@@ -141,6 +168,7 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
                 "freshness_reason": "legacy_fleet_bins_have_no_timestamps",
             },
             "agent_candidate": candidate,
+            "agent_channel": agent_channel,
         }
     except Exception:
         ctx._calibration_signal = {
@@ -158,6 +186,7 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
                 "agent_id": ctx.agent_id or None,
                 "evidence_status": "unavailable",
             },
+            "agent_channel": _unavailable_agent_channel(ctx.agent_id),
         }
     ctx._cal_error_ready = True
     return ctx._cal_error

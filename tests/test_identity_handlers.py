@@ -136,6 +136,114 @@ def patch_mcp_server():
 class TestEnsureAgentPersisted:
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["active", "paused", "archived", "deleted", "unknown", None, "missing"])
+    async def test_fresh_persistence_registers_only_verified_active_identity(self, monkeypatch, status):
+        from src import agent_metadata_persistence as metadata
+        from src.mcp_handlers.identity import persistence
+
+        registry = {}
+        monkeypatch.setattr(metadata, "agent_metadata", registry)
+        monkeypatch.setattr(persistence, "mcp_server", SimpleNamespace(agent_metadata=registry))
+        monkeypatch.setattr(persistence, "_get_redis", lambda: None)
+        db = AsyncMock()
+        db.get_agent.return_value = None
+        db.get_identity.side_effect = [
+            None,
+            None if status == "missing" else SimpleNamespace(identity_id=123, status=status, metadata={}),
+        ]
+        monkeypatch.setattr(persistence, "get_db", lambda: db)
+
+        await persistence.ensure_agent_persisted(
+            "fresh-uuid", "fresh-session", parent_agent_id="parent",
+            spawn_reason="subagent", thread_id="thread", thread_position=2,
+        )
+
+        if status == "active":
+            assert registry["fresh-uuid"].status == "active"
+            assert registry["fresh-uuid"].parent_agent_id == "parent"
+            assert registry["fresh-uuid"].thread_id == "thread"
+            assert registry["fresh-uuid"].node_index == 2
+            assert registry["fresh-uuid"].total_updates == 0
+        else:
+            assert registry == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["active", "paused", "archived", "deleted"])
+    @pytest.mark.parametrize("agent_exists,identity_exists", [(True, True), (True, False), (False, True)])
+    async def test_existing_durable_rows_do_not_seed_runtime_registry(self, monkeypatch, agent_exists, identity_exists, status):
+        from src import agent_metadata_persistence as metadata
+        from src.mcp_handlers.identity import persistence
+
+        registry = {}
+        monkeypatch.setattr(metadata, "agent_metadata", registry)
+        monkeypatch.setattr(persistence, "mcp_server", SimpleNamespace(agent_metadata=registry))
+        monkeypatch.setattr(persistence, "_get_redis", lambda: None)
+        db = AsyncMock()
+        identity = SimpleNamespace(identity_id=123, status=status, metadata={})
+        db.get_agent.return_value = {"id": "existing-uuid", "status": status} if agent_exists else None
+        db.get_identity.side_effect = [identity if identity_exists else None, identity]
+        monkeypatch.setattr(persistence, "get_db", lambda: db)
+
+        await persistence.ensure_agent_persisted("existing-uuid", "existing-session")
+
+        assert registry == {}
+
+    @pytest.mark.asyncio
+    async def test_failed_identity_write_does_not_register_agent(self, monkeypatch):
+        from src import agent_metadata_persistence as metadata
+        from src.mcp_handlers.identity import persistence
+
+        registry = {}
+        monkeypatch.setattr(metadata, "agent_metadata", registry)
+        monkeypatch.setattr(persistence, "mcp_server", SimpleNamespace(agent_metadata=registry))
+        monkeypatch.setattr(persistence, "_get_redis", lambda: None)
+        db = AsyncMock()
+        db.get_agent.return_value = None
+        db.get_identity.return_value = None
+        db.upsert_identity.side_effect = RuntimeError("write failed")
+        monkeypatch.setattr(persistence, "get_db", lambda: db)
+
+        assert await persistence.ensure_agent_persisted("failed-uuid", "session") is False
+        assert registry == {}
+
+    @pytest.mark.asyncio
+    async def test_fresh_registration_preserves_concurrent_lifecycle_entry(self, monkeypatch):
+        from src import agent_metadata_persistence as metadata
+        from src.agent_metadata_model import AgentMetadata
+        from src.mcp_handlers.identity import persistence
+
+        registry = {}
+        monkeypatch.setattr(metadata, "agent_metadata", registry)
+        monkeypatch.setattr(persistence, "mcp_server", SimpleNamespace(agent_metadata=registry))
+        monkeypatch.setattr(persistence, "_get_redis", lambda: None)
+        db = AsyncMock()
+        db.get_agent.return_value = None
+        paused = AgentMetadata(
+            agent_id="fresh-uuid", status="paused", created_at="2026-01-01",
+            last_update="2026-01-01", paused_at="2026-01-01",
+            total_updates=4, dialectic_conditions=["review required"],
+        )
+        reads = 0
+
+        async def read_identity(_agent_id):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                return None
+            registry["fresh-uuid"] = paused
+            return SimpleNamespace(identity_id=123, status="active", metadata={})
+
+        db.get_identity.side_effect = read_identity
+        monkeypatch.setattr(persistence, "get_db", lambda: db)
+
+        await persistence.ensure_agent_persisted("fresh-uuid", "session")
+
+        assert registry["fresh-uuid"] is paused
+        assert paused.status == "paused"
+        assert paused.total_updates == 4
+        assert paused.dialectic_conditions == ["review required"]
+
+    @pytest.mark.asyncio
     async def test_persists_new_agent(self):
         """When agent doesn't exist in PG, persists and returns True."""
         from src.mcp_handlers.identity.handlers import ensure_agent_persisted
@@ -1156,6 +1264,51 @@ class TestHandleIdentityAdapter:
              patch("src.mcp_handlers.context.update_context_agent_id"), \
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_server):
             yield mock_server
+
+    @pytest.mark.asyncio
+    async def test_nameless_identity_is_visible_without_reload_or_label_write(
+        self, patch_identity_deps, mock_db, monkeypatch,
+    ):
+        """The next read must see a durable identity minted by identity()."""
+        from src import agent_metadata_persistence as metadata
+        from src.mcp_handlers import core
+        from src.mcp_handlers.identity import handlers
+
+        registry = patch_identity_deps.agent_metadata
+        monkeypatch.setattr(metadata, "agent_metadata", registry)
+        identities = {}
+        agents = {}
+
+        async def write_identity(agent_id, **kwargs):
+            identities[agent_id] = SimpleNamespace(
+                agent_id=agent_id, identity_id=123, status="active",
+                metadata=kwargs.get("metadata", {}),
+            )
+
+        async def write_agent(agent_id, **kwargs):
+            agents[agent_id] = {"id": agent_id, **kwargs}
+
+        mock_db.get_identity.side_effect = lambda aid: identities.get(aid)
+        mock_db.get_agent.side_effect = lambda aid: agents.get(aid)
+        mock_db.upsert_identity.side_effect = write_identity
+        mock_db.upsert_agent.side_effect = write_agent
+        mock_db.get_agent_label.return_value = None
+        reload_metadata = AsyncMock()
+        monkeypatch.setattr("src.agent_state.load_metadata_async", reload_metadata)
+
+        result = parse_result(await handlers.handle_identity_adapter({
+            "client_session_id": "fresh-nameless-registry-regression",
+        }))
+
+        assert result["success"] is True
+        uid = result["uuid"]
+        assert uid in identities and uid in agents
+        assert await core.metrics_agent_is_known(uid) is True
+        reload_metadata.assert_not_awaited()
+        mock_db.update_agent_fields.assert_not_awaited()
+        assert registry[uid].total_updates == 0
+        assert registry[uid].public_agent_id == result["agent_id"]
+        mock_db.record_agent_state.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_basic_identity_call(self, patch_identity_deps, mock_db, mock_redis):

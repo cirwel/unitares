@@ -29,14 +29,11 @@ questions the record answers. This document maps them onto the system:
 
 EISV is one instrument inside the kernel, not its definition: each check-in
 returns a behavioral state estimate and preserves an inferred policy
-recommendation. The estimate is observational by default; only explicit
-operator configuration gives that recommendation lifecycle authority. The operator adopted
-moving EISV out of the core to an optional module on 2026-10-10
-([`proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
-This settles the direction, not implementation authorization: the staged gates
-and standing governed-review conditions still apply, and the estimator still
-derives today's check-in policy recommendation. [EISV_COMPUTATION.md](EISV_COMPUTATION.md)
-owns the instrument.
+recommendation. The recommendation is observational by default; only explicit
+operator configuration gives it lifecycle authority. EISV continues to run in
+that posture, maintaining state history and contributing to assessment and
+guidance. [EISV_COMPUTATION.md](EISV_COMPUTATION.md#role-runtime-and-evidence)
+owns the instrument's role, runtime status and evidence.
 
 ## Layered architecture
 
@@ -48,8 +45,8 @@ UNITARES Core does not own the agent execution loop. Agent harnesses, custom
 clients, and reference residents sit above the public interfaces and remain
 independent userlands. MCP is the primary agent-facing contract, while REST,
 the SDK, adapters, and the dashboard expose the same Core. The general-purpose
-**UNITARES Resident** belongs in that userland layer and must use those public
-contracts; its separate repository ships an early skeleton, and it is not a
+**UNITARES Resident** belongs in that userland layer and uses those public
+contracts as a separate repository (`cirwel/unitares-resident`), not a
 deployed Core component.
 
 ```
@@ -64,8 +61,8 @@ deployed Core component.
 │   FINDINGS & KG        shared, provenance-tagged cross-agent memory          │  what supports it
 │   REVIEW (DIALECTIC)   thesis / antithesis / synthesis, recorded positions   │  who challenged it
 │   OUTCOMES             typed outcome events with provenance                  │  what happened
-│   PROPRIOCEPTION       state estimate → risk → recommendation; optional      │  one instrument,
-│   & POLICY             operator-configured actuator                          │  not the record
+│   PROPRIOCEPTION       state estimate → risk → recommendation                │  deployed instrument
+│   & POLICY             optional operator-configured actuator                 │  explicit authority
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ COORDINATION    BEAM lease plane · governed effects · agent messaging        │  single-writer
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -78,12 +75,12 @@ deployed Core component.
 | Layer | Status | One-line status |
 |---|---|---|
 | Identity & lineage | **Mature** | Load-bearing; strict write gate live; anchors everything |
-| Findings & knowledge graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |
-| Review (dialectic) | **In-flight** | Independent reviewer serving live where the orchestrated-review flag is on (default off); reviewer-quality is the open frontier |
+| Findings & knowledge graph | **Live** | Provenance-tagged relational store + FTS + pgvector + Apache AGE graph links |
+| Review (dialectic) | **Live** | Thesis/antithesis/synthesis protocol with independent orchestrated reviewer dispatch (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW`) |
 | Outcomes | **Deployed** | Outcome claims are recorded with provenance; independence depends on the producer |
 | Policy & EISV | **Deployed** | Runtime observations and controller history → smoothed indices → assessment and policy |
-| Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
-| Reference residents · Storage · Interfaces | **Live / Mature** | Operational; UNITARES Resident has a separate early skeleton, not yet a usable agent product |
+| Coordination (BEAM) | **Live** | Lease plane, governed effects, and agent messaging on port 8788 |
+| Reference residents · Storage · Interfaces | **Live / Mature** | Operational; `unitares-resident` ships separately as a first-party agent runtime (`cirwel/unitares-resident`) |
 
 Evidence for particular diagnostic or decision benefits is tracked separately
 in the [claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status).
@@ -105,7 +102,7 @@ live longer than one session is a set of capabilities, not a roster:
 
 `agents/` ships **reference** long-lived agents: a janitor, a fleet monitor, a code watcher, a metrics chronicler and a local-model triage scribe. They are examples of the pattern and operational tools for the deployment that runs them. They are specialized, optional governed clients, not Core internals or a general agent framework, and are **live** in the reference deployment. They are outside the shipped server package and are not governance internals; see [`agents/README.md`](../agents/README.md). The orchestrated dialectic reviewer also lives in `agents/`, but it is part of an optional server feature and is described under [Review](#review-dialectic-and-recovery) below.
 
-The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, EISV dynamics, policy recommendations and knowledge graph apply to both.
+The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, policy recommendations and knowledge graph apply to both, and both report EISV on the same axes. Their sensors differ, so their EISV levels are not directly comparable ([sensory class split](ontology/eisv-proprioception-contract.md#sensory-class-split--which-axis-needs-which-validation-regime-2026-08-17)).
 
 ## Interfaces and transport surfaces
 

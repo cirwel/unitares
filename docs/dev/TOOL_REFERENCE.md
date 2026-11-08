@@ -152,12 +152,12 @@ Main tools for sharing work and getting feedback
 - **Workflow alias:** `sync_state`
 - **Related:** `simulate_update`, `get_governance_metrics`, `export(action='history')`
 
-Record a work check-in and get a governance decision: it advances and persists this agent's EISV state, returning proceed or pause. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. Neither no-write path is a parameter of this tool: get_governance_metrics reads the verdict without writing, and the separate simulate_update tool previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
+Record a work check-in. After admission, a fresh checkpoint is accepted before synchronous EISV assessment; checkpoint acceptance and later state persistence have separate receipts. A keyed replay returns the original checkpoint without repeating assessment, and an assessment failure can leave the checkpoint accepted. On an assessment-bearing response, policy_evaluation preserves the inferred recommendation, decision carries the effective action, and enforcement reports posture and applied lifecycle effects. Default observe posture leaves inferred pauses advisory; existing lifecycle holds still apply. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. Neither no-write path is a parameter of this tool: get_governance_metrics reads the verdict without writing, and the separate simulate_update tool previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 WHAT IT DOES:
-- Records your update and runs the EISV governance cycle
-- Returns a decision (proceed/pause) based on current state
-- Provides EISV metrics: Energy (E), Information Integrity (I), Entropy (S), Valence (V)
+- A fresh admitted update records a checkpoint, then runs the EISV governance cycle
+- Assessment-bearing responses return an effective decision (proceed/pause); receipt-only responses supply no new assessment
+- Provides EISV metrics: Energy (E), Information Integrity (I), Entropy (S), Valence (V). These are weighted behavioral indices; inspect their source and derivation
 - Reports coherence tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score
 
 SEE ALSO:
@@ -171,11 +171,11 @@ ALTERNATIVES:
 - Want historical data? → Use export(action='history') (time series, not current state)
 
 WHEN TO USE:
-- After completing a task or generating output
-- After making significant progress or changes
+- At a meaningful milestone when you also hold a judgment the substrate cannot infer: a self-correction, revised belief, material change in uncertainty or complexity, or handoff assessment after substantive work.
+- One check-in may cover a coherent unit of work. Task completion, generated output, elapsed time, turn/tool counts, reminders, or automatic substrate observations alone do not call for one.
 
 ~~~text
-RETURNS:
+ASSESSMENT-BEARING RESPONSE FIELDS (shape depends on response_mode; status labels are model classifications):
 {
   "success": true,
   "agent_id": "string",
@@ -210,10 +210,11 @@ RETURNS:
 ~~~
 
 PARAMETERS (most are optional):
+- idempotency_key (string): Reuse the same explicit key and submitted content to recover an accepted checkpoint without repeating assessment
 - client_session_id (string): In-session binding identifier (from start_session() or identity()); not a continuity_token or cross-process proof
 - response_text (string): Describe what you did (optional but helpful)
 - complexity (float 0-1): How complex was your task? (default: 0.5)
-- confidence (float 0-1): How confident are you? (optional, auto-derived if omitted)
+- confidence (float 0-1): Optional explicit forecast. Omission does not mint an agent prediction; the compatibility estimator stays internal
 - task_type (string): "convergent" | "divergent" | "mixed" (default: "mixed")
 
 RELATED TOOLS:
@@ -225,7 +226,7 @@ RELATED TOOLS:
 ERROR RECOVERY:
 - "agent_id is required": Identity auto-binds on first call - just include client_session_id
 - "Authentication required": Call start_session(force_new=true) once, then pass its client_session_id on this call
-- Timeout: Retry with simpler parameters or check system resources
+- Unconfirmed checkpoint or timeout: retry the same content with the same explicit idempotency_key; without a key, a retry may create another record
 
 ~~~text
 EXAMPLE: Minimal call (identity auto-binds)
@@ -263,7 +264,7 @@ EXAMPLE RESPONSE:
     "verdict": "safe",
     "lambda1": 0.18,
     "health_status": "healthy",
-    "health_message": "Coherence 0.85, risk_score 0.23 acceptable"
+    "health_message": "Low risk (23.00%)"
   },
   "eisv_labels": {"E": "Energy", "I": "Information Integrity", "S": "Entropy", "V": "Valence"}
 }
@@ -396,7 +397,7 @@ EISV FIELD CONTRACT:
 - **Timeout:** 30s
 - **Related:** `process_agent_update`, `get_governance_metrics`
 
-Run one governance cycle as a dry run and return the decision and metrics a real check-in would have produced, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
+Run one governance cycle as a dry run and preview its decision and metrics from the current inputs, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 USE CASES:
 - Test governance decisions without persisting
@@ -429,7 +430,7 @@ RETURNS:
     "coherence_source": string, "coherence_role": string,
     "risk_score": float,  # Governance/operational risk
     "attention_score": float,  # DEPRECATED: Use risk_score instead. Kept for backward compatibility.
-    "phi": float,  # Primary physics signal
+    "phi": float,  # Φ objective; cold-start verdict input and configured policy floor
     "verdict": "safe" | "caution" | "high-risk",  # Primary governance signal
     "lambda1": float, "health_status": "healthy" | "moderate" | "critical"
   },
@@ -459,12 +460,12 @@ EXAMPLE RESPONSE:
 {
   "success": true,
   "simulation": true,
-  "decision": {"action": "approve", "reason": "Low risk (0.23)", "require_human": false},
+  "decision": {"action": "proceed", "reason": "Low risk (0.23)", "require_human": false},
   "metrics": {
     "coherence": 0.50,
     "coherence_source": "legacy_tanh_v", "coherence_role": "ode_control_feedback",
     "risk_score": 0.23,  # Governance/operational risk (primary)
-    "phi": 0.35,  # Primary physics signal
+    "phi": 0.35,  # Φ objective; cold-start verdict input and configured policy floor
     "verdict": "safe",  # Primary governance signal
     "E": 0.67, "I": 0.89, "S": 0.45, "V": -0.03
   },
@@ -1272,7 +1273,7 @@ Read accepts_host_id_from, not available, to learn which tool will take it. An u
 
 Ask a model or council to critique a design or assumption (no review record; thorough/council is opt-in; on-record: request_review).
 
-Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable, unless host_id explicitly pins an existing host. Automatic selection follows consult.thorough.prefer in UNITARES_INFERENCE_HOSTS_FILE; without that order it requires exactly one eligible available peer. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless automatic routing uses allow_degraded=true, which returns a local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. host_id pins a host and infers omitted effort (standard for Ollama/HF, thorough for CLI); an explicit effort must match. External hosts require cloud_allowed and pinned calls require allow_degraded=false. No host fallback or same-family exclusion applies to explicit selection. host_ids asks a council of 2 or 3 CLI hosts the same brief in parallel: each answers separately under members, with its own record, and nothing combines the answers. model picks a local model (standard lane). Use delegate_inference for model or timeout control on a CLI host; consult takes no sampling control. Full diagnostics explain tokens_used: backend aggregate usage, not answer length or comparable billed cost.
+Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable, unless host_id explicitly pins an existing host. Automatic selection follows consult.thorough.prefer in UNITARES_INFERENCE_HOSTS_FILE; without that order it requires exactly one eligible available peer. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless automatic routing uses allow_degraded=true, which returns a local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). Does not update your governance state. host_id pins a host and infers omitted effort (standard for Ollama/HF, thorough for CLI); an explicit effort must match. External hosts require cloud_allowed and pinned calls require allow_degraded=false. No host fallback or same-family exclusion applies to explicit selection. host_ids asks a council of 2 or 3 CLI hosts the same brief in parallel: each answers separately under members, with its own record, and nothing combines the answers. model picks a local model (standard lane). Use delegate_inference for model or timeout control on a CLI host; consult takes no sampling control. Full diagnostics explain tokens_used: backend aggregate usage, not answer length or comparable billed cost.
 
 ### `call_model`
 
@@ -1284,7 +1285,7 @@ Send a brief, get back advisory model evidence, never a governed verdict. effort
 
 Deprecated since 2026-10-16: use consult(effort='standard'), which reaches the same local host.
 
-Still callable until its removal, no earlier than 2026-12-02. Its model, temperature and max_tokens controls for HTTP hosts go with it (consult does not take them, by design; delegate_inference keeps model for a CLI host); if you depend on one, say so with leave_note before then. One synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Still callable until its removal, no earlier than 2026-12-02. Its model, temperature and max_tokens controls for HTTP hosts go with it (consult does not take them, by design; delegate_inference keeps model for a CLI host); if you depend on one, say so with leave_note before then. One synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity. Audited as event_type='inference_call' (route, privacy class and outcome, never prompt or response text); it does not run a governance update.
 
 ### `delegate_inference`
 
@@ -1296,7 +1297,7 @@ Still callable until its removal, no earlier than 2026-12-02. Its model, tempera
 
 Hand a bounded task to a strong-model CLI host (operator extension, off by default); for a local completion use consult.
 
-Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing; the orchestrator stops it 30s after timeout_s regardless. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s): the 45s default timeout_s fits that. A larger timeout_s (up to 420) is only for a client that waits longer; otherwise the client sees a bare transport timeout with no id. consult at effort='thorough' takes this same lane with optional host_id selection. Omitted host_id uses the deployment's consult.thorough.prefer order in UNITARES_INFERENCE_HOSTS_FILE, or the only enabled, configured and available host; missing or ambiguous selection refuses with setup guidance. No vendor is the default. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing; the orchestrator stops it 30s after timeout_s regardless. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s): the 45s default timeout_s fits that. A larger timeout_s (up to 420) is only for a client that waits longer; otherwise the client sees a bare transport timeout with no id. consult at effort='thorough' takes this same lane with optional host_id selection. Omitted host_id uses the deployment's consult.thorough.prefer order in UNITARES_INFERENCE_HOSTS_FILE, or the only enabled, configured and available host; missing or ambiguous selection refuses with setup guidance. No vendor is the default. Audited as event_type='inference_call' (route, privacy class and outcome, never prompt or response text); it does not run a governance update.
 
 ## Export & History
 
@@ -1669,7 +1670,7 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. To OPEN a review, use request_review; this lane can change governance state. For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis, reassign and reconcile_effect each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request. The separate consult tool advises without opening a record; dialectic(action='consult') is different: it files an outside verdict on an existing session as a non-authoritative transcript record. reconcile_effect is an operator-only recovery action: it may apply a still-pending durable terminal effect, but it never automatically replays an applying or unknown-partial effect.
+Open and advance governed, on-record peer review sessions. To OPEN a review, use request_review; this lane can change governance state. For advice outside a governed-review session, use consult; consultation audit metadata still applies. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis, reassign and reconcile_effect each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request. The separate consult tool advises without opening a record; dialectic(action='consult') is different: it files an outside verdict on an existing session as a non-authoritative transcript record. reconcile_effect is an operator-only recovery action: it may apply a still-pending durable terminal effect, but it never automatically replays an applying or unknown-partial effect.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|

@@ -19,7 +19,7 @@ Process `{{facts.writer_process_id}}`, acting for `{{facts.writer_principal_id}}
 
 The record binds the finding to the process that wrote it (an
 `{{relation.authored}}` link), so the claim stays attributed to its author
-across sessions and handoffs.
+across sessions and runtimes.
 
 ## 2. The evidence disagrees
 

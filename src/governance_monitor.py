@@ -157,6 +157,7 @@ from src.monitor_cirs import run_cirs as _run_cirs_impl
 from src.monitor_calibration import run_calibration_recording as _run_calibration_recording_impl
 from src.monitor_result import build_result as _build_result_impl
 from src.monitor_prediction import (
+    bind_agent_predictions as _bind_agent_predictions,
     register_tactical_prediction as _register_prediction,
     lookup_prediction as _lookup_prediction,
     consume_prediction as _consume_prediction,
@@ -281,7 +282,7 @@ class UNITARESMonitor:
         # pre-floor verdict/risk pair still exists) and emitted once the decision
         # is known. Rebuilt or cleared at the top of every update.
         self._pending_verification_shadow_row: Optional[Dict[str, Any]] = None
-        self._cached_outcome_history: Optional[list] = None  # Populated by Phase 5, used by process_update
+        self._cached_outcome_history: Optional[list] = None  # Updated from call-local _outcome_history in process_update
 
         # Continuous self-validation: track previous verdict for trajectory comparison
         self._prev_verdict_action: Optional[str] = None   # 'proceed', 'pause', etc.
@@ -318,7 +319,9 @@ class UNITARESMonitor:
         # the id. Enables exact filtration for the sequential calibration lane
         # when the agent echoes the id back on outcome_event. See
         # src/sequential_calibration.py module docstring for the null it serves.
-        self._open_predictions: Dict[str, Dict[str, Any]] = {}
+        self._open_predictions: Dict[str, Dict[str, Any]] = _bind_agent_predictions(
+            self.agent_id, {}, overwrite_existing=bool(load_state)
+        )
         self._last_prediction_id: Optional[str] = None
         self._prediction_ttl_seconds: float = 3600.0  # orphan cleanup threshold
 
@@ -460,6 +463,7 @@ class UNITARESMonitor:
                             float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
                         )
                     )
+                    _bind_agent_predictions(self.agent_id, self._open_predictions)
                 from src.eisv_instrument import TRACK_STATE_KEY, restore_track
 
                 restore_track(self, data.pop(TRACK_STATE_KEY, None))
@@ -1277,6 +1281,7 @@ class UNITARESMonitor:
             client_session_id=client_session_id,
             task_type=task_type,
             tool_usage_stats=tu_stats,
+            epistemic_class=agent_state.get("epistemic_class"),
         )
         
         # Store for response and downstream use
@@ -1321,6 +1326,13 @@ class UNITARESMonitor:
         # easy to misread as "the physical sensor is cut", so record which
         # source actually fed these observations rather than leaving it to be
         # inferred from raw_obs magnitudes.
+        if "_outcome_history" in agent_state:
+            call_outcome_history = agent_state.get("_outcome_history")
+            if call_outcome_history is not None:
+                self._cached_outcome_history = call_outcome_history
+        else:
+            call_outcome_history = self._cached_outcome_history
+
         sensor_eisv = agent_state.get('sensor_eisv')
         if sensor_eisv:
             # Use externally supplied sensor EISV directly when available
@@ -1329,6 +1341,13 @@ class UNITARESMonitor:
             beh_S_obs = float(sensor_eisv.get('S', 0.2))
             beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
         else:
+            from src.dual_log.continuity import should_exclude_template_divergence
+
+            exclude_template_div = should_exclude_template_divergence(
+                continuity_metrics,
+                response_text=response_text,
+                epistemic_class=agent_state.get('epistemic_class'),
+            )
             # Non-embodied agents: compute from behavioral_sensor
             beh_sensor = compute_behavioral_sensor_eisv(
                 decision_history=self.state.decision_history,
@@ -1340,11 +1359,17 @@ class UNITARESMonitor:
                 V_history=self.state.V_history,
                 calibration_error=getattr(drift_vector, 'calibration_deviation', None),
                 drift_norm=getattr(drift_vector, 'norm', None),
-                complexity_divergence=continuity_metrics.complexity_divergence,
+                complexity_divergence=(
+                    None if exclude_template_div else continuity_metrics.complexity_divergence
+                ),
                 continuity_E_input=continuity_metrics.E_input,
-                continuity_I_input=continuity_metrics.I_input,
-                continuity_S_input=continuity_metrics.S_input,
-                outcome_history=self._cached_outcome_history,
+                continuity_I_input=(
+                    None if exclude_template_div else continuity_metrics.I_input
+                ),
+                continuity_S_input=(
+                    None if exclude_template_div else continuity_metrics.S_input
+                ),
+                outcome_history=call_outcome_history,
                 tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
             )
             if beh_sensor:
@@ -1353,11 +1378,35 @@ class UNITARESMonitor:
                 beh_S_obs = beh_sensor['S']
                 beh_obs_source = 'behavioral_sensor'
             else:
-                # Insufficient history — use continuity layer inputs as fallback
+                # Insufficient history — use continuity layer inputs as fallback.
+                # When template divergence is excluded (#2418), I_input and
+                # S_input are treated as absent and use the same 0.5 / 0.2
+                # missing-input defaults as None.
                 beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                beh_I_obs = continuity_metrics.I_input if continuity_metrics.I_input is not None else 0.5
-                beh_S_obs = continuity_metrics.S_input if continuity_metrics.S_input is not None else 0.2
+                beh_I_obs = (
+                    0.5
+                    if exclude_template_div or continuity_metrics.I_input is None
+                    else continuity_metrics.I_input
+                )
+                beh_S_obs = (
+                    0.2
+                    if exclude_template_div or continuity_metrics.S_input is None
+                    else continuity_metrics.S_input
+                )
                 beh_obs_source = 'continuity_fallback'
+                # Replace any upstream attempted sensor trace with the fallback
+                # actually consumed. Telemetry failure must not alter intake.
+                agent_state.pop('_eisv_derivation', None)
+                try:
+                    from src.eisv_telemetry import build_continuity_fallback_derivation
+
+                    agent_state['_eisv_derivation'] = build_continuity_fallback_derivation(
+                        continuity_metrics,
+                        template_divergence_excluded=exclude_template_div,
+                        computed={'E': beh_E_obs, 'I': beh_I_obs, 'S': beh_S_obs},
+                    )
+                except Exception as exc:
+                    logger.debug("Continuity fallback trace unavailable: %s", type(exc).__name__)
 
         # Provenance for the authoritative vector: which source produced the
         # observations this check-in's behavioral state was updated from.
@@ -1672,6 +1721,11 @@ class UNITARESMonitor:
             confidence=self_confidence,
             decision=decision,
             drift_vector=drift_vector,
+            checkpoint_id=(
+                agent_state.get("_checkpoint_id")
+                if isinstance(agent_state, dict)
+                else None
+            ),
         )
 
         # Issue #1995: measure the absolute-floor geometry after the behavioral
@@ -2103,9 +2157,22 @@ class UNITARESMonitor:
         """Run CIRS oscillation detection and resonance damping."""
         return _run_cirs_impl(self, risk_score, unitares_verdict)
 
-    def _run_calibration_recording(self, confidence, decision, drift_vector):
+    def _run_calibration_recording(
+        self,
+        confidence,
+        decision,
+        drift_vector,
+        *,
+        checkpoint_id: Optional[str] = None,
+    ):
         """Retrospective trajectory validation + strategic/tactical calibration."""
-        return _run_calibration_recording_impl(self, confidence, decision, drift_vector)
+        return _run_calibration_recording_impl(
+            self,
+            confidence,
+            decision,
+            drift_vector,
+            checkpoint_id=checkpoint_id,
+        )
 
     # ------------------------------------------------------------------
     # Tactical prediction registry
@@ -2122,6 +2189,7 @@ class UNITARESMonitor:
         confidence: float,
         *,
         decision_action: Optional[str] = None,
+        checkpoint_id: Optional[str] = None,
         advertise: bool = True,
     ) -> str:
         """Mint a prediction id for this (agent, confidence) pair and register it.
@@ -2136,11 +2204,14 @@ class UNITARESMonitor:
         ``outcome_event`` is refused as PREDICTION_REUSE_CONFLICT while the
         check-in's real prediction expires unadvertised.
         """
+        _bind_agent_predictions(getattr(self, "agent_id", None), self._open_predictions)
         pid = _register_prediction(
             self._open_predictions, confidence,
             decision_action=decision_action,
             prediction_ttl_seconds=self._prediction_ttl_seconds,
+            checkpoint_id=checkpoint_id,
         )
+        _bind_agent_predictions(getattr(self, "agent_id", None), self._open_predictions)
         if advertise:
             self._last_prediction_id = pid
         return pid
@@ -2166,6 +2237,13 @@ class UNITARESMonitor:
         """Drop prediction records older than ttl_seconds. Returns count removed."""
         ttl = float(ttl_seconds if ttl_seconds is not None else self._prediction_ttl_seconds)
         removed = _expire_predictions(self._open_predictions, ttl)
+        if not self._open_predictions:
+            _bind_agent_predictions(
+                getattr(self, "agent_id", None),
+                self._open_predictions,
+                merge_existing=False,
+                clear_if_empty=True,
+            )
         if self._last_prediction_id and self._last_prediction_id not in self._open_predictions:
             self._last_prediction_id = None
         return removed

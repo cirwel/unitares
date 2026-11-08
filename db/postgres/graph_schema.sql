@@ -5,7 +5,11 @@
 --   psql "$DB_POSTGRES_URL" -f db/postgres/graph_schema.sql
 
 -- Load AGE extension
-LOAD 'age';
+DO $$ BEGIN
+    IF current_setting('is_superuser') = 'on' THEN
+        EXECUTE 'LOAD ''age''';
+    END IF;
+END $$;
 SET search_path = ag_catalog, core, audit, public;
 
 -- Create the graph (idempotent)

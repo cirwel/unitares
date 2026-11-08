@@ -108,7 +108,7 @@ async function section(historyResult, raw = events()) {
     return typeof historyResult === "function" ? historyResult(id, options) : historyResult;
   };
   dom.window.Chart = class FakeChart {
-    constructor(_canvas, config) { this.data = config.data; charts.push(this); }
+    constructor(canvas, config) { this.canvas = canvas; this.data = config.data; this.options = config.options; charts.push(this); }
     destroy() { this.destroyed = true; }
     update() {}
   };
@@ -123,6 +123,96 @@ async function click(dom, selector) {
 }
 
 describe("EISV telemetry source separation", () => {
+  it("does not draw the startup source change as a behavioral V drop", async () => {
+    // Representative values from the diagnosed third-update mechanism. No
+    // agent identity or report text is retained in this synthetic history.
+    const points = [
+      ["ode_fallback", "ode_fallback", -0.003, 1],
+      ["ode_fallback", "ode_fallback", -0.020, 1],
+      ["behavioral", "continuity_fallback", -0.153137, 2],
+      ["behavioral", "behavioral_sensor", -0.10, 3],
+      ["behavioral", "behavioral_sensor", 0, 3],
+      ["behavioral", "continuity_fallback", -0.12, 4],
+    ].map(([primary, source, V, segment], i) => ({
+      t: `2026-11-04T12:0${i}:00Z`, E: 0.3, I: 0.5, S: 0.2, V, coherence: 0.49,
+      telemetry: { primary_source: primary, measurement_source: source,
+        behavioral_source: i < 3 || i === 5 ? "continuity_fallback" : "behavioral_sensor",
+        coherence_source: "legacy_tanh_v", coherence_role: "ode_control_feedback" },
+      chart_segments: { eisv: segment, coherence: 1 },
+    }));
+    const { dom, charts } = await section({ source: "live", data: { points } });
+    await click(dom, '[data-traj-id="agent-1"]');
+    const lower = charts.find((c) => c.canvas.id === "eisv-traj-lower");
+    const valence = lower.data.datasets.filter((d) => d.label.startsWith("Valence"));
+    expect(valence.map((d) => d.data)).toEqual([
+      [-0.003, -0.020, null, null, null, null],
+      [null, null, -0.153137, null, null, -0.12],
+      [null, null, null, -0.10, 0, null],
+    ]);
+    valence.forEach((d) => {
+      expect(d.spanGaps).toBe(false);
+      expect(d.fill).toBe(false);
+      expect(d.tension).toBe(0);
+      expect(d.pointRadius).toBeGreaterThan(0); // update 3 must not disappear
+    });
+    const upper = charts.find((c) => c.canvas.id === "eisv-traj-upper");
+    const coherence = upper.data.datasets.filter((d) => d.label.startsWith("Coherence"));
+    expect(coherence).toHaveLength(1);
+    expect(coherence[0].label).toContain("ODE control feedback");
+    expect(coherence[0].data).toEqual(points.map((p) => p.coherence));
+    expect(lower.options.plugins.tooltip.callbacks.title([{ dataIndex: 2 }])).toBe(points[2].t);
+    expect(lower.options.plugins.tooltip.callbacks.afterBody([{ dataIndex: 2 }]).join(" "))
+      .toContain("Estimator: behavioral · consumed source: continuity_fallback");
+    dom.window.EISV.retheme();
+    expect(charts.at(-1).data.datasets.filter((d) => d.label.startsWith("Valence")).map((d) => d.data))
+      .toEqual(valence.map((d) => d.data));
+    expect(dom.window.document.getElementById("eisv-trajectory").textContent)
+      .toContain("only where it supplied the reported values");
+  });
+
+  it("breaks same-source lines across hidden transitions and absent run provenance", async () => {
+    const points = [1, 1, 3, undefined].map((segment, i) => ({
+      ...observation(), V: i === 3 ? NaN : 0,
+      telemetry: { primary_source: "behavioral", measurement_source: "behavioral_sensor" },
+      chart_segments: { eisv: segment },
+    }));
+    const { dom, charts } = await section({ source: "live", data: { points } });
+    await click(dom, '[data-traj-id="agent-1"]');
+    const v = charts.at(-1).data.datasets.find((d) => d.label.startsWith("Valence"));
+    const color = (a, b) => v.segment.borderColor({ p0DataIndex: a, p1DataIndex: b });
+    expect(v.data).toEqual([0, 0, 0, null]);
+    expect(color(0, 1)).not.toBe("transparent");
+    expect(color(1, 2)).toBe("transparent"); // B omitted between two A samples
+    expect(color(2, 3)).toBe("transparent"); // old server cannot establish continuity
+  });
+
+  it("shows missing and legacy-inferred producers as isolated observations", async () => {
+    const points = [
+      { t: "2026-11-04T12:00:00Z", E: 0, V: null },
+      { t: "2026-11-04T12:01:00Z", E: 0.5, V: -0.2,
+        telemetry: { schema: "eisv.telemetry.summary.legacy", primary_source: "ode_fallback", measurement_source: "ode_fallback" } },
+      { t: "2026-11-04T12:02:00Z", E: 0.4,
+        telemetry: { primary_source: "behavioral", measurement_source: "unknown", coherence_source: "legacy_tanh_v" } },
+      { t: "2026-11-04T12:03:00Z", E: 0.6,
+        telemetry: { primary_source: "unknown", measurement_source: "behavioral_sensor", coherence_role: "unknown" } },
+    ];
+    const { dom, charts } = await section({ source: "live", data: { points } });
+    await click(dom, '[data-traj-id="agent-1"]');
+    charts.slice(-2).flatMap((c) => c.data.datasets).forEach((d) => {
+      expect(d.showLine).toBe(false);
+      expect(d.label).toContain("source unrecorded");
+    });
+    const upper = charts.at(-2), lower = charts.at(-1);
+    expect(upper.data.datasets).toHaveLength(3); // one item per dimension
+    expect(lower.data.datasets).toHaveLength(2);
+    expect(upper.data.datasets[0].data).toEqual([0, 0.5, 0.4, 0.6]);
+    expect(lower.data.datasets[1].data).toEqual([null, -0.2, null, null]);
+    const tooltip = upper.options.plugins.tooltip.callbacks.afterBody;
+    expect(tooltip([{ dataIndex: 1 }])[0]).toContain("(legacy inference)");
+    expect(tooltip([{ dataIndex: 2 }])[0]).toContain("Estimator: behavioral · consumed source: unknown");
+    expect(tooltip([{ dataIndex: 3 }])[0]).toContain("Estimator: unknown · consumed source: behavioral_sensor");
+  });
+
   it("buckets a selected source without averaging another instrument into it", () => {
     const dom = new JSDOM("", { runScripts: "outside-only", url: "https://governance.test/#eisv" });
     dom.window.SNAPSHOT = {};

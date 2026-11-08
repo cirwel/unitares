@@ -33,7 +33,7 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     ledger_text = " ".join(
         (PROJECT_ROOT / "docs" / "EVIDENCE_AND_LIMITS.md").read_text(encoding="utf-8").split()
     )
-    assert "External adoption remains unvalidated" in ledger_text
+    assert "single-operator deployment" in ledger_text
     assert "did not establish predictive lift" in ledger_text
     assert "read-specific power" in ledger_text
     assert "inconclusive, not a demonstrated negative" in ledger_text

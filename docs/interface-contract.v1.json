@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "2.3.0",
+  "version": "2.4.1",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "ceda56df0c248edd7393bec9b51056483de59f32392a7b33aad4467c03f8d9d7",
+  "surface_sha256": "e22e55dca930c46dca3fbf97a428b37438bff1f1914bef4b5a5763d6d4099945",
   "capabilities": [
     {
       "name": "start_session",
@@ -37,7 +37,7 @@
       "name": "sync_state",
       "implementation": "process_agent_update",
       "kind": "workflow_alias",
-      "input_schema_sha256": "99d7217504654ca666f84dffd5abdf3d2a5a43923d07eec174de17daf6e512e8",
+      "input_schema_sha256": "476bea4c642b769519148c581ef566d1d4b8b2e993831370f498ed07b5a1d4a1",
       "transport_names": {
         "mcp_streamable_http": "sync_state",
         "rest_v1_tools": "sync_state",
@@ -70,7 +70,7 @@
       "name": "store_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "f1de51b2470cdd204399eab537d560807be342e3d0bdbd54caa874c90938be2d",
+      "input_schema_sha256": "4217df4470d0b7c35163c4f2c5b8ad410c4a5a6a6cb65360515bf3678b1c1e06",
       "transport_names": {
         "mcp_streamable_http": "store_finding",
         "rest_v1_tools": "store_finding",
@@ -81,7 +81,7 @@
       "name": "update_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "01651b4bcc3ce2b67a623392d8feec186f049feb0c6906860643f4b37b633f72",
+      "input_schema_sha256": "976943f53957e8c48f90da2786056185424581e7550aa0c78974b049f429f1ae",
       "transport_names": {
         "mcp_streamable_http": "update_finding",
         "rest_v1_tools": "update_finding",
@@ -136,7 +136,7 @@
       "name": "process_agent_update",
       "implementation": "process_agent_update",
       "kind": "canonical_tool",
-      "input_schema_sha256": "9f48449c835ac674eb340e352158ec173524d29e2108f09631c822e3ffa020cf",
+      "input_schema_sha256": "f2c51eac70cb5ccacbb8d1e580197cf9e49873c9b942e92b8ddc1bdc2709afa1",
       "transport_names": {
         "mcp_streamable_http": "process_agent_update",
         "rest_v1_tools": "process_agent_update",

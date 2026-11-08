@@ -12,7 +12,11 @@ import time as _time
 from copy import deepcopy
 from typing import Dict, Any, Optional
 from src.logging_utils import get_logger
-from src.monitor_prediction import lookup_prediction, consume_prediction
+from src.monitor_prediction import (
+    consume_prediction,
+    get_agent_predictions,
+    lookup_prediction,
+)
 from src.grounding.outcome_anchors import (
     EXCLUSION_REASON_FIXTURE,
     EXCLUSION_REASON_SCRAPED,
@@ -374,7 +378,7 @@ async def record_outcome(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     if prediction_id:
         _m = _monitors.get(agent_id) if isinstance(_monitors, dict) else None
-        open_predictions = getattr(_m, "_open_predictions", None) if _m else None
+        open_predictions = get_agent_predictions(agent_id, _m)
         if open_predictions is not None:
             record_peek = lookup_prediction(open_predictions, prediction_id)
             if record_peek is None:
@@ -533,6 +537,12 @@ async def record_outcome(arguments: Dict[str, Any]) -> Dict[str, Any]:
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
+    detail.pop("checkpoint_id", None)
+    if (
+        prediction_record is not None
+        and prediction_record.get("checkpoint_id") is not None
+    ):
+        detail["checkpoint_id"] = prediction_record["checkpoint_id"]
 
     persistence_status = "created"
     if prediction_id:

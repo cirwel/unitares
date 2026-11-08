@@ -4,10 +4,12 @@ description: >
   Compatibility umbrella skill for UNITARES, accountability infrastructure for
   long-running AI agents. Use this as the entrypoint when you need the overall
   model and route into the split governance skills.
-last_verified: "2026-10-29"
+last_verified: "2026-11-05"
 freshness_days: 35
 source_files:
+  - unitares/docs/EISV_COMPUTATION.md
   - unitares/src/agent_loop_detection.py
+  - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/tool_stability.py
@@ -53,17 +55,24 @@ review, outcomes, and reconstruction. Identity, shared memory, review and
 outcome records are the core; the EISV state model below is one instrument in
 the check-in path.
 
-## Core Model
+## Check-in Instrument
 
-Each check-in evaluates agent state with the **EISV** model:
+The current implementation invokes **EISV** synchronously for newly accepted
+check-ins. It maintains a time-smoothed state estimate that informs guidance
+and policy. Neutral acceptance survives assessment failure, and replaying a
+checkpoint receipt does not evaluate state again. See `governance-lifecycle`
+for acceptance and retry semantics.
 
-- `E`: effective energy / execution drive
-- `I`: information integrity / calibration
-- `S`: entropy / drift / instability
-- `V`: valence (signed E-I imbalance)
+- `E`: weighted complexity, outcome, continuity, and tool observations
+- `I`: calibration and consistency features
+- `S`: deviations and activity features
+- `V`: separately smoothed raw E/I observation gap
 
-EISV estimates runtime state; `record_result` grades a check-in against a real
-outcome.
+These describe the behavioral producer; other producers share the field names.
+The [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence)
+separates these operational definitions, their intended interpretations,
+evidence of benefit and the staged optional-module direction. `record_result`
+grades a check-in against a real outcome.
 How to read `coherence` and its producer tags is in
 `skills/governance-fundamentals/SKILL.md` (*Coherence*).
 
@@ -72,7 +81,9 @@ EISV is digital proprioception, not an authority grant. By default,
 recommendation, while a recommended pause becomes non-coercive `proceed` /
 `guide` with `enforcement.applied=false`. Only an operator's explicit
 `UNITARES_POLICY_ACTUATION=enforce` setting gives inferred policy the historical
-circuit-breaker effect. Identity, authorization, archive state, existing
+circuit-breaker effect. Observation posture keeps the estimator running; it
+does not make the current check-in implementation assessor-free. Identity,
+authorization, archive state, existing
 durable pauses, and coordination controls remain authoritative in both modes.
 Dialectic is an optional communication and review protocol unless an actual
 applied pause needs recovery.
@@ -141,8 +152,10 @@ process. Use that for ordinary `sync_state()` / `check_working_state()` calls.
 it as cross-process selfhood. Do not pass `continuity_token` on every call; reserve
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
-Use `sync_state()` after meaningful work to record progress and complexity, then
-read `action_summary` for the decision and its evidence maturity, `next_action`,
+Use `sync_state()` only at a meaningful milestone when you also hold a judgment
+the substrate cannot infer; completion or session exit alone does not call for
+one. Record that judgment and the relevant work, then read `action_summary` for
+the decision and its evidence maturity, `next_action`,
 `recovery_hint`, and, when you asked for them with
 `include_memory_suggestions=true`, `memory_suggestions`. Pass
 `confidence` only when it is a real forecast; if the response returns a

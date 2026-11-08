@@ -212,7 +212,7 @@ instead of asking again.
 
 Accountability infrastructure for long-running AI agents. UNITARES is a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction, served over MCP and REST. Describe it that way: the wording is owned by `README.md` and pinned by `scripts/diagnostics/check_doc_drift.py`.
 
-EISV is one instrument inside it, not its definition: each check-in returns a behavioral state estimate and a policy action. The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path. The operator adopted moving EISV out of the core to an optional module on 2026-10-10 (`docs/proposals/active/eisv-core-boundary-v0.md`). The direction is settled; the proposal's staged authorization and standing governed-review conditions still govern implementation.
+EISV is the integrated check-in instrument: successful fresh check-ins run it synchronously to summarize observations over time and supply feedback and an inferred policy recommendation. Receipt-only replay supplies no new assessment. The default `observe` posture controls actuation, not whether EISV runs. The operator adopted optional-module separation on 2026-10-10 as staged architecture work; the [boundary proposal](docs/proposals/active/eisv-core-boundary-v0.md) and its standing review conditions still govern implementation. Use [the role, runtime and evidence contract](docs/EISV_COMPUTATION.md#role-runtime-and-evidence) when summarizing it. Preserve the distinction between defined measurements, intended interpretations and demonstrated benefit; neither integration nor an inconclusive evaluation settles usefulness. The information-theoretic / free-energy formulation remains a research target.
 
 ## Stack
 
@@ -347,7 +347,10 @@ Operational rules:
    was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
-   and land at least one real `sync_state()` before exit.
+   and reuse its binding for later writes. Having an identity creates no
+   check-in quota: use `sync_state()` only at a meaningful milestone when you
+   also hold a judgment the substrate cannot infer, never merely because the
+   subagent is exiting.
 5. Persistent/substrate agents use their dedicated substrate identity pattern.
    Ordinary sessions should not copy that pattern.
 

@@ -399,6 +399,15 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     """
     Record a work check-in and get a governance decision.
     """
+    idempotency_key: Optional[str] = Field(
+        default=None, min_length=1, max_length=200, pattern=r"[\s\S]*\S[\s\S]*",
+        description=(
+            "Stable key for one submitted check-in. Retry identical content with "
+            "this key to recover its original checkpoint without repeating "
+            "assessment. Changed content conflicts. Omit for a new record on "
+            "every call. Existing identity and lifecycle admission still apply."
+        ),
+    )
     parameters: List[float] = Field(
         default_factory=list,
         description="Agent parameters vector (optional, deprecated)."

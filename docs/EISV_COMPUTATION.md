@@ -2,6 +2,28 @@
 
 **EISV computes a compact, time-smoothed record of runtime observations and controller history.** The behavioral path blends supplied features into E, I and S, smooths them, and derives V from the E/I observation gap. Assessment compares that state with thresholds and, after warmup, an adaptive baseline. Policy uses the assessment alongside other decision inputs.
 
+## Role, runtime and evidence
+
+EISV is a maintained instrument within UNITARES. It supplies a compact history
+of runtime observations, baseline comparisons, feedback and inferred policy
+recommendations. Its integration is operational; what a reading diagnoses and
+whether a consumer benefits from it are separate questions.
+
+| Question | Current contract | Owner |
+|---|---|---|
+| Does it run? | Successful fresh check-ins run EISV synchronously. There is no shipped no-assessor check-in setting. Keyed replay returns the accepted checkpoint without a new assessment; a later assessment failure can leave that checkpoint accepted. | [Check-in acceptance](operations/checkin-refactor-characterization.md#neutral-checkpoint-acceptance-2026-11-02-increment) |
+| Is it becoming optional? | Optional-module separation is an adopted, staged architecture direction. Default `observe` posture controls actuation; it does not disable estimation. Instrument repair and evaluation remain supported while boundaries are separated. | [Boundary proposal](proposals/active/eisv-core-boundary-v0.md), [instrument-quality plan](plans/eisv-instrument-quality-2026-10-13.md) |
+| What do the numbers mean? | The formulas measure defined blends of observations and controller history. The names carry intended interpretations; physical and information-theoretic meanings remain research targets. | The computation and producer definitions below |
+| Does it help? | Signal response, useful summarization, prediction and intervention benefit require evidence suited to each claim. Operational use or architectural dependency alone establishes none of those benefits; inconclusive outcome evidence does not establish that the signals are uninformative. | [Evidence boundaries](EVIDENCE_AND_LIMITS.md#evaluation-boundaries), [evaluation catalog](EVALUATION_INDEX.md) |
+| What may it decide? | A policy recommendation and an applied lifecycle hold are distinct. Agent-facing instructions must name the effective action and actual write gate, with their source and scope. | [Reading the policy action](manual/05-reading-the-signals.md#53-the-policy-action), [interface contract](INTERFACE_CONTRACT.md#policy-recommendation-and-actuation) |
+
+Use this section when summarizing EISV elsewhere. Describe its implemented role
+directly, link the evidence for a claimed benefit, and label roadmap work as
+staged. Basin names, `healthy` status labels and approval actions are model or
+policy classifications, not independent certification of task quality. A
+favorable change in a reading is a reason to inspect the underlying evidence,
+not sufficient evidence of improvement or recovery by itself.
+
 ## What the signals record
 
 These are operational definitions of the current behavioral path. The formulas below specify the weights, defaults and optional inputs.
@@ -141,6 +163,10 @@ No human oracle is needed for runtime drift estimation. Independent exogenous ou
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
 
 Optional blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set engineering parameters.
+
+**De-looping and per-agent calibration switches** (both **default ON** (`1`, era `SN1`), hashed into the instrument configuration in `src/eisv_instrument.py`; set to `0`/`false`/`no`/`off` to restore the legacy self-loop and shared-fleet-calibration formulas above):
+- `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS` (default `1`): excludes the endogenous controller self-loop components from the base formulas (`decision_history` and `legacy_coherence_level` in `E`, `legacy_coherence_trend` in `I`, `regime_instability` in `S`), filters out server-generated `trajectory_validated` and `cirs_resonance` outcome echoes, and **renormalizes the remaining observed base terms to sum to `1.0`** before the optional post-base blends (`E_base = 0.50·cal_e + 0.50·outcome_e` when both are observed or `1.00` on whichever single term is observed; `I_base = (5/7)·cal_I + (2/7)·consistency_I` when both are observed, `1.00` on whichever single term is observed, or `0.75` `uncalibrated_base_fallback` when neither is observed; `S_base = clamp((8/13)·drift_s + (5/13)·cd_s, 0.05, 1)` when both are observed or `1.00` on whichever single term is observed; if no non-loop base input is observed on `E` or `S`, its documented default fallback carries the base). By contrast, the one-step measurement-only shadow ablations (`compute_legacy_coherence_dependency_shadow`, `compute_decision_self_loop_shadow`, `compute_regime_self_loop_shadow`) keep the legacy weights when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` and substitute constant fleet/transfer-midpoint stand-ins so their `candidate_minus_deployed` deltas measure single-step level attribution rather than reweighting.
+- `UNITARES_PER_AGENT_I_CALIBRATION` (default `1`): replaces the shared fleet `calibration_error` scalar in `I` with the agent's own verified confidence–outcome pairs (`agent_calibration_pooled` when a reference-cohort `prior_error` is supplied, or `agent_tactical_calibration` when `n_verified_pairs >= 5` and `freshness_status == "recent"`), falling back to calibration-free `I` (`0.60·coh_I + 0.40·consistency_I` when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`; `1.00·consistency_I` with ≥3 non-echo outcomes or an explicit `0.75` `uncalibrated_base_fallback` without outcomes when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`). Under `SN1`, `1.00·consistency_I` when calibration is ineligible is accepted by design: `consistency_I` (`health_evidence=false`) measures score variance only, while outcome success/failure direction enters `E_base` at `0.50` weight, so constant failures lower `E_obs` and pull `V` (`E_obs - I_obs`) negative rather than conflating failure with dispersion.
 
 `coh_e` and `coh_I` are especially important to interpret honestly. They were
 introduced to reduce E saturation and differentiate agents while `coherence`
@@ -288,6 +314,53 @@ evaluation, and enforcement result as separate objects; creating the envelope
 does not change any score or action. See
 [`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)
 for the schema, privacy bounds, export surfaces, and legacy-row behavior.
+
+For `continuity_fallback`, `derivation.inputs.continuity` records the inputs
+where continuity E/I/S were computed: approximate report-token count,
+wall-clock check-in gap, structural counts, self-complexity, formula branch,
+raw/pre-clip values and bounds. It includes no report text or tool names.
+`derivation.selection` records the values actually handed to the behavioral
+filter, including missing-input and template-exclusion defaults. Missing traces
+remain unknown. A clip at a bound and an actual change by clipping are separate
+fields; neither means that an input was defaulted. A zero report-token count
+does not establish zero work. Check-in spacing is not generation duration.
+When the gap is missing or nonpositive, E uses a different report-length
+formula. Its dependency is `fallback_formula`, with the reason recorded
+separately from a scalar missing-input default. This remains visible even for
+zero report tokens and zero V; neither clipping nor signed cancellation
+turns it into an observed rate.
+
+The trace captures complexity/divergence **before** later tool-use blending
+and rate-of-change adjustments. Those adjustments currently do not recompute
+continuity E/I/S, so the final public divergence can differ from the value that
+produced I/S. The record preserves that distinction rather than retroactively
+substituting the final divergence. `default_dependent` labels the whole input
+as depending on a default; it does not quantify a fractional contribution.
+
+To inspect inherited dependencies, export one identity's ordered, unsampled
+`eisv.telemetry.v1` envelopes into
+`{"agent_id": "...", "records": [ ... ]}` and run:
+
+```sh
+python3 scripts/analysis/eisv_provenance_replay.py trace.json --out replay.json
+```
+
+This offline tool checks adjacent version-2 behavioral updates with the real
+`BehavioralEISV` implementation and four-decimal serialization bounds. The
+first saved state has unknown ancestry. Gaps, resets, unsupported metadata and
+numeric mismatches re-anchor that history as unknown. Duplicate measurement
+IDs are rejected; repeated content alone is not a duplicate. V retains
+separate E-input and I-input ancestry with one shared unknown anchor, so signed
+cancellation cannot erase a default or unknown dependency. Only reconciled
+convex component recipes receive fractional allocations; additive or nonlinear
+recipes remain unresolved rather than being renormalized. Source labels and
+coefficient totals are not confidence, independent evidence, readiness rules,
+or proof of target validity. Baseline provenance and ODE prediction/innovation
+are outside this replay; no live estimator, baseline, policy or flag is changed.
+`observed_*` means present at the recorded computation boundary. Upstream
+values can themselves contain defaults (including schema-defaulted
+self-complexity); this ledger does not establish recursive, default-free
+ancestry for those values.
 
 ## Don't take this document's word for it
 

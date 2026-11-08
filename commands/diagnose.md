@@ -32,6 +32,9 @@ If no proof-owned UUID rebind is available, call `identity(client_session_id=<yo
 If you have no `client_session_id`, report the identity as unknown and suggest `/governance-start`, which declares the cached uuid as a parent only for a deliberate handoff from an exited process.
 
 Then call `get_governance_metrics` for the current agent using the same continuity data.
+This reads and interprets the available state; it does not advance EISV through
+a new check-in. Use `verbosity="standard"` or `verbosity="full"` when the source
+or lifecycle details needed for the diagnosis are absent from the compact view.
 
 Call `health_check()` only when system health, not agent state, may be part of the issue.
 
@@ -45,13 +48,28 @@ Display:
 - `identity_assurance`
 - deprecation warnings
 - whether continuity looks strong or weak
-- E, I, S, V
-- coherence
-- risk score
-- verdict
+- E, I, S, V with `primary_eisv_source` and available timestamp/freshness labels
+- coherence with its producer and role (`coherence_source` / `coherence_role`,
+  or nested `coherence.source` / `coherence.role`)
+- risk score with `risk_score_source` when returned
+- verdict with `verdict_source` / `verdict_resolution_source` when returned
+- `write_gate`, including any applied hold and its available recovery or expiry
+  information; distinguish it from an inferred recommendation
 - `next_action`, `memory_suggestions`, and `recovery_hint` when present
 - summary or mode/basin if available
-- behavioral vs ODE authority when it is obvious in the response
+- which fields come from behavioral assessment or ODE feedback, as identified
+  by the response; label missing provenance as unknown
+
+The `policy_evaluation` and `enforcement` blocks belong to assessment-bearing
+check-in responses, not this metrics read or a receipt-only retry. Do not infer
+an enforcement posture from a bare verdict. Use the returned `write_gate` for
+the current lifecycle restriction. A high-risk reading is a reason to inspect
+its inputs and relevant task evidence; an applied hold follows its recovery
+contract even when the reading's interpretation is disputed.
+
+Interpret these as defined state indices and policy classifications. The
+[computation reference](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md)
+owns their inputs, intended interpretations, and evidence limits.
 
 If `health_check()` is used, also show:
 

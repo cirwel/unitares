@@ -61,13 +61,10 @@ the originating review transcript is operator-private.
 
 These records establish specific, consequential corrections and continuity of
 review conditions. They come from a fixed sample of 20 recent merged PRs, with
-no matched unreviewed or conventional-review control; some reviews were
-author-relayed or filed under the same GitHub identity. Dialectic review,
+no matched unreviewed or conventional-review control. Dialectic review,
 councils, external models, and ordinary repository review have incomplete
 common instrumentation, so this channel is one of several through which review
-runs. A prospective comparison (`accountable-coordination-ablation-v0`) was
-registered and closed on 2026-10-01 before any run; it needs more than one
-operator.
+runs.
 
 <details>
 <summary>Recorded exercise of the review constraint</summary>
@@ -156,7 +153,7 @@ on 2026-09-26, followed by version updates through 0.3.3 on 2026-10-06.
 The agent-side contract is also distributed as
 [`unitares-sdk` on PyPI](https://pypi.org/project/unitares-sdk/), published from
 CI through a trusted publisher. These records establish integration acceptance
-and package availability. External adoption remains unvalidated.
+and package availability.
 
 ### Security response
 
@@ -169,8 +166,7 @@ Two high-severity advisories published on 2026-10-05 document fixes in 3.2.0:
   bypass was reachable from a browser page through CSRF or DNS rebinding.
   [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v)
 
-Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0.
-Neither credits an outside finder:
+Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0:
 
 - **Lifecycle actions on another agent:** any bound client could archive,
   delete or unpause another agent, and an agent could give itself the operator
@@ -209,6 +205,19 @@ documents both times. The 2026-12-01 result must therefore be described as **ame
 interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
 eligible as a result. The cluster threshold is not lowered, so a shortfall
 closes the read as inconclusive, not as a measured null.
+
+The read ran on 2026-11-03, after a second, run-date amendment, and took that
+branch. The registered fixture rule removed 4,649 of the 4,876 trusted
+outcomes in the window as test traffic, so the support condition failed (29
+and 28 bad clusters against 150), and the read closed for insufficient eligible
+evidence without testing EISV. Under the registered protocol, whether EISV
+adds predictive signal for bad outcomes **remains untested, not disproved**.
+The pre-declared corrected-rule sensitivity run, which has no authority,
+restores the data (4,874 rows and 449 bad clusters before T). It finds no detectable
+rework-prediction lift over the previous-outcome baseline (selective p 0.858
+and 0.828), and a slightly higher Brier error than the baseline (Brier improvement −0.0012
+and −0.0007). Its inference is `INCONCLUSIVE`, not refuted. See the
+[result](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
 
 An operational `FAIL` can close a scheduled line of work without scientifically
 refuting the underlying capability. The

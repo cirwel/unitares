@@ -11,6 +11,14 @@ class _GraphBackend(GraphMixin):
 
 
 @pytest.mark.asyncio
+async def test_nonsuperuser_age_uses_administrator_preload_without_privileged_load():
+    conn = AsyncMock()
+    conn.fetchval.return_value = True
+    await _GraphBackend()._prepare_age_connection(conn)
+    conn.execute.assert_awaited_once_with('SET search_path = ag_catalog, core, audit, public')
+
+
+@pytest.mark.asyncio
 async def test_graph_available_creates_missing_graph():
     backend = _GraphBackend()
     conn = AsyncMock()

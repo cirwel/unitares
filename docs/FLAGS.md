@@ -48,7 +48,7 @@ additions merge cleanly. -->
 | `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
 | `UNITARES_AUTOMATION_STATE_DIR` | `None (no reader fallback)` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
-| `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
+| `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Execute assessment and existing effects after internal admission | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
 | `UNITARES_BIND_ALL_INTERFACES` | `False (via env_truthy)` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_BUILD_SHA` | `''` | The git commit of the checkout this process runs from, and how it was known | src/mcp_handlers/dialectic/events.py, src/versioning.py |
@@ -67,7 +67,7 @@ additions merge cleanly. -->
 | `UNITARES_COHORT_PRIOR_MODE` | `None (no reader fallback)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
-| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/mutation_helpers.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET_FILE` | `None (no reader fallback)` | Where the generated secret lives | src/continuity_secret.py |
 | `UNITARES_CREDENTIAL_ISSUANCE` | `None (no reader fallback)` | ``log`` to observe only; anything else enforces. | src/mcp_handlers/identity/credential_issuance.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
@@ -98,10 +98,10 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_REVIEWER_HOSTS` | varies: `''` (src/dialectic_reviewer_config.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py:243, agents/dialectic_reviewer/host_list.py); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223) | Reviewer hosts in the order they are tried, comma-separated, at most three (codex, claude, antigravity, external) | src/dialectic_reviewer_config.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_list.py |
 | `UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR` | `''` | The operator's ordered reviewer host list, read as a plan | agents/dialectic_reviewer/host_list.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `None (no reader fallback)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
-| `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
+| `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/actionability.py |
 | `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than a local model's 4 | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S` | `''` | read by _dialectic_sweep_cycle_timeout_s() | src/background_tasks.py |
-| `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
+| `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/actionability.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
@@ -143,7 +143,7 @@ additions merge cleanly. -->
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1782); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1793) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
-| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichment_helpers.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SYNTHESIS_INTERVAL_HOURS` | `str(DEFAULT_INTERVAL_HOURS)` | Hours between scheduled synthesis cycles; a non-positive value falls back to the default. | src/kg_synthesis_schedule.py |
 | `UNITARES_KG_SYNTHESIS_SCHEDULE` | `DEFAULT_MODE` | Scheduled synthesis mode | src/kg_synthesis_schedule.py |
@@ -174,6 +174,7 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
 | `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
+| `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS` | `'1'` | Return True when controller self-loops in the behavioral sensor are neutralized | src/behavioral_sensor.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'false'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `'false'` | Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION) | src/mcp_listen_config.py |
@@ -194,13 +195,14 @@ additions merge cleanly. -->
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
 | `UNITARES_PARENT_AGENT_ID` | `None (no reader fallback)` | read by main() | agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
+| `UNITARES_PER_AGENT_I_CALIBRATION` | `'1'` | Return True when per-agent tactical calibration in behavioral I is enabled | src/behavioral_sensor.py |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
 | `UNITARES_POLICY_ACTUATION` | `'observe'` | Return the operator-owned policy actuation posture | src/agent_loop_detection.py |
 | `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1744); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1753) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_DIR` | `None (no reader fallback)` | — | src/process_cleanup.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
-| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_tasks.py |
+| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_resident_monitors.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_READ_ONLY_TOKENS` | `''` | Read the read-only key digests | src/http_routes/access.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
@@ -211,7 +213,7 @@ additions merge cleanly. -->
 | `UNITARES_RESIDENT_PROGRESS_PLUGINS` | `None (no reader fallback)` | True unless the deployment explicitly disabled plugin discovery. | src/resident_progress/plugins.py |
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
 | `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
-| `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichment_helpers.py |
 | `UNITARES_ROUTE_PACKS` | `''` | Selected pack names in order, deduplicated; unset selects none. | src/http_routes/packs.py |
 | `UNITARES_ROUTE_PACKS_FILE` | `''` | Read and validate the complete manifest before importing any handler. | src/http_routes/packs.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |

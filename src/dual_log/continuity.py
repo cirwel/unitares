@@ -8,6 +8,7 @@ This is THE GROUNDING MECHANISM that makes EISV meaningful.
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+import re
 import numpy as np
 import json
 
@@ -54,6 +55,12 @@ class ContinuityMetrics:
     self_complexity_defaulted: bool = False   # divergence used the 0.2 stand-in
     E_input_clipped: bool = False             # E_input hit a clip bound, carries no signal
     continuity_degenerate: bool = False       # text features can't move for this caller
+    template_divergence_excluded: bool = False  # degenerate automatic/rollup divergence excluded (#2418)
+
+    # Captured where E/I/S are computed, before later tool/ROC adjustments to
+    # derived_complexity/divergence. Those adjustments do not recompute E/I/S.
+    # None means unavailable (e.g. an older/custom producer), never a default.
+    input_derivation: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Serialize for storage and API responses."""
@@ -72,6 +79,8 @@ class ContinuityMetrics:
             'self_complexity_defaulted': self.self_complexity_defaulted,
             'E_input_clipped': self.E_input_clipped,
             'continuity_degenerate': self.continuity_degenerate,
+            'template_divergence_excluded': self.template_divergence_excluded,
+            'input_derivation': self.input_derivation,
         }
 
 
@@ -161,6 +170,7 @@ def compute_continuity_metrics(
     
     # Derive complexity from operational features
     derived_complexity = derive_complexity(op)
+    text_complexity = derived_complexity
 
     # Task types with high cognitive-to-output ratio: the thinking is the work,
     # not the output. A 3-line refactor after reading 2000 lines is not "simple."
@@ -221,13 +231,13 @@ def compute_continuity_metrics(
     I_input = float(1.0 - complexity_divergence)
     
     # S_input: Uncertainty from multiple sources
-    S_input = float(np.clip(
+    S_raw = (
         0.1 +  # Base uncertainty
         0.5 * complexity_divergence +
         (0.1 if not op.is_session_continuation else 0) +
-        (0.1 if refl.self_complexity is None else 0),
-        0.0, 1.0
-    ))
+        (0.1 if refl.self_complexity is None else 0)
+    )
+    S_input = float(np.clip(S_raw, 0.0, 1.0))
     
     # Degeneracy: with no markdown structure, no tool mentions and no questions,
     # every term of derive_complexity except the token count is zero, so the
@@ -259,6 +269,118 @@ def compute_continuity_metrics(
         self_complexity_defaulted=self_complexity_defaulted,
         E_input_clipped=E_input_clipped,
         continuity_degenerate=continuity_degenerate,
+        input_derivation={
+            'schema': 'eisv.continuity_inputs.v1',
+            'formula': 'src.dual_log.continuity.compute_continuity_metrics',
+            'formula_version': 1,
+            'inputs': {
+                'response_tokens': op.response_tokens,
+                'checkin_gap_ms': op.latency_ms,
+                'is_session_continuation': op.is_session_continuation,
+                'has_code_blocks': op.has_code_blocks,
+                'code_block_count': op.code_block_count,
+                'list_item_count': op.list_item_count,
+                'paragraph_count': op.paragraph_count,
+                'question_count': op.question_count,
+                'mentioned_tool_count': len(op.mentioned_tools),
+                'self_complexity': refl.self_complexity,
+                'high_reasoning_task': refl.task_type in HIGH_REASONING_TASK_TYPES,
+            },
+            'intermediates': {
+                'text_complexity': text_complexity,
+                'derived_complexity': derived_complexity,
+                'complexity_divergence': complexity_divergence,
+                'divergence_defaulted': self_complexity_defaulted,
+                'divergence_default_reason': 'missing_self_complexity' if self_complexity_defaulted else None,
+                'task_floor_applied': text_complexity != derived_complexity,
+            },
+            'E': {
+                'formula': 'clip((response_tokens / (checkin_gap_ms / 1000)) / 200, 0.3, 1)' if op.latency_ms and op.latency_ms > 0 else 'clip(0.5 + 0.3 * (response_tokens / 1000), 0.3, 1)',
+                'branch': 'report_tokens_per_checkin_gap' if op.latency_ms and op.latency_ms > 0 else 'report_length_fallback',
+                'branch_reason': 'positive_gap' if op.latency_ms and op.latency_ms > 0 else ('missing_gap' if op.latency_ms is None else 'nonpositive_gap'),
+                'raw_value': E_raw, 'value': E_input, 'clip_bounds': [0.3, 1.0],
+                'clip_applied': E_raw != E_input,
+                'at_bound': E_input_clipped,
+            },
+            'I': {'formula': '1 - complexity_divergence', 'raw_value': I_input, 'value': I_input},
+            'S': {
+                'formula': 'clip(0.1 + 0.5 * complexity_divergence + 0.1 * not_continuation + 0.1 * missing_self_complexity, 0, 1)',
+                'raw_value': S_raw, 'value': S_input, 'clip_bounds': [0.0, 1.0],
+                'clip_applied': S_raw != S_input,
+            },
+        },
+    )
+
+
+_AUTOMATIC_ROLLUP_RE = re.compile(
+    r"^\s*\d+\s+tool\s+calls?\s+completed\b",
+    re.IGNORECASE,
+)
+_NON_AUTHORED_EPISTEMIC_CLASSES = frozenset({
+    "substrate_observation",
+    "substrate_interpretation",
+})
+
+
+def is_automatic_or_rollup_checkin(
+    response_text: Optional[str] = None,
+    epistemic_class: Optional[str] = None,
+) -> bool:
+    """Return True when a check-in is an automatic substrate observation/interpretation or runtime tool-count rollup.
+
+    Automatic check-ins (e.g. Lumen sensor bridges, session/process hooks with
+    ``epistemic_class in ("substrate_observation", "substrate_interpretation")``,
+    and Codex/hook ``N tool calls completed: ...`` rollups) carry fixed-shape
+    templates rather than agent-authored reflective prose. See issue #2418.
+    """
+    if isinstance(epistemic_class, str) and epistemic_class.strip() in _NON_AUTHORED_EPISTEMIC_CLASSES:
+        return True
+    if isinstance(response_text, str) and _AUTOMATIC_ROLLUP_RE.match(response_text):
+        return True
+    return False
+
+
+def should_exclude_template_divergence(
+    continuity_metrics: Any,
+    *,
+    response_text: Optional[str] = None,
+    epistemic_class: Optional[str] = None,
+) -> bool:
+    """Return True when complexity_divergence is a degenerate template artifact (#2418).
+
+    Excludes ``complexity_divergence`` (and its derived ``I_input`` / ``S_input``)
+    from feeding live behavioral sensor, ethical drift, and baseline statistics
+    when BOTH:
+    1. ``continuity_metrics.continuity_degenerate`` is True (no code blocks,
+       list items, multi-paragraph structure, questions, or tool mentions), and
+    2. the check-in that produced ``continuity_metrics`` is an automatic/non-authored
+       check-in or a runtime tool-count rollup (`is_automatic_or_rollup_checkin`).
+
+    When ``response_text`` and ``epistemic_class`` are omitted (e.g. when reading
+    ``monitor._last_continuity_metrics`` from a prior check-in in
+    ``prepare_unlocked_inputs`` or pre-ODE anomaly scoring), reads the stamped
+    ``continuity_metrics.template_divergence_excluded`` flag recorded when that
+    ``ContinuityMetrics`` instance was created so alternating authored and
+    automatic check-ins never cross-contaminate.
+
+    Raw ``ContinuityMetrics`` stay intact on ``monitor._last_continuity_metrics``
+    and dual-log storage for auditability.
+    """
+    if continuity_metrics is None:
+        return False
+    if response_text is None and epistemic_class is None:
+        if isinstance(continuity_metrics, dict):
+            return bool(continuity_metrics.get("template_divergence_excluded", False))
+        return bool(getattr(continuity_metrics, "template_divergence_excluded", False))
+    if isinstance(continuity_metrics, dict):
+        degenerate = bool(continuity_metrics.get("continuity_degenerate", False))
+    else:
+        degenerate = bool(getattr(continuity_metrics, "continuity_degenerate", False))
+    if not degenerate:
+        return False
+    return is_automatic_or_rollup_checkin(
+        response_text=response_text,
+        epistemic_class=epistemic_class,
     )
 
 
@@ -389,6 +511,7 @@ class ContinuityLayer:
         task_type: Optional[str] = None,
         calibration_weight: float = 0.5,
         tool_usage_stats: Optional[Dict[str, Any]] = None,
+        epistemic_class: Optional[str] = None,
     ) -> ContinuityMetrics:
         """
         Process an agent update through dual-log architecture.
@@ -460,6 +583,12 @@ class ContinuityLayer:
             complexity_roc = min(1.0, abs(metrics.derived_complexity - self._prev_derived_complexity))
             metrics.complexity_divergence = complexity_roc
         self._prev_derived_complexity = metrics.derived_complexity
+
+        metrics.template_divergence_excluded = should_exclude_template_divergence(
+            metrics,
+            response_text=response_text,
+            epistemic_class=epistemic_class,
+        )
 
         # 4. Store entries
         self._store_operational(op_entry)

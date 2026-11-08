@@ -8,8 +8,8 @@
 
 UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator server that keeps attributed records of identity,
-claims and evidence, review, outcomes, and reconstruction across sessions,
-handoffs, and agents from different vendors.
+claims and evidence, review, outcomes, and reconstruction across sessions
+and agents from different vendors.
 
 This guide is procedure: what to run and inspect, in what order. Start with the
 claims ledger, then exercise the captured workflow in a test deployment.
@@ -38,7 +38,8 @@ operations, or monitoring agents:
    `client_session_id`, and thread it on later calls. Confirm that
    `check_working_state` returns the new process's `agent_uuid`.
 3. **Preserve the finding.** Use `store_finding` for a durable claim and its
-   evidence. Use `sync_state` after meaningful work; its check-in keeps only a bounded
+   evidence. Use `sync_state` only at a meaningful milestone when you also hold
+   a judgment the substrate cannot infer; its check-in keeps only a bounded
    excerpt of its report text, so it does not replace the finding. Retain a returned `prediction_id` when
    grading that check-in later.
 4. **Request review when needed.** `request_review` starts a governed review;
@@ -127,13 +128,15 @@ profiles, dependencies, and configured reviewer/provider requirements are in
 EISV computes weighted, smoothed runtime observations and controller history.
 The [computation reference](EISV_COMPUTATION.md) defines the formulas, provenance,
 and distinction between deployed indices and the paper's research targets.
-`proceed` and `guide` are advisory; `pause` holds governed writes until recovery,
-review, an operator, or expiry lifts it. External enforcement needs host
-integration. The operator adopted moving EISV into an optional module on
-2026-10-10; the [staged implementation plan](proposals/active/eisv-core-boundary-v0.md)
-governs that work. The estimator still ships in the core path.
+The default `observe` posture retains inferred pause recommendations as
+guidance while EISV continues to run. With the operator's `enforce` posture, an
+applied pause holds governed writes until recovery, review, an operator, or
+expiry lifts it. Existing durable holds remain authoritative in either posture;
+external enforcement needs host integration. See the
+[role, runtime and evidence contract](EISV_COMPUTATION.md#role-runtime-and-evidence).
 
-Correctness, safety, adversarial resistance, predictive lift, and incident
+Assessment labels such as `safe` and `healthy` describe configured bands over
+the instrument's inputs. Correctness, safety, adversarial resistance, predictive lift, and incident
 prevention require their own evidence. The [scope and threat model](SCOPE_AND_THREAT_MODEL.md)
 and [evaluation boundaries](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) state
 what remains open. The current trust boundary is one operator and its explicitly
