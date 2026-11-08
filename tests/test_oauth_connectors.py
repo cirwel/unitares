@@ -166,13 +166,13 @@ def test_redirects_are_kept_exact(uri):
 async def test_registry_persists_hash_and_only_create_returns_secret(monkeypatch):
     captured = {}
     class Connection:
-        async def fetchrow(self, query, *args):
+        async def fetchrow(self, query, *args, **kwargs):
             captured["args"] = args
             return {"client_id": args[0], "name": args[1], "redirect_uris": args[3],
                     "created_at": datetime.now(timezone.utc), "revoked_at": None}
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
-    monkeypatch.setattr(registry_module, "get_db", lambda: SimpleNamespace(acquire=Connection))
+    monkeypatch.setattr(registry_module, "get_db", lambda: SimpleNamespace(acquire=lambda **kwargs: Connection()))
     result = await ConnectorRegistry().create("App", [CALLBACK], "operator")
     assert captured["args"][2] == secret_digest(result["client_secret"])
     assert result["client_secret"] not in captured["args"]

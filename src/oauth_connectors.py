@@ -6,7 +6,6 @@ these digests. Every lookup hits Postgres; revocation also denies cached tokens.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import re
@@ -17,6 +16,7 @@ from src.db import get_db
 
 CLIENT_PREFIX = "unitares_connector_"
 CLIENT_ID_RE = re.compile(r"unitares_connector_[0-9a-f]{32}\Z")
+DB_TIMEOUT_SECONDS = 5.0
 
 
 def managed_client_id(client_id: str) -> bool:
@@ -72,10 +72,11 @@ class ConnectorRegistry:
     async def get(self, client_id: str) -> dict | None:
         if not CLIENT_ID_RE.fullmatch(client_id):
             return None
-        async with asyncio.timeout(5), get_db().acquire() as conn:
+        async with get_db().acquire(timeout=DB_TIMEOUT_SECONDS) as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM core.oauth_connectors WHERE client_id=$1 AND revoked_at IS NULL",
                 client_id,
+                timeout=DB_TIMEOUT_SECONDS,
             )
         if row is None:
             return None
@@ -85,10 +86,11 @@ class ConnectorRegistry:
         return result
 
     async def list(self) -> list[dict]:
-        async with asyncio.timeout(5), get_db().acquire() as conn:
+        async with get_db().acquire(timeout=DB_TIMEOUT_SECONDS) as conn:
             rows = await conn.fetch(
                 "SELECT client_id, name, redirect_uris, created_at, revoked_at "
-                "FROM core.oauth_connectors ORDER BY created_at DESC"
+                "FROM core.oauth_connectors ORDER BY created_at DESC",
+                timeout=DB_TIMEOUT_SECONDS,
             )
         return [public_record(row) for row in rows]
 
@@ -96,12 +98,15 @@ class ConnectorRegistry:
         name, redirect_uris = validate_registration(name, redirect_uris)
         client_id = CLIENT_PREFIX + secrets.token_hex(16)
         secret = secrets.token_urlsafe(32)
-        async with asyncio.timeout(5), get_db().acquire() as conn:
+        # Acquisition and statement deadlines belong to asyncpg on the
+        # executor loop. A caller-loop cancellation is not a DB deadline.
+        async with get_db().acquire(timeout=DB_TIMEOUT_SECONDS) as conn:
             row = await conn.fetchrow(
                 "INSERT INTO core.oauth_connectors "
                 "(client_id,name,secret_hash,redirect_uris,created_by) VALUES ($1,$2,$3,$4::jsonb,$5) "
                 "RETURNING client_id,name,redirect_uris,created_at,revoked_at",
                 client_id, name, secret_digest(secret), json.dumps(redirect_uris), actor,
+                timeout=DB_TIMEOUT_SECONDS,
             )
         # Only after the durable write succeeds. The raw secret never enters
         # a subsequent read, audit column, environment variable or log.
@@ -110,9 +115,10 @@ class ConnectorRegistry:
     async def revoke(self, client_id: str, actor: str) -> bool:
         if not CLIENT_ID_RE.fullmatch(client_id):
             return False
-        async with asyncio.timeout(5), get_db().acquire() as conn:
+        async with get_db().acquire(timeout=DB_TIMEOUT_SECONDS) as conn:
             result = await conn.execute(
                 "UPDATE core.oauth_connectors SET revoked_at=now(),revoked_by=$2 "
                 "WHERE client_id=$1 AND revoked_at IS NULL", client_id, actor,
+                timeout=DB_TIMEOUT_SECONDS,
             )
         return result == "UPDATE 1"

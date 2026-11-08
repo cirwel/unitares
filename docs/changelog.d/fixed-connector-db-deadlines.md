@@ -1,0 +1,1 @@
+- **Connector storage deadlines:** Pass acquisition and query timeouts to asyncpg on its executor loop instead of cancelling registry work from the caller loop.
