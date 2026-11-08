@@ -85,9 +85,13 @@ def owned_head(pr: dict, agent: str) -> str:
         raise Parked("The serial queue only accepts PRs targeting master; stacked PRs stay parked.")
     if run("git", "status", "--porcelain=v1", "-uall").strip():
         raise Parked("Commit and push local changes before resuming; resume never stages or commits.")
+    # Authorship remains stable across handovers. A matching author footer
+    # cannot authorize automatic delivery once scopes have been reassigned.
+    if re.search(r"^Delivery mode:\s*manual\s*$", pr["body"], re.MULTILINE | re.IGNORECASE):
+        raise Parked("Delivery ownership changed; all sessions use the manual PR path and recorded grant scopes.")
     footers = re.findall(r"^UNITARES agent: ([0-9a-fA-F-]+)\s*$", pr["body"], re.MULTILINE)
     if not footers or footers[-1].lower() != agent:
-        raise Parked("PR ownership footer does not match UNITARES_AGENT_UUID; --resume is only for a PR still owned by this session. Successors and adopters use the manual PR path.")
+        raise Parked("PR ownership check failed: the terminal author footer does not match UNITARES_AGENT_UUID. Resume requires the opening session to still own all delivery; handovers use the manual PR path.")
     if pr["state"] not in {"OPEN", "MERGED"} or pr["isCrossRepository"]:
         raise Parked("Resume requires an open, same-repository PR (or an already merged result).")
     if pr["headRefName"] != branch or pr["headRefOid"] != head:

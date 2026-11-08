@@ -78,12 +78,25 @@ veto by removing the label.
   The opening session is the
   initial delivery owner; a completed handover or adoption transfers delivery
   responsibility within its recorded scope, while original authorship remains
-  unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
-  session's UNITARES identity. When a successor or adopter pushes commits, add
-  its own `Model:` / `UNITARES agent:` signature to the PR body alongside
-  the original author's; delivery-only actions record identity in a PR comment
-  without claiming authorship. Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
-  do not distinguish sessions reliably.
+  unchanged. Keep the opening author's paired `Model:` / `UNITARES agent:`
+  signature last in the body, even after a full or partial handover. A
+  committing successor adds its paired signature above that terminal pair;
+  delivery-only actors identify themselves in the grant/adoption comment
+  without claiming authorship. The terminal pair is attribution, never an
+  owner pointer or evidence of delivery authority.
+
+  Before exercising any handover, successor grant or adoption, add a standalone
+  `Delivery mode: manual` line above the signatures. Keep it for the life of
+  the PR, including after a partial grant ends. `ship.sh --resume` refuses a
+  marked PR for every session, including the opening author. All delivery then
+  uses the manual PR path and the verified scope in the grant/adoption record.
+  This cooperative marker does not authenticate a grant; omitting or removing
+  it cannot restore authority. An unmarked footer match is only an additional
+  consistency check for a PR whose opening session still owns all delivery.
+
+  Do not push commits to another session's PR branch, even to fix something
+  small. Branch prefixes (`claude/`, `codex/`) and commit authors do not
+  distinguish sessions reliably.
   You may act on another session's PR only within a verified handover or
   operator grant, or after completing the stuck-queue adoption below. To
   contribute, either comment on the PR with the change,
@@ -161,7 +174,10 @@ veto by removing the label.
   unlabeled. If a queue label is already present, seek operator clarification
   before acting.
   The original author remains credited in the PR body when delivery ownership
-  changes. The queue's squash commit records only the terminal signature.
+  changes. The terminal signature remains the opening author's attribution;
+  the queue copies only that pair into the squash signature. Other committing
+  authors stay credited in the PR body and GitHub's commit/co-author list.
+  Neither the terminal pair nor its position changes any delivery scope.
 
   Before exercising a grant, verify current head, CI, review coverage,
   unresolved findings, collisions and ordering. Put ordering such as "merge
@@ -209,9 +225,11 @@ exclude GitHub. Their PRs are therefore authored by the operator's account.
 The operator does not open PRs or press merge, so an agent branch authored by
 that account is an agent act, never an operator act. The
 `agent-via-operator-login` label (`operator-login-agent-pr.yml`) records this
-on `claude/*` and `codex/*` PRs. The footer stays the owner pointer: such a
-session onboards and ends the body with its own `UNITARES agent: <uuid>`,
-never a uuid copied from another session. `agent-pr-relay.yml` then reopens
+on `claude/*` and `codex/*` PRs. An opening session onboards and signs the
+body with its own `UNITARES agent: <uuid>`, never an invented identity. That
+terminal author signature stays after a handover; the verified grant/adoption
+record identifies delivery authority, and `Delivery mode: manual` prevents
+a footer match from resuming automatic delivery. `agent-pr-relay.yml` then reopens
 the PR under the `unitares-pr-relay` App, which can write pull requests on
 this repository and nothing else. The original is closed with a link to its
 replacement. Branch, commits, labels and footer carry over, except the
@@ -822,9 +840,11 @@ fallback to the interactive `gh` login). It neither commits nor pushes, starts
 no local full test run, and never updates the base or arms auto-merge.
 
 Use `--resume` only for a PR opened and still owned by your session. The
-PR's ownership footer must match `UNITARES_AGENT_UUID`, but the command does
-not verify handovers, adoption conditions or grant scopes and always marks
-ready and enters the queue. Successors and adopters use the manual PR path;
+PR's terminal author footer must match `UNITARES_AGENT_UUID`, and the command
+refuses any PR carrying `Delivery mode: manual`. Every handover, successor grant
+or adoption requires that permanent marker before action. The command does
+not authenticate grants or adoption conditions and otherwise always marks
+ready and enters the queue. After any handover all sessions use the manual PR path;
 a readiness-only successor leaves the PR unlabeled.
 Automatic completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
 `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and `.github/workflows/`.
