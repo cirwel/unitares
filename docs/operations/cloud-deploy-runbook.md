@@ -200,8 +200,12 @@ cluster or container:
    `ag_catalog.ag_label.graph`, while `CREATE SCHEMA governance_graph` on the
    target cluster allocates a new namespace OID. `GraphMixin` automatically
    reconciles `ag_catalog.ag_graph` and `ag_catalog.ag_label` in-place on the
-   first AGE probe or query after restore. If you are verifying a restored
-   database directly via `psql` before starting the server, run:
+   first AGE probe or query after restore. That repair needs `UPDATE` on both
+   catalog tables. A role without it, such as a native install's `NOSUPERUSER`
+   application role, leaves the graph unavailable and its data untouched until
+   a role that can update the catalog runs the statement below. Run the same
+   statement if you are verifying a restored database directly via `psql`
+   before starting the server:
 
    ```sql
    WITH old_graph AS (

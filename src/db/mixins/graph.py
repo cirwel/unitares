@@ -136,14 +136,18 @@ class GraphMixin:
     """
 
     async def _probe_age_graph(self, conn, *, _allow_repair: bool = True) -> None:
-        """Verify the configured AGE graph can execute a trivial Cypher query."""
+        """Verify the configured AGE graph can execute a trivial Cypher query.
+
+        A probe may reconcile catalog OIDs in place, but it never recreates the
+        graph: availability checks run on nearly every knowledge-graph read.
+        """
         try:
             await conn.fetch(
                 f"SELECT * FROM cypher('{self._age_graph}', $$ RETURN 1 $$) as (result agtype)"
             )
         except Exception as exc:
             if _allow_repair and self._is_stale_age_graph_error(exc):
-                repaired = await self._repair_stale_age_graph(conn, exc)
+                repaired = await self._repair_stale_age_graph(conn, exc, allow_recreate=False)
                 if repaired:
                     await self._prepare_age_connection(conn)
                     await self._ensure_age_graph_exists(conn)
@@ -158,6 +162,44 @@ class GraphMixin:
             self._age_graph,
         )
         return reconciled is True
+
+    async def _age_graph_schema_exists(self, conn) -> bool:
+        """Report whether the graph's PostgreSQL schema, which holds its data, exists."""
+        exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+            self._age_graph,
+        )
+        return exists is True
+
+    async def _reconcile_existing_age_graph(self, conn) -> bool:
+        """Make an existing graph schema usable in place, without ever dropping it.
+
+        Returns False, leaving the data untouched, when the catalog cannot be
+        updated or the graph still fails its probe. A False from the reconcile
+        itself only means the OIDs already agree, which is what a concurrent
+        repair leaves behind, so the probe decides the outcome.
+        """
+        try:
+            reconciled = await self._reconcile_age_graph_oid(conn)
+        except Exception as exc:
+            logger.warning(
+                f"In-place AGE OID reconciliation failed for '{self._age_graph}': {exc}; "
+                "leaving the graph untouched. This repair needs UPDATE on "
+                "ag_catalog.ag_graph and ag_catalog.ag_label."
+            )
+            return False
+        try:
+            await self._probe_age_graph(conn, _allow_repair=False)
+        except Exception as exc:
+            logger.warning(
+                f"AGE graph '{self._age_graph}' still fails its probe after reconciliation "
+                f"({exc}); leaving the graph untouched"
+            )
+            return False
+        if reconciled:
+            logger.info(f"Reconciled stale AGE catalog OID for '{self._age_graph}' in-place")
+        self._graph_exists_confirmed = True
+        return True
 
     @staticmethod
     def _is_stale_age_graph_error(error: Exception) -> bool:
@@ -238,15 +280,21 @@ class GraphMixin:
         )
         return pattern.sub(lambda m: sanitized[m.group(1)], cypher)
 
-    async def _repair_stale_age_graph(self, conn, error: Exception) -> bool:
+    async def _repair_stale_age_graph(
+        self, conn, error: Exception, *, allow_recreate: bool = True
+    ) -> bool:
         """
         Repair a stale AGE catalog entry by reconciling catalog OIDs or recreating the graph.
 
         When a pg_dump restore recreates the graph schema with a new pg_namespace OID while
         copying the source cluster's literal graphid into ag_catalog.ag_graph and
         ag_catalog.ag_label, in-place OID reconciliation preserves all restored vertices
-        and edges. If the schema is missing or in-place reconciliation does not restore a
-        working graph probe, falls back to drop_graph + create_graph.
+        and edges.
+
+        drop_graph + create_graph runs only on positive evidence that the graph's schema
+        is gone, and only when ``allow_recreate`` is true. While the schema exists it may
+        hold the only copy of the data, so every failure there returns False and the
+        caller surfaces the original error.
 
         Uses a fresh non-transactional connection because catalog repair and
         drop_graph/create_graph cannot safely run inside an aborted caller transaction.
@@ -259,28 +307,10 @@ class GraphMixin:
         )
         async with self.acquire() as fresh_conn:
             await self._prepare_age_connection(fresh_conn)
-            try:
-                reconciled = await self._reconcile_age_graph_oid(fresh_conn)
-            except Exception as reconcile_exc:
-                logger.warning(
-                    f"In-place AGE OID reconciliation failed for '{self._age_graph}': "
-                    f"{reconcile_exc}; falling back to recreate"
-                )
-                reconciled = False
-
-            if reconciled:
-                try:
-                    await self._probe_age_graph(fresh_conn, _allow_repair=False)
-                    logger.info(
-                        f"Reconciled stale AGE catalog OID for '{self._age_graph}' in-place"
-                    )
-                    self._graph_exists_confirmed = True
-                    return True
-                except Exception as probe_exc:
-                    logger.warning(
-                        f"In-place AGE OID reconciliation for '{self._age_graph}' "
-                        f"did not pass graph probe ({probe_exc}); falling back to recreate"
-                    )
+            if await self._age_graph_schema_exists(fresh_conn):
+                return await self._reconcile_existing_age_graph(fresh_conn)
+            if not allow_recreate:
+                return False
 
             await fresh_conn.execute("SELECT * FROM ag_catalog.drop_graph($1, true)", self._age_graph)
             await fresh_conn.execute("SELECT * FROM ag_catalog.create_graph($1)", self._age_graph)
