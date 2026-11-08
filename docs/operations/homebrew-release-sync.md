@@ -18,9 +18,11 @@ explicit operator rollout decision after the environment protection, its
 environment-scoped `UNITARES_HOMEBREW_RELEASE_SYNC_ARMED=true` secret, and the
 App grant have been checked.
 
-The workflow checks out the exact tag, verifies its commit, creates
-`unitares-VERSION.tar.gz` with `git archive` and `gzip -n`, and uploads it only
-when the release has no asset by that name. An existing asset must be
+The workflow checks out the exact tag, verifies that the workflow event's ref
+and SHA match that tag and commit, and creates `unitares-VERSION.tar.gz` with
+`git archive` and `gzip -n`. It signs a GitHub artifact attestation and verifies
+the fixed repository/workflow, tag, source and signer commit before uploading
+the archive, and only when the release has no asset by that name. An existing asset must be
 byte-identical and is never overwritten. It then runs the tap's offline release
 renderer and opens or updates the single `auto/homebrew-release-sync` draft PR.
 That transition advances both `Formula/unitares.rb` and the release-coupled
@@ -47,9 +49,19 @@ Rerunning with the same tag is idempotent: the archive must match and the draft
 branch is regenerated from current tap `main`. A different existing asset is a
 hard failure and requires investigation. The tap also provides a protected
 manual `release-sync.yml` recovery workflow using the same evidence contract.
+Dispatch the upstream workflow at the release tag, for example
+`gh workflow run homebrew-release-sync.yml --ref "$TAG" -f tag="$TAG"`.
+That tag must contain the attesting workflow. Dispatching a newer workflow on
+`master` while checking out an older tag cannot certify the older source context.
+The tap recovery path refuses unsigned source archives; use a new release
+containing the workflow rather than claiming retrospective provenance.
 
 Apple Silicon bottle build and publication are separate protected workflows in
-the tap. The build job has no write credential; publication verifies the exact
-successful run and checksums before publishing non-overwriting assets and
-opening another draft PR. Billed macOS execution and asset publication remain
-explicit operator actions.
+the tap. The build job can write attestations but cannot publish releases or
+change branches. Publication verifies the fixed signer workflow, exact commit,
+successful run and certificate run/attempt, plus every file in the signed
+manifest, before minting its publication token. It publishes the four bottles
+and dependency inventory/evidence as non-overwriting assets and opens another
+draft PR. Billed macOS execution and asset publication remain explicit operator
+actions. See the [consumer verification instructions](../install/HOMEBREW_SETUP.md).
+Provenance establishes origin and integrity, not benign behavior or reproducibility.
