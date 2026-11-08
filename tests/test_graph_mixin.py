@@ -54,6 +54,7 @@ async def test_run_cypher_repairs_stale_graph_and_retries():
     backend.acquire = lambda: acquire_ctx
 
     conn.fetchval.return_value = True
+    fresh_conn.fetchval.side_effect = [False, False]
     conn.fetch.side_effect = [
         Exception("graph with oid 17401 does not exist"),
         [{"result": '{"ok": true}::agtype'}],
@@ -62,6 +63,8 @@ async def test_run_cypher_repairs_stale_graph_and_retries():
     result = await backend._run_cypher_on_conn(conn, "RETURN 1", {})
 
     assert result == [{"ok": True}]
+    fresh_conn.execute.assert_any_call("LOAD 'age'")
+    fresh_conn.execute.assert_any_call("SET search_path = ag_catalog, core, audit, public")
     # DDL should run on the fresh connection, not the transactional one
     fresh_conn.execute.assert_any_call(
         "SELECT * FROM ag_catalog.drop_graph($1, true)",
@@ -71,6 +74,68 @@ async def test_run_cypher_repairs_stale_graph_and_retries():
         "SELECT * FROM ag_catalog.create_graph($1)",
         "governance_graph",
     )
+
+
+@pytest.mark.asyncio
+async def test_run_cypher_reconciles_restored_graph_oid_without_dropping_data():
+    backend = _GraphBackend()
+    conn = AsyncMock()
+    fresh_conn = AsyncMock()
+
+    acquire_ctx = AsyncMock()
+    acquire_ctx.__aenter__.return_value = fresh_conn
+    acquire_ctx.__aexit__.return_value = False
+    backend.acquire = lambda: acquire_ctx
+
+    conn.fetchval.return_value = True
+    # 1st fetchval on fresh_conn: is_superuser = 'off' -> False
+    # 2nd fetchval on fresh_conn: _RECONCILE_AGE_GRAPH_OID_SQL -> True
+    fresh_conn.fetchval.side_effect = [False, True]
+    fresh_conn.fetch.return_value = [{"result": "1"}]
+    conn.fetch.side_effect = [
+        Exception("graph with oid 30252 does not exist"),
+        [{"result": '{"restored": true}::agtype'}],
+    ]
+
+    result = await backend._run_cypher_on_conn(conn, "MATCH (d:Discovery) RETURN d", {})
+
+    assert result == [{"restored": True}]
+    fresh_conn.execute.assert_any_call("LOAD 'age'")
+    fresh_conn.execute.assert_any_call("SET search_path = ag_catalog, core, audit, public")
+    executed_sqls = [call.args[0] for call in fresh_conn.execute.await_args_list]
+    assert not any("drop_graph" in sql for sql in executed_sqls)
+    assert not any("create_graph" in sql for sql in executed_sqls)
+    assert backend._graph_exists_confirmed is True
+
+
+@pytest.mark.asyncio
+async def test_graph_available_reconciles_stale_oid_on_first_probe():
+    backend = _GraphBackend()
+    conn = AsyncMock()
+    fresh_conn = AsyncMock()
+
+    conns = iter([conn, fresh_conn])
+
+    class _AcquireCtx:
+        async def __aenter__(self):
+            return next(conns)
+
+        async def __aexit__(self, *args):
+            return False
+
+    backend.acquire = lambda: _AcquireCtx()
+
+    conn.fetchval.side_effect = [False, True, False]
+    conn.fetch.side_effect = [
+        Exception("graph with oid 30252 does not exist"),
+        [{"result": "1"}],
+    ]
+    fresh_conn.fetchval.side_effect = [False, True]
+    fresh_conn.fetch.return_value = [{"result": "1"}]
+
+    assert await backend.graph_available() is True
+    executed_sqls = [call.args[0] for call in fresh_conn.execute.await_args_list]
+    assert not any("drop_graph" in sql for sql in executed_sqls)
 
 
 @pytest.mark.asyncio

@@ -205,6 +205,10 @@ services:
       UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       UNITARES_DIALECTIC_BEAM_RESOLUTION: ${UNITARES_DIALECTIC_BEAM_RESOLUTION:-1}
+      # Policy actuation and SN1 behavioral sensor defaults (v4.0.0).
+      UNITARES_POLICY_ACTUATION: ${UNITARES_POLICY_ACTUATION:-observe}
+      UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS: ${UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS:-1}
+      UNITARES_PER_AGENT_I_CALIBRATION: ${UNITARES_PER_AGENT_I_CALIBRATION:-1}
       # Keep Python's fallback decision aligned with the lease plane. Under
       # BEAM-control enforcement, an unavailable BEAM writer must fail closed
       # instead of bypassing request-bound identity via direct PostgreSQL.
