@@ -311,7 +311,7 @@ jobs:
                 *) echo "unexpected patch path: $path" >&2; exit 1 ;;
               esac
               test "$(git ls-files --stage -- "$path" | cut -d' ' -f1)" = 100644
-            done < <(git diff --cached --name-only)
+            done < <(git diff --cached --name-only --no-renames)
           fi
           git config user.name "unitares-agents[bot]"
           git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"

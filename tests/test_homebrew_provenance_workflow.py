@@ -137,7 +137,7 @@ def test_render_guard_refuses_a_repository_level_app_key(release_env):
         assert result.returncode == expected
 
 
-@pytest.mark.parametrize('mode', ['regular', 'extra_only', 'mixed_extra', 'symlink', 'deletion', 'missing', 'empty'])
+@pytest.mark.parametrize('mode', ['regular', 'extra_only', 'mixed_extra', 'symlink', 'deletion', 'missing', 'empty', 'rename_from_extra'])
 def test_publisher_patch_policy_with_real_git(tmp_path, mode):
     repo = tmp_path / 'repo'
     repo.mkdir()
@@ -153,11 +153,17 @@ def test_publisher_patch_policy_with_real_git(tmp_path, mode):
     target.parent.mkdir()
     target.write_text('original\n')
     (repo / 'Formula/unitares-lease-plane.rb').write_text('original\n')
-    (repo / 'SOURCES.json').write_text('{}\n')
+    if mode == 'rename_from_extra':
+        (repo / 'scripts').mkdir()
+        (repo / 'scripts/rename-source').write_text('rename candidate\n')
+    else:
+        (repo / 'SOURCES.json').write_text('{}\n')
     git('add', '.')
     git('commit', '-qm', 'baseline')
     outside = tmp_path / 'untouched'
     outside.write_text('outside unchanged\n')
+    if mode == 'rename_from_extra':
+        git('mv', 'scripts/rename-source', 'SOURCES.json')
     if mode in ('regular', 'mixed_extra'):
         target.write_text('candidate\n')
     if mode in ('extra_only', 'mixed_extra'):
@@ -171,7 +177,10 @@ def test_publisher_patch_policy_with_real_git(tmp_path, mode):
     patch_dir = tmp_path / 'tap-transition'
     patch_dir.mkdir()
     if mode != 'missing':
-        (patch_dir / 'release.patch').write_bytes(git('diff', '--cached', '--binary'))
+        patch_bytes = git('diff', '--cached', '--binary')
+        if mode == 'rename_from_extra':
+            assert b'rename from scripts/rename-source' in patch_bytes
+        (patch_dir / 'release.patch').write_bytes(patch_bytes)
     git('reset', '--hard', 'HEAD')
     publishing = WORKFLOW['jobs']['sync']['steps'][-1]['run']
     policy = publishing[publishing.index('patch="$RUNNER_TEMP'):publishing.index('git config user.name')]
@@ -182,5 +191,7 @@ def test_publisher_patch_policy_with_real_git(tmp_path, mode):
     assert not (repo / 'scripts/untrusted.py').exists()
     if mode in ('extra_only', 'mixed_extra', 'missing', 'empty'):
         assert git('diff', '--cached', '--name-only') == b''
+    if mode == 'rename_from_extra':
+        assert 'unexpected patch path: scripts/rename-source' in result.stderr
     if mode == 'regular':
         assert git('diff', '--cached', '--name-only').decode().strip() == 'Formula/unitares.rb'
