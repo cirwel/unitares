@@ -78,18 +78,23 @@ veto by removing the label.
   The opening session is the
   initial delivery owner; a completed handover or adoption transfers delivery
   responsibility within its recorded scope, while original authorship remains
-  unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
-  session's UNITARES identity. Do not push commits to another session's PR branch, even to
-  fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
+  unchanged. Keep the opening author's `Model:` / `UNITARES agent:` signature at the end
+  of the PR body. Record later delivery owners and their attribution in PR
+  comments; the PR-body signature is authorship, not current ownership proof.
+  Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
   do not distinguish sessions reliably.
-  If it wasn't created in your session and its owner didn't hand it to you,
-  it isn't yours. To contribute, either comment on the PR with the change,
+  You may act on another session's PR only within a verified handover or
+  operator grant, or after completing the stuck-queue adoption below. To
+  contribute, either comment on the PR with the change,
   or branch from its head (`<author>/<topic>-on-<N>`), open your own draft
-  PR, and put "merge after #N" in its body. The owner or the operator can
-  hand a branch over explicitly, with the grant and acceptance recorded on the
-  PR. Operator-origin grants must be verified under the successor rule below;
-  an account name alone does not prove a handover. If your own push is rejected
-  because the remote has commits you
+  PR, and put "merge after #N" in its body. The owner may request a handover,
+  but that request transfers no authority.
+  The operator must confirm it through the verified instruction route below,
+  naming the successor by UNITARES agent UUID and stating separately whether
+  readiness and queue-entry are authorized. Record the owner's request, the operator grant's
+  source and scope, and the successor's acceptance on the PR. A shared GitHub
+  login, PR comment or UUID footer alone does not verify the request or transfer
+  authority. If your own push is rejected because the remote has commits you
   did not author, somebody else is on your branch: keep your work on a local
   `backup/*` branch, build on the remote head, and ask who it is. Never
   force-push over it (see *Git Rules*).
@@ -148,13 +153,17 @@ veto by removing the label.
   PR, followed by acceptance and the successor's own attribution; preserve the
   original author's provenance. Both instruction routes require this PR record.
   Acceptance transfers delivery ownership only for the granted operations.
-  A readiness-only successor cannot apply `approved-to-merge` or merge.
+  A readiness-only successor may mark an unlabeled draft PR ready but leaves it
+  unlabeled. If a queue label is already present, seek operator clarification
+  before acting.
   The original author remains credited even when delivery ownership changes.
 
   Before exercising a grant, verify current head, CI, review coverage,
   unresolved findings, collisions and ordering. Put ordering such as "merge
-  after #N" in the PR body. Marking ready and applying the queue label together
-  requires queue-entry authority; merging remains the queue's act.
+  after #N" in the PR body. After a later verified queue-entry grant is recorded
+  and accepted, the authorized successor revalidates the current head and
+  applies `approved-to-merge`. The 12-hour adoption route applies only to a PR
+  that already carries that label; merging remains the queue's act.
 
 ### Review workflow
 
@@ -852,7 +861,7 @@ guards keep concurrent sessions from clobbering each other:
 a ~15-minute slowest job, **every merge invalidates every other open PR**.
 
 **Queue it instead of watching.** When your PR is ready (CI green, known findings addressed, and required
-sensitive-path review coverage passing), mark it ready and apply `approved-to-merge` in the same step.
+sensitive-path review coverage passing) and you hold queue-entry authority, mark it ready and apply `approved-to-merge` in the same step. A readiness-only successor leaves it ready and unlabeled until a later verified grant and fresh validation.
 `scripts/ops/pr-babysitter.sh` (launchd, every five minutes while the operator's
 machine is awake) keeps exactly one PR armed at a time in the order the label
 went on, avoiding the N² CI cascade of arming or updating multiple behind PRs at
@@ -868,9 +877,11 @@ Draft PRs cannot be queued, so mark ready first.
   grant and acceptance have been recorded on the PR under the successor rule
   above. A direct instruction and a verified PR-comment instruction follow the
   same rule. Never label another agent's PR outside these routes. Apply it when
-  marking ready on the same validation (CI green, known findings addressed,
-  required sensitive-path review coverage passing). The operator vetoes by
-  removing it. The exception is a PR labelled `governance-sensitive` (see
+  marking ready only if queue-entry authority is already held. After a
+  readiness-only handoff, apply it only following a later verified queue-entry
+  grant and fresh validation of the current head (CI green, known findings
+  addressed, required sensitive-path review coverage passing). The operator
+  vetoes by removing it. The exception is a PR labelled `governance-sensitive` (see
   `docs/dev/GOVERNANCE_SENSITIVITY.md`), touching that manifest, or coming from
   a fork: the queue never arms it, and the operator merges it by hand. When the
   queue first sees `approved-to-merge` (within 15 minutes of application), it
@@ -1053,7 +1064,8 @@ this entirely).
 | One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
-| Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| Your PR is READY and you hold queue-entry authority (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| You have readiness-only authority | Mark an unlabeled draft ready, leave it unlabeled, and wait for a separate verified queue-entry grant before revalidation and labeling |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Third cycle without a P0/P1 done | Escalate redundant full-review requests; fixes of serious findings retain their exemption ([round cap](#round-cap)) |

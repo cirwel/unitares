@@ -43,8 +43,9 @@
 #      the PR and past a few hundred GitHub stops showing it new ones (#3036).
 #
 # The approval label is the merge decision. The authorized delivery owner applies
-# it when marking ready: the opening owner, a completed stuck-queue adopter, or
-# the named operator-assigned successor with explicit queue-entry authority and
+# it when entering the queue, at readiness or after a later verified grant and
+# validation: the opening owner, a completed stuck-queue adopter, or the named
+# operator-assigned successor with explicit queue-entry authority and
 # the verified grant/acceptance recorded on the PR (AGENTS.md / CLAUDE.md).
 # Original authorship is preserved; another agent may not self-assign authority.
 # This script checks label/head coverage, not the human origin of a handover.
@@ -71,7 +72,7 @@
 # scope; the guard against a hostile agent is who holds the credentials.
 #
 # Deliberately out of scope — these stay human or session judgment:
-#   - readying drafts (the draft→ready mark is the owning agent's gate),
+#   - readying drafts (the draft→ready mark is the authorized delivery owner's gate),
 #   - resolving conflicts,
 #   - arming anything that does not carry the label, or that targets a branch
 #     other than PR_QUEUE_BASE (a stacked PR runs no CI; arming it merges it).
