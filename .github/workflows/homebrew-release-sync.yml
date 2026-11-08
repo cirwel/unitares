@@ -116,13 +116,98 @@ jobs:
             gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
           fi
 
-  # Tap main is a separate trust domain. Its renderer must never inherit the
-  # upstream signing identity or the credential that can replace release assets.
-  sync:
+  # Mutable tap code runs on its own runner, with no environment secrets,
+  # App key, signing authority or write token. Its output is untrusted data.
+  render:
     needs: source_archive
     permissions:
       contents: read
       pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tap_commit: ${{ steps.base.outputs.commit }}
+      artifact_id: ${{ steps.patch.outputs.artifact-id }}
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      UNITARES_VERSION: ${{ needs.source_archive.outputs.version }}
+      UNITARES_COMMIT: ${{ needs.source_archive.outputs.commit }}
+      UNITARES_ARCHIVE_SHA256: ${{ needs.source_archive.outputs.sha256 }}
+      UNITARES_ARCHIVE_URL: ${{ needs.source_archive.outputs.url }}
+    steps:
+      - name: Refuse an App key outside the protected environment
+        env:
+          APP_KEY_PRESENT: ${{ secrets.UNITARES_AGENT_APP_PRIVATE_KEY != '' }}
+        run: test "$APP_KEY_PRESENT" = false
+
+      - name: Check out the verified release commit for the renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source_archive.outputs.commit }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: cirwel/homebrew-unitares
+          path: _tap
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Record the tap base before running its renderer
+        id: base
+        working-directory: _tap
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Render and test the draft transition without write credentials
+        working-directory: _tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          floor_pr="$(jq -r .release_floor_pr SOURCES.json)"
+          floor_commit="$(gh pr view "$floor_pr" \
+            --repo cirwel/unitares --json state,mergeCommit \
+            --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
+          test -n "$floor_commit"
+          python3 scripts/release_sync.py \
+            --source-root "$GITHUB_WORKSPACE" \
+            --release-repo "$GITHUB_WORKSPACE" \
+            --version "$UNITARES_VERSION" --tag "$TAG" \
+            --commit "$UNITARES_COMMIT" \
+            --archive-url "$UNITARES_ARCHIVE_URL" \
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
+            --release-floor-commit "$floor_commit"
+          python3 scripts/release_sync.py \
+            --source-root "$GITHUB_WORKSPACE" \
+            --release-repo "$GITHUB_WORKSPACE" \
+            --version "$UNITARES_VERSION" --tag "$TAG" \
+            --commit "$UNITARES_COMMIT" \
+            --archive-url "$UNITARES_ARCHIVE_URL" \
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
+            --release-floor-commit "$floor_commit" --check
+          python3 scripts/test_release_sync.py
+          mkdir "$RUNNER_TEMP/tap-transition"
+          git diff --binary -- Formula/unitares.rb Formula/unitares-lease-plane.rb SOURCES.json \
+            > "$RUNNER_TEMP/tap-transition/release.patch"
+
+      - name: Preserve the proposed patch as an immutable workflow artifact
+        id: patch
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: homebrew-transition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tap-transition/release.patch
+          if-no-files-found: error
+          retention-days: 7
+
+  # This credential-bearing job executes only this upstream workflow's fixed
+  # shell and pinned actions. It applies a patch as data; it runs no tap code.
+  sync:
+    needs: [source_archive, render]
+    permissions:
+      contents: read
+      actions: read
     environment: homebrew-release-sync
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -138,12 +223,12 @@ jobs:
           ARMED: ${{ secrets.UNITARES_HOMEBREW_RELEASE_SYNC_ARMED }}
         run: test "$ARMED" = true
 
-      - name: Check out the verified release commit for the renderer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download this run's exact transition artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          ref: ${{ needs.source_archive.outputs.commit }}
-          persist-credentials: false
-          fetch-depth: 0
+          artifact-ids: ${{ needs.render.outputs.artifact_id }}
+          path: ${{ runner.temp }}/tap-transition
+          merge-multiple: true
 
       - name: Mint a tap-scoped App token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -165,13 +250,18 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: Render, verify and open the draft tap PR
+      - name: Apply the proposed data patch and open the draft tap PR
         working-directory: _tap
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          UPSTREAM_GH_TOKEN: ${{ github.token }}
+          EXPECTED_TAP_COMMIT: ${{ needs.render.outputs.tap_commit }}
         run: |
           set -euo pipefail
+          [[ "$EXPECTED_TAP_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse origin/main)" = "$EXPECTED_TAP_COMMIT" || {
+            echo "tap main changed after rendering; rerun instead of applying a stale patch" >&2
+            exit 1
+          }
           branch=auto/homebrew-release-sync
           remote_ref="refs/remotes/origin/$branch"
           lease="--force-with-lease=refs/heads/$branch:"
@@ -191,36 +281,29 @@ jobs:
           else
             git checkout -B "$branch" origin/main
           fi
-          floor_pr="$(jq -r .release_floor_pr SOURCES.json)"
-          floor_commit="$(GH_TOKEN="$UPSTREAM_GH_TOKEN" gh pr view "$floor_pr" \
-            --repo cirwel/unitares --json state,mergeCommit \
-            --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
-          test -n "$floor_commit"
-          python3 scripts/release_sync.py \
-            --source-root "$GITHUB_WORKSPACE" \
-            --release-repo "$GITHUB_WORKSPACE" \
-            --version "$UNITARES_VERSION" --tag "$TAG" \
-            --commit "$UNITARES_COMMIT" \
-            --archive-url "$UNITARES_ARCHIVE_URL" \
-            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
-            --release-floor-commit "$floor_commit"
-          python3 scripts/release_sync.py \
-            --source-root "$GITHUB_WORKSPACE" \
-            --release-repo "$GITHUB_WORKSPACE" \
-            --version "$UNITARES_VERSION" --tag "$TAG" \
-            --commit "$UNITARES_COMMIT" \
-            --archive-url "$UNITARES_ARCHIVE_URL" \
-            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
-            --release-floor-commit "$floor_commit" --check
-          python3 scripts/test_release_sync.py
+          patch="$RUNNER_TEMP/tap-transition/release.patch"
+          test -f "$patch" && test ! -L "$patch"
+          if [ -s "$patch" ]; then
+            git -c core.hooksPath=/dev/null apply --index \
+              --include='Formula/unitares.rb' --include='Formula/unitares-lease-plane.rb' \
+              --include='SOURCES.json' "$patch"
+            # Restrict both names and modes; no code or Git configuration from
+            # the renderer is executed on this credential-bearing runner.
+            while IFS= read -r path; do
+              case "$path" in
+                Formula/unitares.rb|Formula/unitares-lease-plane.rb|SOURCES.json) ;;
+                *) echo "unexpected patch path: $path" >&2; exit 1 ;;
+              esac
+              test "$(git ls-files --stage -- "$path" | cut -d' ' -f1)" = 100644
+            done < <(git diff --cached --name-only)
+          fi
           git config user.name "unitares-agents[bot]"
           git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
-          git add Formula/unitares.rb Formula/unitares-lease-plane.rb SOURCES.json
           if git diff --cached --quiet; then
             echo "Tap already matches $TAG." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git commit -m "chore(release): sync UNITARES $TAG"
+          git -c core.hooksPath=/dev/null commit -m "chore(release): sync UNITARES $TAG"
           git push "$lease" --force-if-includes origin "HEAD:refs/heads/$branch"
           body="$RUNNER_TEMP/homebrew-pr-body.md"
           printf '%s\n' \

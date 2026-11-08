@@ -8,11 +8,11 @@ Apple Silicon acceptance have each been verified.
 
 `.github/workflows/homebrew-release-sync.yml` runs for a published stable
 release, or by explicit dispatch for recovery. The `homebrew-release-sync`
-environment is the authority boundary and should require operator approval. Its
-repository variables and secrets provide the shared `unitares-agents` App
+environment should require operator approval for each privileged job. Its
+environment-scoped variables and secrets provide the shared `unitares-agents` App
 client ID and private key; the minted token is scoped only to
 `cirwel/homebrew-unitares`, with contents and pull-request writes.
-The job also fails closed unless the repository variable
+The workflow also fails closed unless the repository variable
 `UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED` is exactly `true`; enabling it is an
 explicit operator rollout decision after the environment protection, its
 environment-scoped `UNITARES_HOMEBREW_RELEASE_SYNC_ARMED=true` secret, and the
@@ -25,9 +25,19 @@ the fixed repository/workflow, tag, source and signer commit before uploading
 the archive, and only when the release has no asset by that name. An existing asset must be
 byte-identical and is never overwritten. It then runs the tap's offline release
 renderer and opens or updates the single `auto/homebrew-release-sync` draft PR.
-Signing/publication and tap rendering run in separate jobs. The renderer receives
-only the verified version, commit, digest and URL as job outputs, and has no
-upstream signing or release-write permission.
+Three runners separate source signing/publication, tap rendering, and draft-PR
+publication. The renderer has read-only tokens and no protected environment; it
+refuses to execute if the shared App key is visible from repository/organization
+secrets. Put that key only in the protected environment. The publisher consumes
+an immutable patch artifact from this run and applies only the two formula files
+and `SOURCES.json` as regular files. It executes no tap scripts and refuses a tap
+base that changed since rendering. The shared App remains a privileged operator
+credential across repositories; these jobs do not claim to isolate an independently
+compromised, operator-approved workflow elsewhere that holds that key.
+
+With required environment reviewers, source publication and draft-PR publication
+have separate approvals. The source archive may already be published while the
+second approval is pending; the tap PR does not exist until that stage succeeds.
 That transition advances both `Formula/unitares.rb` and the release-coupled
 `Formula/unitares-lease-plane.rb` from the same immutable asset.
 

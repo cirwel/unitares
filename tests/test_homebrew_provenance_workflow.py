@@ -98,10 +98,19 @@ def test_publisher_uses_fixed_signer_and_exact_source(release_env):
 
 def test_tap_code_cannot_inherit_upstream_signing_or_release_write_authority():
     signing = WORKFLOW['jobs']['source_archive']
-    rendering = WORKFLOW['jobs']['sync']
+    rendering = WORKFLOW['jobs']['render']
     assert signing['permissions'] == {'contents': 'write', 'id-token': 'write', 'attestations': 'write'}
     assert rendering['permissions'] == {'contents': 'read', 'pull-requests': 'read'}
     assert rendering['needs'] == 'source_archive'
+    assert 'environment' not in rendering
+    guard = rendering['steps'][0]
+    assert guard['env']['APP_KEY_PRESENT'] == "${{ secrets.UNITARES_AGENT_APP_PRIVATE_KEY != '' }}"
+    assert guard['run'] == 'test "$APP_KEY_PRESENT" = false'
+    assert all('create-github-app-token' not in s.get('uses', '') for s in rendering['steps'])
+    publishing = WORKFLOW['jobs']['sync']
+    assert publishing['needs'] == ['source_archive', 'render']
+    assert publishing['permissions'] == {'contents': 'read', 'actions': 'read'}
+    assert all('python' not in s.get('run', '') for s in publishing['steps'])
     assert all('_tap' not in s.get('working-directory', '') for s in signing['steps'])
     assert not any(s.get('with', {}).get('repository') == 'cirwel/homebrew-unitares' for s in signing['steps'])
     assert set(signing['outputs']) == {'version', 'commit', 'sha256', 'url'}
@@ -116,3 +125,28 @@ def test_archive_outputs_match_the_verified_source(release_env):
     assert outputs['commit'] == COMMIT
     assert len(outputs['sha256']) == 64
     assert outputs['url'] == 'https://github.com/cirwel/unitares/releases/download/v3.7.0/unitares-3.7.0.tar.gz'
+
+
+def test_render_guard_refuses_a_repository_level_app_key(release_env):
+    guard = WORKFLOW['jobs']['render']['steps'][0]['run']
+    for present, expected in [('true', 1), ('false', 0)]:
+        result = subprocess.run(['bash', '-c', guard], env={**release_env, 'APP_KEY_PRESENT': present})
+        assert result.returncode == expected
+
+
+@pytest.mark.parametrize('path,mode,accepted', [
+    ('Formula/unitares.rb', '100644', True),
+    ('SOURCES.json', '100644', True),
+    ('Formula/unitares.rb', '120000', False),
+    ('scripts/release_sync.py', '100644', False),
+])
+def test_publisher_restricts_patch_paths_and_modes(tmp_path, path, mode, accepted):
+    publishing = WORKFLOW['jobs']['sync']['steps'][-1]['run']
+    end = 'done < <(git diff --cached --name-only)'
+    policy = publishing[publishing.index('while IFS= read -r path; do'):publishing.index(end) + len(end)]
+    binary = tmp_path / 'git'
+    binary.write_text('#!/bin/bash\ncase "$1" in\n  diff) printf "%s\\n" "$TEST_PATH" ;;\n  ls-files) printf "%s abc 0\\t%s\\n" "$TEST_MODE" "$TEST_PATH" ;;\nesac\n')
+    binary.chmod(0o755)
+    result = subprocess.run(['bash', '-euc', policy], env={**os.environ,
+        'PATH': f'{tmp_path}:{os.environ["PATH"]}', 'TEST_PATH': path, 'TEST_MODE': mode}, capture_output=True)
+    assert (result.returncode == 0) == accepted

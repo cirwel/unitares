@@ -198,6 +198,11 @@ publication. Manual dispatch must run **at the tag**, for example
 `gh workflow run homebrew-release-sync.yml --ref "$TAG" -f tag="$TAG"`.
 The tagged commit must contain the attesting workflow; older unsigned assets
 cannot acquire this guarantee by running a newer workflow on `master`.
+Signing, tap rendering and draft-PR publication use separate runners. The tap
+renderer refuses to run if the shared App private key is available outside the
+protected environment; publication applies its proposed patch as data without
+executing tap scripts. Source publication and draft-PR publication require
+separate environment approvals when required reviewers are configured.
 
 Users can verify a downloaded source archive with a current authenticated GitHub
 CLI and an expected full commit obtained independently from the reviewed release:
