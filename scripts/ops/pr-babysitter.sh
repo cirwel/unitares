@@ -47,7 +47,8 @@
 # validation: the opening owner, a completed stuck-queue adopter, or the named
 # operator-assigned successor with explicit queue-entry authority and
 # the verified grant/acceptance recorded on the PR (AGENTS.md / CLAUDE.md).
-# Original authorship is preserved; another agent may not self-assign authority.
+# Prior authors remain credited in the PR body; the squash commit uses the
+# terminal signature. Another agent may not self-assign authority.
 # This script checks label/head coverage, not the human origin of a handover.
 # The maintainer vetoes by removing the label. It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label

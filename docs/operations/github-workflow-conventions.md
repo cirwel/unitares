@@ -81,9 +81,14 @@ veto by removing the label.
   unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
   session's UNITARES identity. Preserve prior contributors' `Model:` /
   `UNITARES agent:` signatures in the PR body when the terminal owner footer
-  changes, and add the successor's signature to the body as well as its
-  handover comment so review routing sees every author family. A footer or
-  comment is a pointer, not proof of a grant or queue-entry authority.
+  changes. Add a successor's signature to the body only when it contributes
+  commits, so review routing sees every author family; a delivery-only
+  successor records its identity and scope in a PR comment without claiming
+  authorship. A bounded amendment or delivery-only grant leaves the terminal
+  branch-owner footer unchanged; only an explicit branch-ownership handover
+  changes it. Delivery-only successors use the manual PR path, not
+  `ship.sh --resume`. A footer or comment is a pointer, not proof of a grant
+  or queue-entry authority.
   Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
   do not distinguish sessions reliably.
   You may act on another session's PR only within a verified handover or
@@ -94,7 +99,8 @@ veto by removing the label.
   but that request transfers no authority.
   The operator must confirm it through the verified instruction route below,
   naming the successor by UNITARES agent UUID and stating separately whether
-  readiness and queue-entry are authorized. Record the owner's request, the operator grant's
+  branch writing (commits and pushes), readiness, and queue-entry are
+  authorized. Record the owner's request, the operator grant's
   source and scope, and the successor's acceptance on the PR. A shared GitHub
   login, PR comment or UUID footer alone does not verify the request or transfer
   authority. If your own push is rejected because the remote has commits you
@@ -143,9 +149,11 @@ veto by removing the label.
   the separate [stuck-queue adoption](#adoption) route retains its conditions.
 
   If the owner cannot return, the operator may override readiness or assign a
-  named successor by UNITARES agent UUID. The grant must separately state
-  readiness and queue-entry authority. It can arrive as a verified operator
-  instruction on the PR or a direct instruction in that successor's operator
+  named successor by UNITARES agent UUID. A direct readiness override must be
+  recorded in a PR comment with its source and scope; it does not authorize
+  queue entry. The grant must separately state branch-writing, readiness, and
+  queue-entry authority; one scope does not imply another. It can arrive as a
+  verified operator instruction on the PR or a direct instruction in that successor's operator
   session. The successor must establish operator origin from that direct
   instruction or an independently established operator-only channel. GitHub
   login, author association, UUID footer and an agent's acceptance comment are
@@ -159,7 +167,8 @@ veto by removing the label.
   A readiness-only successor may mark an unlabeled draft PR ready but leaves it
   unlabeled. If a queue label is already present, seek operator clarification
   before acting.
-  The original author remains credited even when delivery ownership changes.
+  The original author remains credited in the PR body when delivery ownership
+  changes. The queue's squash commit records only the terminal signature.
 
   Before exercising a grant, verify current head, CI, review coverage,
   unresolved findings, collisions and ordering. Put ordering such as "merge
@@ -821,8 +830,9 @@ no local full test run, and never updates the base or arms auto-merge.
 
 The PR's ownership footer must match `UNITARES_AGENT_UUID`. That match is
 necessary for `--resume`, not proof of a handover or queue-entry authority:
-a successor may use it only after a verified queue-entry grant, and a
-readiness-only successor must not use it. The command does not verify grants.
+a successor may use it only after a verified branch-ownership handover with
+readiness and queue-entry grants; delivery-only successors must use the manual
+PR path. The command does not verify grants.
 Automatic completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
 `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and `.github/workflows/`.
 Paths in `second_family_paths` remain eligible only after passing their required
