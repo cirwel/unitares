@@ -22,6 +22,11 @@ concurrency:
 
 jobs:
   sync:
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write
+      attestations: write
     if: >-
       github.repository == 'cirwel/unitares' &&
       vars.UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED == 'true' &&
@@ -57,6 +62,11 @@ jobs:
           test "$TAG" = "v$version"
           commit="$(git rev-parse HEAD)"
           test "$(git rev-list -n 1 "$TAG")" = "$commit"
+          # The signing certificate describes the workflow's event context,
+          # not an arbitrary ref passed to checkout. Manual dispatch must use
+          # --ref "$TAG", and the tag must contain this workflow version.
+          test "$GITHUB_REF" = "refs/tags/$TAG"
+          test "$GITHUB_SHA" = "$commit"
           archive="$RUNNER_TEMP/unitares-$version.tar.gz"
           git archive --format=tar --prefix="unitares-$version/" "$commit" | gzip -n -9 > "$archive"
           digest="$(sha256sum "$archive" | cut -d' ' -f1)"
@@ -67,13 +77,36 @@ jobs:
               echo "existing release asset differs; refusing to overwrite it" >&2
               exit 1
             }
-          else
-            gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
           fi
           echo "UNITARES_VERSION=$version" >> "$GITHUB_ENV"
           echo "UNITARES_COMMIT=$commit" >> "$GITHUB_ENV"
           echo "UNITARES_ARCHIVE_SHA256=$digest" >> "$GITHUB_ENV"
           echo "UNITARES_ARCHIVE_URL=https://github.com/cirwel/unitares/releases/download/$TAG/unitares-$version.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Attest the source archive from this release commit
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: ${{ runner.temp }}/unitares-${{ env.UNITARES_VERSION }}.tar.gz
+
+      - name: Verify provenance before publishing the source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/unitares-$UNITARES_VERSION.tar.gz"
+          gh attestation verify "$archive" --repo cirwel/unitares \
+            --signer-workflow cirwel/unitares/.github/workflows/homebrew-release-sync.yml \
+            --source-ref "refs/tags/$TAG" --source-digest "$UNITARES_COMMIT" \
+            --signer-digest "$UNITARES_COMMIT" --deny-self-hosted-runners \
+            --format json > "$RUNNER_TEMP/source-verification.json"
+          jq -e 'type == "array" and length > 0' "$RUNNER_TEMP/source-verification.json"
+          existing="$RUNNER_TEMP/published-unitares-$UNITARES_VERSION.tar.gz"
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "unitares-$UNITARES_VERSION.tar.gz" --output "$existing" 2>/dev/null; then
+            cmp "$archive" "$existing"
+          else
+            gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
+          fi
 
       - name: Mint a tap-scoped App token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3

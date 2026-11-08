@@ -191,3 +191,27 @@ Maintainers hand stable releases to the tap through the protected deterministic
 [Homebrew release sync](../operations/homebrew-release-sync.md). It opens a
 draft tap PR and cannot merge it; bottle construction and publication remain
 separate operator-gated actions.
+
+The release sync signs the deterministic source archive with a GitHub artifact
+attestation and verifies its repository, workflow, tag and exact commit before
+publication. Manual dispatch must run **at the tag**, for example
+`gh workflow run homebrew-release-sync.yml --ref "$TAG" -f tag="$TAG"`.
+The tagged commit must contain the attesting workflow; older unsigned assets
+cannot acquire this guarantee by running a newer workflow on `master`.
+
+Users can verify a downloaded source archive with a current authenticated GitHub
+CLI and an expected full commit obtained independently from the reviewed release:
+
+```sh
+gh attestation verify "unitares-$VERSION.tar.gz" --repo cirwel/unitares \
+  --signer-workflow cirwel/unitares/.github/workflows/homebrew-release-sync.yml \
+  --source-ref "refs/tags/v$VERSION" --source-digest "$EXPECTED_COMMIT" \
+  --signer-digest "$EXPECTED_COMMIT" --deny-self-hosted-runners
+```
+
+The tap's [verification instructions](https://github.com/cirwel/homebrew-unitares#verify-a-downloaded-package)
+cover bottle signatures, complete evidence manifests and recorded build dependencies.
+Ordinary `brew install` still performs Homebrew checksum checks; attestation
+verification is an additional explicit check. Provenance establishes origin and
+integrity, not benign behavior, an independent security audit or reproducibility.
+These changes do not publish bottles or enable the protected build environments.
