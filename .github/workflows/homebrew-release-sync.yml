@@ -143,7 +143,9 @@ jobs:
       - name: Check out the verified release commit for the renderer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.source_archive.outputs.commit }}
+          # source_archive already required this event SHA to equal the tag.
+          # Bind checkout directly, rather than accepting a ref via job output.
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
 

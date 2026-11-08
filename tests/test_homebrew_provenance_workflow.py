@@ -107,6 +107,8 @@ def test_tap_code_cannot_inherit_upstream_signing_or_release_write_authority():
     assert guard['env']['APP_KEY_PRESENT'] == "${{ secrets.UNITARES_AGENT_APP_PRIVATE_KEY != '' }}"
     assert guard['run'] == 'test "$APP_KEY_PRESENT" = false'
     assert all('create-github-app-token' not in s.get('uses', '') for s in rendering['steps'])
+    source_checkout = next(s for s in rendering['steps'] if s.get('name', '').startswith('Check out the verified'))
+    assert source_checkout['with']['ref'] == '${{ github.sha }}'
     publishing = WORKFLOW['jobs']['sync']
     assert publishing['needs'] == ['source_archive', 'render']
     assert publishing['permissions'] == {'contents': 'read', 'actions': 'read'}
