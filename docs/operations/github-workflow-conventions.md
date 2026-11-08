@@ -78,9 +78,12 @@ veto by removing the label.
   The opening session is the
   initial delivery owner; a completed handover or adoption transfers delivery
   responsibility within its recorded scope, while original authorship remains
-  unchanged. Keep the opening author's `Model:` / `UNITARES agent:` signature at the end
-  of the PR body. Record later delivery owners and their attribution in PR
-  comments; the PR-body signature is authorship, not current ownership proof.
+  unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
+  session's UNITARES identity. Preserve prior contributors' `Model:` /
+  `UNITARES agent:` signatures in the PR body when the terminal owner footer
+  changes, and add the successor's signature to the body as well as its
+  handover comment so review routing sees every author family. A footer or
+  comment is a pointer, not proof of a grant or queue-entry authority.
   Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
   do not distinguish sessions reliably.
   You may act on another session's PR only within a verified handover or
@@ -816,8 +819,11 @@ explicitly provisioned `GH_TOKEN`/`GITHUB_TOKEN`; it refuses an implicit
 fallback to the interactive `gh` login). It neither commits nor pushes, starts
 no local full test run, and never updates the base or arms auto-merge.
 
-The PR's ownership footer must match `UNITARES_AGENT_UUID`, and automatic
-completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
+The PR's ownership footer must match `UNITARES_AGENT_UUID`. That match is
+necessary for `--resume`, not proof of a handover or queue-entry authority:
+a successor may use it only after a verified queue-entry grant, and a
+readiness-only successor must not use it. The command does not verify grants.
+Automatic completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
 `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and `.github/workflows/`.
 Paths in `second_family_paths` remain eligible only after passing their required
 two-family review; scientific proposals, registered stop rules, identity
