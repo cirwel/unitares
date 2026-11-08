@@ -79,7 +79,10 @@ veto by removing the label.
   initial delivery owner; a completed handover or adoption transfers delivery
   responsibility within its recorded scope, while original authorship remains
   unchanged. End every PR body with `UNITARES agent: <uuid>`, the owning
-  session's UNITARES identity. Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
+  session's UNITARES identity. When a successor or adopter pushes commits, add
+  its own `Model:` / `UNITARES agent:` signature to the PR body alongside
+  the original author's; delivery-only actions record identity in a PR comment
+  without claiming authorship. Do not push commits to another session's PR branch, even to fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
   do not distinguish sessions reliably.
   You may act on another session's PR only within a verified handover or
   operator grant, or after completing the stuck-queue adoption below. To
@@ -188,7 +191,7 @@ Read the PR's `review` check: **UNREVIEWED** means no completed coverage,
 runner is online; a paused/offline host leaves the PR visibly unreviewed.
 Ordinary work may still proceed after validation with that fact in the body;
 sensitive paths retain their required coverage. `approved-to-merge` remains
-the owning author's separate readiness declaration.
+the authorized delivery owner's separate queue-entry decision.
 
 A scheduled host runs the same `scripts/dev/review.sh sweep` entrypoint from
 clean, trusted merged code, using a separate checkout only as PR review

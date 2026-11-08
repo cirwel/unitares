@@ -87,7 +87,7 @@ def owned_head(pr: dict, agent: str) -> str:
         raise Parked("Commit and push local changes before resuming; resume never stages or commits.")
     footers = re.findall(r"^UNITARES agent: ([0-9a-fA-F-]+)\s*$", pr["body"], re.MULTILINE)
     if not footers or footers[-1].lower() != agent:
-        raise Parked("PR ownership footer does not match UNITARES_AGENT_UUID; record an explicit handoff first.")
+        raise Parked("PR ownership footer does not match UNITARES_AGENT_UUID; --resume is only for a PR still owned by this session. Successors and adopters use the manual PR path.")
     if pr["state"] not in {"OPEN", "MERGED"} or pr["isCrossRepository"]:
         raise Parked("Resume requires an open, same-repository PR (or an already merged result).")
     if pr["headRefName"] != branch or pr["headRefOid"] != head:
