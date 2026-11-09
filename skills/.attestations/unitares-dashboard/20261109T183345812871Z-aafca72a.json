@@ -1,14 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-09T18:28:09Z",
+  "verified_at": "2026-11-09T18:33:45Z",
   "verified_date": "2026-11-09",
-  "verifier": "Antigravity gemini-4-argon (agent cf00ce29-80ef-4502-97c1-96c8212eed4d): rechecked the Connectors section claims in unitares-dashboard/SKILL.md (lines 298-313) after resolving the review findings in data.js, connectors.js, connectors.test.js, http_routes/connectors.py, and oauth_connectors.py; 51 Python connector/route tests and 159 dashboard Vitest tests passed.",
+  "verifier": "Antigravity gemini-4-argon (agent cf00ce29-80ef-4502-97c1-96c8212eed4d): rechecked unitares-dashboard/SKILL.md claims against merged master dashboard/package.json and updated data.js, connectors.js, connectors.test.js, http_routes/connectors.py, and oauth_connectors.py; ESLint (0 errors), 159 Vitest tests, and 51 Python connector tests passed.",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
-    "unitares/dashboard/package.json": "b5c89d6bf716ece9",
+    "unitares/dashboard/package.json": "e488de4e394cc87f",
     "unitares/dashboard/redesign/app.html": "46c569214f1f5bc5",
-    "unitares/dashboard/redesign/data.js": "c45951cf51a0c363",
+    "unitares/dashboard/redesign/data.js": "9881c91f045f94f1",
     "unitares/dashboard/redesign/sections/connectors.js": "2aaca011a81a28d5",
     "unitares/dashboard/redesign/sections/discoveries.js": "2adb8b060e6d6744",
     "unitares/dashboard/redesign/sections/eisv.js": "a7a678c31726f94f",
@@ -32,22 +32,5 @@
     "unitares/src/http_routes/telemetry.py": "a352db903da8a796",
     "unitares/src/oauth_connectors.py": "3c7810d5df8946a5"
   },
-  "skill_digest": "5b12ca1a2c7b7062",
-  "superseded_digests": {
-    "unitares/dashboard/redesign/data.js": [
-      "cdc4635a9f1dedf7"
-    ],
-    "unitares/dashboard/redesign/sections/connectors.js": [
-      "1f3dc4c20e320a9b"
-    ],
-    "unitares/dashboard/tests/connectors.test.js": [
-      "27b4d0d91ee896f7"
-    ],
-    "unitares/src/http_routes/connectors.py": [
-      "47babf178c6225d8"
-    ],
-    "unitares/src/oauth_connectors.py": [
-      "8500d9012d2303d2"
-    ]
-  }
+  "skill_digest": "5b12ca1a2c7b7062"
 }
