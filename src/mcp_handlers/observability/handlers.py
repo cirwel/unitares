@@ -256,8 +256,6 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         # themselves don't have to look up what "pause"/"guide" mean.
         from src.governance_glossary import explain_verdict
         risk_score = metrics.get("risk_score")
-        if risk_score is None:
-            risk_score = metrics.get("current_risk")
         observation = {
             "current_state": {
                 "E": pE,
@@ -265,8 +263,9 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "S": pS,
                 "V": pV,
                 "coherence": float(monitor.state.coherence),
-                "risk_score": float(risk_score if risk_score is not None else 0.0),
+                "risk_score": float(risk_score) if risk_score is not None else None,
                 "risk_score_source": metrics.get("risk_score_source"),
+                "phi_risk_latest": metrics.get("phi_risk_latest"),
                 "phi": metrics.get("phi"),  # Primary physics signal
                 "verdict": explain_verdict(
                     metrics.get("verdict"), evidence_source=metrics.get("primary_eisv_source")
