@@ -620,7 +620,9 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
         """
         db = await self._get_db()
         async with db.acquire() as conn:
-            await conn.execute("LOAD 'age'")
+            unprivileged = await conn.fetchval("SELECT current_setting('is_superuser') = 'off'")
+            if unprivileged is not True:
+                await conn.execute("LOAD 'age'")
             await conn.execute("SET search_path = ag_catalog, core, audit, public")
             await conn.execute(sql)
 
