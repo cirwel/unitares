@@ -38,7 +38,16 @@ test-smoke: ## Run fast critical-path tests
 	@python3 -m pytest -o addopts= -q --maxfail=1 \
 		tests/test_version_sync.py \
 		tests/test_mcp_server_std.py::TestLoadVersion \
-		tests/test_mcp_server_std.py::TestAutoArchiveOrphanAgents
+		tests/test_mcp_server_std.py::TestAutoArchiveOrphanAgents \
+		tests/test_dialectic_protocol_state_machine.py::test_lean4_spec_structure_and_zero_sorry \
+		tests/test_dialectic_protocol_state_machine.py::test_lean4_kernel_typechecks_dialectic_protocol \
+		tests/test_dialectic_protocol_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_session \
+		tests/test_saga_cas_protocol_state_machine.py::test_lean4_saga_cas_spec_structure_and_zero_sorry \
+		tests/test_saga_cas_protocol_state_machine.py::test_lean4_kernel_typechecks_saga_cas_protocol \
+		tests/test_saga_cas_protocol_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_code \
+		tests/test_resolution_effects_state_machine.py::test_lean4_resolution_effects_spec_structure_and_zero_sorry \
+		tests/test_resolution_effects_state_machine.py::test_lean4_kernel_typechecks_resolution_effects \
+		tests/test_resolution_effects_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_code
 
 # ── Server ───────────────────────────────────────────────
 

@@ -249,7 +249,10 @@ def analyze_agent_patterns(
         pE, pI, pS, pV = monitor.get_primary_eisv()
     except (AttributeError, TypeError, ValueError):
         pE, pI, pS, pV = float(state.E), float(state.I), float(state.S), float(state.V)
-    risk_score = float(state.risk_history[-1]) if state.risk_history else 0.0
+    # Match the non-analysis observe projection and the last verdict. The
+    # rolling history below is Phi telemetry, not resolved decision risk.
+    risk_score = current_metrics.get("risk_score")
+    phi_risk_latest = current_metrics.get("phi_risk_latest")
     current_state = {
         "E": pE,
         "I": pI,
@@ -258,7 +261,9 @@ def analyze_agent_patterns(
         "coherence": float(state.coherence),
         "coherence_source": coherence_source,
         "coherence_role": coherence_role,
-        "risk_score": risk_score,  # Governance/operational risk
+        "risk_score": float(risk_score) if risk_score is not None else None,
+        "risk_score_source": current_metrics.get("risk_score_source"),
+        "phi_risk_latest": phi_risk_latest,
         "lambda1": float(state.lambda1),
         "update_count": state.update_count
     }
@@ -309,6 +314,8 @@ def analyze_agent_patterns(
         }.get(patterns.get("risk_trend"), "stable")
     risk_change = trend_change(state.risk_history)
     patterns["trend_provenance"] = {
+        "risk_source": "phi_history",
+        "role": "diagnostic_trend_not_policy_verdict",
         "formula": (
             "risk_plus_behavioral_consistency.v2"
             if coherence_history_interpretable
@@ -345,6 +352,10 @@ def analyze_agent_patterns(
         emitted_windows=emitted_windows,
         coherence_role=coherence_role,
     )
+    for anomaly in anomalies:
+        if anomaly["type"] == "risk_spike":
+            anomaly["risk_source"] = "phi_history"
+            anomaly["role"] = "diagnostic_trend_not_policy_verdict"
 
     # Summary statistics
     # verdict_history (safe/caution/high-risk) is a separate vocabulary from
@@ -357,6 +368,7 @@ def analyze_agent_patterns(
     summary = {
         "total_updates": state.update_count,
         "mean_risk": float(np.mean(state.risk_history)) if state.risk_history else 0.0,
+        "mean_risk_source": "phi_history",
         "mean_coherence": float(np.mean(state.coherence_history)) if state.coherence_history else 0.0,
         "mean_coherence_provenance": {
             "source": coherence_source,
@@ -381,6 +393,7 @@ def analyze_agent_patterns(
         result["recent_history"] = {
             "timestamps": timestamps[-recent_window:] if timestamps else [],
             "risk_history": [float(r) for r in state.risk_history[-recent_window:]],
+            "risk_history_source": "phi_history",
             "coherence_history": [float(c) for c in state.coherence_history[-recent_window:]],
             "coherence_history_provenance": {
                 "source": coherence_source,

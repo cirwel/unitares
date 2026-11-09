@@ -1,1 +1,0 @@
-- **Council lanes:** the codex council lane refuses a `COUNCIL_DIR` under a shared temporary directory, with the reason, instead of running blind. Since #3103 the lane denies those directories, and a deny outranks every read. Its own empty working directory may still sit there.

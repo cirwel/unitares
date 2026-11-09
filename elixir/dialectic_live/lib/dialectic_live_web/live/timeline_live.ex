@@ -8,10 +8,13 @@ defmodule DialecticLiveWeb.TimelineLive do
   same lanes as the dashboard's Timeline tab (`dashboard/redesign/sections/
   timeline.js`): one row per agent across the window, marks placed in time,
   bands for pauses and dialectic reviews, subagents nested under a visible
-  parent. Selecting a mark shows its record.
+  parent. Selecting a mark shows its record. Marks too close together to
+  tell apart draw as one counted group, in the tone of its most notable
+  mark; selecting it lists them.
 
-  Pure lane ordering, pause-band pairing, attention detection, and record
-  detail formatting live in `DialecticLiveWeb.TimelineLive.Lanes`.
+  Pure lane ordering, mark clustering, pause-band pairing, attention
+  detection, and record detail formatting live in
+  `DialecticLiveWeb.TimelineLive.Lanes`.
   """
   use DialecticLiveWeb, :live_view
 
@@ -48,6 +51,8 @@ defmodule DialecticLiveWeb.TimelineLive do
         meta: %{},
         feed_reachable: true,
         marks: %{},
+        clusters: %{},
+        group_hint: nil,
         resumed_at: %{},
         row_order: [],
         selected: nil,
@@ -151,7 +156,7 @@ defmodule DialecticLiveWeb.TimelineLive do
         all = snap.events ++ snap.provisional
         last_seen = Enum.reduce(all, roster_last_seen(snap.agents), &bump_last_seen(&2, &1))
 
-        marks =
+        read =
           all
           |> Enum.filter(&visible?(&1, socket.assigns.substrate))
           |> Map.new(&{TimelineAdapter.dom_id(&1), &1})
@@ -162,6 +167,10 @@ defmodule DialecticLiveWeb.TimelineLive do
           if snap.status == :ok and snap.last_reread_at != socket.assigns[:last_reread_at],
             do: %{},
             else: socket.assigns.resumed_at
+
+        resumed = Enum.reduce(all, resumed_seed, &note_resume(&2, &1))
+        marks = Map.merge(held_pauses(socket.assigns, resumed), read)
+        paired = Map.get(snap, :paired, %{})
 
         socket
         |> assign(
@@ -174,14 +183,9 @@ defmodule DialecticLiveWeb.TimelineLive do
           roster: roster,
           last_seen: last_seen,
           marks: marks,
-          resumed_at: Enum.reduce(all, resumed_seed, &note_resume(&2, &1)),
-          selected:
-            carry_selection(
-              socket.assigns.selected,
-              socket.assigns.marks,
-              marks,
-              Map.get(snap, :paired, %{})
-            ),
+          resumed_at: resumed,
+          selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks, paired),
+          group_hint: carry_group(socket.assigns, marks, paired),
           row_order: order_rows(roster, marks, last_seen)
         )
         |> relane()
@@ -353,7 +357,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           :key={m.id}
           type="button"
           id={m.id}
-          class={["tl-mk", m.cls, @selected == m.id && "sel"]}
+          class={["tl-mk", m.cls, selected?(m, @selected) && "sel"]}
           style={mark_style(m)}
           data-kind={m.kind}
           data-provisional={m.provisional && "true"}
@@ -378,6 +382,8 @@ defmodule DialecticLiveWeb.TimelineLive do
       |> assign(:latency, latency_summary(assigns.latencies))
       |> assign(:hours, hours(assigns))
       |> assign(:sel_mark, assigns.selected && Map.get(assigns.marks, assigns.selected))
+      |> assign(:sel_group, assigns.selected && Map.get(assigns.clusters, assigns.selected))
+      |> assign(:in_group, group_of(assigns.clusters, assigns.selected))
 
     ~H"""
     <div class="mx-auto max-w-7xl p-6 space-y-4">
@@ -590,24 +596,56 @@ defmodule DialecticLiveWeb.TimelineLive do
         <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
         <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage</span>
         <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
+        <span>
+          <span class="tl-mk group alert"><span class="tl-dot">3</span></span>events close together, coloured by the most notable
+        </span>
         <span><span class="tl-band pause"></span>paused</span>
         <span><span class="tl-band dialectic"></span>dialectic review</span>
       </div>
 
       <section id="mark-detail" class="rounded-box border border-base-300 p-5 text-sm">
-        <%= if @sel_mark do %>
-          <h2 class="font-semibold mb-2">{mark_title(@sel_mark, @roster)}</h2>
-          <p :if={detail_note(@sel_mark)} class="text-base-content/70 mb-3">
-            {detail_note(@sel_mark)}
-          </p>
-          <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
-            <%= for {k, v} <- detail_rows(@sel_mark, @labels, @roster) do %>
-              <dt class="text-base-content/60">{k}</dt>
-              <dd class="break-words">{v}</dd>
-            <% end %>
-          </dl>
-        <% else %>
-          <p class="text-base-content/60">Select a mark to see its record.</p>
+        <%= cond do %>
+          <% @sel_group -> %>
+            <h2 class="font-semibold mb-1">{length(@sel_group.members)} events close together</h2>
+            <p class="text-base-content/70 mb-3">
+              {utc(@sel_group.at)} to {utc(@sel_group.until)}. Select one to see its record.
+            </p>
+            <ul id="group-members" class="space-y-1">
+              <li :for={mid <- @sel_group.members} :if={m = @marks[mid]}>
+                <button
+                  type="button"
+                  id={"member-#{mid}"}
+                  phx-click="select"
+                  phx-value-id={mid}
+                  class="link link-hover text-left"
+                >
+                  {joined([utc(m["ts"]), mark_title(m, @roster), assessment(m)])}
+                </button>
+              </li>
+            </ul>
+          <% @sel_mark -> %>
+            <button
+              :if={@in_group}
+              type="button"
+              id="back-to-group"
+              phx-click="select"
+              phx-value-id={@in_group.id}
+              class="link link-hover text-xs text-base-content/70 mb-2"
+            >
+              ← {length(@in_group.members)} events close together
+            </button>
+            <h2 class="font-semibold mb-2">{mark_title(@sel_mark, @roster)}</h2>
+            <p :if={detail_note(@sel_mark)} class="text-base-content/70 mb-3">
+              {detail_note(@sel_mark)}
+            </p>
+            <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
+              <%= for {k, v} <- detail_rows(@sel_mark, @labels, @roster) do %>
+                <dt class="text-base-content/60">{k}</dt>
+                <dd class="break-words">{v}</dd>
+              <% end %>
+            </dl>
+          <% true -> %>
+            <p class="text-base-content/60">Select a mark to see its record.</p>
         <% end %>
       </section>
     </div>

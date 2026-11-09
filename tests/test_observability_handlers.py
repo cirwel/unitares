@@ -607,6 +607,40 @@ class TestHandleObserveAgent:
         assert "next_action" in verdict
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("risk,source", [(0.0, "resolved"), (0.8, "resolved"), (None, None)])
+    @pytest.mark.parametrize("phi_metrics", [{}, {"phi_risk_latest": None}, {"phi_risk_latest": 0.4}])
+    async def test_analysis_toggle_preserves_risk_semantics(self, risk, source, phi_metrics):
+        from src.pattern_analysis import analyze_agent_patterns
+        from src.mcp_handlers.observability.handlers import handle_observe_agent
+
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        state = _make_state(risk_history=[0.918] * 10)
+        for dimension in ("E", "I", "S", "V"):
+            setattr(state, dimension + "_history", [getattr(state, dimension)] * 10)
+        state.coherence_history = [state.coherence] * 10
+        state.timestamp_history = [str(i) for i in range(10)]
+        state.decision_history = ["proceed"] * 10
+        state.verdict_history = ["safe"] * 10
+        monitor = _make_monitor(uuid, state=state, metrics={
+            "risk_score": risk, "risk_score_source": source,
+            **phi_metrics,
+        })
+        server = _build_mock_server(agent_ids=[uuid], monitors_dict={uuid: monitor})
+        server.analyze_agent_patterns.side_effect = analyze_agent_patterns
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"), \
+             patch("src.agent_storage.get_agent_state_history", new=AsyncMock(return_value=[])), \
+             patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=[])):
+            observations = []
+            for enabled in (True, False):
+                result = await handle_observe_agent({"target_agent_id": uuid, "analyze_patterns": enabled})
+                observations.append(parse_result(result)["observation"]["current_state"])
+        for current in observations:
+            assert current["risk_score"] == risk
+            assert current["risk_score_source"] == source
+            assert current["phi_risk_latest"] == phi_metrics.get("phi_risk_latest")
+
+    @pytest.mark.asyncio
     async def test_missing_target_agent_id(self):
         """No target_agent_id and no fallback -> error."""
         server = _build_mock_server()

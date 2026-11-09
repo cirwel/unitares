@@ -1,7 +1,7 @@
 defmodule DialecticLiveWeb.TimelineLive.Lanes do
   @moduledoc """
-  Pure lane ordering, pause-band pairing, attention detection, and record
-  detail formatting for `DialecticLiveWeb.TimelineLive`.
+  Pure lane ordering, mark clustering, pause-band pairing, attention
+  detection, and record detail formatting for `DialecticLiveWeb.TimelineLive`.
 
   Kept separate from the LiveView process callbacks and HEEx template so the
   data transformations over snapshot/provisional marks remain pure functions
@@ -14,6 +14,15 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
   @ticks 6
   # The feed's own provisional cap.
   @provisional_cap 500
+  # What ends a pause. Archiving sets the agent's status directly and emits no
+  # resume, so an archive closes a pause too.
+  @pause_ends ~w(lifecycle_resumed lifecycle_archived)
+  # A lane's marks closer than one marker's width overlap into a smear, so
+  # the window is cut into this many slots, fixed to the page anchor, and a
+  # slot holding two or more marks draws one counted group at its centre.
+  # At the track's 520 px minimum a slot is about one marker wide; slots stay
+  # put as the window slides, so a group does not regroup as marks expire.
+  @cluster_slots 30
 
   # How a lineage child relates to its parent, by its spawn_reason. Mirrors
   # the tab and src/identity/lineage_semantics.py: only dispatched children
@@ -32,12 +41,38 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
 
   # --- window & selection state helpers ---
 
+  # A recorded pause older than the window is not in a re-read, but while no
+  # later resume is known the agent is still paused: its band runs to now and
+  # it still needs attention, as `prune/1` keeps it between re-reads. Carry it
+  # across the re-read. Only a history row is carried, and only once it is
+  # older than the window: a live mark the feed has expired, or a row the
+  # window still covers, is the re-read's to keep or drop. A resume the page
+  # already knew of still counts, even when it too has left the window.
+  def held_pauses(assigns, resumed) do
+    %{marks: marks, resumed_at: known, substrate: substrate} = assigns
+
+    start =
+      DateTime.to_unix(DateTime.utc_now(), :microsecond) - hours(assigns) * 3_600_000_000
+
+    Map.filter(marks, fn {_id, m} ->
+      us = TimelineAdapter.ts_us(m["ts"])
+      agent = m["agent_id"]
+
+      m["event_type"] == "lifecycle_paused" and m["provisional"] != true and is_binary(agent) and
+        is_integer(us) and us < start and
+        us >= max(Map.get(known, agent, -1), Map.get(resumed, agent, -1)) and
+        visible?(m, substrate)
+    end)
+  end
+
   # A re-read that confirms a provisional mark gives it a history id (`p-`
   # becomes `h-`), so a selection on the live mark follows it to the row
   # that absorbed it rather than clearing as the record arrives. Follow the
   # feed's mark-to-row pairing first; fall back to the latest matching row when
   # the mark arrived directly on the page without a feed pairing.
   def carry_selection(nil, _old, _new, _paired), do: nil
+  # A group is not a mark; `relane/1` resolves it against the new groups.
+  def carry_selection("c-" <> _ = id, _old, _new, _paired), do: id
 
   def carry_selection(id, old, new, paired) do
     cond do
@@ -58,11 +93,28 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
     end
   end
 
-  # Each agent's latest resume, kept apart from the marks: it is what closes
-  # a pause band, so it must survive the cap and the window prune that drop
-  # the resume mark itself.
-  def note_resume(acc, %{"event_type" => "lifecycle_resumed", "agent_id" => a} = m)
-      when is_binary(a) do
+  # A selected group's marks, each carried as a selected mark is, so that
+  # `relane/1` can find them when the re-read confirms them into another
+  # slot (a live mark and its history row can sit either side of a boundary).
+  def carry_group(%{selected: "c-" <> _ = id} = assigns, new, paired) do
+    case Map.get(assigns.clusters, id) do
+      nil ->
+        nil
+
+      group ->
+        group.members
+        |> Enum.map(&carry_selection(&1, assigns.marks, new, paired))
+        |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  def carry_group(_assigns, _new, _paired), do: nil
+
+  # Each agent's latest resume or archive, kept apart from the marks: it is
+  # what closes a pause band, so it must survive the cap and the window prune
+  # that drop the mark itself.
+  def note_resume(acc, %{"event_type" => type, "agent_id" => a} = m)
+      when type in @pause_ends and is_binary(a) do
     case TimelineAdapter.ts_us(m["ts"]) do
       nil -> acc
       us -> Map.update(acc, a, us, &max(&1, us))
@@ -255,10 +307,21 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
     flagged = MapSet.new(attention, & &1.agent)
     lane = &build_lane(&1, by_owner, flagged, assigns)
     open_background = assigns.show_background or filter != ""
+    lanes = Enum.map(shown, lane)
+    background_lanes = if open_background, do: Enum.map(background, lane), else: []
+
+    clusters =
+      for l <- lanes ++ background_lanes,
+          %{cluster: true} = c <- l.marks,
+          into: %{},
+          do: {c.id, c}
 
     [
-      lanes: Enum.map(shown, lane),
-      background_lanes: if(open_background, do: Enum.map(background, lane), else: []),
+      lanes: lanes,
+      background_lanes: background_lanes,
+      clusters: clusters,
+      selected: resolve_group(assigns, clusters),
+      group_hint: nil,
       background_open: open_background,
       background_count: length(background),
       background_names:
@@ -289,10 +352,104 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
           {mid, m} <- own,
           m["kind"] != "dialectic",
           do: mark_view(mid, m, anchor, roster, labels)
-        ),
+        )
+        |> group_marks(id, hours(assigns) * 3600 / @cluster_slots),
       bands: bands(own, anchor, labels, Map.get(assigns.resumed_at, id))
     }
   end
+
+  # `own` is in time order, and so is the result. A mark with no time stays
+  # as it is (hidden), last. Lifecycle marks stay single: they mark the pause
+  # bands' edges, and an unresumed pause is kept after it leaves the window,
+  # where a group would be held at the window's start.
+  defp group_marks(views, lane_id, slot) do
+    {timed, untimed} = Enum.split_with(views, &is_number(&1.t))
+    {grouping, single} = Enum.split_with(timed, &(&1.kind != "lifecycle"))
+
+    grouping
+    |> Enum.chunk_by(&floor(&1.t / slot))
+    |> Enum.map(fn
+      [one] -> one
+      group -> group_view(group, lane_id, slot)
+    end)
+    |> Kernel.++(single)
+    |> Enum.sort_by(& &1.t)
+    |> Kernel.++(untimed)
+  end
+
+  # The group takes the look of its most notable mark, so a pause verdict or
+  # a failed outcome inside it still shows red.
+  defp group_view(group, lane_id, slot) do
+    n = floor(hd(group).t / slot)
+    top = Enum.max_by(group, &notability/1)
+    first = hd(group)
+    last = List.last(group)
+
+    %{
+      id: "c-#{lane_id}-#{n}",
+      cluster: true,
+      members: Enum.map(group, & &1.id),
+      kind: "group",
+      cls: "group " <> group_tone(notability(top)),
+      glyph: Integer.to_string(length(group)),
+      t: Float.round((n + 0.5) * slot, 1),
+      at: first.at,
+      until: last.at,
+      provisional: Enum.all?(group, & &1.provisional),
+      seen_live: false,
+      label:
+        joined([
+          "#{length(group)} events, #{utc(first.at)} to #{utc(last.at)}",
+          "most notable: " <> top.label
+        ])
+    }
+  end
+
+  defp notability(%{cls: cls}) do
+    cond do
+      cls in ["checkin pause", "outcome bad"] -> 4
+      cls == "checkin guide" -> 3
+      cls in ["checkin substrate", "checkin unassessed"] -> 1
+      true -> 2
+    end
+  end
+
+  defp group_tone(4), do: "alert"
+  defp group_tone(3), do: "warn"
+  defp group_tone(2), do: "ok"
+  defp group_tone(_), do: "quiet"
+
+  # A selected group that no longer exists follows its marks: to the group
+  # that now holds one of them, or else to the first still shown on its own.
+  # After a re-read its marks are the ones `carry_group/3` carried.
+  def resolve_group(%{selected: "c-" <> _ = id} = assigns, new) do
+    members =
+      assigns.group_hint ||
+        case Map.get(assigns.clusters, id) do
+          nil -> []
+          group -> group.members
+        end
+
+    cond do
+      Map.has_key?(new, id) ->
+        id
+
+      holder = Enum.find_value(members, &group_of(new, &1)) ->
+        holder.id
+
+      true ->
+        Enum.find(members, &Map.has_key?(assigns.marks, &1))
+    end
+  end
+
+  def resolve_group(%{selected: id}, _new), do: id
+
+  def group_of(_clusters, nil), do: nil
+
+  def group_of(clusters, id),
+    do: clusters |> Map.values() |> Enum.find(&(id in &1.members))
+
+  def selected?(m, selected), do: selected == m.id or selected in Map.get(m, :members, [])
 
   # Each row's family root: the nearest row above it at depth 0.
   defp family_roots(order) do
@@ -355,17 +512,25 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
   defp attention(own, resumed_us) do
     newest = Enum.sort_by(own, fn {_, m} -> sort_key(m) end, :desc)
     pause = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_paused" end)
-    resume = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_resumed" end)
+    resume = Enum.find(newest, fn {_, m} -> m["event_type"] in @pause_ends end)
 
     verdict =
       Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(verdict_of(m)) end)
+
+    # An archive after the agent's latest check-in settles it: the agent is
+    # gone, so its last verdict no longer asks anything of a person.
+    archived_after? =
+      verdict &&
+        Enum.any?(newest, fn {_, m} ->
+          m["event_type"] == "lifecycle_archived" and sort_key(m) > sort_key(elem(verdict, 1))
+        end)
 
     cond do
       pause && open_pause?(pause, resume, resumed_us) ->
         {pid, pm} = pause
         %{sel: pid, reason: "paused since " <> clock(pm["ts"])}
 
-      verdict && action_class(verdict_of(elem(verdict, 1))) == "pause" ->
+      verdict && not archived_after? && action_class(verdict_of(elem(verdict, 1))) == "pause" ->
         {vid, vm} = verdict
         %{sel: vid, reason: "its latest check-in drew a pause verdict at " <> clock(vm["ts"])}
 
@@ -437,6 +602,7 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
       cls: cls,
       glyph: glyph,
       t: rel_s(m["ts"], anchor),
+      at: m["ts"],
       provisional: m["provisional"] == true,
       seen_live: m["seen_live"] == true,
       label:
@@ -475,17 +641,12 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
   defp live_verdict(%{"assessment" => %{"verdict" => v}}) when is_binary(v), do: v
   defp live_verdict(_m), do: nil
 
-  defp action_class(action) do
-    case action |> to_string() |> String.downcase() do
-      "guide" -> "guide"
-      v when v in ["pause", "reject"] -> "pause"
-      _ -> "proceed"
-    end
-  end
+  defp action_class(action), do: TimelineAdapter.verdict_bucket(action)
 
   # Pause bands pair lifecycle_paused with the next lifecycle_resumed on the
   # same row; a resume with no pause in the window started before it, and a
-  # pause with no resume runs to now. Dialectic sessions draw from creation
+  # pause with no resume runs to now. An archive closes a pause it follows,
+  # and draws nothing on its own. Dialectic sessions draw from creation
   # to close, or to now while active; the server's `ts` may precede the
   # window, which the CSS clamps.
   defp bands(own, anchor, labels, resumed_us) do
@@ -505,7 +666,11 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
             {acc, held}
           end
 
-        {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_resumed"} = m}, {acc, held} ->
+        {_id, %{"kind" => "lifecycle", "event_type" => "lifecycle_archived"}}, {acc, nil} ->
+          {acc, nil}
+
+        {id, %{"kind" => "lifecycle", "event_type" => type} = m}, {acc, held}
+        when type in @pause_ends ->
           {from_id, from} = held || {id, nil}
 
           band = %{

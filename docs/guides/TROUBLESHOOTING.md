@@ -399,6 +399,12 @@ curl http://localhost:8767/health
 bare-metal install.** A Docker operator should restore the named Postgres volume
 from a verified backup instead of mixing host and container database commands.
 
+The commands below assume the local `governance` database is owned by your
+current OS user's PostgreSQL role. If you set `DB_POSTGRES_ADMIN_URL`, it must
+use that same role and local server: `CREATE DATABASE` makes that role the owner,
+and bootstrap requires the connecting role to own the database. Use your
+deployment's restore procedure for a separate application role or remote server.
+
 ```bash
 set -euo pipefail
 
@@ -418,7 +424,13 @@ psql "${DB_POSTGRES_ADMIN_URL:-postgresql://localhost:5432/postgres}" -c "CREATE
 # Reinitialize explicitly. The server refuses an uninitialized schema; it does
 # not auto-create one.
 export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
-./scripts/install/bootstrap_postgres.sh --apply
+# Mark only the database just created successfully above, never an existing DB.
+export UNITARES_INSTALL_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+psql -X "$DB_POSTGRES_URL" -v ON_ERROR_STOP=1 -v install_id="$UNITARES_INSTALL_ID" <<'SQL'
+SELECT format('COMMENT ON DATABASE %I IS %L', current_database(),
+              'unitares-install:' || :'install_id' || ':prepared') \gexec
+SQL
+./scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"
 python3 scripts/dev/unitares_doctor.py --mode local --db-url "$DB_POSTGRES_URL"
 
 # Restart only after the bootstrap and doctor succeed

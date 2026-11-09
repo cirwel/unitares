@@ -67,7 +67,7 @@ additions merge cleanly. -->
 | `UNITARES_COHORT_PRIOR_MODE` | `None (no reader fallback)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
-| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/mutation_helpers.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET_FILE` | `None (no reader fallback)` | Where the generated secret lives | src/continuity_secret.py |
 | `UNITARES_CREDENTIAL_ISSUANCE` | `None (no reader fallback)` | ``log`` to observe only; anything else enforces. | src/mcp_handlers/identity/credential_issuance.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
@@ -143,7 +143,7 @@ additions merge cleanly. -->
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1782); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1793) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
-| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichment_helpers.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SYNTHESIS_INTERVAL_HOURS` | `str(DEFAULT_INTERVAL_HOURS)` | Hours between scheduled synthesis cycles; a non-positive value falls back to the default. | src/kg_synthesis_schedule.py |
 | `UNITARES_KG_SYNTHESIS_SCHEDULE` | `DEFAULT_MODE` | Scheduled synthesis mode | src/kg_synthesis_schedule.py |
@@ -202,7 +202,7 @@ additions merge cleanly. -->
 | `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1744); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1753) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_DIR` | `None (no reader fallback)` | — | src/process_cleanup.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
-| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_tasks.py |
+| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_resident_monitors.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_READ_ONLY_TOKENS` | `''` | Read the read-only key digests | src/http_routes/access.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
@@ -213,7 +213,7 @@ additions merge cleanly. -->
 | `UNITARES_RESIDENT_PROGRESS_PLUGINS` | `None (no reader fallback)` | True unless the deployment explicitly disabled plugin discovery. | src/resident_progress/plugins.py |
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
 | `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
-| `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichment_helpers.py |
 | `UNITARES_ROUTE_PACKS` | `''` | Selected pack names in order, deduplicated; unset selects none. | src/http_routes/packs.py |
 | `UNITARES_ROUTE_PACKS_FILE` | `''` | Read and validate the complete manifest before importing any handler. | src/http_routes/packs.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |

@@ -32,6 +32,7 @@ HINT_MODULES = (
     "src/mcp_handlers/support/agent_auth.py",
     "src/mcp_handlers/updates/phases.py",
     "src/mcp_handlers/updates/enrichments.py",
+    "src/mcp_handlers/updates/enrichment_helpers.py",
     "src/mcp_handlers/introspection/tool_catalog.py",
     "src/mcp_handlers/introspection/tool_introspection.py",
     "src/mcp_handlers/lifecycle/query.py",

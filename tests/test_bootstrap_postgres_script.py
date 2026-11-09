@@ -86,7 +86,7 @@ def test_unknown_argument_fails_without_touching_database() -> None:
 
 
 @pytest.mark.parametrize("fail_checksum", [False, True])
-def test_apply_crosses_checksum_boundary_and_resumes_safely(
+def test_apply_crosses_checksum_boundary_and_refuses_bootstrap_replay(
     tmp_path: Path, fail_checksum: bool
 ) -> None:
     """Exercise --apply, including psql's distinct -c and stdin behavior."""
@@ -112,6 +112,7 @@ def test_apply_crosses_checksum_boundary_and_resumes_safely(
         args = sys.argv[1:]
         path = Path(os.environ["BOOTSTRAP_TEST_STATE"])
         state = json.loads(path.read_text())
+        marker = path.with_suffix('.marker')
         sql = ""
         if "-f" in args:
             file = Path(args[args.index("-f") + 1])
@@ -123,7 +124,13 @@ def test_apply_crosses_checksum_boundary_and_resumes_safely(
             sql = args[command + 1] if command is not None else sys.stdin.read()
             if command is not None and ":migration" in sql.replace(":'", ":"):
                 sys.exit('ERROR: syntax error at or near ":"')
-        if sql.startswith("SELECT 1"):
+        if 'Bootstrap refused:' in sql:
+            if marker.exists():
+                sys.exit('Bootstrap refused: not prepared')
+            marker.write_text('bootstrapping')
+        elif 'Bootstrap completion refused:' in sql:
+            marker.write_text('bootstrapped')
+        elif sql.startswith("SELECT 1"):
             if int(sql.rsplit(" ", 1)[-1]) in state["applied"]:
                 print("1")
         elif sql.startswith("SELECT EXISTS"):
@@ -153,7 +160,8 @@ def test_apply_crosses_checksum_boundary_and_resumes_safely(
 
     def apply() -> subprocess.CompletedProcess:
         return subprocess.run(
-            [str(script), "--apply", "--db-url", "postgresql://fixture/unused"],
+            [str(script), "--apply", "--install-id", "11111111-1111-4111-8111-111111111111",
+             "--db-url", "postgresql://fixture/unused"],
             env=env, capture_output=True, text=True, check=False,
         )
 
@@ -179,13 +187,18 @@ def test_apply_crosses_checksum_boundary_and_resumes_safely(
         assert "validator called" in proc.stdout
         assert "bootstrap complete" in proc.stdout
 
-    # A previously applied migration is never re-run or retroactively hashed,
-    # including migration 62 when its post-commit checksum write failed.
+    # Neither completed nor interrupted bootstrap authorizes replay of base
+    # schemas. Existing migration/checksum evidence remains unchanged.
     env["BOOTSTRAP_TEST_FAIL_CHECKSUM"] = "0"
     resumed = apply()
-    assert resumed.returncode == 0, resumed.stderr
+    assert resumed.returncode != 0
+    assert 'Bootstrap refused' in resumed.stderr
     after_resume = json.loads(state.read_text())
-    assert after_resume["applied"] == [61, 62, 63]
-    assert "61" not in after_resume["checksums"]
-    assert ("62" in after_resume["checksums"]) is not fail_checksum
-    assert "63" in after_resume["checksums"]
+    assert after_resume == recorded
+
+
+@pytest.mark.parametrize('args', [[], ['--install-id', 'not-a-uuid']])
+def test_apply_requires_install_identity_before_psql(args):
+    proc = subprocess.run([str(SCRIPT), '--apply', *args], capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert 'requires --install-id' in proc.stderr

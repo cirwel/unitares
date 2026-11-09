@@ -57,7 +57,7 @@ defmodule DialecticLiveWeb.DialecticLive do
   # awaiting-facilitation first, then most-recently-updated.
   defp sort_sessions(sessions) do
     Enum.sort_by(sessions, fn s ->
-      {awaiting?(s) && 0 || 1, -updated_sort_key(s)}
+      {(awaiting?(s) && 0) || 1, -updated_sort_key(s)}
     end)
   end
 
@@ -70,7 +70,8 @@ defmodule DialecticLiveWeb.DialecticLive do
   defp updated_sort_key(s) do
     case field(s, "updated_at") || field(s, "created_at") do
       v when is_integer(v) -> v
-      v when is_binary(v) -> String.length(v) # stable-ish; refine when shape settles
+      # stable-ish; refine when shape settles
+      v when is_binary(v) -> String.length(v)
       _ -> 0
     end
   end
@@ -101,15 +102,23 @@ defmodule DialecticLiveWeb.DialecticLive do
       </div>
 
       <ul class="space-y-3">
-        <li :for={s <- @sessions} class={["card bg-base-200 p-4", awaiting?(s) && "border border-warning"]}>
+        <li
+          :for={s <- @sessions}
+          class={["card bg-base-200 p-4", awaiting?(s) && "border border-warning"]}
+        >
           <div class="flex items-center justify-between gap-3">
-            <div class="font-mono text-sm truncate">{field(s, "session_id") || field(s, "id") || "—"}</div>
+            <div class="font-mono text-sm truncate">
+              {field(s, "session_id") || field(s, "id") || "—"}
+            </div>
             <div class="flex items-center gap-2">
               <span :if={awaiting?(s)} class="badge badge-warning">awaiting facilitation</span>
               <span class="badge badge-ghost">{field(s, "phase") || field(s, "status") || "?"}</span>
             </div>
           </div>
-          <div :if={field(s, "topic") || field(s, "question")} class="text-sm text-base-content/70 mt-1">
+          <div
+            :if={field(s, "topic") || field(s, "question")}
+            class="text-sm text-base-content/70 mt-1"
+          >
             {field(s, "topic") || field(s, "question")}
           </div>
           <div :if={topic_truncated?(s)} class="text-xs text-base-content/50 mt-1">

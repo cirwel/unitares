@@ -1,0 +1,1 @@
+- **S validation draft:** Pin both proposed arms to explicit RK1 estimator flags so SN1 deployment cannot silently remove the intended regime-term comparison; retain operator approval before registration or collection.

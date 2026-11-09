@@ -26,7 +26,14 @@ from pathlib import Path
 
 from src.mcp_handlers.schemas.knowledge import KnowledgeParams
 
-HANDLERS = Path(__file__).resolve().parent.parent / "src" / "mcp_handlers" / "knowledge" / "handlers.py"
+KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "src" / "mcp_handlers" / "knowledge"
+HANDLERS = KNOWLEDGE_DIR / "handlers.py"
+HANDLER_MODULES = (
+    KNOWLEDGE_DIR / "handlers.py",
+    KNOWLEDGE_DIR / "mutation_helpers.py",
+    KNOWLEDGE_DIR / "search_helpers.py",
+    KNOWLEDGE_DIR / "validation_helpers.py",
+)
 
 
 def _read_arg_keys(source: str) -> set[str]:
@@ -80,7 +87,8 @@ KNOWN_UNEXPOSED = set()
 
 def _classify_undeclared() -> set[str]:
     """Read keys that are neither declared, internal, nor a recorded known-gap."""
-    read = _read_arg_keys(HANDLERS.read_text())
+    combined_source = "\n".join(path.read_text() for path in HANDLER_MODULES)
+    read = _read_arg_keys(combined_source)
     declared = set(KnowledgeParams.model_fields.keys())
     allowed = declared | INTERNAL_KEYS | KNOWN_UNEXPOSED | INTENTIONALLY_UNEXPOSED
     return {k for k in read if not k.startswith("_") and k not in allowed}
