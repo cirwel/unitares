@@ -90,7 +90,7 @@ def owned_head(pr: dict, agent: str) -> str:
     # Authorship remains stable across handovers. A matching author footer
     # cannot authorize automatic delivery once scopes have been reassigned.
     if re.search(
-        r"^[ \t>*-]*\*{0,2}Delivery mode:\*{0,2}[ \t]*\*{0,2}manual\*{0,2}[ \t]*$",
+        r"^[ \t>*-]*\*{0,2}Delivery mode:\*{0,2}[ \t]*\*{0,2}manual\*{0,2}[ \t\r]*$",
         pr["body"],
         re.MULTILINE | re.IGNORECASE,
     ):
@@ -363,11 +363,11 @@ def main() -> int:
             queued = not current["isDraft"] and any(label["name"] == "approved-to-merge" for label in current["labels"])
         except (Parked, json.JSONDecodeError, OSError, KeyError, ValueError):
             queued = False
-        if queued:
+        if not getattr(error, "retryable", True):
+            print(f"[ship] parked: {error}", file=sys.stderr)
+        elif queued:
             print(f"[ship] Delivery failed while the live PR is already ready and approved: {error}\n"
                   "[ship] Approval remains set and may belong to an earlier head. Inspect the error and approval freshness on the manual PR path.", file=sys.stderr)
-        elif not getattr(error, "retryable", True):
-            print(f"[ship] parked: {error}", file=sys.stderr)
         else:
             retry = ["./scripts/dev/ship.sh", "--resume"]
             if args.reviewer:

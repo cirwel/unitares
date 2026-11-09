@@ -35,7 +35,12 @@ class HandoverResumeTests(unittest.TestCase):
     def test_handover_parks_every_actor_despite_retained_author_footer(self):
         # Includes readiness-only, branch-writing-only and complete handovers:
         # their scopes live in the record; none permits automatic resume.
-        for marker in ("Delivery mode: manual", "- Delivery mode: manual", "**Delivery mode: manual**"):
+        for marker in (
+            "Delivery mode: manual",
+            "Delivery mode: manual\r",
+            "- Delivery mode: manual",
+            "**Delivery mode: manual**",
+        ):
             for actor in (AUTHOR, SUCCESSOR):
                 with self.subTest(marker=marker, actor=actor), patch.object(ship, "run", side_effect=self.git_run):
                     with self.assertRaisesRegex(ship.Parked, "manual PR path") as ctx:
@@ -55,11 +60,17 @@ class HandoverResumeTests(unittest.TestCase):
                 self.assertFalse(ctx.exception.retryable)
 
     def test_permanent_handover_refusal_omits_retry_command(self):
-        stderr = io.StringIO()
-        with patch.object(ship, "resume", side_effect=ship.Parked("Delivery ownership changed", retryable=False)), \
-             patch.object(ship, "snapshot", return_value=self.pr(handed_over=True)), \
-             patch("sys.argv", ["ship-resume"]), \
-             patch("sys.stderr", stderr):
-            self.assertEqual(ship.main(), 2)
-        self.assertIn("Delivery ownership changed", stderr.getvalue())
-        self.assertNotIn("[ship] resume:", stderr.getvalue())
+        for is_draft, labels in ((True, []), (False, [{"name": "approved-to-merge"}])):
+            with self.subTest(is_draft=is_draft, labels=labels):
+                pr = self.pr(handed_over=True)
+                pr["isDraft"] = is_draft
+                pr["labels"] = labels
+                stderr = io.StringIO()
+                with patch.object(ship, "resume", side_effect=ship.Parked("Delivery ownership changed", retryable=False)), \
+                     patch.object(ship, "snapshot", return_value=pr), \
+                     patch("sys.argv", ["ship-resume"]), \
+                     patch("sys.stderr", stderr):
+                    self.assertEqual(ship.main(), 2)
+                self.assertIn("[ship] parked: Delivery ownership changed", stderr.getvalue())
+                self.assertNotIn("Delivery failed while the live PR", stderr.getvalue())
+                self.assertNotIn("[ship] resume:", stderr.getvalue())
