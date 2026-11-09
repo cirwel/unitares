@@ -21,7 +21,9 @@ from uuid import UUID
 
 
 class Parked(RuntimeError):
-    pass
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class CommandFailed(Parked):
@@ -85,9 +87,31 @@ def owned_head(pr: dict, agent: str) -> str:
         raise Parked("The serial queue only accepts PRs targeting master; stacked PRs stay parked.")
     if run("git", "status", "--porcelain=v1", "-uall").strip():
         raise Parked("Commit and push local changes before resuming; resume never stages or commits.")
-    footers = re.findall(r"^UNITARES agent: ([0-9a-fA-F-]+)\s*$", pr["body"], re.MULTILINE)
-    if not footers or footers[-1].lower() != agent:
-        raise Parked("PR ownership footer does not match UNITARES_AGENT_UUID; record an explicit handoff first.")
+    # Authorship remains stable across handovers. A matching author footer
+    # cannot authorize automatic delivery once scopes have been reassigned.
+    if re.search(
+        r"^[ \t>*-]*\*{0,2}Delivery mode:\*{0,2}[ \t]*\*{0,2}manual\*{0,2}[ \t\r]*$",
+        pr["body"],
+        re.MULTILINE | re.IGNORECASE,
+    ):
+        raise Parked(
+            "Delivery ownership changed; all sessions use the manual PR path and recorded grant scopes.",
+            retryable=False,
+        )
+    footers = [
+        f.lower()
+        for f in re.findall(r"^UNITARES agent: ([0-9a-fA-F-]+)\s*$", pr["body"], re.MULTILINE)
+    ]
+    if len(set(footers)) > 1:
+        raise Parked(
+            "PR body records multiple agent signatures; handovers use the manual PR path and recorded grant scopes.",
+            retryable=False,
+        )
+    if not footers or footers[-1] != agent:
+        raise Parked(
+            "PR ownership check failed: the terminal author footer does not match UNITARES_AGENT_UUID. Resume requires the opening session to still own all delivery; handovers use the manual PR path.",
+            retryable=False,
+        )
     if pr["state"] not in {"OPEN", "MERGED"} or pr["isCrossRepository"]:
         raise Parked("Resume requires an open, same-repository PR (or an already merged result).")
     if pr["headRefName"] != branch or pr["headRefOid"] != head:
@@ -339,9 +363,11 @@ def main() -> int:
             queued = not current["isDraft"] and any(label["name"] == "approved-to-merge" for label in current["labels"])
         except (Parked, json.JSONDecodeError, OSError, KeyError, ValueError):
             queued = False
-        if queued:
+        if not getattr(error, "retryable", True):
+            print(f"[ship] parked: {error}", file=sys.stderr)
+        elif queued:
             print(f"[ship] Delivery failed while the live PR is already ready and approved: {error}\n"
-                  "[ship] Approval remains set and may belong to an earlier head. Inspect the error and approval freshness before retrying.", file=sys.stderr)
+                  "[ship] Approval remains set and may belong to an earlier head. Inspect the error and approval freshness on the manual PR path.", file=sys.stderr)
         else:
             retry = ["./scripts/dev/ship.sh", "--resume"]
             if args.reviewer:
