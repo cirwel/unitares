@@ -88,11 +88,13 @@ veto by removing the label.
   Before exercising any handover, successor grant or adoption, add a standalone
   `Delivery mode: manual` line above the signatures. Keep it for the life of
   the PR, including after a partial grant ends. `ship.sh --resume` refuses a
-  marked PR for every session, including the opening author. All delivery then
+  marked PR (or one carrying multiple agent signatures) for every session,
+  including the opening author. All delivery then
   uses the manual PR path and the verified scope in the grant/adoption record.
   This cooperative marker does not authenticate a grant; omitting or removing
-  it cannot restore authority. An unmarked footer match is only an additional
-  consistency check for a PR whose opening session still owns all delivery.
+  it violates the handover contract and does not restore authority. An unmarked
+  single-author footer match is only an additional consistency check for a PR
+  whose opening session still owns all delivery.
 
   Do not push commits to another session's PR branch, even to fix something
   small. Branch prefixes (`claude/`, `codex/`) and commit authors do not
@@ -118,7 +120,8 @@ veto by removing the label.
   failing or unreviewed, or its approval stale) with no activity on the PR at
   all in that time (no commit, comment, review or label change from anyone), any
   agent may take it over:
-  1. Post a handover comment on the PR saying you are adopting it and why.
+  1. Post a handover comment on the PR saying you are adopting it and why, and
+     add `Delivery mode: manual` above the PR body signatures.
      This completed adoption makes the adopter the delivery owner, including
      authority to renew the queue label after validation. Preserve the original
      author's provenance. This route requires no separate operator assignment.
@@ -167,7 +170,8 @@ veto by removing the label.
   is ambiguous, leave the PR unchanged until the operator confirms it directly.
 
   Before acting, record the grant's relevant wording, source and scope on the
-  PR, followed by acceptance and the successor's own attribution; preserve the
+  PR, followed by acceptance and the successor's own attribution, and add
+  `Delivery mode: manual` above the PR body signatures; preserve the
   original author's provenance. Both instruction routes require this PR record.
   Acceptance transfers delivery ownership only for the granted operations.
   A readiness-only successor may mark an unlabeled draft PR ready but leaves it
