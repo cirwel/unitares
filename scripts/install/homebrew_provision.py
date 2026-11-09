@@ -223,7 +223,7 @@ SELECT json_build_object(
             result = run(['docker', 'ps', '--format', '{{.Names}}'], env=self.env, timeout=15)
             if result.returncode:
                 raise Refusal('Cannot inspect Docker containers. Resolve Docker connectivity before provisioning.')
-            if 'postgres-age' in result.stdout.splitlines():
+            if {'postgres-age', 'unitares-postgres-age'} & set(result.stdout.splitlines()):
                 raise Refusal('Docker postgres-age is active; reuse that installation instead of provisioning another.')
         if records['redis'].get('running'):
             size = self.redis('DBSIZE')
