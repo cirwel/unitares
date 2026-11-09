@@ -40,7 +40,7 @@ def _connector_management_gate(request):
             return _reply({"error": "Refresh this page and try again (missing CSRF header)."}, 403)
         if not dashboard_auth.dashboard_session_is_fresh(request):
             return _reply({"error": "Sign in again to add or disable a connector.",
-                           "signin_url": "/auth/signin?stepup=1"}, 403)
+                           "signin_url": "/auth/signin?stepup=1&next=%2F%23connectors"}, 403)
     return None
 
 

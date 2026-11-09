@@ -37,7 +37,7 @@ class Registry:
     async def list(self):
         if not self.available:
             raise ConnectionError()
-        return []
+        return [registry_module.public_record(self.record)] if self.record else []
 
     async def create(self, name, redirects, actor):
         validate_registration(name, redirects)
@@ -151,7 +151,8 @@ def test_exact_callback_and_conflicting_credentials_rejected():
 
 @pytest.mark.parametrize("uri", ["https://example.com/*", "https://example.com/#fragment",
     "http://remote.example/callback", "https://user:secret@example.com/callback",
-    "https://example.com/call back", "https://example.com:bad/callback", "javascript:alert(1)"])
+    "https://example.com/call back", "https://example.com:bad/callback", "javascript:alert(1)",
+    "https://exa<mple.com/cb"])
 def test_invalid_redirects(uri):
     with pytest.raises(ValueError):
         validate_registration("App", [uri])
@@ -170,6 +171,10 @@ async def test_registry_persists_hash_and_only_create_returns_secret(monkeypatch
             captured["args"] = args
             return {"client_id": args[0], "name": args[1], "redirect_uris": args[3],
                     "created_at": datetime.now(timezone.utc), "revoked_at": None}
+        async def fetch(self, query, *args, **kwargs):
+            return [{"client_id": ID, "name": "App", "redirect_uris": f'["{CALLBACK}"]',
+                     "secret_hash": secret_digest(SECRET),
+                     "created_at": datetime.now(timezone.utc), "revoked_at": None}]
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
     monkeypatch.setattr(registry_module, "get_db", lambda: SimpleNamespace(acquire=lambda **kwargs: Connection()))
@@ -177,6 +182,11 @@ async def test_registry_persists_hash_and_only_create_returns_secret(monkeypatch
     assert captured["args"][2] == secret_digest(result["client_secret"])
     assert result["client_secret"] not in captured["args"]
     assert "secret_hash" not in result
+    listed = await ConnectorRegistry().list()
+    assert len(listed) == 1
+    assert listed[0]["client_id"] == ID
+    assert "secret_hash" not in listed[0]
+    assert "client_secret" not in listed[0]
 
 
 def management_client(monkeypatch, registry, *, operator=False, session=False, fresh=False):
@@ -203,14 +213,19 @@ def test_management_refuses_agent_bearer_and_cross_origin(monkeypatch):
 def test_management_requires_fresh_session_and_csrf(monkeypatch):
     payload = {"name": "App", "redirect_uris": [CALLBACK]}
     client = management_client(monkeypatch, Registry(), session=True, fresh=False)
-    assert client.post("/auth/connectors", headers={"X-Unitares-Csrf": "1"}, json=payload).status_code == 403
+    stale = client.post("/auth/connectors", headers={"X-Unitares-Csrf": "1"}, json=payload)
+    assert stale.status_code == 403
+    assert stale.json()["signin_url"] == "/auth/signin?stepup=1&next=%2F%23connectors"
     client = management_client(monkeypatch, Registry(), session=True, fresh=True)
     assert client.post("/auth/connectors", json=payload).status_code == 403
     response = client.post("/auth/connectors", headers={"X-Unitares-Csrf": "1"}, json=payload)
     assert response.status_code == 201
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["client_secret"] == SECRET
-    assert SECRET not in client.get("/auth/connectors").text
+    listed = client.get("/auth/connectors")
+    assert listed.json()["connectors"][0]["client_id"] == ID
+    assert SECRET not in listed.text
+    assert secret_digest(SECRET) not in listed.text
 
 
 def test_management_storage_failure_never_claims_success(monkeypatch):

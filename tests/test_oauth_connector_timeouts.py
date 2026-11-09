@@ -89,3 +89,8 @@ class ConnectorDeadlineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.committed)
         # This models a query deadline before commit, not ambiguous network
         # loss after a real Postgres commit. No exactly-once claim is made.
+
+    async def test_stopped_executor_loop_fails_fast_with_connection_error(self):
+        await self.pool.close()
+        with self.assertRaises(ConnectionError):
+            await self.registry.get(CLIENT_ID)

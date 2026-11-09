@@ -12,11 +12,14 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
+from pydantic import AnyUrl, TypeAdapter, ValidationError
+
 from src.db import get_db
 
 CLIENT_PREFIX = "unitares_connector_"
 CLIENT_ID_RE = re.compile(r"unitares_connector_[0-9a-f]{32}\Z")
 DB_TIMEOUT_SECONDS = 5.0
+_ANY_URL = TypeAdapter(AnyUrl)
 
 
 def managed_client_id(client_id: str) -> bool:
@@ -43,7 +46,8 @@ def validate_registration(name, redirect_uris) -> tuple[str, list[str]]:
         try:
             parsed = urlsplit(uri)
             port = parsed.port
-        except ValueError as exc:
+            _ANY_URL.validate_python(uri)
+        except (ValueError, ValidationError) as exc:
             raise ValueError("Enter a valid callback URL.") from exc
         del port
         local = parsed.hostname in ("localhost", "127.0.0.1", "::1")

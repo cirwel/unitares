@@ -61,4 +61,25 @@ describe("connector setup", () => {
     expect(dom.window.document.querySelector("#connector-list img")).toBeNull();
     expect(dom.window.document.querySelector("#connector-list script")).toBeNull();
   });
+  it("keeps a newly created connector's secret visible when disabling a different connector", async () => {
+    const dom = boot({
+      connectors: vi.fn().mockResolvedValue({
+        ...settings,
+        connectors: [
+          { client_id: "old-client", name: "Old app", redirect_uris: ["https://old.example/cb"], revoked_at: null },
+          { client_id: "new-client", name: "My app", redirect_uris: ["https://app.example/callback/"], revoked_at: null },
+        ],
+      }),
+      revokeConnector: vi.fn().mockResolvedValue({ success: true }),
+    });
+    dom.window.confirm = vi.fn().mockReturnValue(true);
+    await dom.window.Connectors.load();
+    await submit(dom);
+    expect(dom.window.document.querySelector("[data-secret]").value).toBe("one-time-secret");
+    dom.window.document.querySelector('[data-revoke="old-client"]').click();
+    await vi.waitFor(() => expect(dom.window.document.getElementById("connector-status").textContent).toBe("Connector disabled."));
+    expect(dom.window.document.querySelector("[data-secret]").value).toBe("one-time-secret");
+    dom.window.document.querySelector('[data-revoke="new-client"]').click();
+    await vi.waitFor(() => expect(dom.window.document.querySelector("[data-secret]")).toBeNull());
+  });
 });

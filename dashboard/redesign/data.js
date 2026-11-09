@@ -117,8 +117,9 @@
     const op = operatorToken();
     if (op) headers["X-Unitares-Operator"] = op;
     const response = await fetch(path, Object.assign({}, options, { headers, credentials: "same-origin", cache: "no-store" }));
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Connector request failed. Try again.");
+    let body = null;
+    try { body = await response.json(); } catch { body = null; }
+    if (!response.ok || !body) throw new Error((body && body.error) || "Connector request failed. Try again.");
     return body;
   }
 

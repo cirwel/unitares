@@ -93,6 +93,9 @@ async def _await_on_loop(target: Any, loop: asyncio.AbstractEventLoop) -> Any:
         async def _wrap():
             return await target
         coro = _wrap()
+    if not loop.is_running():
+        coro.close()
+        raise ConnectionError("Database executor loop is not running")
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return await asyncio.wrap_future(future)
 

@@ -4,6 +4,7 @@
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;")
     .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   let settings = null;
+  let activeSecretClientId = null;
   const el = (id) => document.getElementById(id);
   function message(text, error) {
     el("connector-status").textContent = text;
@@ -18,6 +19,7 @@
       </span></label>`;
   }
   function clearSecret() {
+    activeSecretClientId = null;
     const result = el("connector-result");
     if (result) { result.replaceChildren(); result.hidden = true; }
   }
@@ -49,6 +51,7 @@
         name: el("connector-name").value.trim(),
         redirect_uris: el("connector-callback").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
       });
+      activeSecretClientId = created.client_id;
       const result = el("connector-result");
       result.innerHTML = `<h2 tabindex="-1">Paste these into your app</h2>
         <p>Your connector is saved and ready to authorize. The client secret is shown only here; save it before leaving.</p>
@@ -90,7 +93,7 @@
       button.disabled = true;
       try {
         await window.DATA.revokeConnector(button.dataset.revoke);
-        clearSecret();
+        if (button.dataset.revoke === activeSecretClientId) clearSecret();
         await refresh();
         message("Connector disabled.");
       } catch (error) { button.disabled = false; message(error.message, true); }
@@ -101,7 +104,7 @@
     if (!mount) return;
     mount.innerHTML = `<p class="security-intro">Connect an app to this UNITARES server. Each connector gets its own credentials and can be disabled separately.</p>
       <p class="security-note">Sign in recently to manage connectors, or provide your operator credential in <a href="#security">Security</a>.
-        <a href="/auth/signin?stepup=1">Sign in again</a> · <button class="security-btn" id="connector-refresh" type="button">Refresh</button></p>
+        <a href="/auth/signin?stepup=1&amp;next=%2F%23connectors">Sign in again</a> · <button class="security-btn" id="connector-refresh" type="button">Refresh</button></p>
       <div class="security-grid"><section class="panel"><h2>Add connector</h2>
         <form id="connector-form">
           <label class="security-secret-label" for="connector-name">Name</label>
