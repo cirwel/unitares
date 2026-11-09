@@ -399,6 +399,12 @@ curl http://localhost:8767/health
 bare-metal install.** A Docker operator should restore the named Postgres volume
 from a verified backup instead of mixing host and container database commands.
 
+The commands below assume the local `governance` database is owned by your
+current OS user's PostgreSQL role. If you set `DB_POSTGRES_ADMIN_URL`, it must
+use that same role and local server: `CREATE DATABASE` makes that role the owner,
+and bootstrap requires the connecting role to own the database. Use your
+deployment's restore procedure for a separate application role or remote server.
+
 ```bash
 set -euo pipefail
 
