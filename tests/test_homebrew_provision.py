@@ -317,9 +317,19 @@ def test_sql_redacts_credentials_and_rechecks_cluster_on_mutating_connection(ins
     assert seen[1][1]['env']['PGPASSWORD'] not in ' '.join(seen[1][0])
 
 
-@pytest.mark.parametrize('problem', ['writer', 'postgres-command', 'redis-command', 'process',
-                                   'docker', 'docker-compose-name', 'docker-unreadable', 'redis-data', 'redis-unreadable', 'port'])
-def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypatch, problem):
+@pytest.mark.parametrize(('problem', 'expected_match'), [
+    ('writer', 'Stop both native writers'),
+    ('postgres-command', 'PostgreSQL has a custom service command'),
+    ('redis-command', 'Redis has a custom service command'),
+    ('process', 'PostgreSQL service process does not match'),
+    ('docker', 'Docker postgres-age is active'),
+    ('docker-compose-name', 'Docker postgres-age is active'),
+    ('docker-unreadable', 'Cannot inspect Docker containers'),
+    ('redis-data', 'Redis database 0 is nonempty or unreadable'),
+    ('redis-unreadable', 'Redis database 0 is nonempty or unreadable'),
+    ('port', 'foreign listener'),
+])
+def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypatch, problem, expected_match):
     i = installation
     p = provision.NativeProvisioner(i.brew)
     records = {name: {'running': name not in native.WRITERS, 'pid': 123} for name in native.SERVICES}
@@ -341,7 +351,8 @@ def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypat
         if args[0] == 'docker':
             container = 'unitares-postgres-age\n' if problem == 'docker-compose-name' else 'postgres-age\n'
             return SimpleNamespace(returncode=1 if problem == 'docker-unreadable' else 0, stdout=container)
-        return SimpleNamespace(returncode=0, stdout='7' if problem == 'redis-data' else 'NOAUTH')
+        redis_out = '7' if problem == 'redis-data' else ('NOAUTH' if problem == 'redis-unreadable' else '0')
+        return SimpleNamespace(returncode=0, stdout=redis_out)
     monkeypatch.setattr(provision, 'run', run)
     if problem == 'writer':
         records['unitares']['running'] = True
@@ -349,7 +360,7 @@ def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypat
         records['postgresql@17']['command'] += ' -p 6432'
     elif problem == 'redis-command':
         records['redis']['command'] = 'custom'
-    with pytest.raises(native.Refusal):
+    with pytest.raises(native.Refusal, match=expected_match):
         p.preflight()
     assert not p.path.exists()
     assert not i.brew.config.exists()
