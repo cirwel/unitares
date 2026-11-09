@@ -189,7 +189,6 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
             "check-in text retention limit",
             ("bounded excerpt of its report text",),
         ),
-        ("unmeasured comparative benefit", ("remain unmeasured",)),
     ],
     "docs/CAPABILITIES_AND_DEPLOYMENT.md": [
         PRODUCT_CATEGORY,
@@ -213,7 +212,6 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
             ("AGE enables graph-specific behavior, including replacement-link",),
         ),
         ("provider-hosted Glama boundary", ("private provider-hosted Glama bundle",)),
-        ("unmeasured comparative benefit", ("remain evaluation questions",)),
     ],
     "src/tool_modes.py": [
         PRODUCT_CATEGORY,

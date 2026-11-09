@@ -375,7 +375,7 @@ The first two are both reversible in practice but reached through separate paths
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `orphan (agent)` | Is this stale, unlabeled or explicitly `archive-eligible`-tagged agent an archival candidate? (a pure predicate over update count and age; an agent with zero updates is a *ghost*, deliberately excluded; names and automatic class tags do not opt an agent in) | `src/agent_lifecycle.py::classify_for_archival` · `src/agent_lifecycle.py::auto_archive_orphan_agents` (protections are checked before classification; mutation is separately gated by `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`) |
-| `orphan (knowledge-graph discovery)` | Does this discovery have no inbound edges, i.e. nothing references it? (structural; the query may add an age cutoff) | `src/storage/knowledge_graph_age.py::get_orphan_discoveries` |
+| `orphan (knowledge-graph discovery)` | Does this discovery have no inbound edges, i.e. nothing references it? (structural; the query may add an age cutoff) | `src/storage/knowledge_graph_age_search.py::get_orphan_discoveries` |
 | `orphan (lineage claim)` | Is this provisional lineage claim unsupported, and so demotable? (`orphan_candidate` / `orphan_demoted` / `orphan_demote_failed` in the R1 sweep) | `src/identity/r1_maintenance.py::sweep_provisional_lineage` · `r1-verify-lineage-claim.md` |
 
 Three structurally different questions: liveness over time, graph connectivity, and evidential support for a claimed ancestor. An audit row or sweep name containing "orphan" does not say which. Informal uses (a lease or OS process left behind by a crashed owner) appear in BEAM comments but have no code predicate; they are plain English, not this term.
@@ -425,8 +425,8 @@ lists words from multiple vocabularies, and the monitor variable
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `confidence (reported forecast)` | What probability did the caller state for a result that can later be graded? Supplying `confidence` can mint a `prediction_id`; retain it for `record_result`. | `docs/guides/AGENT_SESSION_WALKTHROUGH.md`; `src/mcp_handlers/updates/phases.py::_self_report_record` |
-| `confidence (effective)` | What value reached the update after identity-assurance dampening? It can differ from `confidence_reported`. | `src/mcp_handlers/updates/phases.py::_self_report_record` |
+| `confidence (reported forecast)` | What probability did the caller state for a result that can later be graded? Supplying `confidence` can mint a `prediction_id`; retain it for `record_result`. | `docs/guides/AGENT_SESSION_WALKTHROUGH.md`; `src/mcp_handlers/updates/post_update_helpers.py::_self_report_record` |
+| `confidence (effective)` | What value reached the update after identity-assurance dampening? It can differ from `confidence_reported`. | `src/mcp_handlers/updates/post_update_helpers.py::_self_report_record` |
 | `confidence (derived fallback)` | What internal estimate is used when the caller omits confidence? Its legacy coherence dependency is disclosed in `confidence_reliability`; it does not become an agent-reported forecast or mint a tactical prediction. | `src/confidence.py`; `docs/EISV_COMPUTATION.md` |
 | `confidence (behavioral / baseline)` | Is there enough history to use behavioral assessment or self-relative deviation? This is estimator maturity, not a probability the work will succeed. | `src/behavioral_state.py`; `docs/EISV_COMPUTATION.md` |
 

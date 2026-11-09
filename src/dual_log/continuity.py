@@ -57,6 +57,11 @@ class ContinuityMetrics:
     continuity_degenerate: bool = False       # text features can't move for this caller
     template_divergence_excluded: bool = False  # degenerate automatic/rollup divergence excluded (#2418)
 
+    # Captured where E/I/S are computed, before later tool/ROC adjustments to
+    # derived_complexity/divergence. Those adjustments do not recompute E/I/S.
+    # None means unavailable (e.g. an older/custom producer), never a default.
+    input_derivation: Optional[dict] = None
+
     def to_dict(self) -> dict:
         """Serialize for storage and API responses."""
         return {
@@ -75,6 +80,7 @@ class ContinuityMetrics:
             'E_input_clipped': self.E_input_clipped,
             'continuity_degenerate': self.continuity_degenerate,
             'template_divergence_excluded': self.template_divergence_excluded,
+            'input_derivation': self.input_derivation,
         }
 
 
@@ -164,6 +170,7 @@ def compute_continuity_metrics(
     
     # Derive complexity from operational features
     derived_complexity = derive_complexity(op)
+    text_complexity = derived_complexity
 
     # Task types with high cognitive-to-output ratio: the thinking is the work,
     # not the output. A 3-line refactor after reading 2000 lines is not "simple."
@@ -224,13 +231,13 @@ def compute_continuity_metrics(
     I_input = float(1.0 - complexity_divergence)
     
     # S_input: Uncertainty from multiple sources
-    S_input = float(np.clip(
+    S_raw = (
         0.1 +  # Base uncertainty
         0.5 * complexity_divergence +
         (0.1 if not op.is_session_continuation else 0) +
-        (0.1 if refl.self_complexity is None else 0),
-        0.0, 1.0
-    ))
+        (0.1 if refl.self_complexity is None else 0)
+    )
+    S_input = float(np.clip(S_raw, 0.0, 1.0))
     
     # Degeneracy: with no markdown structure, no tool mentions and no questions,
     # every term of derive_complexity except the token count is zero, so the
@@ -262,6 +269,46 @@ def compute_continuity_metrics(
         self_complexity_defaulted=self_complexity_defaulted,
         E_input_clipped=E_input_clipped,
         continuity_degenerate=continuity_degenerate,
+        input_derivation={
+            'schema': 'eisv.continuity_inputs.v1',
+            'formula': 'src.dual_log.continuity.compute_continuity_metrics',
+            'formula_version': 1,
+            'inputs': {
+                'response_tokens': op.response_tokens,
+                'checkin_gap_ms': op.latency_ms,
+                'is_session_continuation': op.is_session_continuation,
+                'has_code_blocks': op.has_code_blocks,
+                'code_block_count': op.code_block_count,
+                'list_item_count': op.list_item_count,
+                'paragraph_count': op.paragraph_count,
+                'question_count': op.question_count,
+                'mentioned_tool_count': len(op.mentioned_tools),
+                'self_complexity': refl.self_complexity,
+                'high_reasoning_task': refl.task_type in HIGH_REASONING_TASK_TYPES,
+            },
+            'intermediates': {
+                'text_complexity': text_complexity,
+                'derived_complexity': derived_complexity,
+                'complexity_divergence': complexity_divergence,
+                'divergence_defaulted': self_complexity_defaulted,
+                'divergence_default_reason': 'missing_self_complexity' if self_complexity_defaulted else None,
+                'task_floor_applied': text_complexity != derived_complexity,
+            },
+            'E': {
+                'formula': 'clip((response_tokens / (checkin_gap_ms / 1000)) / 200, 0.3, 1)' if op.latency_ms and op.latency_ms > 0 else 'clip(0.5 + 0.3 * (response_tokens / 1000), 0.3, 1)',
+                'branch': 'report_tokens_per_checkin_gap' if op.latency_ms and op.latency_ms > 0 else 'report_length_fallback',
+                'branch_reason': 'positive_gap' if op.latency_ms and op.latency_ms > 0 else ('missing_gap' if op.latency_ms is None else 'nonpositive_gap'),
+                'raw_value': E_raw, 'value': E_input, 'clip_bounds': [0.3, 1.0],
+                'clip_applied': E_raw != E_input,
+                'at_bound': E_input_clipped,
+            },
+            'I': {'formula': '1 - complexity_divergence', 'raw_value': I_input, 'value': I_input},
+            'S': {
+                'formula': 'clip(0.1 + 0.5 * complexity_divergence + 0.1 * not_continuation + 0.1 * missing_self_complexity, 0, 1)',
+                'raw_value': S_raw, 'value': S_input, 'clip_bounds': [0.0, 1.0],
+                'clip_applied': S_raw != S_input,
+            },
+        },
     )
 
 

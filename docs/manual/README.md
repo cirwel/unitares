@@ -20,10 +20,10 @@ typed outcomes are the mechanisms
 ([product definition](../PRODUCT_DEFINITION.md)).
 
 Each check-in also returns a raw policy recommendation derived from EISV, a
-behavioral state estimate. That recommendation is observational by default: it
-cannot pause an identity or block writes unless the operator explicitly enables
-the legacy actuator. EISV still ships in the check-in path, and its move to an
-optional module follows a [staged plan](../proposals/active/eisv-core-boundary-v0.md).
+behavioral state estimate. That recommendation is observational by default, with
+optional hard-hold enforcement when configured by the operator. See the
+[computation contract](../EISV_COMPUTATION.md#role-runtime-and-evidence) for
+inputs, formulas, and runtime posture.
 
 Explicit identity, authorization, archive, durable-pause, and coordination
 boundaries remain authoritative. The host remains responsible for actions

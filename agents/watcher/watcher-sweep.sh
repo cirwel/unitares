@@ -20,6 +20,17 @@
 #                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
+#   UNITARES_WATCHER_PYTHON       interpreter for agent.py (default: python3 on
+#                                 PATH). A scheduler's PATH can resolve a
+#                                 python3 without Watcher's dependencies, so set
+#                                 this to the interpreter the hooks use.
+#
+# Each run also performs the findings lifecycle (agent.py --lifecycle) before
+# anything else: the stale-path sweep and the line-drift sweep, exactly what
+# surface_pending runs before a chime. They keep running whether or not
+# anything is displaying findings and whether or not Ollama is up; lifecycle
+# needs no model. Compaction (--compact) is deliberately not part of it: it
+# deletes resolved rows, which are labels, so it stays an explicit act.
 #
 # Host schedulers and their selected scan roots belong in deployment config.
 
@@ -28,6 +39,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PY="${UNITARES_WATCHER_PYTHON:-python3}"
 
 ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-}"
 if [[ -z "$ROOTS" ]]; then
@@ -50,6 +62,15 @@ log() {
 }
 
 mkdir -p "$STATE_DIR" "$LOCK_DIR"
+
+# --- Findings lifecycle: every run, before any skip below ---
+# Runs under the findings lock inside agent.py. A failure is logged and the
+# scan still proceeds; lifecycle retries on the next interval.
+LIFECYCLE_RC=0
+"$PY" "${WATCHER_AGENT}" --lifecycle >/dev/null 2>&1 || LIFECYCLE_RC=$?
+if [[ "$LIFECYCLE_RC" -ne 0 ]]; then
+    log "lifecycle failed (exit ${LIFECYCLE_RC}); retrying next interval"
+fi
 
 # --- Window: everything modified since the last successful sweep ---
 # The watermark is the state file's own mtime, compared with `find -newer`.
@@ -116,6 +137,21 @@ done
 # Watcher drops test files internally; filter here to avoid spawning python for them.
 CANDIDATES=$(printf '%s' "$CANDIDATES" | grep -v '/tests\?/' | grep -v -E '/(test_[^/]+|[^/]+_test)\.[a-z]+$' || true)
 
+# Keep only real edits. A git checkout (new worktree, branch switch, pull)
+# moves the mtime of every file it writes, so mtime alone makes a fresh
+# worktree look like a thousand edits and re-flags existing code once per
+# copy. sweep_filter keeps a file git reports modified or untracked, or that a
+# commit since the watermark touched, and every file outside a work tree. If
+# the filter itself fails, scan the unfiltered list rather than skip edits.
+RAW_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+if FILTERED=$(printf '%s\n' "$CANDIDATES" | PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m agents.watcher.sweep_filter --since-file "$STATE_FILE" 2>/dev/null); then
+    CANDIDATES="$FILTERED"
+else
+    log "edit filter failed; scanning unfiltered candidates"
+fi
+FILTERED_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+UNEDITED=$(( RAW_COUNT - FILTERED_COUNT ))
+
 if [[ -z "${CANDIDATES//[[:space:]]/}" ]]; then
     mv -f "$PENDING_STATE" "$STATE_FILE"
     exit 0
@@ -150,13 +186,13 @@ while IFS= read -r FILE_PATH; do
     touch "$LOCK_FILE"
 
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
-    REGIONS=$(cd "$REPO_ROOT" && python3 -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
+    REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
     if [[ -z "$REGIONS" ]]; then
-        python3 "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
+        "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
     else
         while IFS= read -r REGION; do
             [[ -z "$REGION" ]] && continue
-            python3 "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
+            "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
         done <<< "$REGIONS"
     fi
     SCANNED=$(( SCANNED + 1 ))
@@ -166,10 +202,10 @@ done <<< "$CANDIDATES"
 # work, hold the old watermark so the remainder is picked up next sweep.
 if [[ "$SCANNED" -ge "$MAX_FILES" ]]; then
     rm -f "$PENDING_STATE"
-    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook"
+    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
 else
     mv -f "$PENDING_STATE" "$STATE_FILE"
-    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook"
+    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
 fi
 
 exit 0

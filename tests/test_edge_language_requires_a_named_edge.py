@@ -60,10 +60,11 @@ def test_recovery_hint_keeps_edge_language_when_the_margin_is_real():
 
 def _reflection(decision, state=None, verdict="safe"):
     from src.mcp_handlers.updates import enrichments as E
+    from src.mcp_handlers.updates import enrichment_helpers as EH
     fn = getattr(E, "_reflection_line", None) or getattr(E, "_build_reflection", None)
     if fn is None:                      # name drift -- assert the source instead
         import inspect
-        src = inspect.getsource(E)
+        src = inspect.getsource(E) + "\n" + inspect.getsource(EH)
         i = src.index("You're close to a governance edge")
         pytest.skip("reflection builder not directly callable; source asserted elsewhere")
     return fn({"decision": decision, "verdict": verdict}, state)
@@ -73,7 +74,8 @@ def test_borderline_basin_is_not_described_as_an_edge_in_source():
     """The boundary basin must not reach the nearest_edge branch."""
     import inspect
     from src.mcp_handlers.updates import enrichments as E
-    src = inspect.getsource(E)
+    from src.mcp_handlers.updates import enrichment_helpers as EH
+    src = inspect.getsource(E) + "\n" + inspect.getsource(EH)
     assert '_has_tight_margin(response_data) or (isinstance(state, dict) and state.get("borderline"))' not in src, (
         "borderline (a basin fact) is ORed into the edge-proximity branch again"
     )
@@ -85,4 +87,6 @@ def test_no_generic_governance_edge_fallback_remains():
     asserted with nothing to name."""
     import inspect
     from src.mcp_handlers.updates import enrichments as E
-    assert "You're close to a governance edge." not in inspect.getsource(E)
+    from src.mcp_handlers.updates import enrichment_helpers as EH
+    src = inspect.getsource(E) + "\n" + inspect.getsource(EH)
+    assert "You're close to a governance edge." not in src

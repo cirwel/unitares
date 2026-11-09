@@ -23,10 +23,16 @@ finding is a discarded label.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import agents.watcher.findings as F
+
+
+def _iso_days_ago(days: float) -> str:
+    then = datetime.now(timezone.utc) - timedelta(days=days)
+    return then.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +60,9 @@ def _finding(**over) -> dict:
         "line": 251,
         "hint": "fire-and-forget task — store ref or use TaskGroup",
         "severity": "high",
-        "detected_at": "2026-08-12T14:27:06Z",
+        # Fresh by default, so the retention tests below stay retention tests
+        # and never cross PATH_GONE_EXPIRY_DAYS as the calendar moves.
+        "detected_at": _iso_days_ago(1),
         "model_used": "gemma4:latest",
         "line_content_hash": "abc123",
         "fingerprint": "deadbeefcafe0001",
@@ -154,3 +162,176 @@ class TestMixedLedger:
         assert set(kept) == {"aaaa", "bbbb"}
         assert kept["aaaa"]["path_gone"] is False
         assert kept["bbbb"]["path_gone"] is True
+
+
+class TestExpiry:
+    """Retention is bounded: an unadjudicated finding on a deleted path ages
+    out after PATH_GONE_EXPIRY_DAYS instead of staying open forever.
+
+    Without the bound the only exit from the open set was adjudication, so it
+    grew whenever nobody adjudicated (2026-11-05: 258 open, 181 on deleted
+    paths). Aged out, not deleted: the row and its snapshot stay on disk.
+    """
+
+    def test_old_path_gone_finding_ages_out_but_is_kept(self):
+        _write([_finding(detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+
+        dropped = F._sweep_stale_quiet()
+
+        assert dropped == 0, "expiry must not delete the row"
+        rows = _read()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["status"] == "aged_out"
+        assert row["resolution_reason"] == "path_gone_unadjudicated"
+        assert row["aged_out_at"]
+        assert row["path_gone"] is True
+        assert row["line_content"] == "asyncio.create_task(self._emit(payload))"
+
+    def test_surfaced_status_expires_too(self):
+        _write([_finding(status="surfaced", detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 5))])
+
+        F._sweep_stale_quiet()
+
+        assert _read()[0]["status"] == "aged_out"
+
+    def test_young_path_gone_finding_stays_open(self):
+        _write([_finding(detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS - 1))])
+
+        F._sweep_stale_quiet()
+
+        row = _read()[0]
+        assert row["status"] == "open"
+        assert row["path_gone"] is True
+
+    def test_old_finding_on_live_path_never_expires(self, tmp_path):
+        """Expiry is for deleted paths only; a live file keeps its finding."""
+        real = tmp_path / "live.py"
+        real.write_text("asyncio.create_task(x())\n")
+        _write([_finding(file=str(real), detected_at=_iso_days_ago(200))])
+
+        F._sweep_stale_quiet()
+
+        assert _read()[0]["status"] == "open"
+
+    @pytest.mark.parametrize("status", ["confirmed", "dismissed", "aged_out"])
+    def test_adjudicated_rows_are_not_rewritten(self, status):
+        """A label already recorded is never overwritten by expiry."""
+        _write([_finding(status=status, path_gone=True, detected_at=_iso_days_ago(90))])
+
+        F._sweep_stale_quiet()
+
+        row = _read()[0]
+        assert row["status"] == status
+        assert "resolution_reason" not in row
+
+    @pytest.mark.parametrize("detected_at", ["", "not-a-date", None])
+    def test_unparseable_timestamp_fails_open(self, detected_at):
+        _write([_finding(detected_at=detected_at, path_gone=True)])
+
+        F._sweep_stale_quiet()
+
+        assert _read()[0]["status"] == "open"
+
+    def test_expiry_alone_is_written_to_disk(self):
+        """Same trap as TestFlagPersistence: an already-flagged row that only
+        expires drops nothing and marks nothing new, so the early return must
+        count the expiry or the change is computed and discarded."""
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+
+        F._sweep_stale_quiet()
+
+        assert _read()[0]["status"] == "aged_out", "expiry computed but never persisted"
+
+    def test_expired_rows_leave_the_unresolved_listing(self, capsys, tmp_path):
+        # Deleted paths inside the scope root, so both rows are in scope.
+        gone = str(tmp_path / "removed-worktree" / "src" / "server.py")
+        _write(
+            [
+                _finding(
+                    fingerprint="01dc0ffee0000001",
+                    file=gone,
+                    detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1),
+                ),
+                _finding(fingerprint="7e5c0ffee0000002", file=gone, line=99),
+            ]
+        )
+        F._sweep_stale_quiet()
+
+        F.print_unresolved(scope_root=tmp_path)
+        out = capsys.readouterr().out
+
+        assert "Total unresolved: 1" in out
+        assert "#7e5c0ffe" in out
+        assert "#01dc0ffe" not in out
+
+    def test_cli_sweep_reports_expiry(self, capsys):
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+
+        F.sweep_stale_findings()
+
+        out = capsys.readouterr().out
+        assert "aged out 1" in out
+        assert "nothing to sweep" not in out
+
+
+class TestCompactionKeepsExpired:
+    """Review finding on #3199 (codex, P1): ``compact_findings`` drops aged_out
+    rows older than its cutoff by ``detected_at``, and every expired row is
+    already past that cutoff, so the first ``--compact`` would delete the
+    evidence that expiry promised to keep."""
+
+    def test_expired_row_survives_compaction(self, capsys):
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+        F._sweep_stale_quiet()
+
+        F.compact_findings()
+
+        rows = _read()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "aged_out"
+        assert rows[0]["line_content"]
+
+    def test_expired_row_is_still_adjudicable_then_compacts(self, capsys):
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+        F._sweep_stale_quiet()
+
+        assert F.update_finding_status("deadbeef", "dismissed", emit_resolution_event=False) == 0
+        assert _read()[0]["status"] == "dismissed"
+
+        F.compact_findings()
+
+        assert _read() == [], "an adjudicated row compacts like any other"
+
+    def test_other_aged_out_rows_still_compact(self, capsys):
+        _write(
+            [
+                _finding(
+                    status="aged_out",
+                    resolution_reason="line_drift_token_absent",
+                    detected_at=_iso_days_ago(30),
+                )
+            ]
+        )
+
+        F.compact_findings()
+
+        assert _read() == []
+
+
+def test_cli_counts_expiry_when_the_same_pass_drops_an_aged_out_row(capsys):
+    """Review finding on #3199 (codex, P2): a net status count reported
+    'aged out 0' when one row expired and an older snapshotless aged_out row
+    was dropped in the same pass."""
+    _write(
+        [
+            _finding(fingerprint="aaaa0000", detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1)),
+            _finding(fingerprint="bbbb0000", status="aged_out", line_content=""),
+        ]
+    )
+
+    F.sweep_stale_findings()
+
+    out = capsys.readouterr().out
+    assert "dropped 1" in out
+    assert "aged out 1" in out

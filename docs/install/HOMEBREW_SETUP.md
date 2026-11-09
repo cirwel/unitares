@@ -18,7 +18,56 @@ unitares setup --homebrew
 unitares setup --homebrew --apply
 ```
 
-The first command inspects the install without writing files or changing
+For a fresh installation with no native configuration, use explicit provisioning:
+
+```sh
+unitares setup --homebrew --provision-db
+unitares setup --homebrew --provision-db --apply
+```
+
+The first command prints the plan without changing files, services or databases.
+The second verifies the installed PostgreSQL 17, AGE and pgvector packages and
+the selected cluster, starts PostgreSQL and Redis if needed, and creates a
+dedicated `unitares` login and database. The application login is **not a
+superuser**. The local administrator installs extensions and configures AGE
+preload only for that role in that database. Setup bootstraps as the application
+role, checks migrations and performs an AGE query before publishing `native.env`
+with a generated password and installation ID. Server and lease-plane writers
+remain stopped. After successful provisioning, run:
+
+```sh
+unitares start --homebrew --check
+unitares start --homebrew
+```
+
+Provisioning refuses existing configuration, a shell `DB_POSTGRES_URL`, an
+existing role or database, active writers, foreign port owners, and an active
+Docker `postgres-age`. If Docker is installed, its inventory must be readable.
+Redis database 0 must be empty; setup atomically records an installation marker
+there so a fresh PostgreSQL database cannot be paired with existing identity
+state. Resume accepts only that marker until provisioning is complete. Setup
+never adopts or deletes existing data, edits cluster-wide PostgreSQL
+configuration, rotates existing credentials, or clears Redis. Dependencies
+started by setup remain running if a later step fails.
+
+The private `$(brew --prefix)/var/unitares/native-setup.json` journal retains
+credentials and stage evidence; keep it private and outside Git. Normal start,
+setup and update refuse an unfinished journal. Resume with:
+
+```sh
+unitares setup --homebrew --provision-db --apply --resume
+```
+
+Resume verifies the cluster, role/database markers, privileges, configuration
+and bootstrap source files. A crash after database creation but before its
+ownership comment leaves ambiguous state and requires manual inspection. A
+bootstrap interrupted after SQL begins also refuses automatic replay: preserve
+the database and journal and use the recovery guidance below. A completed
+bootstrap can resume schema/runtime verification and configuration publication
+without replaying SQL. There is deliberately no destructive reset/abort flag.
+Repeated provisioning after completion preserves the existing configuration.
+
+Without `--provision-db`, the first command inspects the install without writing files or changing
 services. `--apply` creates a missing `$(brew --prefix)/etc/unitares/native.env`
 with mode 600. It prompts for the URL of your deliberately chosen PostgreSQL
 database without displaying the input. Use a URL with a URL-encoded user,
@@ -43,7 +92,7 @@ settings.
 
 ## Database next step
 
-Setup performs read-only database inspection only when the selected Homebrew
+Setup without `--provision-db` performs read-only database inspection only when the selected Homebrew
 PostgreSQL service is running. It never installs formulae, starts services,
 creates databases or applies SQL. A successful setup exit means the inspection
 completed, **not** that the server is ready; read its database-readiness line.
@@ -142,3 +191,32 @@ Maintainers hand stable releases to the tap through the protected deterministic
 [Homebrew release sync](../operations/homebrew-release-sync.md). It opens a
 draft tap PR and cannot merge it; bottle construction and publication remain
 separate operator-gated actions.
+
+The release sync signs the deterministic source archive with a GitHub artifact
+attestation and verifies its repository, workflow, tag and exact commit before
+publication. Manual dispatch must run **at the tag**, for example
+`gh workflow run homebrew-release-sync.yml --ref "$TAG" -f tag="$TAG"`.
+The tagged commit must contain the attesting workflow; older unsigned assets
+cannot acquire this guarantee by running a newer workflow on `master`.
+Signing, tap rendering and draft-PR publication use separate runners. The tap
+renderer refuses to run if the shared App private key is available outside the
+protected environment; publication applies its proposed patch as data without
+executing tap scripts. Source publication and draft-PR publication require
+separate environment approvals when required reviewers are configured.
+
+Users can verify a downloaded source archive with a current authenticated GitHub
+CLI and an expected full commit obtained independently from the reviewed release:
+
+```sh
+gh attestation verify "unitares-$VERSION.tar.gz" --repo cirwel/unitares \
+  --signer-workflow cirwel/unitares/.github/workflows/homebrew-release-sync.yml \
+  --source-ref "refs/tags/v$VERSION" --source-digest "$EXPECTED_COMMIT" \
+  --signer-digest "$EXPECTED_COMMIT" --deny-self-hosted-runners
+```
+
+The tap's [verification instructions](https://github.com/cirwel/homebrew-unitares#verify-a-downloaded-package)
+cover bottle signatures, complete evidence manifests and recorded build dependencies.
+Ordinary `brew install` still performs Homebrew checksum checks; attestation
+verification is an additional explicit check. Provenance establishes origin and
+integrity, not benign behavior, an independent security audit or reproducibility.
+These changes do not publish bottles or enable the protected build environments.

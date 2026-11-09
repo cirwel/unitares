@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-11-06T02:01:28Z",
+  "verified_date": "2026-11-06",
+  "verifier": "gpt-6-astra / UNITARES 9dfa50a2-1f38-4cea-8bcb-35d08bfeb45b (rechecked changed-source impact: finding examples already supply summary/discovery_id; alias names, workflow, identity, dialectic, and EISV semantics unchanged)",
+  "source_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": "3824f568c083f48f",
+    "unitares/skills/dialectic-reasoning/SKILL.md": "e23a1486d3397505",
+    "unitares/skills/governance-fundamentals/SKILL.md": "9a1d46de11050d2f",
+    "unitares/skills/governance-lifecycle/SKILL.md": "3ec5f9172f2c7a78",
+    "unitares/skills/knowledge-graph/SKILL.md": "19ca81fc3d035b88",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/eisv/adapter.py": "1c9ef7fa0362bf30",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "862831ee9525d389",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "416d9df3af0d58c9",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/schemas/identity.py": "8f8798c5515927bc",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "c305f805bb185a69",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "b271b275a249db52"
+    ]
+  }
+}

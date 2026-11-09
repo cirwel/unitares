@@ -104,7 +104,11 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
         "src/knowledge_graph_lifecycle.py",
         "src/db/mixins/knowledge_graph.py",
     ),
-    "dialectic": ("src/mcp_handlers/dialectic/", "src/dialectic_db.py"),
+    "dialectic": (
+        "src/mcp_handlers/dialectic/",
+        "src/dialectic_db.py",
+        "src/dialectic_db_queries.py",
+    ),
     "audit": ("src/db/mixins/audit.py", "src/audit_db.py"),
     "outcomes": (
         "src/outcomes.py",

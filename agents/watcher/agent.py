@@ -2623,6 +2623,24 @@ def _surface_receipts(finding: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def run_lifecycle() -> int:
+    """Run the findings lifecycle sweeps once: the stale-path sweep (marks
+    ``path_gone``, drops snapshotless rows) and the line-drift sweep.
+
+    Both are quiet: they log and never print. ``surface_pending`` calls this
+    before computing a chime, and ``--lifecycle`` runs it on its own, so a
+    scheduler can keep the findings state current whether or not anything is
+    displaying it. While lifecycle ran only from the display path, pausing
+    display also paused lifecycle, and every later cleanup waited on a manual
+    ``--sweep-stale``. Callers hold the findings lock (the CLI does so through
+    ``_run_with_watcher_findings_lease``), because both sweeps rewrite
+    findings.jsonl.
+    """
+    _sweep_stale_quiet()
+    _sweep_token_drift_quiet()
+    return 0
+
+
 def surface_pending(
     *,
     audience: str | None = None,
@@ -2667,8 +2685,7 @@ def surface_pending(
     don't pollute the chime block stdout.
     """
     audience = _normalize_surface_audience(audience)
-    _sweep_stale_quiet()
-    _sweep_token_drift_quiet()
+    run_lifecycle()
     all_findings = _iter_findings_raw()
     if audience is None:
         pending_findings = [
@@ -4105,6 +4122,14 @@ def main(argv: list[str] | None = None) -> int:
         help="drop findings whose target file no longer exists on disk",
     )
     parser.add_argument(
+        "--lifecycle",
+        action="store_true",
+        help=(
+            "run the findings lifecycle sweeps (stale path, line drift) once, "
+            "quietly, under the findings lock; for schedulers"
+        ),
+    )
+    parser.add_argument(
         "--agent-id",
         metavar="UUID",
         type=_governance_agent_uuid,
@@ -4180,6 +4205,7 @@ def main(argv: list[str] | None = None) -> int:
         args.resolve,
         args.dismiss,
         args.sweep_stale,
+        args.lifecycle,
         args.compact,
     )
     if args.print_unresolved and not any(higher_precedence):
@@ -4277,6 +4303,12 @@ def main(argv: list[str] | None = None) -> int:
         return _run_with_watcher_findings_lease(
             "sweep stale findings",
             sweep_stale_findings,
+            holder_agent_id=args.agent_id,
+        )
+    if args.lifecycle:
+        return _run_with_watcher_findings_lease(
+            "findings lifecycle sweep",
+            run_lifecycle,
             holder_agent_id=args.agent_id,
         )
     if args.compact:

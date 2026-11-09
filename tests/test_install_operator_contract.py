@@ -313,7 +313,8 @@ def test_advanced_bare_metal_path_uses_one_schema_bootstrap() -> None:
 
     command = "./scripts/install/bootstrap_postgres.sh --apply"
     assert command in playbook
-    assert command in setup
+    assert "./scripts/install/bootstrap_postgres.sh --dry-run" in setup
+    assert "Missing schema does not prove database" in setup
     assert "psql -U postgres" not in setup
     assert "pip install unitares-core" not in playbook
 

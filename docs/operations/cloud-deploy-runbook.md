@@ -186,6 +186,48 @@ drill per deployment: fresh volumes, load the SQL dump, drop the RDB into
 the Redis volume, `docker compose up`, confirm `onboard()` sees the expected
 identity history.
 
+### PostgreSQL + Apache AGE restore notes
+
+When restoring a `pg_dump` from a source cluster onto a fresh PostgreSQL
+cluster or container:
+
+1. **Source roles:** if the source cluster owned objects or granted read access
+   to local roles that do not exist on the target cluster, either pre-create
+   those roles (`CREATE ROLE <name>;`) before `psql -f` or restore with
+   `--no-owner --no-acl`.
+2. **Apache AGE catalog OID drift:** `pg_dump` copies the source database's
+   literal `pg_namespace` OID into `ag_catalog.ag_graph.graphid` and
+   `ag_catalog.ag_label.graph`, while `CREATE SCHEMA governance_graph` on the
+   target cluster allocates a new namespace OID. `GraphMixin` automatically
+   reconciles `ag_catalog.ag_graph` and `ag_catalog.ag_label` in-place on the
+   first AGE probe or query after restore. That repair needs `UPDATE` on both
+   catalog tables. A role without it, such as a native install's `NOSUPERUSER`
+   application role, leaves the graph unavailable and its data untouched until
+   a role that can update the catalog runs the statement below. Run the same
+   statement if you are verifying a restored database directly via `psql`
+   before starting the server:
+
+   ```sql
+   WITH old_graph AS (
+       SELECT g.graphid AS old_id, n.oid AS new_id
+       FROM ag_catalog.ag_graph AS g
+       JOIN pg_namespace AS n ON n.nspname = g.name
+       WHERE g.name = 'governance_graph'
+         AND g.graphid <> n.oid
+   ), updated_graph AS (
+       UPDATE ag_catalog.ag_graph AS g
+       SET graphid = old_graph.new_id,
+           namespace = old_graph.new_id::regnamespace
+       FROM old_graph
+       WHERE g.name = 'governance_graph'
+       RETURNING g.graphid
+   )
+   UPDATE ag_catalog.ag_label AS l
+   SET graph = old_graph.new_id
+   FROM old_graph, updated_graph
+   WHERE l.graph = old_graph.old_id;
+   ```
+
 ### Redis 7 to 8 rollout
 
 Redis Open Source supports upgrading a standalone Redis 7.x instance to Redis

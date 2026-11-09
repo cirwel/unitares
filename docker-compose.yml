@@ -43,7 +43,7 @@ services:
   postgres-age:
     # Pulled from this release's tag like the lease plane below, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares-postgres:v3.6.0
+    image: ghcr.io/cirwel/unitares-postgres:v4.0.0
     pull_policy: missing
     build:
       context: db/postgres
@@ -123,7 +123,7 @@ services:
     # published, or no registry access), Compose builds from the block below
     # instead. On a master checkout the tag names a release, not your source:
     # run `docker compose up --build` to build what you have checked out.
-    image: ghcr.io/cirwel/unitares-lease-plane:v3.6.0
+    image: ghcr.io/cirwel/unitares-lease-plane:v4.0.0
     pull_policy: missing
     build:
       context: .
@@ -176,7 +176,7 @@ services:
   governance-mcp:
     # Pulled from this release's tag like the lease plane above, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares:v3.6.0
+    image: ghcr.io/cirwel/unitares:v4.0.0
     pull_policy: missing
     build:
       context: .
@@ -205,6 +205,10 @@ services:
       UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       UNITARES_DIALECTIC_BEAM_RESOLUTION: ${UNITARES_DIALECTIC_BEAM_RESOLUTION:-1}
+      # Policy actuation and SN1 behavioral sensor defaults (v4.0.0).
+      UNITARES_POLICY_ACTUATION: ${UNITARES_POLICY_ACTUATION:-observe}
+      UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS: ${UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS:-1}
+      UNITARES_PER_AGENT_I_CALIBRATION: ${UNITARES_PER_AGENT_I_CALIBRATION:-1}
       # Keep Python's fallback decision aligned with the lease plane. Under
       # BEAM-control enforcement, an unavailable BEAM writer must fail closed
       # instead of bypassing request-bound identity via direct PostgreSQL.
