@@ -1,0 +1,1 @@
+- **merge queue:** `pr-babysitter.sh` no longer arms a queued PR labelled `automerge-hold` or `no-auto-merge`, and disarms one it had armed; the approval stays, so the PR returns in turn when the hold is removed. A declared draft whose review still needs a second model family now gets `review-requested` added.

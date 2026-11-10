@@ -1868,3 +1868,32 @@ def test_a_dry_run_promotes_nothing(tmp_path: Path) -> None:
     assert calls == []
     assert "dry-run: gh pr ready 1" in out
     assert _state(tmp_path, ".declared") == ""
+
+
+# --- explicit holds ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("hold", ["automerge-hold", "no-auto-merge"])
+def test_a_held_pr_is_not_armed_and_the_queue_moves_on(tmp_path: Path, hold: str) -> None:
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, labels=(LABEL, hold)), _pr(2)],
+        timelines={1: _timeline(labelled_min_ago=10), 2: _timeline(labelled_min_ago=5)},
+    )
+    assert calls == [_arm(2)]
+    assert f"#1 is labelled {hold}, an explicit hold" in out
+
+
+def test_a_hold_disarms_the_queues_own_arm_and_keeps_the_approval(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, labels=(LABEL, "automerge-hold"), armed_min_ago=5)], arms={1: 5})
+    assert calls == ["pr merge 1 -R o/r --disable-auto"]
+    assert "an explicit hold" in out
+    assert not any("--remove-label" in call for call in calls)
+
+
+def test_a_declared_draft_missing_a_review_family_gets_its_review_requested(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_declared(labels=(READY,), review="ACTION_REQUIRED")], timelines={1: _declaration()})
+    assert calls == [f"pr edit 1 -R o/r --add-label {REQUESTED}"]
+    for labels in ((READY, REQUESTED), (READY, "no-auto-review")):
+        calls, _ = _run(tmp_path, [_declared(labels=labels, review="ACTION_REQUIRED")], timelines={1: _declaration()})
+        assert calls == [], labels

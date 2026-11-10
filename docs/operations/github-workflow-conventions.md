@@ -940,6 +940,10 @@ Draft PRs cannot be queued, so mark ready first.
   is skipped until the label is removed and re-added. The pin catches honest
   follow-up pushes or branch mutations after approval, not hostile actors
   sharing the same credentials.
+- **Holds.** A queued PR labelled `automerge-hold` or `no-auto-merge` is not
+  armed, and is disarmed if the queue had armed it. Its approval stands, so it
+  returns in turn once the hold comes off: a hold pauses, removing
+  `approved-to-merge` withdraws.
 - **It honours declared order.** A "merge after #N" (or
   `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
   unreadable dependency holds it too.
@@ -996,7 +1000,9 @@ else, the script looks at every PR against `master` that carries
   therefore needs a fresh declaration.
 - While the PR has no passing review, it adds `review-requested` if the PR
   has neither that nor `no-auto-review`, since the shared review host takes a
-  draft only on request. A draft reviewed before it was declared needs none.
+  draft only on request. A draft reviewed before it was declared needs none;
+  one whose review is `action_required` for a missing model family gets the
+  request too.
 - It promotes the PR only when GitHub reports it `MERGEABLE`, its `review`
   check has passed, and its other checks have reported with none failing,
   pending or parked. `review` is required on this route whatever
