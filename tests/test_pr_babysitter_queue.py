@@ -1736,7 +1736,17 @@ def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> Non
     assert "was never pinned" in out
 
 
-@pytest.mark.parametrize("body", ["", "Classification: capability", "class: `capability`"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        "Classification: capability",
+        "class: `capability`",
+        # A fix mentioned in passing does not outvote the PR's own classification.
+        "Classification: capability\n\nThe earlier proposal used Classification: fix.",
+        "Classification: fix\n\nClassification: capability",
+    ],
+)
 def test_only_a_pr_classified_as_a_fix_is_promoted(tmp_path: Path, body: str) -> None:
     calls, out = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
     assert calls == []

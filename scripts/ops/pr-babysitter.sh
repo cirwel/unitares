@@ -550,8 +550,12 @@ while read -r pr; do
   fi
   # Readiness of a capability is the operator's ruling, so the route takes
   # only a PR whose body classifies it as a fix, as `ship.sh --resume` does.
-  # Unattended, an unstated classification is not assumed to be a fix.
-  if ! jq -e '(.body // "") | test("\\b(classification|class)\\s*:\\s*[*` ]*fix\\b"; "i")' <<<"$pr" >/dev/null; then
+  # Unattended, an unstated classification is not assumed to be a fix, and
+  # every classification the body states must agree: a capability PR that
+  # also quotes "Classification: fix" somewhere is still a capability.
+  if ! jq -e '[(.body // "") | match("\\b(?:classification|class)\\s*:\\s*[*` ]*(fix|capability)\\b"; "gi")
+               | .captures[0].string | ascii_downcase]
+              | length > 0 and all(. == "fix")' <<<"$pr" >/dev/null; then
     log "#$n declared ready without Classification: fix in its body; skipped"
     notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` takes only a PR whose body says \`Classification: fix\`. A capability stays a draft until the operator rules on it."
     continue
