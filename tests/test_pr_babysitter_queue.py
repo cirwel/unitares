@@ -1693,6 +1693,11 @@ def test_an_unfinished_promotion_is_finished_or_withdrawn_never_repinned(tmp_pat
     assert _run(tmp_path, [_declared()], timelines=declared, fail=(f"--remove-label {READY}",))[0] == PROMOTE
     calls, _ = _run(tmp_path, [both], timelines=declared)
     assert calls == [PROMOTE[2]]
+    # A hold added while the promotion was unfinished wins over finishing it.
+    held = _declared(labels=(READY, REQUESTED, LABEL, "automerge-hold"), draft=False)
+    calls, out = _run(tmp_path, [held], timelines=declared)
+    assert calls == [WITHDRAW]
+    assert "during its promotion" in out
 
 
 def test_review_is_required_on_the_declared_route_even_where_it_is_advisory(tmp_path: Path) -> None:

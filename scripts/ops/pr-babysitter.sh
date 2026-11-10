@@ -538,7 +538,16 @@ while read -r pr; do
     # withdrawn and the declaration starts over on the next tick.
     at=$(latest_label_time "$n") || { log "#$n timeline unreadable; unfinished promotion left as it is"; continue; }
     line=$(pinned "$n" "$at") || { log "#$n approval state unreadable ($STATE_FILE); unfinished promotion left as it is"; continue; }
-    if [ -n "$at" ] && [ -n "$line" ]; then
+    hold=""
+    for l in $READY_HOLD_LABELS; do
+      q -e --arg l "$l" 'labelled($l)' <<<"$pr" >/dev/null && { hold="$l"; break; }
+    done
+    if [ -n "$hold" ]; then
+      # A hold put on mid-promotion: the queue itself does not read these
+      # labels, so finishing here would let it arm the PR over the hold.
+      log "#$n was labelled $hold during its promotion; withdrawing $LABEL"
+      act gh pr edit "$n" -R "$REPO" --remove-label "$LABEL" || log "#$n $LABEL could not be withdrawn; retried next tick"
+    elif [ -n "$at" ] && [ -n "$line" ]; then
       log "#$n finishing its promotion: removing $READY_LABEL"
       act gh pr edit "$n" -R "$REPO" --remove-label "$READY_LABEL" || log "#$n $READY_LABEL could not be removed; retried next tick"
     else
