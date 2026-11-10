@@ -253,8 +253,8 @@ a footer match from resuming automatic delivery. `agent-pr-relay.yml` then reope
 the PR under the `unitares-pr-relay` App, which can write pull requests on
 this repository and nothing else. The original is closed with a link to its
 replacement. Branch, commits, labels and footer carry over, except the
-queue labels `approved-to-merge` and `operator-armed`, which are earned on
-the new PR. The relay also adds a model-family label, `agent/claude`,
+queue labels `approved-to-merge`, `ready-when-validated` and
+`operator-armed`, which are earned on the new PR. The relay also adds a model-family label, `agent/claude`,
 `agent/gpt` or `agent/gemini`, from the body's last `Model:` line, so PRs can
 be filtered by model family even though an App authors them all. The label
 comes from the body, so it is a filter, not verified provenance. The new

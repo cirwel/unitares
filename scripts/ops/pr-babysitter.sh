@@ -650,6 +650,16 @@ while read -r pr; do
     log "#$n moved or lost $READY_LABEL since this tick began; not promoted"
     continue
   fi
+  # A hold added since the snapshot counts too: once promoted, the queue
+  # would arm the PR without looking at these labels again.
+  hold=""
+  for l in $READY_HOLD_LABELS $OPERATOR_ONLY_LABELS $OPERATOR_ARMED_LABEL; do
+    jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$live" >/dev/null && { hold="$l"; break; }
+  done
+  if [ -n "$hold" ]; then
+    log "#$n was labelled $hold since this tick began; not promoted"
+    continue
+  fi
 
   log "#$n validated as declared at ${head:0:8}; marking ready and queueing"
   if [ "$(jq -r .isDraft <<<"$pr")" = "true" ]; then

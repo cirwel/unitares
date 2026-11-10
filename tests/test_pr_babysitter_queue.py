@@ -1782,6 +1782,16 @@ def test_a_head_that_moved_during_the_tick_is_not_promoted(tmp_path: Path) -> No
     assert calls == []
 
 
+@pytest.mark.parametrize("hold", ["automerge-hold", "no-auto-merge", "governance-sensitive", "operator-armed"])
+def test_a_hold_added_during_the_tick_stops_the_promotion(tmp_path: Path, hold: str) -> None:
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "live_1.json").write_text(json.dumps({"headRefOid": "sha1", "labels": [{"name": READY}, {"name": hold}]}))
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == []
+    assert f"was labelled {hold} since this tick began" in out
+
+
 def test_a_promotion_that_stopped_after_marking_ready_is_finished(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()}, fail=("--add-label approved-to-merge",))
     assert calls == PROMOTE  # the label call was attempted and refused
