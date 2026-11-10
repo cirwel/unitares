@@ -28,6 +28,7 @@ class Registry:
         self.record = {"client_id": ID, "name": "My connector", "redirect_uris": [CALLBACK],
                        "secret_hash": secret_digest(SECRET)}
         self.available = True
+        self.revoke_calls = []
 
     async def get(self, client_id):
         if not self.available:
@@ -46,7 +47,10 @@ class Registry:
         return {"client_id": ID, "client_secret": SECRET, "name": name}
 
     async def revoke(self, client_id, actor):
-        if client_id != ID:
+        self.revoke_calls.append((client_id, actor))
+        if not self.available:
+            raise ConnectionError("database unavailable")
+        if client_id != ID or self.record is None:
             return False
         self.record = None
         return True
@@ -283,35 +287,129 @@ async def test_persisted_tokens_after_restart_are_denied_on_connector_revocation
     assert await restarted.load_refresh_token(info, tokens["refresh_token"]) is None
 
 
-def test_management_through_real_session_and_operator_middleware(monkeypatch):
-    from datetime import timedelta
+@pytest.fixture
+def management_app(monkeypatch):
     from src import dashboard_auth, http_api
     cookie = "synthetic-dashboard-session"
-    row = {"created_at": datetime.now(timezone.utc), "last_seen_at": datetime.now(timezone.utc)}
+    session = {"row": {"created_at": datetime.now(timezone.utc),
+                       "last_seen_at": datetime.now(timezone.utc),
+                       "session_hash": dashboard_auth._sha256(cookie)}}
     class Connection:
         async def fetchrow(self, query, digest):
             assert digest == dashboard_auth._sha256(cookie)
-            return row
+            return session["row"]
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
     monkeypatch.setattr(dashboard_auth, "get_db", lambda: SimpleNamespace(acquire=Connection))
     monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", "synthetic-operator-token")
+    registry = Registry()
+    p = provider(registry)
     app = Starlette()
     http_api.register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0,
         server_version="test", has_streamable_http=True, mount_route_packs=False,
-        oauth_provider=provider(Registry()), oauth_settings=SimpleNamespace(
+        oauth_provider=p, oauth_settings=SimpleNamespace(
             issuer_url="https://server.example", resource_server_url="https://server.example/mcp/"))
-    client = TestClient(app)
+    return SimpleNamespace(client=TestClient(app), registry=registry, provider=p,
+                           session=session, cookie=cookie)
+
+
+def test_management_through_real_session_and_operator_middleware(management_app):
+    from datetime import timedelta
+    from src import dashboard_auth
+    client = management_app.client
     payload = {"name": "App", "redirect_uris": [CALLBACK]}
     assert client.post("/auth/connectors", json=payload).status_code == 403
     assert client.post("/auth/connectors", headers={"Authorization": "Bearer synthetic-operator-token"}, json=payload).status_code == 403
     assert client.post("/auth/connectors", headers={"X-Unitares-Operator": "synthetic-operator-token", "Origin": "http://testserver"}, json=payload).status_code == 201
-    client.cookies.set(dashboard_auth.SESSION_COOKIE, cookie)
+    client.cookies.set(dashboard_auth.SESSION_COOKIE, management_app.cookie)
     assert client.get("/auth/connectors").json()["server_url"] == "https://server.example/mcp/"
     assert client.post("/auth/connectors", json=payload).status_code == 403
     headers = {"X-Unitares-Csrf": "1", "Origin": "http://testserver"}
     assert client.post("/auth/connectors", headers=headers, json=payload).status_code == 201
-    row["created_at"] -= timedelta(seconds=dashboard_auth.STEP_UP_TTL_SECONDS + 1)
+    management_app.session["row"]["created_at"] -= timedelta(seconds=dashboard_auth.STEP_UP_TTL_SECONDS + 1)
     assert client.post("/auth/connectors", headers=headers, json=payload).status_code == 403
-    row = None
+    management_app.session["row"] = None
     assert client.get("/auth/connectors").status_code == 403
+
+
+@pytest.mark.parametrize("auth", ["anonymous", "agent_bearer", "operator_bearer", "invalid_operator",
+                                 "missing_csrf", "stale_session", "expired_session",
+                                 "foreign_origin_session", "foreign_origin_operator"])
+def test_revoke_route_rejects_unauthorized_requests_before_mutation(management_app, auth):
+    from datetime import timedelta
+    from src import dashboard_auth
+    client = management_app.client
+    headers = {"Origin": "http://testserver"}
+    if auth == "agent_bearer":
+        headers["Authorization"] = "Bearer agent"
+    elif auth == "operator_bearer":
+        headers["Authorization"] = "Bearer synthetic-operator-token"
+    elif auth == "invalid_operator":
+        headers["X-Unitares-Operator"] = "invalid-operator-token"
+    elif auth == "foreign_origin_operator":
+        headers.update({"X-Unitares-Operator": "synthetic-operator-token", "Origin": "https://evil.example"})
+    elif auth != "anonymous":
+        client.cookies.set(dashboard_auth.SESSION_COOKIE, management_app.cookie)
+        if auth != "missing_csrf":
+            headers["X-Unitares-Csrf"] = "1"
+        if auth == "stale_session":
+            management_app.session["row"]["created_at"] -= timedelta(seconds=dashboard_auth.STEP_UP_TTL_SECONDS + 1)
+        elif auth == "expired_session":
+            management_app.session["row"] = None
+        elif auth == "foreign_origin_session":
+            headers["Origin"] = "https://evil.example"
+    response = client.post(f"/auth/connectors/{ID}/revoke", headers=headers)
+    assert response.status_code == 403
+    assert response.headers["cache-control"] == "no-store"
+    assert management_app.registry.revoke_calls == []
+    assert management_app.registry.record is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", ["operator", "session"])
+async def test_http_revoke_denies_cached_and_restarted_tokens(management_app, auth):
+    from src import dashboard_auth
+    from tests.test_oauth_persistence import _DictStore
+    store = _DictStore()
+    p = management_app.provider
+    p._store = store
+    oauth_client = client_app(p)
+    tokens = exchange(oauth_client, code(oauth_client)).json()
+    assert await p.load_access_token(tokens["access_token"])
+    restarted = GovernanceOAuthProvider(auto_approve=False, connector_registry=management_app.registry, store=store)
+    info = await restarted.get_client(ID)
+    assert await restarted.load_access_token(tokens["access_token"])
+    headers = {"Origin": "http://testserver"}
+    if auth == "operator":
+        headers["X-Unitares-Operator"] = "synthetic-operator-token"
+        actor = "operator_credential"
+    else:
+        management_app.client.cookies.set(dashboard_auth.SESSION_COOKIE, management_app.cookie)
+        headers["X-Unitares-Csrf"] = "1"
+        actor = "dashboard_session:" + dashboard_auth._sha256(management_app.cookie).hex()
+    response = management_app.client.post(f"/auth/connectors/{ID}/revoke", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"success": True}
+    assert response.headers["cache-control"] == "no-store"
+    assert management_app.registry.revoke_calls == [(ID, actor)]
+    assert await p.load_access_token(tokens["access_token"]) is None
+    assert await p.load_refresh_token(info, tokens["refresh_token"]) is None
+    assert await restarted.load_access_token(tokens["access_token"]) is None
+    assert await restarted.load_refresh_token(info, tokens["refresh_token"]) is None
+
+
+def test_http_revoke_storage_failure_never_claims_success(management_app):
+    management_app.registry.available = False
+    response = management_app.client.post(f"/auth/connectors/{ID}/revoke", headers={
+        "X-Unitares-Operator": "synthetic-operator-token", "Origin": "http://testserver",
+    })
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert "success" not in response.json()
+    assert SECRET not in response.text
+    assert management_app.registry.record is not None
+
+
+def test_sdk_revocation_endpoint_is_not_mounted_by_default():
+    client = client_app(provider(Registry()))
+    assert client.post("/revoke", data={"client_id": ID, "token": "synthetic-token"}).status_code == 404

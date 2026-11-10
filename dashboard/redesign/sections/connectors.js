@@ -5,6 +5,7 @@
     .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   let settings = null;
   let activeSecretClientId = null;
+  let credentialGeneration = 0;
   const el = (id) => document.getElementById(id);
   function message(text, error) {
     el("connector-status").textContent = text;
@@ -19,6 +20,7 @@
       </span></label>`;
   }
   function clearSecret() {
+    credentialGeneration += 1;
     activeSecretClientId = null;
     const result = el("connector-result");
     if (result) { result.replaceChildren(); result.hidden = true; }
@@ -45,12 +47,16 @@
   async function create(event) {
     event.preventDefault();
     clearSecret();
+    const generation = credentialGeneration;
     el("connector-add").disabled = true;
     try {
       const created = await window.DATA.createConnector({
         name: el("connector-name").value.trim(),
         redirect_uris: el("connector-callback").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
       });
+      // Navigation discards the one-time display, even if the durable write
+      // finishes later. Do not retry a creation that may already be committed.
+      if (generation !== credentialGeneration || location.hash !== "#connectors") return;
       activeSecretClientId = created.client_id;
       const result = el("connector-result");
       result.innerHTML = `<h2 tabindex="-1">Paste these into your app</h2>

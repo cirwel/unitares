@@ -9,13 +9,41 @@ function boot(overrides = {}) {
   dom.window.eval(source);
   return dom;
 }
-async function submit(dom) {
+function startSubmit(dom) {
   dom.window.document.getElementById("connector-name").value = "My app";
   dom.window.document.getElementById("connector-callback").value = "https://app.example/callback/";
   dom.window.document.getElementById("connector-form").dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+}
+async function submit(dom) {
+  startSubmit(dom);
   await vi.waitFor(() => expect(dom.window.document.getElementById("connector-add").disabled).toBe(false));
 }
 describe("connector setup", () => {
+  it.each(["hash navigation", "section activation", "pagehide"])("does not restore a late creation secret after %s", async (navigation) => {
+    let finishCreate;
+    const createConnector = vi.fn().mockImplementation(() => new Promise((resolve) => { finishCreate = resolve; }));
+    const dom = boot({ createConnector });
+    await dom.window.Connectors.load();
+    startSubmit(dom);
+    expect(createConnector).toHaveBeenCalledTimes(1);
+    if (navigation === "pagehide") {
+      dom.window.dispatchEvent(new dom.window.Event("pagehide"));
+    } else {
+      dom.window.history.replaceState(null, "", "#security");
+      if (navigation === "hash navigation") dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+      else dom.window.Connectors.clearCredentials(); // activateSection uses pushState, without hashchange.
+      // Even returning before the response must not revive discarded credentials.
+      dom.window.history.replaceState(null, "", "#connectors");
+    }
+    finishCreate({ client_id: "new-client", client_secret: "late-one-time-secret" });
+    await vi.waitFor(() => expect(dom.window.document.getElementById("connector-add").disabled).toBe(false));
+    const result = dom.window.document.getElementById("connector-result");
+    expect(result.hidden).toBe(true);
+    expect(result.innerHTML).toBe("");
+    expect(dom.window.localStorage.length).toBe(0);
+    expect(dom.window.sessionStorage.length).toBe(0);
+    expect(createConnector).toHaveBeenCalledTimes(1); // A discarded response is never retried.
+  });
   it("shows copyable settings, preserves exact callbacks and clears one-time credentials", async () => {
     const dom = boot();
     await dom.window.Connectors.load();
