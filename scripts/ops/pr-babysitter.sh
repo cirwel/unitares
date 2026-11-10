@@ -72,8 +72,21 @@
 # GitHub-imitating commit metadata) would not close that door, so it is out of
 # scope; the guard against a hostile agent is who holds the credentials.
 #
+# Declared readiness. A delivery owner whose session will not be there when CI
+# and review finish may label its own draft PR_QUEUE_READY_LABEL
+# (`ready-when-validated`): "mark this ready and queue it once it validates".
+# The declaration is the owner's; the script only carries it out (step 0). It
+# pins the declared head and diff fingerprint exactly as an approval is pinned,
+# asks for the review a draft does not otherwise get, and promotes the PR
+# (ready, approval label on, declaration label off) only when that same content
+# has no failing, pending or parked check and its `review` check has passed.
+# Review is always required on this route, whatever PR_QUEUE_REQUIRED_CHECKS
+# says: nobody is watching, so an unreviewed draft must not slide through. A
+# push after the declaration lapses it until the label is removed and re-added.
+#
 # Deliberately out of scope — these stay human or session judgment:
-#   - readying drafts (the draft→ready mark is the authorized delivery owner's gate),
+#   - readying a draft its owner has not declared (the draft→ready mark is the
+#     authorized delivery owner's gate; silence, age and green checks are not it),
 #   - resolving conflicts,
 #   - arming anything that does not carry the label, or that targets a branch
 #     other than PR_QUEUE_BASE (a stacked PR runs no CI; arming it merges it).
@@ -84,6 +97,11 @@ set -uo pipefail
 REPO="${PR_BABYSITTER_REPO:?Set PR_BABYSITTER_REPO to the repository this queue owns}"
 BASE="${PR_QUEUE_BASE:?Set PR_QUEUE_BASE to the protected base branch}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
+READY_LABEL="${PR_QUEUE_READY_LABEL:-ready-when-validated}"
+REVIEW_REQUEST_LABEL="${PR_QUEUE_REVIEW_REQUEST_LABEL:-review-requested}"
+REVIEW_HOLD_LABEL="${PR_QUEUE_REVIEW_HOLD_LABEL:-no-auto-review}"
+# A declared draft carrying any of these is left alone: each is an explicit hold.
+READY_HOLD_LABELS="${PR_QUEUE_READY_HOLD_LABELS-automerge-hold no-auto-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 RERUN_TRIES="${PR_QUEUE_RERUN_TRIES:-3}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
@@ -499,6 +517,157 @@ latest_label_time() {
 
 load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
 load_review_policy  # likewise for auth_path
+
+# --- 0. declared readiness ------------------------------------------------------
+# Runs first, every tick, whoever holds the slot: promoting a draft arms
+# nothing. A PR already marked ready that still carries the declaration and
+# not the approval is a promotion that stopped halfway, and is finished here.
+READY_STATE_FILE="$STATE_FILE.declared"
+declared=$(q -c --arg b "$BASE" --arg r "$READY_LABEL" --arg l "$LABEL" \
+  'map(select(.baseRefName == $b and labelled($r) and (labelled($l) | not))) | .[]' <<<"$prs") \
+  || { log "could not read the declared drafts; nothing done"; exit 1; }
+while read -r pr; do
+  [ -n "$pr" ] || continue
+  n=$(jq -r .number <<<"$pr")
+  head=$(jq -r .headRefOid <<<"$pr")
+  if held_by=$(operator_only "$pr"); then
+    log "#$n declared ready but is $held_by; the operator readies and merges it by hand; skipped"
+    notify "$n" declared-operator-only "$head" "not promoted: this PR is $held_by, so \`$READY_LABEL\` does not apply to it and the operator handles it by hand."
+    continue
+  fi
+  if why=$(sensitive_path "$head"); then
+    log "#$n declared ready but touches a governance-sensitive surface ($why); skipped"
+    notify "$n" declared-sensitive "$head" "not promoted: this diff touches a governance-sensitive surface (\`$why\`), which the operator readies and merges by hand, so \`$READY_LABEL\` does not apply to it."
+    continue
+  fi
+  hold=""
+  for l in $READY_HOLD_LABELS; do
+    q -e --arg l "$l" 'labelled($l)' <<<"$pr" >/dev/null && { hold="$l"; break; }
+  done
+  if [ -n "$hold" ]; then
+    log "#$n declared ready but labelled $hold; skipped"
+    continue
+  fi
+  # Readiness of a capability is the operator's ruling, so the route takes
+  # only a PR whose body classifies it as a fix, as `ship.sh --resume` does.
+  # Unattended, an unstated classification is not assumed to be a fix.
+  if ! jq -e '(.body // "") | test("\\b(classification|class)\\s*:\\s*[*` ]*fix\\b"; "i")' <<<"$pr" >/dev/null; then
+    log "#$n declared ready without Classification: fix in its body; skipped"
+    notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` takes only a PR whose body says \`Classification: fix\`. A capability stays a draft until the operator rules on it."
+    continue
+  fi
+  times=$(LABEL="$READY_LABEL" approval_times "$n") || { log "#$n timeline unreadable; declaration skipped"; continue; }
+  declared_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  [ -n "$declared_at" ] || { log "#$n has no readable $READY_LABEL event; skipped"; continue; }
+  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$declared_at" ]]; then
+    log "#$n has a commit from $pushed_at, after its declaration at $declared_at; remove and re-add $READY_LABEL to declare it"
+    notify "$n" declared-stale-push "$head" "not promoted: a commit from $pushed_at came after the \`$READY_LABEL\` label ($declared_at), so the declaration no longer covers this head. To declare this head, remove the label, then add it (AGENTS.md says who may)."
+    continue
+  fi
+  pinned_line=$(STATE_FILE="$READY_STATE_FILE" pinned "$n" "$declared_at") \
+    || { log "#$n declaration state unreadable ($READY_STATE_FILE); skipped"; continue; }
+  if [ -z "$pinned_line" ]; then
+    age=$(minutes_since "$declared_at")
+    if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
+      log "#$n declaration at $declared_at was never pinned and is ${age}m old; remove and re-add $READY_LABEL"
+      notify "$n" declared-unpinned "$head" "not promoted: the \`$READY_LABEL\` label went on at $declared_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was declared. It needs renewing: remove the label, then add it (AGENTS.md says who may)."
+      continue
+    fi
+    fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was declared; skipped"; continue; }
+    STATE_FILE="$READY_STATE_FILE" pin "$n" "$head" "$declared_at" "$fp" \
+      || { log "#$n could not record its declaration; skipped"; continue; }
+  else
+    read -r pinned_sha pinned_fp <<<"$pinned_line"
+    if [ "$pinned_sha" != "$head" ]; then
+      fp=$(fingerprint "$head") || { log "#$n diff unreadable; declaration skipped"; continue; }
+      if [ "$fp" != "$pinned_fp" ]; then
+        log "#$n changed since its declaration at ${pinned_sha:0:8}; remove and re-add $READY_LABEL to declare ${head:0:8}"
+        notify "$n" declared-changed "$head" "not promoted: the change differs from what was declared at \`${pinned_sha:0:8}\` (more than a base update). To declare \`${head:0:8}\`, remove the \`$READY_LABEL\` label, then add it (AGENTS.md says who may)."
+        continue
+      fi
+      STATE_FILE="$READY_STATE_FILE" pin "$n" "$head" "$declared_at" "$fp" || true
+    fi
+  fi
+
+  # A draft is reviewed by the shared sweep only on request, so the
+  # declaration carries the request. Added once: the label then stays.
+  if q -e --arg h "$REVIEW_HOLD_LABEL" 'labelled($h)' <<<"$pr" >/dev/null; then
+    log "#$n declared ready but labelled $REVIEW_HOLD_LABEL; no review is requested for it"
+    notify "$n" declared-review-held "$head" "waiting: this PR carries both \`$READY_LABEL\` and \`$REVIEW_HOLD_LABEL\`. It is promoted only once its \`review\` check passes, and the hold stops the shared host reviewing it; remove one of the two, or record a review yourself."
+  elif ! q -e --arg a "$REVIEW_REQUEST_LABEL" 'labelled($a)' <<<"$pr" >/dev/null; then
+    log "#$n declared ready; requesting its review"
+    act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \
+      || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
+    continue
+  fi
+
+  case "$(jq -r .mergeable <<<"$pr")" in
+    MERGEABLE) ;;
+    CONFLICTING)
+      log "#$n declared ready but CONFLICTING; skipped"
+      notify "$n" declared-conflicting "$head" "not promoted: this PR conflicts with master. Merge master in, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
+      continue ;;
+    *) continue ;;  # GitHub is still computing mergeability
+  esac
+
+  # Review first: findings park the `review` check as ACTION_REQUIRED, and
+  # that is the author's to fix or dispose, not a check awaiting approval.
+  unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS review" unmet_required_checks "$pr")
+  if [ -n "$unmet" ]; then
+    log "#$n declared ready, waiting on $unmet"
+    case " $unmet" in
+      *review=ACTION_REQUIRED*)
+        notify "$n" declared-review "$head" "not promoted: the \`review\` check needs action on this head (open findings, or a required model family still missing). Fix or dispose the findings; a push needs the declaration renewed (remove the \`$READY_LABEL\` label, then add it)." ;;
+    esac
+    continue
+  fi
+  others='[rollup[] | select((.name // .context) != "review")] as $o | {statusCheckRollup: $o}'
+  if [ "$(q "$others | pending | length" <<<"$pr")" -gt 0 ]; then
+    continue  # CI still running on this head
+  fi
+  if [ "$(q "$others | parked | length" <<<"$pr")" -gt 0 ]; then
+    log "#$n declared ready but a check is waiting for approval (ACTION_REQUIRED); skipped"
+    continue
+  fi
+  # Nothing failing is not the same as something passing: a head whose CI has
+  # not reported yet has an empty rollup.
+  if [ "$(q "$others | [rollup[] | select((.conclusion // .state // \"\") == \"SUCCESS\")] | length" <<<"$pr")" -eq 0 ]; then
+    continue
+  fi
+  if [ "$(q "$others | failed | length" <<<"$pr")" -gt 0 ]; then
+    log "#$n declared ready but checks failed on ${head:0:8}; skipped"
+    notify "$n" declared-failing "$head" "not promoted: $(q -r "$others | failed | map(.name // .context) | unique | join(\", \")" <<<"$pr") failed on this head. Fix it, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
+    continue
+  fi
+
+  # The tick's snapshot is minutes old. Promote only the head it validated,
+  # and only while the declaration still stands.
+  live=$(gh pr view "$n" -R "$REPO" --json headRefOid,labels 2>/dev/null) \
+    || { log "#$n could not be re-read; not promoted this tick"; continue; }
+  if [ "$(jq -r .headRefOid <<<"$live")" != "$head" ] \
+     || ! jq -e --arg r "$READY_LABEL" 'any(.labels[]?; .name == $r)' <<<"$live" >/dev/null; then
+    log "#$n moved or lost $READY_LABEL since this tick began; not promoted"
+    continue
+  fi
+
+  log "#$n validated as declared at ${head:0:8}; marking ready and queueing"
+  if [ "$(jq -r .isDraft <<<"$pr")" = "true" ]; then
+    act gh pr ready "$n" -R "$REPO" || { log "#$n could not be marked ready; retried next tick"; continue; }
+  fi
+  # Ready first: a draft carrying the approval would sit outside both steps.
+  act gh pr edit "$n" -R "$REPO" --add-label "$LABEL" --remove-label "$READY_LABEL" \
+    || { log "#$n marked ready but could not be labelled $LABEL; retried next tick"; continue; }
+  # Pin the approval to the head this step validated, now. Left to the
+  # approvals step of a later tick, the pin would take whatever head is there
+  # by then (a push between the two ticks carries a commit date before the
+  # label) or miss the pin window altogether.
+  if at=$(latest_label_time "$n") && [ -n "$at" ] && fp=$(fingerprint "$head"); then
+    pin "$n" "$head" "$at" "$fp" || log "#$n queued, but its approval could not be pinned ($STATE_FILE)"
+  else
+    [ "$DRY_RUN" = "1" ] || log "#$n queued, but its approval could not be pinned yet; the approvals step pins it"
+  fi
+done <<<"$declared"
 
 # --- 1. tidy the slot -----------------------------------------------------------
 # Arms this script made: "<pr> <armed-at> <subject-key>" per line. An armed PR
