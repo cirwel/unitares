@@ -6,8 +6,9 @@ coverage audit for [#2818](https://github.com/cirwel/unitares/issues/2818).
 The replacement is deployed and its no-evidence fallback is active. The
 per-agent calibration projection is empty. The observed supply contains
 externally observed outcomes without registered forecasts, and registered
-forecasts whose outcomes do not qualify for calibration. It does not yet
-provide the paired evidence needed to evaluate the per-agent estimator.
+forecasts whose outcomes do not qualify for calibration. Two unbound
+caller-confidence rows also fall below admission. It does not yet provide the
+paired evidence needed to evaluate the per-agent estimator.
 
 ## Implementation and deployment
 
@@ -46,16 +47,22 @@ they are check-in counts, not independent agent or task counts.
 Among the 632 behavioral rows with component telemetry, **607** use
 `uncalibrated_base_fallback` (`observed=false`), and **25** use
 `outcome_score_consistency`. None uses a calibration base component.
+The joint component/channel query verifies that these are the channel-bearing
+zero-pair rows. All 607 fallback rows carry the specific default reason
+`no_admissible_calibration_or_outcomes`, rather than the legacy fallback reason
+`default_calibration_accuracy_0.75`.
 The fallback base is 0.75; later continuity/tool adjustments and temporal
 smoothing can change the final I value. A nonconstant final I therefore does
 not demonstrate a populated calibration channel. Outcome-score consistency
 measures dispersion, not verified forecast calibration.
 
-At the projection read, `core.calibration` version **7993** had an explicitly
+At the projection read, `core.calibration` version **7995** had an explicitly
 empty `tactical_bins_by_agent` object and zero strategic agent entries. The
 durable calibration-delivery table had **zero rows**, including zero pending
 rows. This is absence of queued supply at that snapshot, not evidence that a
 delivery worker drained an observed backlog successfully.
+Unbound outcomes can train calibration directly without creating an outbox
+row, so the outbox alone is not a census of all calibration admission.
 
 ## Where the supply stops
 
@@ -71,6 +78,10 @@ does not independently reverify the underlying test executions.
   `self_report_with_refs` / `0.35`, and 4 `tool_observed` / `0.65` shadow rows.
   The first six are below the admission threshold; the last four explicitly
   exclude themselves with `shadow_write`.
+- **2 unbound caller-confidence outcomes** (`argument_fallback`,
+  `excluded=false`) have grades `claim_only` / `0.1` and
+  `self_report_with_refs` / `0.35`. Both are below the floor for the direct
+  admission path, which does not require a registered forecast.
 - **5,930 `trajectory_validated` rows** are server observations, not external
   forecast/outcome pairs. They do not fill this evidence requirement.
 
@@ -85,6 +96,13 @@ The source explains these boundaries:
    fixture and shadow exclusions, and the existing evidence-weight floor.
    [`enqueue_delivery`](../../../src/calibration_delivery.py) applies those
    admission conditions before creating durable work for a bound outcome.
+   For newly persisted outcomes, the unbound branch in `record_outcome`
+   instead calls `record_prediction`
+   and, for test/task outcomes, `record_tactical_decision` directly when a
+   confidence is supplied, evidence weight is at least 0.65 and the row is
+   not excluded. An unbound row at that grade can therefore populate the
+   channel without a registry forecast or delivery row. This existing route
+   is distinct from the proposal's stronger verified-pair requirement.
 3. [`compute_agent_tactical_calibration_channel`](../../../src/calibration.py)
    reads the per-agent tactical bins and reports null when no pairs exist;
    [`_compute_I_components`](../../../src/behavioral_sensor.py) selects the
@@ -135,3 +153,7 @@ The captured output is [`audit-output.txt`](audit-output.txt). The projection
 and outbox are current snapshots; the event windows are fixed. Retention and
 late writes can change later reruns, so this output is the dated receipt rather
 than a promise of identical future counts.
+The receipt was captured by redirecting psql stdout without edits. On the
+installed PostgreSQL 17.11 client, `\pset footer off` emits no acknowledgement;
+the preceding pager and format settings do. This was also checked separately
+with `printf '\\pset footer off\n' | psql -X -d <database>`.

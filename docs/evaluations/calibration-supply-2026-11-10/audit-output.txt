@@ -5,7 +5,7 @@ SET
 SET
 projection_snapshot
 updated_at|version|tactical_agents|strategic_agents|tactical_map_type
-2026-11-10 06:36:59.789878+00|7993|0|0|object
+2026-11-10 08:37:41.155206+00|7995|0|0|object
 channel_coverage_24h
 kind|evidence_status|default_reason|pairs|rows
 behavioral_sensor|unavailable|no_verified_agent_pairs|0|632
@@ -13,10 +13,10 @@ caller_published_sensor||||444
 continuity_fallback||||81
 behavioral_sensor||||2
 i_base_components_24h
-component|source|observed|rows
-uncalibrated_base_fallback|behavioral_sensor_default|false|607
-outcome_score_consistency|recent_outcomes|true|25
-|||2
+channel_type|pairs|component|source|observed|default_reason|rows
+object|0|uncalibrated_base_fallback|behavioral_sensor_default|false|no_admissible_calibration_or_outcomes|607
+object|0|outcome_score_consistency|recent_outcomes|true||25
+null||||||2
 outcome_supply_7d
 outcome_type|verification_source|grade|weight|binding|excluded|exclusion_reasons|rows
 trajectory_validated|server_observation|substrate_observed|0.85||||5930

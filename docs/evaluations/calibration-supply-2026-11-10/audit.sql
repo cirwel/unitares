@@ -37,13 +37,16 @@ WITH rows AS (
       AND recorded_at < '2026-11-10T08:20:00Z'
       AND state_json#>>'{eisv_telemetry,derivation,kind}' = 'behavioral_sensor'
 )
-SELECT c->>'name' AS component, c->>'source' AS source,
-       c->>'observed' AS observed, count(*) AS rows
+SELECT jsonb_typeof(t#>'{measurement,agent_calibration}') AS channel_type,
+       t#>>'{measurement,agent_calibration,n_verified_pairs}' AS pairs,
+       c->>'name' AS component, c->>'source' AS source,
+       c->>'observed' AS observed, c->>'default_reason' AS default_reason,
+       count(*) AS rows
 FROM rows
 LEFT JOIN LATERAL jsonb_array_elements(
     t#>'{derivation,components,dimensions,I,components}'
 ) c ON TRUE
-GROUP BY 1,2,3 ORDER BY rows DESC, component;
+GROUP BY 1,2,3,4,5,6 ORDER BY rows DESC, component;
 
 \echo outcome_supply_7d
 SELECT outcome_type, verification_source,
