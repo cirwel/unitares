@@ -6,6 +6,7 @@
   let settings = null;
   let activeSecretClientId = null;
   let credentialGeneration = 0;
+  let createInFlight = false;
   const el = (id) => document.getElementById(id);
   function message(text, error) {
     el("connector-status").textContent = text;
@@ -25,6 +26,12 @@
     const result = el("connector-result");
     if (result) { result.replaceChildren(); result.hidden = true; }
   }
+  function syncControls() {
+    const add = el("connector-add");
+    const refreshButton = el("connector-refresh");
+    if (add) add.disabled = createInFlight || !settings;
+    if (refreshButton) refreshButton.disabled = createInFlight;
+  }
   async function refresh() {
     try {
       settings = await window.DATA.connectors();
@@ -36,39 +43,52 @@
         </div>`).join("") : '<p class="empty">No connectors added yet.</p>';
       el("connector-legacy").textContent = settings.legacy_client_configured
         ? "A client configured through the server environment is also available. It is managed separately." : "";
-      el("connector-add").disabled = false;
+      syncControls();
     } catch (error) {
       settings = null;
-      el("connector-add").disabled = true;
+      syncControls();
       el("connector-list").textContent = "Connector list unavailable.";
       message(error.message, true);
     }
   }
   async function create(event) {
     event.preventDefault();
+    if (createInFlight) return;
+    const displaySettings = settings;
+    if (!displaySettings) {
+      message("Connector settings are unavailable. Refresh the list before creating credentials.", true);
+      return;
+    }
     clearSecret();
     const generation = credentialGeneration;
-    el("connector-add").disabled = true;
+    createInFlight = true;
+    syncControls();
     try {
       const created = await window.DATA.createConnector({
         name: el("connector-name").value.trim(),
         redirect_uris: el("connector-callback").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
       });
       // Navigation discards the one-time display, even if the durable write
-      // finishes later. Do not retry a creation that may already be committed.
-      if (generation !== credentialGeneration || location.hash !== "#connectors") return;
+      // finishes later. Refresh the authoritative list and tell the operator
+      // what happened; never retry a creation that may already be committed.
+      if (generation !== credentialGeneration || location.hash !== "#connectors") {
+        event.target.reset();
+        await refresh();
+        message("Connector saved, but its one-time secret was discarded after leaving this section. Disable it and create a replacement before use.", true);
+        return;
+      }
       activeSecretClientId = created.client_id;
       const result = el("connector-result");
       result.innerHTML = `<h2 tabindex="-1">Paste these into your app</h2>
         <p>Your connector is saved and ready to authorize. The client secret is shown only here; save it before leaving.</p>
-        ${field("Server URL", settings.server_url)}
+        ${field("Server URL", displaySettings.server_url)}
         ${field("Client ID", created.client_id)}
         ${field("Client secret", created.client_secret, true)}
-        ${field("Token authentication method", settings.token_auth_method)}
+        ${field("Token authentication method", displaySettings.token_auth_method)}
         <p class="security-note">Choose HTTP Basic if your app uses that name.</p>
         <details><summary>Only if your app asks: endpoints and scopes</summary>
-        ${field("Authorization endpoint", settings.authorization_endpoint)}
-        ${field("Token endpoint", settings.token_endpoint)}${field("Scopes", settings.scopes)}</details>
+        ${field("Authorization endpoint", displaySettings.authorization_endpoint)}
+        ${field("Token endpoint", displaySettings.token_endpoint)}${field("Scopes", displaySettings.scopes)}</details>
         <p class="security-note">Return to your app and start its connection again. If you lose the secret, disable this connector and add a replacement.</p>
         <button class="security-btn" type="button" id="connector-done">Done — clear credentials</button>`;
       result.hidden = false;
@@ -79,7 +99,7 @@
       message("Connector saved. No server restart is needed.");
       await refresh();
     } catch (error) { message(error.message, true); }
-    finally { el("connector-add").disabled = !settings; }
+    finally { createInFlight = false; syncControls(); }
   }
   async function click(event) {
     const copy = event.target.closest("[data-copy]");

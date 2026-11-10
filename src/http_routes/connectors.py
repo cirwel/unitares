@@ -74,7 +74,12 @@ async def http_connectors(request):
             })
         if "client_id" in request.path_params:
             changed = await registry.revoke(request.path_params["client_id"], _actor(request))
-            return _reply({"success": changed}, 200 if changed else 404)
+            if not changed:
+                return _reply({
+                    "success": False,
+                    "error": "Connector is already disabled or no longer exists. Refresh the list before trying again.",
+                }, 404)
+            return _reply({"success": True})
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)

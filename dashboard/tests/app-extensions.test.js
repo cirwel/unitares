@@ -38,6 +38,15 @@ describe("dashboard extensions", () => {
     expect(ids).toEqual(["overview", "agents", "discoveries", "dialectic", "activity", "timeline", "eisv", "risk", "connectors", "security"]);
   });
 
+  it("clears connector credentials through the real section switch", () => {
+    const dom = boot(null, {});
+    dom.window.Connectors = { load: vi.fn(), clearCredentials: vi.fn() };
+    const doc = dom.window.document;
+    doc.querySelector('#nav a[data-section="connectors"]').click();
+    doc.querySelector('#nav a[data-section="security"]').click();
+    expect(dom.window.Connectors.clearCredentials).toHaveBeenCalledTimes(1);
+  });
+
   it("adds nothing when no manifest is served", async () => {
     const dom = boot(null, {});
     await flush();

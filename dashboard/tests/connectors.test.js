@@ -19,10 +19,27 @@ async function submit(dom) {
   await vi.waitFor(() => expect(dom.window.document.getElementById("connector-add").disabled).toBe(false));
 }
 describe("connector setup", () => {
-  it.each(["hash navigation", "section activation", "pagehide"])("does not restore a late creation secret after %s", async (navigation) => {
+  it("keeps create serialized and disables refresh until the response finishes", async () => {
     let finishCreate;
     const createConnector = vi.fn().mockImplementation(() => new Promise((resolve) => { finishCreate = resolve; }));
     const dom = boot({ createConnector });
+    await dom.window.Connectors.load();
+    startSubmit(dom);
+    startSubmit(dom);
+    expect(createConnector).toHaveBeenCalledTimes(1);
+    expect(dom.window.document.getElementById("connector-add").disabled).toBe(true);
+    expect(dom.window.document.getElementById("connector-refresh").disabled).toBe(true);
+    finishCreate({ client_id: "new-client", client_secret: "one-time-secret" });
+    await vi.waitFor(() => expect(dom.window.document.getElementById("connector-refresh").disabled).toBe(false));
+    expect(dom.window.document.querySelector("[data-secret]").value).toBe("one-time-secret");
+  });
+  it.each(["hash navigation", "section activation", "pagehide"])("does not restore a late creation secret after %s", async (navigation) => {
+    let finishCreate;
+    const createConnector = vi.fn().mockImplementation(() => new Promise((resolve) => { finishCreate = resolve; }));
+    const saved = { client_id: "new-client", name: "My app", redirect_uris: ["https://app.example/callback/"], revoked_at: null };
+    const connectors = vi.fn().mockResolvedValueOnce(settings)
+      .mockResolvedValue({ ...settings, connectors: [saved] });
+    const dom = boot({ createConnector, connectors });
     await dom.window.Connectors.load();
     startSubmit(dom);
     expect(createConnector).toHaveBeenCalledTimes(1);
@@ -40,6 +57,9 @@ describe("connector setup", () => {
     const result = dom.window.document.getElementById("connector-result");
     expect(result.hidden).toBe(true);
     expect(result.innerHTML).toBe("");
+    expect(dom.window.document.getElementById("connector-list").textContent).toContain("My app");
+    expect(dom.window.document.getElementById("connector-status").textContent).toContain("one-time secret was discarded");
+    expect(connectors).toHaveBeenCalledTimes(2);
     expect(dom.window.localStorage.length).toBe(0);
     expect(dom.window.sessionStorage.length).toBe(0);
     expect(createConnector).toHaveBeenCalledTimes(1); // A discarded response is never retried.

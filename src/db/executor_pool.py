@@ -262,7 +262,11 @@ class ExecutorPool:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop_ready.set()
+        # Signal readiness from a callback executed by the loop, not before
+        # run_forever() starts.  Callers may schedule work as soon as this
+        # event is set, so setting it in the thread prologue leaves a race in
+        # which loop.is_running() is still false.
+        self._loop.call_soon(self._loop_ready.set)
         try:
             self._loop.run_forever()
         except BaseException as exc:

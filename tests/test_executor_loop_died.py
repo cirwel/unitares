@@ -64,11 +64,29 @@ def test_run_forever_raises_emits_uncaught():
     assert kwargs["payload"]["error_class"] == "RuntimeError"
     assert "incident_id" in kwargs["payload"]
     assert len(kwargs["payload"]["incident_id"]) == 36
-    # _loop_ready was set before run_forever() was called — caller can still
-    # inspect this if it's ever useful, but the assert here just pins that
-    # the emit didn't happen *before* loop_ready (which would mean we wrapped
-    # too aggressively).
-    assert pool._loop_ready.is_set()
+    # The mocked run_forever never executes the scheduled readiness callback.
+    # A caller must not be told the loop is ready before it actually runs.
+    assert not pool._loop_ready.is_set()
+
+
+def test_loop_ready_is_signalled_only_after_loop_is_running():
+    """The creation waiter is released by the live loop, not its thread prologue."""
+    from src.db.executor_pool import ExecutorPool
+
+    pool = ExecutorPool.__new__(ExecutorPool)
+    pool._loop = asyncio.new_event_loop()
+    pool._loop_ready = threading.Event()
+    pool._closed_flag = False
+    thread = threading.Thread(target=pool._run_loop, daemon=True)
+    thread.start()
+    try:
+        assert pool._loop_ready.wait(timeout=1.0)
+        assert pool._loop.is_running()
+    finally:
+        pool._closed_flag = True
+        pool._loop.call_soon_threadsafe(pool._loop.stop)
+        thread.join(timeout=1.0)
+        pool._loop.close()
 
 
 def test_run_forever_returns_without_close_emits_premature_return():

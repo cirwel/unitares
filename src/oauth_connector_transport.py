@@ -71,8 +71,6 @@ class ConnectorCompatibility:
                 # Preserve SDK-supported encodings for legacy clients. The
                 # managed authenticator independently requires urlencoding.
                 return await self.app(scope, receive, send)
-            if b";" in body:
-                return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
             fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
         else:
             return await self.app(scope, receive, send)
@@ -81,6 +79,8 @@ class ConnectorCompatibility:
         client_id = values.get("client_id") or (basic[0] if basic else "")
         if not managed_client_id(client_id):
             return await self.app(scope, receive, send)
+        if method == "POST" and b";" in body:
+            return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
         # No duplicated fields or conflicting credential sources for managed
         # clients. The Basic shim removes Authorization after its rewrite.
         keys = [key for key, _ in fields]
