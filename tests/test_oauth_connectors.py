@@ -46,7 +46,7 @@ class Registry:
         return {"client_id": ID, "client_secret": SECRET, "name": name}
 
     async def revoke(self, client_id, actor):
-        if client_id != ID:
+        if client_id != ID or self.record is None:
             return False
         self.record = None
         return True
@@ -200,7 +200,10 @@ def management_client(monkeypatch, registry, *, operator=False, session=False, f
         request.state.oauth_issuer = "https://server.example"
         request.state.oauth_resource = "https://server.example/mcp/"
         return await routes.http_connectors(request)
-    return TestClient(Starlette(routes=[Route("/auth/connectors", handler, methods=["GET", "POST"])]))
+    return TestClient(Starlette(routes=[
+        Route("/auth/connectors", handler, methods=["GET", "POST"]),
+        Route("/auth/connectors/{client_id}/revoke", handler, methods=["POST"]),
+    ]))
 
 
 def test_management_refuses_agent_bearer_and_cross_origin(monkeypatch):
@@ -237,6 +240,18 @@ def test_management_storage_failure_never_claims_success(monkeypatch):
     assert "client_secret" not in response.text
 
 
+def test_revoke_of_missing_connector_returns_actionable_error(monkeypatch):
+    registry = Registry()
+    registry.record = None
+    client = management_client(monkeypatch, registry, operator=True)
+    response = client.post(f"/auth/connectors/{ID}/revoke")
+    assert response.status_code == 404
+    assert response.json() == {
+        "success": False,
+        "error": "Connector is already disabled or no longer exists. Refresh the list before trying again.",
+    }
+
+
 def test_local_dashboard_operator_origin_is_accepted(monkeypatch):
     client = management_client(monkeypatch, Registry(), operator=True)
     response = client.post("/auth/connectors", headers={"Origin": "http://testserver"},
@@ -255,6 +270,24 @@ def test_legacy_client_multipart_token_requests_still_reach_sdk():
     }.items()})
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_grant"  # authenticated, SDK processed grant
+
+
+def test_literal_semicolon_is_rejected_only_for_managed_clients():
+    from src.oauth_provider import build_static_client
+
+    p = GovernanceOAuthProvider(auto_approve=False, connector_registry=Registry(),
+        static_clients=[build_static_client("legacy", "legacy-secret", [CALLBACK])])
+    client = client_app(p)
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    legacy = client.post("/token", headers=headers,
+        content="client_id=legacy&client_secret=legacy-secret&grant_type=refresh_token&refresh_token=unknown;value")
+    assert legacy.status_code == 400
+    assert legacy.json()["error"] == "invalid_grant"  # SDK handled the legacy request
+
+    managed = client.post("/token", headers=headers,
+        content=f"client_id={ID}&client_secret={SECRET}&grant_type=refresh_token&refresh_token=unknown;value")
+    assert managed.status_code == 400
+    assert managed.json()["error"] == "invalid_request"
 
 
 def test_managed_multipart_cannot_bypass_client_authentication():

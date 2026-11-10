@@ -16,6 +16,21 @@ async function submit(dom) {
   await vi.waitFor(() => expect(dom.window.document.getElementById("connector-add").disabled).toBe(false));
 }
 describe("connector setup", () => {
+  it("keeps create serialized and disables refresh until the response finishes", async () => {
+    let finishCreate;
+    const createConnector = vi.fn().mockImplementation(() => new Promise((resolve) => { finishCreate = resolve; }));
+    const dom = boot({ createConnector });
+    await dom.window.Connectors.load();
+    const form = dom.window.document.getElementById("connector-form");
+    form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    expect(createConnector).toHaveBeenCalledTimes(1);
+    expect(dom.window.document.getElementById("connector-add").disabled).toBe(true);
+    expect(dom.window.document.getElementById("connector-refresh").disabled).toBe(true);
+    finishCreate({ client_id: "new-client", client_secret: "one-time-secret" });
+    await vi.waitFor(() => expect(dom.window.document.getElementById("connector-refresh").disabled).toBe(false));
+    expect(dom.window.document.querySelector("[data-secret]").value).toBe("one-time-secret");
+  });
   it("shows copyable settings, preserves exact callbacks and clears one-time credentials", async () => {
     const dom = boot();
     await dom.window.Connectors.load();
