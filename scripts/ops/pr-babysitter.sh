@@ -622,15 +622,27 @@ while read -r pr; do
     fi
   fi
 
-  # A draft is reviewed by the shared sweep only on request, so the
-  # declaration carries the request. Added once: the label then stays.
-  if q -e --arg h "$REVIEW_HOLD_LABEL" 'labelled($h)' <<<"$pr" >/dev/null; then
-    log "#$n declared ready but labelled $REVIEW_HOLD_LABEL; no review is requested for it"
-    notify "$n" declared-review-held "$head" "waiting: this PR carries both \`$READY_LABEL\` and \`$REVIEW_HOLD_LABEL\`. It is promoted only once its \`review\` check passes, and the hold stops the shared host reviewing it; remove one of the two, or record a review yourself."
-  elif ! q -e --arg a "$REVIEW_REQUEST_LABEL" 'labelled($a)' <<<"$pr" >/dev/null; then
-    log "#$n declared ready; requesting its review"
-    act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \
-      || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
+  # Review first: findings park the `review` check as ACTION_REQUIRED, and
+  # that is the author's to fix or dispose, not a check awaiting approval.
+  unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS review" unmet_required_checks "$pr")
+  if [ -n "$unmet" ]; then
+    log "#$n declared ready, waiting on $unmet"
+    case " $unmet" in
+      *review=ACTION_REQUIRED*)
+        notify "$n" declared-review "$head" "not promoted: the \`review\` check needs action on this head (open findings, or a required model family still missing). Fix or dispose the findings; a push needs the declaration renewed (remove the \`$READY_LABEL\` label, then add it)." ;;
+      *review=*)
+        # Not reviewed yet. A draft is reviewed by the shared sweep only on
+        # request, so the declaration carries the request: added once, and
+        # only while there is no passing review to wait for.
+        if q -e --arg h "$REVIEW_HOLD_LABEL" 'labelled($h)' <<<"$pr" >/dev/null; then
+          log "#$n declared ready but labelled $REVIEW_HOLD_LABEL; no review is requested for it"
+          notify "$n" declared-review-held "$head" "waiting: this PR carries both \`$READY_LABEL\` and \`$REVIEW_HOLD_LABEL\`. It is promoted only once its \`review\` check passes, and the hold stops the shared host reviewing it; remove one of the two, or record a review yourself."
+        elif ! q -e --arg a "$REVIEW_REQUEST_LABEL" 'labelled($a)' <<<"$pr" >/dev/null; then
+          log "#$n declared ready; requesting its review"
+          act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \
+            || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
+        fi ;;
+    esac
     continue
   fi
 
@@ -643,17 +655,6 @@ while read -r pr; do
     *) continue ;;  # GitHub is still computing mergeability
   esac
 
-  # Review first: findings park the `review` check as ACTION_REQUIRED, and
-  # that is the author's to fix or dispose, not a check awaiting approval.
-  unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS review" unmet_required_checks "$pr")
-  if [ -n "$unmet" ]; then
-    log "#$n declared ready, waiting on $unmet"
-    case " $unmet" in
-      *review=ACTION_REQUIRED*)
-        notify "$n" declared-review "$head" "not promoted: the \`review\` check needs action on this head (open findings, or a required model family still missing). Fix or dispose the findings; a push needs the declaration renewed (remove the \`$READY_LABEL\` label, then add it)." ;;
-    esac
-    continue
-  fi
   others='[rollup[] | select((.name // .context) != "review")] as $o | {statusCheckRollup: $o}'
   if [ "$(q "$others | pending | length" <<<"$pr")" -gt 0 ]; then
     continue  # CI still running on this head
@@ -662,14 +663,14 @@ while read -r pr; do
     log "#$n declared ready but a check is waiting for approval (ACTION_REQUIRED); skipped"
     continue
   fi
-  # Nothing failing is not the same as something passing: a head whose CI has
-  # not reported yet has an empty rollup.
-  if [ "$(q "$others | [rollup[] | select((.conclusion // .state // \"\") == \"SUCCESS\")] | length" <<<"$pr")" -eq 0 ]; then
-    continue
-  fi
   if [ "$(q "$others | failed | length" <<<"$pr")" -gt 0 ]; then
     log "#$n declared ready but checks failed on ${head:0:8}; skipped"
     notify "$n" declared-failing "$head" "not promoted: $(q -r "$others | failed | map(.name // .context) | unique | join(\", \")" <<<"$pr") failed on this head. Fix it, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
+    continue
+  fi
+  # Nothing failing is not the same as something passing: a head whose CI has
+  # not reported yet has an empty rollup.
+  if [ "$(q "$others | [rollup[] | select((.conclusion // .state // \"\") == \"SUCCESS\")] | length" <<<"$pr")" -eq 0 ]; then
     continue
   fi
 

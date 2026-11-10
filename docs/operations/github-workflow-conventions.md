@@ -994,8 +994,9 @@ else, the script looks at every PR against `master` that carries
   the label is removed and re-added; so does a label the script first sees
   more than 15 minutes after it went on. A push that answers review findings
   therefore needs a fresh declaration.
-- It adds `review-requested` if the PR has neither that nor `no-auto-review`,
-  since the shared review host takes a draft only on request.
+- While the PR has no passing review, it adds `review-requested` if the PR
+  has neither that nor `no-auto-review`, since the shared review host takes a
+  draft only on request. A draft reviewed before it was declared needs none.
 - It promotes the PR only when GitHub reports it `MERGEABLE`, its `review`
   check has passed, and its other checks have reported with none failing,
   pending or parked. `review` is required on this route whatever

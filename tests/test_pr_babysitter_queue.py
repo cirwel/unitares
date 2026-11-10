@@ -1736,6 +1736,20 @@ def test_a_declared_draft_waits_for_ci_on_its_head(tmp_path: Path, checks: list[
     assert calls == []
 
 
+def test_failed_ci_is_reported_as_failed_not_as_still_waiting(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(checks=[_check("test", "FAILURE")])], timelines={1: _declaration()})
+    assert calls == []
+    assert "checks failed on" in out
+
+
+def test_a_draft_already_reviewed_is_promoted_without_a_review_request(tmp_path: Path) -> None:
+    # Reviewed before it was declared: nothing to request, and a review hold has nothing left to hold.
+    for labels in ((READY,), (READY, "no-auto-review")):
+        calls, out = _run(tmp_path, [_declared(labels=labels)], timelines={1: _declaration()})
+        assert calls == PROMOTE, labels
+        assert "no review is requested" not in out
+
+
 def test_a_push_after_the_declaration_lapses_it(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration(declared_min_ago=10, pushed_min_ago=2)})
     assert calls == []
