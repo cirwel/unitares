@@ -1,0 +1,42 @@
+Pager usage is off.
+Output format is unaligned.
+BEGIN
+SET
+SET
+projection_snapshot
+updated_at|version|tactical_agents|strategic_agents|tactical_map_type
+2026-11-10 08:37:41.155206+00|7995|0|0|object
+channel_coverage_24h
+kind|evidence_status|default_reason|pairs|rows
+behavioral_sensor|unavailable|no_verified_agent_pairs|0|632
+caller_published_sensor||||444
+continuity_fallback||||81
+behavioral_sensor||||2
+i_base_components_24h
+channel_type|pairs|component|source|observed|default_reason|rows
+object|0|uncalibrated_base_fallback|behavioral_sensor_default|false|no_admissible_calibration_or_outcomes|607
+object|0|outcome_score_consistency|recent_outcomes|true||25
+null||||||2
+outcome_supply_7d
+outcome_type|verification_source|grade|weight|binding|excluded|exclusion_reasons|rows
+trajectory_validated|server_observation|substrate_observed|0.85||||5930
+task_completed|agent_reported_tool_result|claim_only|0.1||||56
+task_completed|agent_reported_tool_result|claim_only|0.1|audit_trail_fallback|true|["scraped_confidence"]|32
+test_passed|external_signal|externally_verified|1.0|audit_trail_fallback|true|["scraped_confidence"]|25
+test_failed|external_signal|externally_verified|1.0|audit_trail_fallback|true|["scraped_confidence"]|8
+task_completed|agent_reported_tool_result|claim_only|0.1|registry|false|[]|5
+dialectic_resolved|server_observation|substrate_observed|0.85|audit_trail_fallback|true|["scraped_confidence"]|4
+task_failed|agent_reported_tool_result|claim_only|0.1||||4
+task_completed|agent_reported_tool_result|tool_observed|0.65|registry|true|["shadow_write"]|3
+task_completed|agent_reported_tool_result|claim_only|0.1|argument_fallback|false|[]|1
+task_completed|agent_reported_tool_result|self_report_with_refs|0.35|argument_fallback|false|[]|1
+test_passed|agent_reported_tool_result|claim_only|0.1|audit_trail_fallback|true|["scraped_confidence"]|1
+test_passed|agent_reported_tool_result|self_report_with_refs|0.35|registry|false|[]|1
+test_passed|agent_reported_tool_result|tool_observed|0.65|registry|true|["shadow_write"]|1
+external_producers_7d
+recorded_via|classifier|prediction_source|rows
+harness_outcome_endpoint|v2-2026-07-31|audit_trail_fallback|33
+delivery_snapshot
+rows|pending|newest_completed
+0|0|
+COMMIT
