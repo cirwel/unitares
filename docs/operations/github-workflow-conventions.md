@@ -157,6 +157,22 @@ veto by removing the label.
   when available. Silence, age and green checks do not transfer ownership;
   the separate [stuck-queue adoption](#adoption) route retains its conditions.
 
+  <a id="declared-readiness"></a>**Declare it in advance when the session will
+  not be there.** A session usually ends before its CI and review come back,
+  and a draft nobody returns to is where PRs here have waited longest: of the
+  60 slowest PRs merged between 2026-10-01 and 2026-11-10, the median spent
+  99% of its life as a draft before any queue label, and its label-to-merge
+  time was half an hour. The delivery owner may therefore label its own draft
+  `ready-when-validated`
+  (`gh pr edit <n> --add-label ready-when-validated`). That is the owner's
+  readiness declaration, made conditionally: "mark this ready and queue it
+  once this content validates." The queue carries it out (section 4) and
+  infers nothing. It applies under the same authority as `approved-to-merge`:
+  the opening owner, a completed adopter, or a named successor holding both
+  readiness and queue-entry authority. It is for a PR whose body says
+  `Classification: fix`; a capability still waits for the operator's ruling.
+  Removing the label withdraws the declaration.
+
   If the owner cannot return, the operator may override readiness or assign a
   named successor by UNITARES agent UUID. A direct readiness override must be
   recorded in a PR comment with its source and scope; it does not authorize
@@ -237,8 +253,8 @@ a footer match from resuming automatic delivery. `agent-pr-relay.yml` then reope
 the PR under the `unitares-pr-relay` App, which can write pull requests on
 this repository and nothing else. The original is closed with a link to its
 replacement. Branch, commits, labels and footer carry over, except the
-queue labels `approved-to-merge` and `operator-armed`, which are earned on
-the new PR. The relay also adds a model-family label, `agent/claude`,
+queue labels `approved-to-merge`, `ready-when-validated` and
+`operator-armed`, which are earned on the new PR. The relay also adds a model-family label, `agent/claude`,
 `agent/gpt` or `agent/gemini`, from the body's last `Model:` line, so PRs can
 be filtered by model family even though an App authors them all. The label
 comes from the body, so it is a filter, not verified provenance. The new
@@ -967,6 +983,43 @@ Draft PRs cannot be queued, so mark ready first.
   done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated.
 
+**Declared drafts are promoted by the queue.** Each tick, before anything
+else, the script looks at every PR against `master` that carries
+`ready-when-validated` ([section 2](#declared-readiness)) and not yet
+`approved-to-merge`:
+
+- It pins the declared head and diff fingerprint, as it pins an approval, in
+  its own state file. A commit dated after the label, or a diff that differs
+  from the pinned one by more than a base update, lapses the declaration until
+  the label is removed and re-added; so does a label the script first sees
+  more than 15 minutes after it went on. A push that answers review findings
+  therefore needs a fresh declaration.
+- While the PR has no passing review, it adds `review-requested` if the PR
+  has neither that nor `no-auto-review`, since the shared review host takes a
+  draft only on request. A draft reviewed before it was declared needs none.
+- It promotes the PR only when GitHub reports it `MERGEABLE`, its `review`
+  check has passed, and its other checks have reported with none failing,
+  pending or parked. `review` is required on this route whatever
+  `PR_QUEUE_REQUIRED_CHECKS` says: nobody is watching, so an unreviewed draft
+  must not slide through. A neutral or `action_required` review leaves it a
+  draft.
+- Promotion re-reads the head and the labels (a hold added mid-tick stops
+  it), marks the PR ready, adds `approved-to-merge`, pins that approval to
+  the head it validated, and only then removes `ready-when-validated`. From
+  there it is an ordinary queued PR. It fails closed: an approval that cannot
+  be pinned is withdrawn and the declaration stands for the next tick, and
+  while both labels are on a PR the approvals step neither pins nor arms it.
+  A promotion interrupted at any point is finished or withdrawn on a later
+  tick.
+- It never promotes a fork, a PR labelled `governance-sensitive`,
+  `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
+  governance-sensitive surface, a stacked PR, or a PR whose body does not say
+  `Classification: fix`.
+
+Lasting refusals post one notice on the PR; waiting on CI or review posts
+nothing. Findings still need their author: the route removes the wait for a
+clean result, not the work of answering a review.
+
 **Drafts stay pinned.** Do not merge the base into idle drafts on a schedule:
 `.github/workflows/draft-base-refresh.yml` is a manual recovery action for
 exactly one positive PR number (preserving the 12-hour quiet-period,
@@ -1097,6 +1150,7 @@ this entirely).
 | One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
+| Your session will end before CI and review finish, and the PR is a `fix` you own | `gh pr edit <n> --add-label ready-when-validated` on the draft; the queue marks it ready and queues it once that content validates (section 4) |
 | Your PR is READY and you hold queue-entry authority (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You have readiness-only authority | Mark an unlabeled draft ready, leave it unlabeled, and wait for a separate verified queue-entry grant before revalidation and labeling |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |

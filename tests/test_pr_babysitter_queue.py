@@ -35,6 +35,11 @@ case "$1 $2" in
   "pr view")
     if [ "${7:-}" = "statusCheckRollup" ]; then
       f="$d/rollup_$3.json"
+    elif [ "${7:-}" = "headRefOid,labels" ]; then
+      # The live re-read before a declared draft is promoted.
+      [ -f "$d/live_$3.json" ] && { cat "$d/live_$3.json"; exit 0; }
+      jq --argjson n "$3" '.[] | select(.number == $n) | {headRefOid, labels}' "$d/prs.json"
+      exit 0
     else
       f="$d/state_${5//\//_}_$3"
     fi
@@ -1626,3 +1631,240 @@ def test_a_later_skipped_run_does_not_mask_an_earlier_result(tmp_path: Path) -> 
     calls, _ = _run(tmp_path, [_pr(1, review=None, checks=checks)])
     assert calls == [f"pr edit 1 -R o/r --add-label {RETRIED}", "run rerun 77 --failed -R o/r"]
 
+
+
+# --- declared readiness ----------------------------------------------------------
+
+READY = "ready-when-validated"
+REQUESTED = "review-requested"
+FIX = "Classification: fix"
+PROMOTE = ["pr ready 1 -R o/r", f"pr edit 1 -R o/r --add-label {LABEL}", f"pr edit 1 -R o/r --remove-label {READY}"]
+WITHDRAW = f"pr edit 1 -R o/r --remove-label {LABEL}"
+
+
+def _declared(number: int = 1, *, labels: tuple[str, ...] = (READY, REQUESTED), body: str = FIX, **kw) -> dict:
+    kw.setdefault("draft", True)
+    return _pr(number, labels=labels, body=body, **kw)
+
+
+def _declaration(declared_min_ago: float = 5, pushed_min_ago: float | None = 20,
+                 approved_min_ago: float | None = 0, updater_min_ago: float | None = None) -> list:
+    events = _timeline(labelled_min_ago=approved_min_ago, pushed_min_ago=pushed_min_ago,
+                       updater_min_ago=updater_min_ago)
+    events.append({"event": "labeled", "label": {"name": READY}, "created_at": _iso(declared_min_ago)})
+    return events
+
+
+def _state(tmp_path: Path, suffix: str = "") -> str:
+    path = tmp_path / "state" / f"approvals{suffix}"
+    return path.read_text() if path.exists() else ""
+
+
+def test_a_declared_draft_is_promoted_once_ci_and_review_pass(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == PROMOTE
+    # The declaration and the approval it became are both pinned to the validated head.
+    assert _state(tmp_path, ".declared").split()[:2] == ["1", "sha1"]
+    assert _state(tmp_path).split()[:2] == ["1", "sha1"]
+
+
+def test_a_promoted_draft_is_not_armed_in_the_tick_that_promoted_it(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == PROMOTE
+    assert not any(" --auto " in call for call in calls)
+
+
+def test_an_approval_that_cannot_be_pinned_is_withdrawn(tmp_path: Path) -> None:
+    # No approval label event can be read back, so nothing says which head it covers.
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration(approved_min_ago=None)})
+    assert calls == [*PROMOTE[:2], WITHDRAW]
+    assert "could not be pinned" in out
+    assert _state(tmp_path) == ""
+
+
+def test_an_unfinished_promotion_is_finished_or_withdrawn_never_repinned(tmp_path: Path) -> None:
+    both = _declared(labels=(READY, REQUESTED, LABEL), draft=False)
+    # The approval was never pinned: withdrawn, and the approvals step does not pin or arm it.
+    calls, _ = _run(tmp_path, [both], timelines={1: _declaration()})
+    assert calls == [WITHDRAW]
+    assert _state(tmp_path) == ""
+    # Pinned by the promotion that stopped: only the declaration label is left to remove.
+    declared = {1: _declaration()}
+    assert _run(tmp_path, [_declared()], timelines=declared, fail=(f"--remove-label {READY}",))[0] == PROMOTE
+    calls, _ = _run(tmp_path, [both], timelines=declared)
+    assert calls == [PROMOTE[2]]
+    # An older approval on a PR that has since moved, or gone back to draft, is not this promotion.
+    for stale in (_declared(labels=(READY, REQUESTED, LABEL), draft=False, head="pushed"),
+                  _declared(labels=(READY, REQUESTED, LABEL), draft=True)):
+        calls, _ = _run(tmp_path, [stale], timelines=declared)
+        assert calls == [WITHDRAW]
+    # A hold added while the promotion was unfinished wins over finishing it.
+    held = _declared(labels=(READY, REQUESTED, LABEL, "automerge-hold"), draft=False)
+    calls, out = _run(tmp_path, [held], timelines=declared)
+    assert calls == [WITHDRAW]
+    assert "during its promotion" in out
+
+
+def test_review_is_required_on_the_declared_route_even_where_it_is_advisory(tmp_path: Path) -> None:
+    for review in ("NEUTRAL", "ACTION_REQUIRED", None):
+        calls, out = _run(tmp_path, [_declared(review=review)], timelines={1: _declaration()},
+                          PR_QUEUE_REQUIRED_CHECKS="")
+        assert calls == [], review
+        assert "waiting on review=" in out
+
+
+def test_a_declared_draft_gets_its_review_requested_once(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_declared(labels=(READY,), review="NEUTRAL")], timelines={1: _declaration()})
+    assert calls == [f"pr edit 1 -R o/r --add-label {REQUESTED}"]
+    calls, _ = _run(tmp_path, [_declared(review="NEUTRAL")], timelines={1: _declaration()})
+    assert calls == []
+
+
+def test_a_review_hold_is_not_overridden_by_a_declaration(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(labels=(READY, "no-auto-review"), review="NEUTRAL")],
+                      timelines={1: _declaration()})
+    assert calls == []
+    assert "no review is requested" in out
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [_check("test", "FAILURE")],
+        [_check("test", "", status="IN_PROGRESS")],
+        [_check("test"), _check("scope", "ACTION_REQUIRED")],
+        [],  # CI has not reported: nothing failing is not something passing
+    ],
+)
+def test_a_declared_draft_waits_for_ci_on_its_head(tmp_path: Path, checks: list[dict]) -> None:
+    calls, _ = _run(tmp_path, [_declared(checks=checks)], timelines={1: _declaration()})
+    assert calls == []
+
+
+def test_failed_ci_is_reported_as_failed_not_as_still_waiting(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(checks=[_check("test", "FAILURE")])], timelines={1: _declaration()})
+    assert calls == []
+    assert "checks failed on" in out
+
+
+def test_failed_ci_and_conflicts_are_reported_while_review_is_still_out(tmp_path: Path) -> None:
+    failing = _declared(checks=[_check("test", "FAILURE")], review="NEUTRAL")
+    calls, out = _run(tmp_path, [failing], timelines={1: _declaration()})
+    assert calls == [] and "checks failed on" in out
+    calls, out = _run(tmp_path, [_declared(mergeable="CONFLICTING", review="NEUTRAL")], timelines={1: _declaration()})
+    assert calls == [] and "CONFLICTING" in out
+
+
+def test_a_draft_already_reviewed_is_promoted_without_a_review_request(tmp_path: Path) -> None:
+    # Reviewed before it was declared: nothing to request, and a review hold has nothing left to hold.
+    for labels in ((READY,), (READY, "no-auto-review")):
+        calls, out = _run(tmp_path, [_declared(labels=labels)], timelines={1: _declaration()})
+        assert calls == PROMOTE, labels
+        assert "no review is requested" not in out
+
+
+def test_a_push_after_the_declaration_lapses_it(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration(declared_min_ago=10, pushed_min_ago=2)})
+    assert calls == []
+    assert f"remove and re-add {READY}" in out
+
+
+def test_a_changed_diff_lapses_the_declaration_but_a_base_update_does_not(tmp_path: Path) -> None:
+    declared = {1: _declaration()}  # one label event: a pin belongs to the label it was made under
+    pending = [_check("test", "", status="IN_PROGRESS")]
+    calls, _ = _run(tmp_path, [_declared(checks=pending)], timelines=declared)
+    assert calls == [] and _state(tmp_path, ".declared").split()[:2] == ["1", "sha1"]
+    # A different head with different content: not what was declared.
+    calls, out = _run(tmp_path, [_declared(head="other")], timelines=declared)
+    assert calls == []
+    assert "changed since its declaration" in out
+    # A base update moves the head and leaves the PR's own lines alone.
+    same = {"files": [{"filename": "f", "status": "modified", "sha": "bsha1", "patch": "@@ -1 +1 @@\n+sha1"}]}
+    calls, _ = _run(tmp_path, [_declared(head="updated")], timelines=declared, compares={"updated": same})
+    assert calls == PROMOTE
+
+
+def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration(declared_min_ago=60, pushed_min_ago=90)})
+    assert calls == []
+    assert "was never pinned" in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        "Classification: capability",
+        "class: `capability`",
+        # A fix mentioned in passing does not outvote the PR's own classification.
+        "Classification: capability\n\nThe earlier proposal used Classification: fix.",
+        "Classification: fix\n\nClassification: capability",
+    ],
+)
+def test_only_a_pr_classified_as_a_fix_is_promoted(tmp_path: Path, body: str) -> None:
+    calls, out = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
+    assert calls == []
+    assert "without Classification: fix" in out
+
+
+@pytest.mark.parametrize(
+    "pr",
+    [
+        _declared(labels=(READY, REQUESTED, "governance-sensitive")),
+        _declared(labels=(READY, REQUESTED, "operator-armed")),
+        _declared(labels=(READY, REQUESTED, "automerge-hold")),
+        _declared(fork=True),
+        _declared(base="claude/parent"),
+        _declared(mergeable="CONFLICTING"),
+        _declared(mergeable="UNKNOWN"),
+        _declared(labels=(REQUESTED,)),  # an undeclared draft is never touched
+    ],
+)
+def test_held_reserved_stacked_conflicting_and_undeclared_drafts_stay_drafts(tmp_path: Path, pr: dict) -> None:
+    calls, _ = _run(tmp_path, [pr], timelines={1: _declaration()})
+    assert calls == []
+
+
+def test_a_sensitive_diff_is_never_promoted(tmp_path: Path) -> None:
+    manifest = tmp_path / "sensitive.tsv"
+    manifest.write_text("f\t-\tan enforcement constant\n")
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration()},
+                      PR_QUEUE_SENSITIVITY_MANIFEST=str(manifest))
+    assert calls == []
+    assert "governance-sensitive surface" in out
+
+
+def test_a_head_that_moved_during_the_tick_is_not_promoted(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "live_1.json").write_text(json.dumps({"headRefOid": "pushed", "labels": [{"name": READY}]}))
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == []
+    assert "not promoted" in out
+    (d / "live_1.json").write_text(json.dumps({"headRefOid": "sha1", "labels": []}))
+    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == []
+
+
+@pytest.mark.parametrize("hold", ["automerge-hold", "no-auto-merge", "governance-sensitive", "operator-armed"])
+def test_a_hold_added_during_the_tick_stops_the_promotion(tmp_path: Path, hold: str) -> None:
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "live_1.json").write_text(json.dumps({"headRefOid": "sha1", "labels": [{"name": READY}, {"name": hold}]}))
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration()})
+    assert calls == []
+    assert f"was labelled {hold} since this tick began" in out
+
+
+def test_a_promotion_that_stopped_after_marking_ready_is_finished(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()}, fail=("--add-label approved-to-merge",))
+    assert calls == PROMOTE[:2]  # the label call was attempted and refused
+    calls, _ = _run(tmp_path, [_declared(draft=False)], timelines={1: _declaration()})
+    assert calls == PROMOTE[1:]
+
+
+def test_a_dry_run_promotes_nothing(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration()}, PR_QUEUE_DRY_RUN="1")
+    assert calls == []
+    assert "dry-run: gh pr ready 1" in out
+    assert _state(tmp_path, ".declared") == ""
