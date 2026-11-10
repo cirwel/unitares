@@ -1891,6 +1891,16 @@ def test_a_hold_disarms_the_queues_own_arm_and_keeps_the_approval(tmp_path: Path
     assert not any("--remove-label" in call for call in calls)
 
 
+def test_a_hold_added_during_the_tick_is_seen_before_arming(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([_pr(1, labels=(LABEL, "automerge-hold"))]))
+    calls, out = _run(tmp_path, [_pr(1)])
+    (d / "prs_live.json").unlink()
+    assert calls == []
+    assert "since this tick began; not armed" in out
+
+
 def test_a_declared_draft_missing_a_review_family_gets_its_review_requested(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_declared(labels=(READY,), review="ACTION_REQUIRED")], timelines={1: _declaration()})
     assert calls == [f"pr edit 1 -R o/r --add-label {REQUESTED}"]

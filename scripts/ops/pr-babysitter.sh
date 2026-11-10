@@ -1192,6 +1192,11 @@ while read -r _ n head; do
     log "#$other was armed since this tick began; nothing armed"
     exit 0
   fi
+  # A hold put on since the tick began counts as one that was there.
+  if held_by=$(held "$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$live")"); then
+    log "#$n was labelled $held_by since this tick began; not armed"
+    continue
+  fi
   for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
     at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
       '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
