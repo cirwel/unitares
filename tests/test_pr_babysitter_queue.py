@@ -1693,6 +1693,11 @@ def test_an_unfinished_promotion_is_finished_or_withdrawn_never_repinned(tmp_pat
     assert _run(tmp_path, [_declared()], timelines=declared, fail=(f"--remove-label {READY}",))[0] == PROMOTE
     calls, _ = _run(tmp_path, [both], timelines=declared)
     assert calls == [PROMOTE[2]]
+    # An older approval on a PR that has since moved, or gone back to draft, is not this promotion.
+    for stale in (_declared(labels=(READY, REQUESTED, LABEL), draft=False, head="pushed"),
+                  _declared(labels=(READY, REQUESTED, LABEL), draft=True)):
+        calls, _ = _run(tmp_path, [stale], timelines=declared)
+        assert calls == [WITHDRAW]
     # A hold added while the promotion was unfinished wins over finishing it.
     held = _declared(labels=(READY, REQUESTED, LABEL, "automerge-hold"), draft=False)
     calls, out = _run(tmp_path, [held], timelines=declared)
@@ -1740,6 +1745,14 @@ def test_failed_ci_is_reported_as_failed_not_as_still_waiting(tmp_path: Path) ->
     calls, out = _run(tmp_path, [_declared(checks=[_check("test", "FAILURE")])], timelines={1: _declaration()})
     assert calls == []
     assert "checks failed on" in out
+
+
+def test_failed_ci_and_conflicts_are_reported_while_review_is_still_out(tmp_path: Path) -> None:
+    failing = _declared(checks=[_check("test", "FAILURE")], review="NEUTRAL")
+    calls, out = _run(tmp_path, [failing], timelines={1: _declaration()})
+    assert calls == [] and "checks failed on" in out
+    calls, out = _run(tmp_path, [_declared(mergeable="CONFLICTING", review="NEUTRAL")], timelines={1: _declaration()})
+    assert calls == [] and "CONFLICTING" in out
 
 
 def test_a_draft_already_reviewed_is_promoted_without_a_review_request(tmp_path: Path) -> None:

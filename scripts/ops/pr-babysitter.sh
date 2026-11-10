@@ -547,11 +547,15 @@ while read -r pr; do
       # labels, so finishing here would let it arm the PR over the hold.
       log "#$n was labelled $hold during its promotion; withdrawing $LABEL"
       act gh pr edit "$n" -R "$REPO" --remove-label "$LABEL" || log "#$n $LABEL could not be withdrawn; retried next tick"
-    elif [ -n "$at" ] && [ -n "$line" ]; then
+    elif [ -n "$at" ] && [ "${line%% *}" = "$head" ] && [ "$(jq -r .isDraft <<<"$pr")" = "false" ]; then
+      # Pinned to this very head, on a PR already marked ready: that is this
+      # step's own promotion. An older approval left on a PR that was then
+      # pushed to, sent back to draft and declared again is not, and falls
+      # through to be withdrawn.
       log "#$n finishing its promotion: removing $READY_LABEL"
       act gh pr edit "$n" -R "$REPO" --remove-label "$READY_LABEL" || log "#$n $READY_LABEL could not be removed; retried next tick"
     else
-      log "#$n carries $LABEL from an unfinished promotion with no pinned head; withdrawing it"
+      log "#$n carries $LABEL with no pin on ${head:0:8} from this promotion; withdrawing it"
       act gh pr edit "$n" -R "$REPO" --remove-label "$LABEL" || log "#$n $LABEL could not be withdrawn; retried next tick"
     fi
     continue
@@ -622,6 +626,24 @@ while read -r pr; do
     fi
   fi
 
+  # What only the author can clear is said first, so it is not hidden
+  # behind a review that has yet to come back.
+  case "$(jq -r .mergeable <<<"$pr")" in
+    MERGEABLE) ;;
+    CONFLICTING)
+      log "#$n declared ready but CONFLICTING; skipped"
+      notify "$n" declared-conflicting "$head" "not promoted: this PR conflicts with master. Merge master in, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
+      continue ;;
+    *) continue ;;  # GitHub is still computing mergeability
+  esac
+
+  others='[rollup[] | select((.name // .context) != "review")] as $o | {statusCheckRollup: $o}'
+  if [ "$(q "$others | failed | length" <<<"$pr")" -gt 0 ]; then
+    log "#$n declared ready but checks failed on ${head:0:8}; skipped"
+    notify "$n" declared-failing "$head" "not promoted: $(q -r "$others | failed | map(.name // .context) | unique | join(\", \")" <<<"$pr") failed on this head. Fix it, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
+    continue
+  fi
+
   # Review first: findings park the `review` check as ACTION_REQUIRED, and
   # that is the author's to fix or dispose, not a check awaiting approval.
   unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS review" unmet_required_checks "$pr")
@@ -646,26 +668,11 @@ while read -r pr; do
     continue
   fi
 
-  case "$(jq -r .mergeable <<<"$pr")" in
-    MERGEABLE) ;;
-    CONFLICTING)
-      log "#$n declared ready but CONFLICTING; skipped"
-      notify "$n" declared-conflicting "$head" "not promoted: this PR conflicts with master. Merge master in, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
-      continue ;;
-    *) continue ;;  # GitHub is still computing mergeability
-  esac
-
-  others='[rollup[] | select((.name // .context) != "review")] as $o | {statusCheckRollup: $o}'
   if [ "$(q "$others | pending | length" <<<"$pr")" -gt 0 ]; then
     continue  # CI still running on this head
   fi
   if [ "$(q "$others | parked | length" <<<"$pr")" -gt 0 ]; then
     log "#$n declared ready but a check is waiting for approval (ACTION_REQUIRED); skipped"
-    continue
-  fi
-  if [ "$(q "$others | failed | length" <<<"$pr")" -gt 0 ]; then
-    log "#$n declared ready but checks failed on ${head:0:8}; skipped"
-    notify "$n" declared-failing "$head" "not promoted: $(q -r "$others | failed | map(.name // .context) | unique | join(\", \")" <<<"$pr") failed on this head. Fix it, then renew the declaration (remove the \`$READY_LABEL\` label, then add it)."
     continue
   fi
   # Nothing failing is not the same as something passing: a head whose CI has
