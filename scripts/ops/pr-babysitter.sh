@@ -520,16 +520,33 @@ load_review_policy  # likewise for auth_path
 
 # --- 0. declared readiness ------------------------------------------------------
 # Runs first, every tick, whoever holds the slot: promoting a draft arms
-# nothing. A PR already marked ready that still carries the declaration and
-# not the approval is a promotion that stopped halfway, and is finished here.
+# nothing. A promotion is three calls (ready, approval on, declaration off) and
+# may stop between any two; the declaration label staying on is what marks it
+# unfinished, and the approvals step never pins an approval while it is there.
 READY_STATE_FILE="$STATE_FILE.declared"
-declared=$(q -c --arg b "$BASE" --arg r "$READY_LABEL" --arg l "$LABEL" \
-  'map(select(.baseRefName == $b and labelled($r) and (labelled($l) | not))) | .[]' <<<"$prs") \
+declared=$(q -c --arg b "$BASE" --arg r "$READY_LABEL" \
+  'map(select(.baseRefName == $b and labelled($r))) | .[]' <<<"$prs") \
   || { log "could not read the declared drafts; nothing done"; exit 1; }
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   head=$(jq -r .headRefOid <<<"$pr")
+  if q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
+    # Both labels: a promotion stopped after the approval went on. If that
+    # approval was pinned to the head this step validated, only the last call
+    # is missing. If it was not, nothing says which head it covers, so it is
+    # withdrawn and the declaration starts over on the next tick.
+    at=$(latest_label_time "$n") || { log "#$n timeline unreadable; unfinished promotion left as it is"; continue; }
+    line=$(pinned "$n" "$at") || { log "#$n approval state unreadable ($STATE_FILE); unfinished promotion left as it is"; continue; }
+    if [ -n "$at" ] && [ -n "$line" ]; then
+      log "#$n finishing its promotion: removing $READY_LABEL"
+      act gh pr edit "$n" -R "$REPO" --remove-label "$READY_LABEL" || log "#$n $READY_LABEL could not be removed; retried next tick"
+    else
+      log "#$n carries $LABEL from an unfinished promotion with no pinned head; withdrawing it"
+      act gh pr edit "$n" -R "$REPO" --remove-label "$LABEL" || log "#$n $LABEL could not be withdrawn; retried next tick"
+    fi
+    continue
+  fi
   if held_by=$(operator_only "$pr"); then
     log "#$n declared ready but is $held_by; the operator readies and merges it by hand; skipped"
     notify "$n" declared-operator-only "$head" "not promoted: this PR is $held_by, so \`$READY_LABEL\` does not apply to it and the operator handles it by hand."
@@ -581,8 +598,10 @@ while read -r pr; do
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was declared; skipped"; continue; }
     STATE_FILE="$READY_STATE_FILE" pin "$n" "$head" "$declared_at" "$fp" \
       || { log "#$n could not record its declaration; skipped"; continue; }
+    declared_fp="$fp"
   else
     read -r pinned_sha pinned_fp <<<"$pinned_line"
+    declared_fp="$pinned_fp"
     if [ "$pinned_sha" != "$head" ]; then
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; declaration skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
@@ -669,17 +688,24 @@ while read -r pr; do
   if [ "$(jq -r .isDraft <<<"$pr")" = "true" ]; then
     act gh pr ready "$n" -R "$REPO" || { log "#$n could not be marked ready; retried next tick"; continue; }
   fi
-  # Ready first: a draft carrying the approval would sit outside both steps.
-  act gh pr edit "$n" -R "$REPO" --add-label "$LABEL" --remove-label "$READY_LABEL" \
+  # Ready first: a draft carrying the approval is outside the queue.
+  act gh pr edit "$n" -R "$REPO" --add-label "$LABEL" \
     || { log "#$n marked ready but could not be labelled $LABEL; retried next tick"; continue; }
-  # Pin the approval to the head this step validated, now. Left to the
-  # approvals step of a later tick, the pin would take whatever head is there
-  # by then (a push between the two ticks carries a commit date before the
-  # label) or miss the pin window altogether.
-  if at=$(latest_label_time "$n") && [ -n "$at" ] && fp=$(fingerprint "$head"); then
-    pin "$n" "$head" "$at" "$fp" || log "#$n queued, but its approval could not be pinned ($STATE_FILE)"
+  [ "$DRY_RUN" = "1" ] && { act gh pr edit "$n" -R "$REPO" --remove-label "$READY_LABEL"; continue; }
+  # Pin the approval to the head this step validated, now, and fail closed.
+  # Left to the approvals step of a later tick, the pin would take whatever
+  # head is there by then: a push between the two ticks can carry a commit
+  # date before the label, and review is only advisory once a PR is queued.
+  # So the declaration label comes off only after the pin is written, and an
+  # approval that cannot be pinned is withdrawn; the declaration then stands
+  # and the next tick promotes it again.
+  if at=$(latest_label_time "$n") && [ -n "$at" ] && pin "$n" "$head" "$at" "$declared_fp"; then
+    act gh pr edit "$n" -R "$REPO" --remove-label "$READY_LABEL" \
+      || log "#$n queued; $READY_LABEL could not be removed and is retried next tick"
   else
-    [ "$DRY_RUN" = "1" ] || log "#$n queued, but its approval could not be pinned yet; the approvals step pins it"
+    log "#$n: its approval could not be pinned to ${head:0:8}; withdrawing it until the next tick"
+    act gh pr edit "$n" -R "$REPO" --remove-label "$LABEL" \
+      || log "#$n $LABEL could not be withdrawn; the next tick withdraws it"
   fi
 done <<<"$declared"
 
@@ -842,9 +868,11 @@ fi
 # Runs every tick, before the slot check, so a PR labelled while another holds
 # the slot is pinned as soon as the script sees the label, not when it reaches
 # the head of the queue.
-queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
+# A PR still carrying the declaration label is mid-promotion (step 0): its
+# approval is pinned there, to the head that step validated, or withdrawn.
+queued=$(q -c --arg b "$BASE" --arg l "$LABEL" --arg r "$READY_LABEL" \
   'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
-              and labelled($l))) | .[]' <<<"$prs") \
+              and labelled($l) and (labelled($r) | not))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
 # Order by when the label went on, which is the order the PRs were approved.

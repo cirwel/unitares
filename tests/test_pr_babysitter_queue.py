@@ -1638,7 +1638,8 @@ def test_a_later_skipped_run_does_not_mask_an_earlier_result(tmp_path: Path) -> 
 READY = "ready-when-validated"
 REQUESTED = "review-requested"
 FIX = "Classification: fix"
-PROMOTE = [f"pr ready 1 -R o/r", f"pr edit 1 -R o/r --add-label {LABEL} --remove-label {READY}"]
+PROMOTE = ["pr ready 1 -R o/r", f"pr edit 1 -R o/r --add-label {LABEL}", f"pr edit 1 -R o/r --remove-label {READY}"]
+WITHDRAW = f"pr edit 1 -R o/r --remove-label {LABEL}"
 
 
 def _declared(number: int = 1, *, labels: tuple[str, ...] = (READY, REQUESTED), body: str = FIX, **kw) -> dict:
@@ -1647,7 +1648,7 @@ def _declared(number: int = 1, *, labels: tuple[str, ...] = (READY, REQUESTED), 
 
 
 def _declaration(declared_min_ago: float = 5, pushed_min_ago: float | None = 20,
-                 approved_min_ago: float | None = None, updater_min_ago: float | None = None) -> list:
+                 approved_min_ago: float | None = 0, updater_min_ago: float | None = None) -> list:
     events = _timeline(labelled_min_ago=approved_min_ago, pushed_min_ago=pushed_min_ago,
                        updater_min_ago=updater_min_ago)
     events.append({"event": "labeled", "label": {"name": READY}, "created_at": _iso(declared_min_ago)})
@@ -1660,7 +1661,7 @@ def _state(tmp_path: Path, suffix: str = "") -> str:
 
 
 def test_a_declared_draft_is_promoted_once_ci_and_review_pass(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration(approved_min_ago=0)})
+    calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()})
     assert calls == PROMOTE
     # The declaration and the approval it became are both pinned to the validated head.
     assert _state(tmp_path, ".declared").split()[:2] == ["1", "sha1"]
@@ -1671,6 +1672,27 @@ def test_a_promoted_draft_is_not_armed_in_the_tick_that_promoted_it(tmp_path: Pa
     calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()})
     assert calls == PROMOTE
     assert not any(" --auto " in call for call in calls)
+
+
+def test_an_approval_that_cannot_be_pinned_is_withdrawn(tmp_path: Path) -> None:
+    # No approval label event can be read back, so nothing says which head it covers.
+    calls, out = _run(tmp_path, [_declared()], timelines={1: _declaration(approved_min_ago=None)})
+    assert calls == [*PROMOTE[:2], WITHDRAW]
+    assert "could not be pinned" in out
+    assert _state(tmp_path) == ""
+
+
+def test_an_unfinished_promotion_is_finished_or_withdrawn_never_repinned(tmp_path: Path) -> None:
+    both = _declared(labels=(READY, REQUESTED, LABEL), draft=False)
+    # The approval was never pinned: withdrawn, and the approvals step does not pin or arm it.
+    calls, _ = _run(tmp_path, [both], timelines={1: _declaration()})
+    assert calls == [WITHDRAW]
+    assert _state(tmp_path) == ""
+    # Pinned by the promotion that stopped: only the declaration label is left to remove.
+    declared = {1: _declaration()}
+    assert _run(tmp_path, [_declared()], timelines=declared, fail=(f"--remove-label {READY}",))[0] == PROMOTE
+    calls, _ = _run(tmp_path, [both], timelines=declared)
+    assert calls == [PROMOTE[2]]
 
 
 def test_review_is_required_on_the_declared_route_even_where_it_is_advisory(tmp_path: Path) -> None:
@@ -1804,7 +1826,7 @@ def test_a_hold_added_during_the_tick_stops_the_promotion(tmp_path: Path, hold: 
 
 def test_a_promotion_that_stopped_after_marking_ready_is_finished(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_declared()], timelines={1: _declaration()}, fail=("--add-label approved-to-merge",))
-    assert calls == PROMOTE  # the label call was attempted and refused
+    assert calls == PROMOTE[:2]  # the label call was attempted and refused
     calls, _ = _run(tmp_path, [_declared(draft=False)], timelines={1: _declaration()})
     assert calls == PROMOTE[1:]
 

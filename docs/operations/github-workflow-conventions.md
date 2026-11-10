@@ -1002,10 +1002,14 @@ else, the script looks at every PR against `master` that carries
   `PR_QUEUE_REQUIRED_CHECKS` says: nobody is watching, so an unreviewed draft
   must not slide through. A neutral or `action_required` review leaves it a
   draft.
-- Promotion re-reads the head and the label, then marks the PR ready, adds
-  `approved-to-merge`, removes `ready-when-validated`, and pins the approval
-  to the head it validated. From there it is an ordinary queued PR. A
-  promotion interrupted after the ready mark is finished on a later tick.
+- Promotion re-reads the head and the labels (a hold added mid-tick stops
+  it), marks the PR ready, adds `approved-to-merge`, pins that approval to
+  the head it validated, and only then removes `ready-when-validated`. From
+  there it is an ordinary queued PR. It fails closed: an approval that cannot
+  be pinned is withdrawn and the declaration stands for the next tick, and
+  while both labels are on a PR the approvals step neither pins nor arms it.
+  A promotion interrupted at any point is finished or withdrawn on a later
+  tick.
 - It never promotes a fork, a PR labelled `governance-sensitive`,
   `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
   governance-sensitive surface, a stacked PR, or a PR whose body does not say
