@@ -100,8 +100,19 @@ LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 READY_LABEL="${PR_QUEUE_READY_LABEL:-ready-when-validated}"
 REVIEW_REQUEST_LABEL="${PR_QUEUE_REVIEW_REQUEST_LABEL:-review-requested}"
 REVIEW_HOLD_LABEL="${PR_QUEUE_REVIEW_HOLD_LABEL:-no-auto-review}"
-# A declared draft carrying any of these is left alone: each is an explicit hold.
-READY_HOLD_LABELS="${PR_QUEUE_READY_HOLD_LABELS-automerge-hold no-auto-merge}"
+# Explicit holds. A PR carrying any of these is not armed, and is disarmed if
+# the queue armed it; its approval stays, so it returns in turn once the hold
+# comes off. Removing the approval withdraws it; a hold only pauses it.
+HOLD_LABELS="${PR_QUEUE_HOLD_LABELS-automerge-hold no-auto-merge}"
+held() {  # <pr-json> -> the hold label it carries, if any
+  local l
+  for l in $HOLD_LABELS; do
+    jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
+  done
+  return 1
+}
+# A declared draft carrying any of these is left alone, for the same reason.
+READY_HOLD_LABELS="${PR_QUEUE_READY_HOLD_LABELS-$HOLD_LABELS}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 RERUN_TRIES="${PR_QUEUE_RERUN_TRIES:-3}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
@@ -651,7 +662,14 @@ while read -r pr; do
     log "#$n declared ready, waiting on $unmet"
     case " $unmet" in
       *review=ACTION_REQUIRED*)
-        notify "$n" declared-review "$head" "not promoted: the \`review\` check needs action on this head (open findings, or a required model family still missing). Fix or dispose the findings; a push needs the declaration renewed (remove the \`$READY_LABEL\` label, then add it)." ;;
+        notify "$n" declared-review "$head" "not promoted: the \`review\` check needs action on this head (open findings, or a required model family still missing). Fix or dispose the findings; a push needs the declaration renewed (remove the \`$READY_LABEL\` label, then add it)."
+        # A missing second family reads as ACTION_REQUIRED too, and the shared
+        # sweep supplies it to a draft only on request.
+        if ! q -e --arg a "$REVIEW_REQUEST_LABEL" --arg h "$REVIEW_HOLD_LABEL" 'labelled($a) or labelled($h)' <<<"$pr" >/dev/null; then
+          log "#$n declared ready; requesting the review it still needs"
+          act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \
+            || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
+        fi ;;
       *review=*)
         # Not reviewed yet. A draft is reviewed by the shared sweep only on
         # request, so the declaration carries the request: added once, and
@@ -811,6 +829,8 @@ while read -r pr; do
     reason="the operator armed #$operator_arm, which takes the slot"
   elif held_by=$(operator_only "$pr"); then
     reason="it is labelled $held_by, which only the operator merges"
+  elif held_by=$(held "$pr"); then
+    reason="it is labelled $held_by, an explicit hold"
   elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then
     # Also for arms made before this check existed, or before the diff grew.
     reason="it touches a governance-sensitive surface ($why), which only the operator merges"
@@ -1031,6 +1051,12 @@ while read -r _ n head; do
     continue
   fi
 
+  if held_by=$(held "$pr"); then
+    log "#$n is labelled $held_by, an explicit hold; skipped"
+    notify "$n" held "$head" "not armed: this PR is labelled \`$held_by\`, an explicit hold. Its approval stands; remove the label and the queue takes it in turn."
+    continue
+  fi
+
   # Before any wait (mergeability, review): a sensitive PR is never armed, so
   # waiting on it would hold the order for a PR the queue will not take.
   if why=$(sensitive_path "$head"); then
@@ -1165,6 +1191,11 @@ while read -r _ n head; do
      && [ -n "$other" ]; then
     log "#$other was armed since this tick began; nothing armed"
     exit 0
+  fi
+  # A hold put on since the tick began counts as one that was there.
+  if held_by=$(held "$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$live")"); then
+    log "#$n was labelled $held_by since this tick began; not armed"
+    continue
   fi
   for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
     at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
