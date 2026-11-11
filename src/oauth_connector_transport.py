@@ -25,11 +25,12 @@ from src.oauth_provider import (
 
 class ConnectorAuthenticator(ClientAuthenticator):
     async def authenticate_request(self, request: Request):
+        raw_urlencoded = await request.body() if _is_urlencoded(request.scope) else b""
         fields = await request.form()
         client_id = str(fields.get("client_id") or "")
         if not managed_client_id(client_id):
             return await super().authenticate_request(request)
-        if not _is_urlencoded(request.scope):
+        if not _is_urlencoded(request.scope) or b";" in raw_urlencoded:
             raise AuthenticationError("Managed connectors require form-encoded token requests")
         record = await self.provider.managed_connector(client_id)
         supplied = fields.get("client_secret")
@@ -57,6 +58,8 @@ class ConnectorCompatibility:
         if scope["type"] != "http" or scope.get("path") not in ("/token", "/authorize"):
             return await self.app(scope, receive, send)
         method = scope.get("method")
+        body = b""
+        text = ""
         if method == "GET":
             fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
         elif method == "POST":
@@ -71,16 +74,24 @@ class ConnectorCompatibility:
                 # Preserve SDK-supported encodings for legacy clients. The
                 # managed authenticator independently requires urlencoding.
                 return await self.app(scope, receive, send)
-            fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+            text = body.decode("utf-8", errors="replace")
+            fields = parse_qsl(text, keep_blank_values=True)
         else:
             return await self.app(scope, receive, send)
         values = dict(fields)
         basic = _basic_credentials(scope) if scope.get("path") == "/token" else None
         client_id = values.get("client_id") or (basic[0] if basic else "")
+        if method == "POST" and b";" in body and (
+            managed_client_id(client_id)
+            or any(
+                managed_client_id(value)
+                for key, value in parse_qsl(text.replace(";", "&"), keep_blank_values=True)
+                if key == "client_id"
+            )
+        ):
+            return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
         if not managed_client_id(client_id):
             return await self.app(scope, receive, send)
-        if method == "POST" and b";" in body:
-            return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
         # No duplicated fields or conflicting credential sources for managed
         # clients. The Basic shim removes Authorization after its rewrite.
         keys = [key for key, _ in fields]

@@ -138,3 +138,63 @@ def test_emit_failure_does_not_swallow_uncaught_exception():
         # Original RuntimeError propagates, NOT ValueError from emit
         with pytest.raises(RuntimeError, match="loop crashed"):
             pool._run_loop()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_startup_timeout_cleans_up_thread_and_loop(monkeypatch):
+    """If `_loop_ready.wait` times out during `__init__` or `create()`,
+    `ExecutorPool` raises `ConnectionError` and tears down its loop/thread."""
+    import src.db.executor_pool as ep_mod
+    from src.db.executor_pool import ExecutorPool
+
+    created_loops = []
+    real_new_event_loop = asyncio.new_event_loop
+
+    def tracking_new_event_loop():
+        loop = real_new_event_loop()
+        created_loops.append(loop)
+        return loop
+
+    release_thread = threading.Event()
+
+    def stalled_run_loop(self):
+        release_thread.wait(timeout=1.0)
+
+    monkeypatch.setattr(ep_mod.asyncio, "new_event_loop", tracking_new_event_loop)
+    monkeypatch.setattr(ep_mod, "LOOP_START_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(ep_mod, "THREAD_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(ExecutorPool, "_run_loop", stalled_run_loop)
+
+    release_thread.set()
+    with pytest.raises(ConnectionError, match="failed to start"):
+        ExecutorPool(MagicMock())
+
+    with pytest.raises(ConnectionError, match="failed to start"):
+        await ExecutorPool.create(lambda: asyncio.sleep(0))
+
+    assert len(created_loops) == 2
+    for loop in created_loops:
+        assert not loop.is_running()
+        assert loop.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_create_factory_failure_cleans_up_thread_and_loop():
+    """If `create_pool_factory` raises inside `ExecutorPool.create()`, the
+    spawned executor thread and event loop are stopped and closed so retries
+    from `PostgresBackend._create_pool` do not leak threads."""
+    from src.db.executor_pool import ExecutorPool
+
+    seen = {}
+
+    async def failing_pool():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["thread"] = threading.current_thread()
+        raise OSError("postgres unreachable")
+
+    with pytest.raises(OSError, match="postgres unreachable"):
+        await ExecutorPool.create(failing_pool)
+
+    assert not seen["thread"].is_alive()
+    assert not seen["loop"].is_running()
+    assert seen["loop"].is_closed()
