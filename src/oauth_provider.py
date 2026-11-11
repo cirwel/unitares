@@ -37,7 +37,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull
 
-from src.oauth_connectors import managed_client_id
+from src.oauth_connectors import ConnectorRegistryUnavailableError, managed_client_id
 
 
 @dataclass
@@ -217,6 +217,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # Pre-registered clients survive restarts because they come from the
         # environment, not from DCR. Connectors that cannot self-register
         # (Google's custom MCP connector asks for a client ID and secret) need one.
+        for c in static_clients or ():
+            if c.client_id and managed_client_id(c.client_id):
+                raise ValueError(
+                    "static OAuth client_id cannot use the reserved unitares_connector_ prefix"
+                )
         self._clients: dict[str, OAuthClientInformationFull] = {
             c.client_id: c for c in (static_clients or []) if c.client_id
         }
@@ -472,12 +477,21 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> dict | None:
         if self.connector_registry is None:
             return None
-        cached = _REQUEST_MANAGED_CONNECTOR.get()
-        if cached is not None and cached[0] == client_id:
-            return cached[1]
+        cache = _REQUEST_CONNECTOR_CACHE.get()
+        if cache is not None and client_id in cache:
+            cached = cache[client_id]
+            if isinstance(cached, Exception):
+                if raise_on_error:
+                    raise ConnectorRegistryUnavailableError(
+                        "Connector registry unavailable"
+                    ) from cached
+                return None
+            return cached
         try:
-            return await self.connector_registry.get(client_id)
+            record = await self.connector_registry.get(client_id)
         except Exception as exc:
+            if cache is not None:
+                cache[client_id] = exc
             if (dropped := _CONNECTOR_LOG_BUDGET.take()) is not None:
                 suffix = f" (dropped {dropped} similar lines)" if dropped else ""
                 logger.warning(
@@ -486,8 +500,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     suffix,
                 )
             if raise_on_error:
-                raise
+                raise ConnectorRegistryUnavailableError(
+                    "Connector registry unavailable"
+                ) from exc
             return None
+        if cache is not None:
+            cache[client_id] = record
+        return record
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         if managed_client_id(client_id):
@@ -724,7 +743,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             refresh_token=new_refresh_str,
         )
 
-    async def load_access_token(self, token: str) -> AccessToken | None:
+    async def load_access_token(
+        self, token: str, *, raise_on_error: bool = False
+    ) -> AccessToken | None:
         entry = self._access_tokens.get(token)
         # Every bearer on every request reaches this (the SDK's auth middleware
         # and the /mcp gate), including static allowlist and REST tokens that
@@ -739,10 +760,16 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 self._cache_access(entry)
         if entry is None:
             return None
-        if managed_client_id(entry.client_id) and await self.managed_connector(entry.client_id) is None:
-            return None
         if entry.expires_at and entry.expires_at < int(time.time()):
             self._access_tokens.pop(token, None)
+            return None
+        if (
+            managed_client_id(entry.client_id)
+            and await self.managed_connector(
+                entry.client_id, raise_on_error=raise_on_error
+            )
+            is None
+        ):
             return None
         return entry
 
@@ -804,6 +831,10 @@ def build_static_client(
     """
     if not client_id or not client_secret:
         raise ValueError("static OAuth client needs both a client_id and a client_secret")
+    if managed_client_id(client_id):
+        raise ValueError(
+            "static OAuth client_id cannot use the reserved unitares_connector_ prefix"
+        )
     if not redirect_uris:
         raise ValueError("static OAuth client needs at least one redirect URI")
     return OAuthClientInformationFull(
@@ -1140,9 +1171,9 @@ _LOG_BUDGET = _LineBudget()
 #: spoofs the static client id can still spend this one; it is public.)
 _STATIC_LOG_BUDGET = _LineBudget()
 _CONNECTOR_LOG_BUDGET = _LineBudget()
-_REQUEST_MANAGED_CONNECTOR: contextvars.ContextVar[tuple[str, dict] | None] = (
-    contextvars.ContextVar("_REQUEST_MANAGED_CONNECTOR", default=None)
-)
+_REQUEST_CONNECTOR_CACHE: contextvars.ContextVar[
+    dict[str, dict | None | Exception] | None
+] = contextvars.ContextVar("_REQUEST_CONNECTOR_CACHE", default=None)
 
 
 class OAuthAttemptLogger:

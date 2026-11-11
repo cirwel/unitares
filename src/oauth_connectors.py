@@ -22,6 +22,10 @@ DB_TIMEOUT_SECONDS = 5.0
 _ANY_URL = TypeAdapter(AnyUrl)
 
 
+class ConnectorRegistryUnavailableError(RuntimeError):
+    """Raised when the managed connector registry cannot be queried transiently."""
+
+
 def managed_client_id(client_id: str) -> bool:
     # Reserve the entire namespace, including malformed IDs: never fall back
     # to an env or dynamic registration for an unknown managed client.

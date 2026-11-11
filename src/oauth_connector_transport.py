@@ -18,7 +18,7 @@ from starlette.routing import Route, request_response
 
 from src.oauth_connectors import managed_client_id, secret_digest
 from src.oauth_provider import (
-    _REQUEST_MANAGED_CONNECTOR, StaticClientBasicAuthShim, _basic_credentials,
+    _REQUEST_CONNECTOR_CACHE, StaticClientBasicAuthShim, _basic_credentials,
     _is_urlencoded, _MAX_TOKEN_BODY, _peek_body, static_pkce_verifier,
 )
 
@@ -55,7 +55,16 @@ class ConnectorCompatibility:
         self.provider = provider
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in ("/token", "/authorize"):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        token = _REQUEST_CONNECTOR_CACHE.set({})
+        try:
+            return await self._handle_http(scope, receive, send)
+        finally:
+            _REQUEST_CONNECTOR_CACHE.reset(token)
+
+    async def _handle_http(self, scope, receive, send):
+        if scope.get("path") not in ("/token", "/authorize"):
             return await self.app(scope, receive, send)
         method = scope.get("method")
         body = b""
@@ -118,11 +127,7 @@ class ConnectorCompatibility:
             self.app, client_id=client_id,
             pkce_verifier=static_pkce_verifier(record["secret_hash"]),
         )
-        token = _REQUEST_MANAGED_CONNECTOR.set((client_id, record))
-        try:
-            await shim(scope, receive, send)
-        finally:
-            _REQUEST_MANAGED_CONNECTOR.reset(token)
+        await shim(scope, receive, send)
 
 
 def install_connector_transport(app, provider):

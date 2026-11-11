@@ -529,3 +529,108 @@ def test_token_refresh_reuses_middleware_connector_lookup_against_mid_request_ou
     )
     assert outage.status_code == 503
     assert outage.json() == {"error": "temporarily_unavailable"}
+
+
+def test_mcp_bearer_gate_returns_503_on_connector_registry_blip_without_double_lookup(monkeypatch):
+    from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
+    from mcp.server.auth.provider import ProviderTokenVerifier
+    from starlette.middleware import Middleware
+    from starlette.middleware.authentication import AuthenticationMiddleware
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount
+
+    from src.services.mcp_transport_service import McpAuthConfig, make_streamable_mcp_asgi
+
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    registry = Registry()
+    p = provider(registry)
+    auth_client = client_app(p)
+    tokens = exchange(auth_client, code(auth_client)).json()
+
+    class _DummySessionManager:
+        async def handle_request(self, scope, receive, send):
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+    app = Starlette(
+        routes=[
+            *create_auth_routes(
+                p,
+                AnyHttpUrl("https://server.example"),
+                client_registration_options=ClientRegistrationOptions(enabled=False),
+            ),
+            Mount(
+                "/mcp",
+                app=make_streamable_mcp_asgi(
+                    _DummySessionManager(),
+                    auth_config=McpAuthConfig(oauth_provider=p),
+                ),
+            ),
+        ],
+        middleware=[
+            Middleware(
+                AuthenticationMiddleware,
+                backend=BearerAuthBackend(ProviderTokenVerifier(p)),
+            )
+        ],
+    )
+    install_connector_transport(app, p)
+    mcp_client = TestClient(app)
+
+    calls = 0
+    real_get = registry.get
+
+    async def counting_get(client_id):
+        nonlocal calls
+        calls += 1
+        return await real_get(client_id)
+
+    registry.get = counting_get
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    ok = mcp_client.post("/mcp/", headers=headers)
+    assert ok.status_code == 200
+    assert calls == 1
+
+    # Postgres blip -> 503 temporarily_unavailable (not 401), single DB attempt
+    registry.available = False
+    blip = mcp_client.post("/mcp/", headers=headers)
+    assert blip.status_code == 503
+    assert blip.headers["retry-after"] == "5"
+    assert blip.json()["error"] == "temporarily_unavailable"
+    assert calls == 2
+
+    # Break-glass static bearer allowlist still overrides a connector outage
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "break-glass-token")
+    override = mcp_client.post(
+        "/mcp/", headers={"Authorization": "Bearer break-glass-token"}
+    )
+    assert override.status_code == 200
+
+    # Revoked connector when DB recovers -> 401 unauthorized
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    registry.available = True
+    registry.record = None
+    revoked = mcp_client.post("/mcp/", headers=headers)
+    assert revoked.status_code == 401
+
+
+def test_static_client_rejects_reserved_managed_connector_prefix():
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    from src.oauth_provider import build_static_client
+
+    with pytest.raises(ValueError, match="unitares_connector_"):
+        build_static_client(
+            "unitares_connector_custom", "s3cret", ["https://client.example/cb"]
+        )
+
+    raw_static = OAuthClientInformationFull(
+        client_id="unitares_connector_custom",
+        client_secret="s3cret",
+        redirect_uris=["https://client.example/cb"],
+        token_endpoint_auth_method="client_secret_post",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+    )
+    with pytest.raises(ValueError, match="unitares_connector_"):
+        GovernanceOAuthProvider(static_clients=[raw_static])

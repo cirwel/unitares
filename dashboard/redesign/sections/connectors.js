@@ -42,11 +42,13 @@
       el("connector-legacy").textContent = settings.legacy_client_configured
         ? "A client configured through the server environment is also available. It is managed separately." : "";
       syncControls();
+      return true;
     } catch (error) {
       settings = null;
       syncControls();
       el("connector-list").textContent = "Connector list unavailable.";
       message(error.message, true);
+      return false;
     }
   }
   async function create(event) {
@@ -108,8 +110,8 @@
       try {
         await window.DATA.revokeConnector(button.dataset.revoke);
         if (button.dataset.revoke === activeSecretClientId) clearSecret();
-        await refresh();
-        message("Connector disabled.");
+        if (await refresh()) message("Connector disabled.");
+        else message(`Connector disabled; ${el("connector-status").textContent}`, true);
       } catch (error) { button.disabled = false; message(error.message, true); }
     }
   }

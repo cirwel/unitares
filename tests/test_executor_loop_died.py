@@ -228,3 +228,35 @@ async def test_executor_pool_create_factory_failure_cleans_up_thread_and_loop():
     assert not seen["thread"].is_alive()
     assert not seen["loop"].is_running()
     assert seen["loop"].is_closed()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_create_cancelled_mid_flight_unwinds_factory_before_loop_stop():
+    """Cancelling a caller task awaiting `ExecutorPool.create()` mid-creation
+    cancels and drains the factory task on the executor loop before stopping and
+    closing that loop."""
+    from src.db.executor_pool import ExecutorPool
+
+    factory_started = threading.Event()
+    seen = {"unwound": False}
+
+    async def slow_pool():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["thread"] = threading.current_thread()
+        factory_started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            await asyncio.sleep(0)
+            seen["unwound"] = True
+
+    task = asyncio.create_task(ExecutorPool.create(slow_pool))
+    await asyncio.to_thread(factory_started.wait, 2.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen["unwound"] is True
+    assert not seen["thread"].is_alive()
+    assert not seen["loop"].is_running()
+    assert seen["loop"].is_closed()

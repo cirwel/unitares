@@ -97,4 +97,24 @@ describe("connector setup", () => {
     dom.window.document.querySelector('[data-revoke="new-client"]').click();
     await vi.waitFor(() => expect(dom.window.document.querySelector("[data-secret]")).toBeNull());
   });
+  it("preserves refresh failure error when disabling a connector succeeds but list reload fails", async () => {
+    const connectors = vi.fn()
+      .mockResolvedValueOnce({
+        ...settings,
+        connectors: [{ client_id: "old-client", name: "Old app", redirect_uris: ["https://old.example/cb"], revoked_at: null }],
+      })
+      .mockRejectedValueOnce(new Error("Session expired"));
+    const dom = boot({
+      connectors,
+      revokeConnector: vi.fn().mockResolvedValue({ success: true }),
+    });
+    dom.window.confirm = vi.fn().mockReturnValue(true);
+    await dom.window.Connectors.load();
+    dom.window.document.querySelector('[data-revoke="old-client"]').click();
+    await vi.waitFor(() => expect(dom.window.document.getElementById("connector-list").textContent).toBe("Connector list unavailable."));
+    const status = dom.window.document.getElementById("connector-status");
+    expect(status.className).toContain("error");
+    expect(status.textContent).toBe("Connector disabled; Session expired");
+    expect(dom.window.document.getElementById("connector-add").disabled).toBe(true);
+  });
 });

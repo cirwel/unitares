@@ -219,6 +219,7 @@ class ExecutorPool:
         self._close_lock = asyncio.Lock()
         self._close_done = asyncio.Event()
         self._closed_flag = False
+        self._startup_pool: Any = None
         self._loop = asyncio.new_event_loop()
         self._loop_ready = threading.Event()
         self._thread = threading.Thread(
@@ -244,16 +245,59 @@ class ExecutorPool:
     async def _abort_startup(self) -> None:
         self._closed_flag = True
         self._close_done.set()
-        try:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        except Exception:
-            pass
+
+        async def _cancel_and_stop() -> None:
+            try:
+                current = asyncio.current_task()
+                pending = [
+                    t
+                    for t in asyncio.all_tasks()
+                    if t is not current and not t.done()
+                ]
+                for task in pending:
+                    if not task.cancelling():
+                        task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                pool, self._startup_pool = self._startup_pool, None
+                close_fn = getattr(pool, "close", None)
+                if callable(close_fn):
+                    try:
+                        maybe_coro = close_fn()
+                        if asyncio.iscoroutine(maybe_coro):
+                            await maybe_coro
+                    except Exception:
+                        pass
+            finally:
+                self._loop.stop()
+
+        scheduled_drain = False
+        if self._loop.is_running():
+            coro = _cancel_and_stop()
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+                fut.add_done_callback(
+                    lambda f: f.exception() if not f.cancelled() else None
+                )
+                scheduled_drain = True
+            except Exception:
+                coro.close()
+        if not scheduled_drain:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, self._thread.join, THREAD_JOIN_TIMEOUT_SECONDS
             )
         except BaseException:
             pass
+        if self._thread.is_alive():
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
         if not self._thread.is_alive() and not self._loop.is_running():
             try:
                 self._loop.close()
@@ -289,10 +333,18 @@ class ExecutorPool:
         # Pass the factory (not the result) so it's called *inside* the
         # executor loop — asyncpg.create_pool's Futures must be loop-bound
         # to the executor loop.
+        async def _create_and_record() -> Any:
+            result = create_pool_factory()
+            if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                result = await result
+            instance._startup_pool = result
+            return result
+
         try:
             instance._raw_pool = await _await_on_loop(
-                create_pool_factory, instance._loop
+                _create_and_record, instance._loop
             )
+            instance._startup_pool = None
         except BaseException:
             await instance._abort_startup()
             raise
