@@ -128,7 +128,9 @@ async def test_revocation_and_database_outage_reject_cached_access_and_refresh()
     assert await p.load_access_token(token["access_token"])
     registry.available = False
     assert await p.load_access_token(token["access_token"]) is None
-    assert exchange(client, "unused").status_code == 401
+    outage = exchange(client, "unused")
+    assert outage.status_code == 503
+    assert outage.json()["error"] == "temporarily_unavailable"
     registry.available = True
     assert await p.load_access_token(token["access_token"])
     await registry.revoke(ID, "operator")
@@ -376,3 +378,109 @@ def test_management_through_real_session_and_operator_middleware(monkeypatch):
     assert client.post("/auth/connectors", headers=headers, json=payload).status_code == 403
     row = None
     assert client.get("/auth/connectors").status_code == 403
+
+
+def test_management_deeply_nested_json_returns_400_and_storage_failure_logs(monkeypatch, caplog):
+    import logging
+
+    registry = Registry()
+    client = management_client(monkeypatch, registry, operator=True)
+    deeply_nested = b"[" * 15000
+    nested = client.post(
+        "/auth/connectors",
+        headers={"Content-Type": "application/json"},
+        content=deeply_nested,
+    )
+    assert nested.status_code == 400
+    assert nested.json() == {"error": "Invalid JSON body."}
+
+    with monkeypatch.context() as mp:
+        mp.setattr(routes.json, "loads", lambda _raw: (_ for _ in ()).throw(RecursionError()))
+        rec_err = client.post(
+            "/auth/connectors",
+            headers={"Content-Type": "application/json"},
+            content=b"{}",
+        )
+    assert rec_err.status_code == 400
+    assert rec_err.json() == {"error": "Invalid JSON body."}
+
+    registry.available = False
+    with caplog.at_level(logging.WARNING, logger="src.http_routes.connectors"):
+        outage = client.get("/auth/connectors")
+    assert outage.status_code == 503
+    assert any("Connector registry operation failed (ConnectionError)" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_managed_connector_outage_logs_are_rate_limited(monkeypatch, caplog):
+    import logging
+    from src import oauth_provider as op_mod
+
+    budget = op_mod._LineBudget(per_window=2, window=60.0)
+    monkeypatch.setattr(op_mod, "_CONNECTOR_LOG_BUDGET", budget)
+    registry = Registry()
+    registry.available = False
+    p = provider(registry)
+    with caplog.at_level(logging.WARNING, logger="src.oauth_provider"):
+        for _ in range(5):
+            assert await p.managed_connector(ID) is None
+    warnings = [r.message for r in caplog.records if "Connector registry unavailable" in r.message]
+    assert len(warnings) == 2
+
+
+@pytest.mark.asyncio
+async def test_sdk_default_authenticator_fails_closed_for_managed_client():
+    from mcp.server.auth.middleware.client_auth import AuthenticationError, ClientAuthenticator
+    from starlette.requests import Request
+
+    p = provider(Registry())
+    body = f"client_id={ID}&client_secret={SECRET}&grant_type=refresh_token&refresh_token=unused".encode()
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    req = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/token",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
+    with pytest.raises(AuthenticationError, match="no stored secret"):
+        await ClientAuthenticator(p).authenticate_request(req)
+
+
+def test_authorize_allows_repeated_rfc8707_resource_params_but_rejects_duplicate_client_id():
+    client = client_app(provider(Registry()))
+    ok = client.get(
+        "/authorize",
+        params=[
+            ("client_id", ID),
+            ("redirect_uri", CALLBACK),
+            ("response_type", "code"),
+            ("resource", "https://server.example/mcp/"),
+            ("resource", "https://server.example/other/"),
+        ],
+        follow_redirects=False,
+    )
+    assert ok.status_code == 302
+
+    dup_client = client.get(
+        "/authorize",
+        params=[
+            ("client_id", ID),
+            ("client_id", ID),
+            ("redirect_uri", CALLBACK),
+            ("response_type", "code"),
+        ],
+        follow_redirects=False,
+    )
+    assert dup_client.status_code == 400
+    assert dup_client.json() == {"error": "invalid_request"}

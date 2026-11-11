@@ -143,39 +143,69 @@ def test_emit_failure_does_not_swallow_uncaught_exception():
 @pytest.mark.asyncio
 async def test_executor_pool_startup_timeout_cleans_up_thread_and_loop(monkeypatch):
     """If `_loop_ready.wait` times out during `__init__` or `create()`,
-    `ExecutorPool` raises `ConnectionError` and tears down its loop/thread."""
+    `ExecutorPool` raises `ConnectionError`:
+    - When the thread is genuinely stalled past `THREAD_JOIN_TIMEOUT_SECONDS`,
+      `_abort_startup*` avoids closing `loop` underneath the live thread, and
+      the queued `loop.stop()` terminates `run_forever()` on its first tick
+      without emitting `executor_loop_died.premature_return`.
+    - When the thread has already exited, `_abort_startup*` closes `loop`."""
     import src.db.executor_pool as ep_mod
     from src.db.executor_pool import ExecutorPool
 
     created_loops = []
+    spawned_threads = []
     real_new_event_loop = asyncio.new_event_loop
+    real_run_loop = ExecutorPool._run_loop
 
     def tracking_new_event_loop():
         loop = real_new_event_loop()
         created_loops.append(loop)
         return loop
 
-    release_thread = threading.Event()
+    release_stalled = threading.Event()
 
-    def stalled_run_loop(self):
-        release_thread.wait(timeout=1.0)
+    def delayed_real_run_loop(self):
+        spawned_threads.append(threading.current_thread())
+        release_stalled.wait(timeout=2.0)
+        real_run_loop(self)
 
     monkeypatch.setattr(ep_mod.asyncio, "new_event_loop", tracking_new_event_loop)
     monkeypatch.setattr(ep_mod, "LOOP_START_TIMEOUT_SECONDS", 0.02)
-    monkeypatch.setattr(ep_mod, "THREAD_JOIN_TIMEOUT_SECONDS", 0.5)
-    monkeypatch.setattr(ExecutorPool, "_run_loop", stalled_run_loop)
+    monkeypatch.setattr(ep_mod, "THREAD_JOIN_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(ExecutorPool, "_run_loop", delayed_real_run_loop)
 
-    release_thread.set()
+    with patch(
+        "src.coordination_failure_emit.emit_coordination_failure_sync"
+    ) as mock_emit:
+        # 1. Truly stalled threads (still alive when join times out):
+        with pytest.raises(ConnectionError, match="failed to start"):
+            ExecutorPool(MagicMock())
+
+        with pytest.raises(ConnectionError, match="failed to start"):
+            await ExecutorPool.create(lambda: asyncio.sleep(0))
+
+        assert len(created_loops) == 2
+        # Loops must NOT be closed while the stalled threads are still alive.
+        for loop in created_loops:
+            assert not loop.is_closed()
+
+        # Releasing the stalled threads runs real `_run_loop`, which immediately
+        # processes the queued `loop.stop()` and exits cleanly with zero emits.
+        release_stalled.set()
+        for thread in spawned_threads:
+            thread.join(timeout=1.0)
+            assert not thread.is_alive()
+        for loop in created_loops:
+            assert not loop.is_running()
+            loop.close()
+
+        mock_emit.assert_not_called()
+
+    # 2. Thread already dead before join completes -> loop is closed immediately:
+    monkeypatch.setattr(ExecutorPool, "_run_loop", lambda self: None)
     with pytest.raises(ConnectionError, match="failed to start"):
         ExecutorPool(MagicMock())
-
-    with pytest.raises(ConnectionError, match="failed to start"):
-        await ExecutorPool.create(lambda: asyncio.sleep(0))
-
-    assert len(created_loops) == 2
-    for loop in created_loops:
-        assert not loop.is_running()
-        assert loop.is_closed()
+    assert created_loops[-1].is_closed()
 
 
 @pytest.mark.asyncio
