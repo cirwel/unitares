@@ -100,8 +100,9 @@ passkey session with the dashboard's CSRF header. An MCP/API bearer alone cannot
 create or disable connectors. When Postgres is unavailable, managed clients fail
 closed and the form reports the failure; it never silently saves only in memory.
 Existing environment-configured clients continue to work and remain managed by
-their environment configuration. Dynamic client registration remains a separate,
-off-by-default facility.
+their environment configuration (client IDs starting with `unitares_connector_`
+are reserved for managed connectors). Dynamic client registration remains a
+separate, off-by-default facility.
 
 **Upgrading:** apply migration `082_oauth_connectors.sql` with the normal migration
 workflow when deploying this version. This is a one-time schema upgrade, not a

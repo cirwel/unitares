@@ -11,10 +11,13 @@ See CLAUDE.md for environment variables.
 from __future__ import annotations
 
 import hmac
+import inspect
 import os
 import logging
 import time
 from typing import List, Optional
+
+from src.oauth_connectors import ConnectorRegistryUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +436,8 @@ async def check_oauth_bearer(
     authorization_header: Optional[str],
     provider,
     required_scopes: Optional[List[str]] = None,
+    *,
+    raise_on_error: bool = False,
 ) -> tuple[bool, Optional[str]]:
     """Validate an OAuth bearer token against an MCP SDK auth provider.
 
@@ -445,7 +450,20 @@ async def check_oauth_bearer(
         return False, None
 
     try:
-        access_token = await provider.load_access_token(token)
+        if (
+            raise_on_error
+            and "raise_on_error"
+            in inspect.signature(provider.load_access_token).parameters
+        ):
+            access_token = await provider.load_access_token(
+                token, raise_on_error=True
+            )
+        else:
+            access_token = await provider.load_access_token(token)
+    except ConnectorRegistryUnavailableError:
+        if raise_on_error:
+            raise
+        return False, None
     except Exception:
         return False, None
 
