@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextvars
 import hashlib
 import hmac
 import json
@@ -471,6 +472,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> dict | None:
         if self.connector_registry is None:
             return None
+        cached = _REQUEST_MANAGED_CONNECTOR.get()
+        if cached is not None and cached[0] == client_id:
+            return cached[1]
         try:
             return await self.connector_registry.get(client_id)
         except Exception as exc:
@@ -1136,6 +1140,9 @@ _LOG_BUDGET = _LineBudget()
 #: spoofs the static client id can still spend this one; it is public.)
 _STATIC_LOG_BUDGET = _LineBudget()
 _CONNECTOR_LOG_BUDGET = _LineBudget()
+_REQUEST_MANAGED_CONNECTOR: contextvars.ContextVar[tuple[str, dict] | None] = (
+    contextvars.ContextVar("_REQUEST_MANAGED_CONNECTOR", default=None)
+)
 
 
 class OAuthAttemptLogger:
