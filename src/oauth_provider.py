@@ -219,6 +219,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # (Google's custom MCP connector asks for a client ID and secret) need one.
         for c in static_clients or ():
             if c.client_id and managed_client_id(c.client_id):
+                logger.error(
+                    "[OAUTH] Static OAuth client_id uses the reserved "
+                    "unitares_connector_ prefix; rename UNITARES_OAUTH_STATIC_CLIENT_ID"
+                )
                 raise ValueError(
                     "static OAuth client_id cannot use the reserved unitares_connector_ prefix"
                 )
@@ -832,6 +836,10 @@ def build_static_client(
     if not client_id or not client_secret:
         raise ValueError("static OAuth client needs both a client_id and a client_secret")
     if managed_client_id(client_id):
+        logger.error(
+            "[OAUTH] Static OAuth client_id uses the reserved "
+            "unitares_connector_ prefix; rename UNITARES_OAUTH_STATIC_CLIENT_ID"
+        )
         raise ValueError(
             "static OAuth client_id cannot use the reserved unitares_connector_ prefix"
         )

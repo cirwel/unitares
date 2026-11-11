@@ -275,3 +275,39 @@ def test_sse_routes_are_prunable_to_close_gate_bypass():
     after = {getattr(r, "path", None) for r in app.routes}
     assert _sse not in after
     assert _msg not in after
+
+
+def test_mcp_listen_config_imports_with_only_src_on_sys_path(tmp_path):
+    """`src/gateway_server.py` runs with only `src/` guaranteed on `sys.path`
+    (plist `PYTHONPATH=__UNITARES_ROOT__/src`, no editable install). Verify
+    `mcp_listen_config` and `gateway_server` import cleanly when the repo root
+    is stripped from `sys.path` and without pulling `src.db` or `src.oauth_connectors`."""
+    import pathlib
+    import subprocess
+    import sys
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    src_dir = repo_root / "src"
+    code = (
+        "import pathlib, sys\n"
+        f"src_dir = {str(src_dir)!r}\n"
+        # Strip any editable-install repo root so `import src.*` fails just like
+        # a bare deploy tree without `pip install -e .`.
+        "sys.path[:] = [src_dir] + [\n"
+        "    p for p in sys.path\n"
+        "    if p and not (pathlib.Path(p) / 'src' / 'mcp_listen_config.py').exists()\n"
+        "]\n"
+        "import mcp_listen_config\n"
+        "import gateway_server\n"
+        "assert 'src.oauth_connectors' not in sys.modules\n"
+        "assert 'src.db' not in sys.modules\n"
+        "mcp_listen_config.build_gateway_transport_security_settings()\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr

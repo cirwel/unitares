@@ -614,16 +614,20 @@ def test_mcp_bearer_gate_returns_503_on_connector_registry_blip_without_double_l
     assert revoked.status_code == 401
 
 
-def test_static_client_rejects_reserved_managed_connector_prefix():
+def test_static_client_rejects_reserved_managed_connector_prefix(caplog):
     from mcp.shared.auth import OAuthClientInformationFull
 
     from src.oauth_provider import build_static_client
 
-    with pytest.raises(ValueError, match="unitares_connector_"):
-        build_static_client(
-            "unitares_connector_custom", "s3cret", ["https://client.example/cb"]
-        )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(ValueError, match="unitares_connector_"):
+            build_static_client(
+                "unitares_connector_custom", "s3cret", ["https://client.example/cb"]
+            )
+    assert "reserved unitares_connector_ prefix" in caplog.text
+    assert "s3cret" not in caplog.text
 
+    caplog.clear()
     raw_static = OAuthClientInformationFull(
         client_id="unitares_connector_custom",
         client_secret="s3cret",
@@ -632,5 +636,7 @@ def test_static_client_rejects_reserved_managed_connector_prefix():
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
     )
-    with pytest.raises(ValueError, match="unitares_connector_"):
-        GovernanceOAuthProvider(static_clients=[raw_static])
+    with caplog.at_level("ERROR"):
+        with pytest.raises(ValueError, match="unitares_connector_"):
+            GovernanceOAuthProvider(static_clients=[raw_static])
+    assert "reserved unitares_connector_ prefix" in caplog.text
