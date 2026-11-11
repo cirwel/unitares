@@ -569,6 +569,9 @@ def test_authorize_allows_repeated_rfc8707_resource_params_but_rejects_duplicate
         follow_redirects=False,
     )
     assert ok.status_code == 302
+    redirect_params = parse_qs(urlsplit(ok.headers["location"]).query)
+    assert "code" in redirect_params
+    assert "error" not in redirect_params
 
     dup_client = client.get(
         "/authorize",
@@ -582,3 +585,45 @@ def test_authorize_allows_repeated_rfc8707_resource_params_but_rejects_duplicate
     )
     assert dup_client.status_code == 400
     assert dup_client.json() == {"error": "invalid_request"}
+
+
+def test_token_refresh_reuses_middleware_connector_lookup_against_mid_request_outage():
+    registry = Registry()
+    client = client_app(provider(registry))
+    tokens = exchange(client, code(client)).json()
+
+    calls = 0
+    real_get = registry.get
+
+    async def flaky_get(client_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise ConnectionError("pool exhausted mid-request")
+        return await real_get(client_id)
+
+    registry.get = flaky_get
+    refreshed = client.post(
+        "/token",
+        data={
+            "client_id": ID,
+            "client_secret": SECRET,
+            "grant_type": "refresh_token",
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+    assert refreshed.status_code == 200
+    assert calls == 1
+
+    # When the first lookup itself fails, the client receives retryable 503.
+    outage = client.post(
+        "/token",
+        data={
+            "client_id": ID,
+            "client_secret": SECRET,
+            "grant_type": "refresh_token",
+            "refresh_token": refreshed.json()["refresh_token"],
+        },
+    )
+    assert outage.status_code == 503
+    assert outage.json() == {"error": "temporarily_unavailable"}
