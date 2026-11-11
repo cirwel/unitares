@@ -92,14 +92,26 @@ class ConnectorCompatibility:
             return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
         if not managed_client_id(client_id):
             return await self.app(scope, receive, send)
-        # No duplicated fields or conflicting credential sources for managed
-        # clients. The Basic shim removes Authorization after its rewrite.
+        # No duplicated fields or conflicting credential sources on /token for
+        # managed clients; on /authorize, permit repeated parameters such as
+        # RFC 8707 `resource` while still rejecting duplicate `client_id`.
         keys = [key for key, _ in fields]
-        if len(keys) != len(set(keys)) or (basic and (
+        is_token_path = scope.get("path") == "/token"
+        duplicate_rejected = (
+            len(keys) != len(set(keys)) if is_token_path else keys.count("client_id") > 1
+        )
+        if duplicate_rejected or (basic and (
             values.get("client_id", basic[0]) != basic[0] or "client_secret" in values
         )):
             return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
-        record = await self.provider.managed_connector(client_id)
+        try:
+            record = await self.provider.managed_connector(client_id, raise_on_error=True)
+        except Exception:
+            return await JSONResponse(
+                {"error": "temporarily_unavailable"},
+                503,
+                headers={"Retry-After": "5"},
+            )(scope, receive, send)
         if record is None:
             return await JSONResponse({"error": "invalid_client"}, 401)(scope, receive, send)
         shim = StaticClientBasicAuthShim(

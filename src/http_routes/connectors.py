@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from urllib.parse import urlsplit
 
 from starlette.responses import JSONResponse
 
 from src import dashboard_auth
 from src.oauth_connectors import validate_registration
+
+logger = logging.getLogger(__name__)
 
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
@@ -53,6 +56,17 @@ def _actor(request):
     return "dashboard_session:" + (key.hex() if isinstance(key, bytes) else str(key))
 
 
+def _storage_unavailable_reply(exc: Exception) -> JSONResponse:
+    # No soft fallback: claiming success on a memory-only registration
+    # would lose credentials at restart. Log only the exception class, never
+    # payloads, DSNs, or secrets.
+    logger.warning("Connector registry operation failed (%s)", type(exc).__name__)
+    return _reply(
+        {"error": "Connector storage is unavailable. Check database health and apply migration 082 before trying again."},
+        503,
+    )
+
+
 async def http_connectors(request):
     if denied := _connector_management_gate(request):
         return denied
@@ -61,43 +75,54 @@ async def http_connectors(request):
     if registry is None:
         return _reply({"error": "OAuth is not configured on this server. Complete the public HTTPS server setup first.",
                        "setup_url": "https://github.com/cirwel/unitares/blob/master/docs/integration/MCP_CLIENTS.md"}, 503)
-    try:
-        if request.method == "GET":
-            issuer = str(request.state.oauth_issuer).rstrip("/")
-            return _reply({
-                "connectors": await registry.list(),
-                "server_url": str(request.state.oauth_resource),
-                "authorization_endpoint": issuer + "/authorize",
-                "token_endpoint": issuer + "/token",
-                "scopes": "mcp:tools", "token_auth_method": "client_secret_basic",
-                "legacy_client_configured": bool(provider._static_client_ids),
-            })
-        if "client_id" in request.path_params:
-            changed = await registry.revoke(request.path_params["client_id"], _actor(request))
-            if not changed:
-                return _reply({
-                    "success": False,
-                    "error": "Connector is already disabled or no longer exists. Refresh the list before trying again.",
-                }, 404)
-            return _reply({"success": True})
-        raw = bytearray()
-        async for chunk in request.stream():
-            raw.extend(chunk)
-            if len(raw) > 16 * 1024:
-                return _reply({"error": "Connector details are too large."}, 413)
+    if request.method == "GET":
+        issuer = str(request.state.oauth_issuer).rstrip("/")
         try:
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise ValueError("Enter a connector name and callback URLs.")
-            name, redirects = validate_registration(data.get("name"), data.get("redirect_uris"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            # JSON decoder text includes no raw payload; do not echo invalid
-            # values (this may be a mistakenly pasted credential).
-            message = str(exc) if not isinstance(exc, json.JSONDecodeError) else "Invalid JSON body."
-            return _reply({"error": message}, 400)
-        created = await registry.create(name, redirects, _actor(request))
-        return _reply(created, 201)
-    except Exception:
-        # No soft fallback: claiming success on a memory-only registration
-        # would lose credentials at restart. Do not log payloads or DB errors.
-        return _reply({"error": "Connector storage is unavailable. Check database health and apply migration 082 before trying again."}, 503)
+            connectors = await registry.list()
+        except Exception as exc:
+            return _storage_unavailable_reply(exc)
+        return _reply({
+            "connectors": connectors,
+            "server_url": str(request.state.oauth_resource),
+            "authorization_endpoint": issuer + "/authorize",
+            "token_endpoint": issuer + "/token",
+            "scopes": "mcp:tools", "token_auth_method": "client_secret_basic",
+            "legacy_client_configured": bool(provider._static_client_ids),
+        })
+    if "client_id" in request.path_params:
+        actor = _actor(request)
+        try:
+            changed = await registry.revoke(request.path_params["client_id"], actor)
+        except Exception as exc:
+            return _storage_unavailable_reply(exc)
+        if not changed:
+            return _reply({
+                "success": False,
+                "error": "Connector is already disabled or no longer exists. Refresh the list before trying again.",
+            }, 404)
+        return _reply({"success": True})
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16 * 1024:
+            return _reply({"error": "Connector details are too large."}, 413)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Enter a connector name and callback URLs.")
+        name, redirects = validate_registration(data.get("name"), data.get("redirect_uris"))
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        # JSON decoder text includes no raw payload; do not echo invalid
+        # values (this may be a mistakenly pasted credential).
+        message = (
+            "Invalid JSON body."
+            if isinstance(exc, (json.JSONDecodeError, RecursionError))
+            else str(exc)
+        )
+        return _reply({"error": message}, 400)
+    actor = _actor(request)
+    try:
+        created = await registry.create(name, redirects, actor)
+    except Exception as exc:
+        return _storage_unavailable_reply(exc)
+    return _reply(created, 201)

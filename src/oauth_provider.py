@@ -466,13 +466,23 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         at = self._access_tokens.get(token)
         return at.client_id if at and hasattr(at, "client_id") else None
 
-    async def managed_connector(self, client_id: str) -> dict | None:
+    async def managed_connector(
+        self, client_id: str, *, raise_on_error: bool = False
+    ) -> dict | None:
         if self.connector_registry is None:
             return None
         try:
             return await self.connector_registry.get(client_id)
-        except Exception:
-            logger.warning("Connector registry unavailable; managed client refused")
+        except Exception as exc:
+            if (dropped := _CONNECTOR_LOG_BUDGET.take()) is not None:
+                suffix = f" (dropped {dropped} similar lines)" if dropped else ""
+                logger.warning(
+                    "[OAUTH] Connector registry unavailable (%s); managed client refused%s",
+                    type(exc).__name__,
+                    suffix,
+                )
+            if raise_on_error:
+                raise
             return None
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
@@ -480,6 +490,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             record = await self.managed_connector(client_id)
             if record is None:
                 return None
+            # `token_endpoint_auth_method="client_secret_post"` with `client_secret=None`
+            # fails closed in the MCP SDK's default `ClientAuthenticator` ("Client is
+            # registered for secret-based authentication but has no stored secret") if
+            # a route is ever mounted without `ConnectorAuthenticator`.
             return OAuthClientInformationFull(
                 client_id=client_id, client_name=record["name"],
                 redirect_uris=record["redirect_uris"],
@@ -1121,6 +1135,7 @@ _LOG_BUDGET = _LineBudget()
 #: callers cannot crowd out the connector's own failures. (A caller that
 #: spoofs the static client id can still spend this one; it is public.)
 _STATIC_LOG_BUDGET = _LineBudget()
+_CONNECTOR_LOG_BUDGET = _LineBudget()
 
 
 class OAuthAttemptLogger:
