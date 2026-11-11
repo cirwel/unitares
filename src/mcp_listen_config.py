@@ -17,8 +17,6 @@ import logging
 import time
 from typing import List, Optional
 
-from src.oauth_connectors import ConnectorRegistryUnavailableError
-
 logger = logging.getLogger(__name__)
 
 from mcp.server.transport_security import TransportSecuritySettings
@@ -460,11 +458,12 @@ async def check_oauth_bearer(
             )
         else:
             access_token = await provider.load_access_token(token)
-    except ConnectorRegistryUnavailableError:
+    except Exception as exc:
         if raise_on_error:
-            raise
-        return False, None
-    except Exception:
+            from src.oauth_connectors import ConnectorRegistryUnavailableError
+
+            if isinstance(exc, ConnectorRegistryUnavailableError):
+                raise
         return False, None
 
     if access_token is None:

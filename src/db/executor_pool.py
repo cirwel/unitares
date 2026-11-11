@@ -272,6 +272,7 @@ class ExecutorPool:
                 self._loop.stop()
 
         scheduled_drain = False
+        fut = None
         if self._loop.is_running():
             coro = _cancel_and_stop()
             try:
@@ -287,16 +288,28 @@ class ExecutorPool:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
                 pass
+        join_timeout = (
+            CLOSE_TIMEOUT_SECONDS if scheduled_drain else THREAD_JOIN_TIMEOUT_SECONDS
+        )
         try:
             await asyncio.get_running_loop().run_in_executor(
-                None, self._thread.join, THREAD_JOIN_TIMEOUT_SECONDS
+                None, self._thread.join, join_timeout
             )
         except BaseException:
             pass
         if self._thread.is_alive():
+            if fut is not None:
+                fut.cancel()
+            self._cancel_orphan_tasks_on_executor_loop()
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
+                pass
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._thread.join, THREAD_JOIN_TIMEOUT_SECONDS
+                )
+            except BaseException:
                 pass
         if not self._thread.is_alive() and not self._loop.is_running():
             try:
@@ -373,6 +386,12 @@ class ExecutorPool:
             # that's a structural bug worth flagging.
             if not self._closed_flag:
                 _emit_executor_loop_died("premature_return", error_class=None)
+        finally:
+            if self._closed_flag and not self._loop.is_running():
+                try:
+                    self._loop.close()
+                except Exception:
+                    pass
 
     def acquire(self, timeout: Any = None) -> _AcquireContext:
         return _AcquireContext(self._raw_pool, self._loop, timeout=timeout)
