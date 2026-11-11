@@ -282,6 +282,7 @@ def test_literal_semicolon_is_rejected_only_for_managed_clients():
     p = GovernanceOAuthProvider(auto_approve=False, connector_registry=Registry(),
         static_clients=[build_static_client("legacy", "legacy-secret", [CALLBACK])])
     client = client_app(p)
+    tokens = exchange(client, code(client)).json()
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     legacy = client.post("/token", headers=headers,
         content="client_id=legacy&client_secret=legacy-secret&grant_type=refresh_token&refresh_token=unknown;value")
@@ -292,6 +293,33 @@ def test_literal_semicolon_is_rejected_only_for_managed_clients():
         content=f"client_id={ID}&client_secret={SECRET}&grant_type=refresh_token&refresh_token=unknown;value")
     assert managed.status_code == 400
     assert managed.json()["error"] == "invalid_request"
+
+    # Semicolon-delimited managed client_id hidden behind a non-managed & field,
+    # Basic header, or percent-encoding must also be rejected as invalid_request
+    # rather than reaching ConnectorAuthenticator's semicolon-splitting form parser.
+    smuggled = client.post("/token", headers=headers, content=(
+        f"grant_type=refresh_token&refresh_token={tokens['refresh_token']}"
+        f"&client_id=legacy&z=1;client_id={ID};client_secret={SECRET}"
+    ))
+    assert smuggled.status_code == 400
+    assert smuggled.json()["error"] == "invalid_request"
+
+    encoded_id = "unitares_%63onnector_" + "a" * 32
+    pct_smuggled = client.post("/token", headers=headers, content=(
+        f"grant_type=refresh_token&refresh_token={tokens['refresh_token']}"
+        f"&z=1;%63lient_id={encoded_id};client_secret={SECRET}"
+    ))
+    assert pct_smuggled.status_code == 400
+    assert pct_smuggled.json()["error"] == "invalid_request"
+
+    basic_legacy = base64.b64encode(b"legacy:legacy-secret").decode("ascii")
+    basic_smuggled = client.post(
+        "/token",
+        headers={**headers, "Authorization": f"Basic {basic_legacy}"},
+        content=f"grant_type=refresh_token&refresh_token={tokens['refresh_token']};client_id={ID};client_secret={SECRET}",
+    )
+    assert basic_smuggled.status_code == 400
+    assert basic_smuggled.json()["error"] == "invalid_request"
 
 
 def test_managed_multipart_cannot_bypass_client_authentication():

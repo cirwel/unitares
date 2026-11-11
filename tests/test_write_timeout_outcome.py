@@ -235,8 +235,11 @@ async def test_update_still_running_on_the_executor_loop_commits_after_the_timeo
 
     graph = _Graph()
     pool_loop = asyncio.new_event_loop()
+    pool_ready = threading.Event()
+    pool_loop.call_soon(pool_ready.set)
     pool_thread = threading.Thread(target=pool_loop.run_forever, daemon=True)
     pool_thread.start()
+    assert pool_ready.wait(timeout=5.0)
 
     async def update_discovery(discovery_id, updates):
         async def statement_on_pool_loop():
