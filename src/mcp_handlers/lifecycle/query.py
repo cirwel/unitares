@@ -1273,11 +1273,20 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
     operator_caller = _is_operator_request()
 
     if target_agent:
-        # FAST PATH: Check Redis cache first (by UUID)
+        # FAST PATH: Redis cache (by UUID), only for an agent this process does
+        # not hold. A live in-memory record is newer than any cached copy: a
+        # check-in updates it but never touches the cache, so a snapshot cached
+        # before the check-in stayed readable for its whole TTL. Reading it
+        # here also wrote it back over the live record below, so the stale
+        # counters outlived the cache entry too.
         try:
             from src.cache import get_metadata_cache
             metadata_cache = get_metadata_cache()
-            cached_meta = await metadata_cache.get(target_agent)
+            cached_meta = (
+                None
+                if target_agent in mcp_server.agent_metadata
+                else await metadata_cache.get(target_agent)
+            )
             if cached_meta:
                 # Found in Redis cache - use it directly
                 logger.debug(f"Metadata cache hit: {target_agent[:8]}...")
@@ -1285,7 +1294,8 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                 # Convert cached dict back to AgentMetadata for consistency
                 from src.agent_state import AgentMetadata
                 meta = AgentMetadata(**cached_meta)
-                # Update in-memory cache for consistency
+                # Fill the in-memory cache; the guard above means this never
+                # replaces a live record.
                 mcp_server.agent_metadata[agent_id] = meta
                 # Skip to response building (meta already loaded)
                 monitor = mcp_server.monitors.get(agent_id)
