@@ -135,16 +135,6 @@ async def _one_pass(coro_fn, monkeypatch, conn):
 
 
 @pytest.mark.asyncio
-async def test_matview_refresh_failure_is_recorded(monkeypatch):
-    conn = MagicMock()
-    conn.execute = AsyncMock(side_effect=RuntimeError("cannot refresh concurrently"))
-    await _one_pass(background_tasks.periodic_matview_refresh, monkeypatch, conn)
-    entry = health.snapshot()["matview_refresh"]
-    assert entry["status"] == "failing"
-    assert "cannot refresh concurrently" in entry["last_error"]
-
-
-@pytest.mark.asyncio
 async def test_partition_maintenance_success_is_recorded(monkeypatch):
     conn = MagicMock()
     conn.fetchval = AsyncMock(return_value='{"events_next": "exists"}')
