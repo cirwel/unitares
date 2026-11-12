@@ -362,6 +362,34 @@ def test_backup_compose_recovers_orphaned_empty_lock_and_rejects_keep_zero_witho
     ok_reused = _run_backup(reused)
     assert ok_reused.returncode == 0, ok_reused.stderr
 
+    # Conversely, a live shell holder running backup_compose.sh must NOT be
+    # reclaimed, and its in-flight .stage_* directory must remain untouched.
+    held = tmp_path / "held_live"
+    held_script = held / "backup_compose.sh"
+    held.mkdir(parents=True)
+    held_script.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
+    held_script.chmod(0o755)
+    holder = subprocess.Popen(["bash", str(held_script)])
+    try:
+        held_lock = held / "backups" / ".backup.lock"
+        held_lock.mkdir(parents=True)
+        (held_lock / "pid").write_text(f"{holder.pid}\n", encoding="utf-8")
+        (held_lock / "cmd").write_text("backup_compose.sh\n", encoding="utf-8")
+        (held_lock / "token").write_text(f"{holder.pid}_1\n", encoding="utf-8")
+        inflight_stage = held / "backups" / ".stage_inflight"
+        inflight_stage.mkdir(parents=True)
+
+        blocked = _run_backup(held)
+        assert blocked.returncode != 0
+        assert held_lock.exists(), "contending run must not delete live holder's lock"
+        assert inflight_stage.exists(), "contending run must not sweep live holder's stage dir"
+        status = json.loads((held / "backups" / "last_backup_status.json").read_text())
+        assert status["status"] == "error"
+        assert "backup lock held by PID" in status["detail"]
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
 
 def test_backup_compose_rejects_failing_sync_cmd_in_plaintext_mode(tmp_path: Path):
     """A failing BACKUP_SYNC_CMD in plaintext mode must not publish a .sql.gz

@@ -147,7 +147,7 @@ is_live_backup_holder() {
     recorded_cmd=$(cat "$LOCK_DIR/cmd" 2>/dev/null || true)
     [ -n "$recorded_cmd" ] || recorded_cmd="backup_compose.sh"
     local cmdline
-    cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    cmdline=$(ps -ww -p "$pid" -o args= 2>/dev/null || ps -p "$pid" -o args= 2>/dev/null || true)
     python3 - "$pid" "$recorded_cmd" "$cmdline" "$LOCK_DIR" "$LOCK_MAX_AGE_SEC" <<'PY'
 import os, shlex, sys, time
 pid_s, recorded_cmd, cmdline, lock_dir, max_age_s = sys.argv[1:6]
@@ -487,7 +487,7 @@ encrypt_stage_artifact() {
 write_manifest() {
     local manifest="$1"
     shift
-    python3 - "$manifest" "$@" <<'PY'
+    if ! python3 - "$manifest" "$@" <<'PY'
 import hashlib, pathlib, sys
 manifest = pathlib.Path(sys.argv[1])
 lines = []
@@ -500,7 +500,15 @@ for raw in sys.argv[2:]:
     lines.append(f"{digest.hexdigest()}  {p.name}\n")
 manifest.write_text("".join(lines), encoding="utf-8")
 PY
-    chmod 600 "$manifest"
+    then
+        rm -f "$manifest"
+        return 1
+    fi
+    if [ ! -s "$manifest" ]; then
+        rm -f "$manifest"
+        return 1
+    fi
+    chmod 600 "$manifest" || return 1
 }
 
 prune_series() {
