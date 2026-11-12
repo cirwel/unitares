@@ -2,20 +2,23 @@
 # backup_compose.sh — Verified PostgreSQL + Redis + server-data backup for
 # Docker Compose deployments (local or cloud VPS).
 #
-# Produces mode-0600 artifacts in $BACKUP_DIR compatible with
-# scripts/ops/check_governance_backup_health.sh (`last_backup_success.txt` and
-# `last_backup_status.json`), closing the Compose backup gaps documented in
-# docs/operations/cloud-deploy-runbook.md:
+# Stages all artifacts in a per-run directory and publishes mode-0600 files into
+# $BACKUP_DIR only after every store and optional encryption step succeeds,
+# keeping scripts/ops/check_governance_backup_health.sh accurate even if a
+# partial stage fails on the first-ever run:
 #   1. PostgreSQL + Apache AGE SQL dump (`governance_<ts>.sql.gz`), verified
 #      with `gzip -t` and pg_dump's completion trailer.
 #   2. Redis RDB snapshot (`redis_<ts>.rdb`) after a fresh `BGSAVE` advances
-#      `LASTSAVE` with `rdb_last_bgsave_status:ok` and a `REDIS` magic header.
-#   3. File-backed governance server data (`governance_data_<ts>.tar.gz` from
-#      `/app/data`, excluding the large `/app/data/hf` model cache) so the
-#      auto-generated `continuity_token_secret` travels with the dump.
+#      `LASTSAVE` with `rdb_last_bgsave_status:ok` and a verified `REDISdddd`
+#      header plus `0xff` EOF / 8-byte CRC64 trailer.
+#   3. File-backed governance server data (`governance_data_<ts>.tar.gz`
+#      streamed from `/app/data` while skipping `/app/data/hf` model weights in
+#      place, without copying weights to host disk) so the auto-generated
+#      `continuity_token_secret` travels with the dump.
 #   4. Optional recipient-only `age` encryption (`AGE_RECIPIENT` or
-#      `AGE_RECIPIENT_FILE`) — keep the private decryption key off the VPS —
-#      plus an optional `BACKUP_SYNC_CMD` hook (e.g. `rclone sync` to S3/R2/B2).
+#      `AGE_RECIPIENT_FILE`) — keep the private decryption key off the VPS.
+#      When an `age` recipient is set, `BACKUP_KEEP_PLAINTEXT` defaults to `0`
+#      so plaintext dumps are never published into `$BACKUP_DIR`.
 #
 # Note: `.env` itself is NOT copied into these archives; escrow deployment
 # credentials separately in a password manager or secret store.
@@ -37,11 +40,16 @@ LOG="${LOG:-$BACKUP_DIR/backup.log}"
 DUMP_RETRIES="${DUMP_RETRIES:-3}"
 DUMP_RETRY_SLEEP_SEC="${DUMP_RETRY_SLEEP_SEC:-5}"
 REDIS_BGSAVE_TIMEOUT_SEC="${REDIS_BGSAVE_TIMEOUT_SEC:-120}"
+LOCK_ORPHAN_SEC="${LOCK_ORPHAN_SEC:-10}"
 
 AGE_BIN="${AGE_BIN:-age}"
 AGE_RECIPIENT="${AGE_RECIPIENT:-}"
 AGE_RECIPIENT_FILE="${AGE_RECIPIENT_FILE:-}"
-BACKUP_KEEP_PLAINTEXT="${BACKUP_KEEP_PLAINTEXT:-1}"
+if [ -n "$AGE_RECIPIENT" ] || [ -n "$AGE_RECIPIENT_FILE" ]; then
+    BACKUP_KEEP_PLAINTEXT="${BACKUP_KEEP_PLAINTEXT:-0}"
+else
+    BACKUP_KEEP_PLAINTEXT="${BACKUP_KEEP_PLAINTEXT:-1}"
+fi
 BACKUP_SYNC_CMD="${BACKUP_SYNC_CMD:-}"
 
 STATUS_JSON="$BACKUP_DIR/last_backup_status.json"
@@ -51,10 +59,8 @@ LOCK_DIR="$BACKUP_DIR/.backup.lock"
 mkdir -p "$BACKUP_DIR"
 
 TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
-PG_FILE="$BACKUP_DIR/governance_${TIMESTAMP}.sql.gz"
-REDIS_FILE="$BACKUP_DIR/redis_${TIMESTAMP}.rdb"
-DATA_FILE="$BACKUP_DIR/governance_data_${TIMESTAMP}.tar.gz"
-TMP_WORK=""
+STAGE_DIR=""
+LOCK_OWNED=0
 
 log() {
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
@@ -74,8 +80,9 @@ write_status_ok() {
     local pg_out="$1"
     local redis_out="$2"
     local data_out="$3"
+    local manifest_out="$4"
     local tmp="${STATUS_JSON}.tmp.$$"
-    PG_OUT="$pg_out" REDIS_OUT="$redis_out" DATA_OUT="$data_out" TS=$(date -u +%Y-%m-%dT%H:%M:%SZ) python3 -c '
+    PG_OUT="$pg_out" REDIS_OUT="$redis_out" DATA_OUT="$data_out" MANIFEST_OUT="$manifest_out" TS=$(date -u +%Y-%m-%dT%H:%M:%SZ) python3 -c '
 import json, os
 print(json.dumps({
     "status": "ok",
@@ -83,24 +90,37 @@ print(json.dumps({
     "file": os.environ["PG_OUT"],
     "redis_file": os.environ["REDIS_OUT"],
     "data_file": os.environ["DATA_OUT"],
+    "manifest_file": os.environ["MANIFEST_OUT"],
 }))
 ' >"$tmp"
     mv "$tmp" "$STATUS_JSON"
 }
 
 cleanup() {
-    if [ -n "$TMP_WORK" ] && [ -d "$TMP_WORK" ]; then
-        rm -rf "$TMP_WORK"
+    if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
+        rm -rf "$STAGE_DIR"
     fi
-    rm -f "${PG_FILE}.tmp" "${REDIS_FILE}.tmp" "${DATA_FILE}.tmp"
-    if [ -d "$LOCK_DIR" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+    if [ "$LOCK_OWNED" = "1" ] && [ -d "$LOCK_DIR" ]; then
         rm -rf "$LOCK_DIR"
     fi
 }
 trap cleanup EXIT
 
+is_orphaned_empty_lock() {
+    python3 - "$LOCK_DIR" "$LOCK_ORPHAN_SEC" <<'PY'
+import os, sys, time
+lock_dir, max_age = sys.argv[1], float(sys.argv[2])
+try:
+    age = time.time() - os.path.getmtime(lock_dir)
+except OSError:
+    sys.exit(1)
+sys.exit(0 if age >= max_age else 1)
+PY
+}
+
 acquire_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
+        LOCK_OWNED=1
         echo "$$" > "$LOCK_DIR/pid"
         return 0
     fi
@@ -110,6 +130,15 @@ acquire_lock() {
         log "WARN: removing stale backup lock from exited PID $old_pid"
         rm -rf "$LOCK_DIR"
         if mkdir "$LOCK_DIR" 2>/dev/null; then
+            LOCK_OWNED=1
+            echo "$$" > "$LOCK_DIR/pid"
+            return 0
+        fi
+    elif [ -z "$old_pid" ] && is_orphaned_empty_lock; then
+        log "WARN: removing orphaned backup lock without PID file"
+        rm -rf "$LOCK_DIR"
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            LOCK_OWNED=1
             echo "$$" > "$LOCK_DIR/pid"
             return 0
         fi
@@ -141,7 +170,6 @@ verify_pg_dump() {
         log "ERROR: backup gzip failed integrity test (gzip -t)"
         return 1
     fi
-    # Consume via `|| true` subshell so early pipe close never trips pipefail.
     local tail_out
     tail_out=$(gunzip -c "$target" 2>/dev/null | tail -15 || true)
     if ! printf '%s\n' "$tail_out" | grep -q "PostgreSQL database dump complete"; then
@@ -151,17 +179,57 @@ verify_pg_dump() {
     return 0
 }
 
+verify_redis_rdb() {
+    local target="$1"
+    python3 - "$target" <<'PY'
+import sys
+path = sys.argv[1]
+try:
+    with open(path, "rb") as fh:
+        head = fh.read(9)
+        fh.seek(0, 2)
+        size = fh.tell()
+        if size < 18:
+            sys.exit(1)
+        fh.seek(-9, 2)
+        tail = fh.read(9)
+except OSError:
+    sys.exit(1)
+ok = head[:5] == b"REDIS" and head[5:9].isdigit() and len(tail) == 9 and tail[0] == 0xFF
+sys.exit(0 if ok else 1)
+PY
+}
+
+verify_data_archive() {
+    local target="$1"
+    if ! gzip -t "$target" 2>/dev/null; then
+        return 1
+    fi
+    python3 - "$target" <<'PY'
+import sys, tarfile
+try:
+    with tarfile.open(sys.argv[1], "r:gz") as tf:
+        names = tf.getnames()
+except Exception:
+    sys.exit(1)
+ok = "data" in names or any(n.startswith("data/") for n in names)
+sys.exit(0 if ok else 1)
+PY
+}
+
 dump_postgres() {
+    local out="$1"
     local attempt=1
     while [ "$attempt" -le "$DUMP_RETRIES" ]; do
-        rm -f "${PG_FILE}.tmp"
+        rm -f "${out}.tmp"
         if "$DOCKER_BIN" exec -i "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$DATABASE" >/dev/null 2>&1 \
-            && "$DOCKER_BIN" exec -i "$PG_CONTAINER" pg_dump -U "$PG_USER" "$DATABASE" | gzip > "${PG_FILE}.tmp" \
-            && verify_pg_dump "${PG_FILE}.tmp"; then
-            mv "${PG_FILE}.tmp" "$PG_FILE"
+            && (set -o pipefail; "$DOCKER_BIN" exec -i "$PG_CONTAINER" pg_dump -U "$PG_USER" "$DATABASE" | gzip > "${out}.tmp") \
+            && verify_pg_dump "${out}.tmp"; then
+            chmod 600 "${out}.tmp"
+            mv "${out}.tmp" "$out"
             return 0
         fi
-        rm -f "${PG_FILE}.tmp"
+        rm -f "${out}.tmp"
         if [ "$attempt" -lt "$DUMP_RETRIES" ]; then
             log "WARN: pg_dump failed (attempt $attempt/$DUMP_RETRIES), retrying in ${DUMP_RETRY_SLEEP_SEC}s"
             sleep "$DUMP_RETRY_SLEEP_SEC"
@@ -175,7 +243,10 @@ wait_redis_idle() {
     local elapsed=0
     while [ "$elapsed" -lt "$REDIS_BGSAVE_TIMEOUT_SEC" ]; do
         local info
-        info=$(redis_cli INFO persistence | tr -d '\r') || return 1
+        if ! info=$(redis_cli INFO persistence); then
+            return 1
+        fi
+        info=$(printf '%s' "$info" | tr -d '\r')
         if printf '%s\n' "$info" | grep -q "^rdb_bgsave_in_progress:0$" \
             && ! printf '%s\n' "$info" | grep -q "^aof_rewrite_in_progress:1$"; then
             return 0
@@ -187,19 +258,29 @@ wait_redis_idle() {
 }
 
 dump_redis() {
-    wait_redis_idle || return 1
+    local out="$1"
+    if ! wait_redis_idle; then
+        return 1
+    fi
 
     local before_save now_sec
-    before_save=$(redis_cli LASTSAVE | tr -d ' \t\r\n') || return 1
+    if ! before_save=$(redis_cli LASTSAVE); then
+        return 1
+    fi
+    before_save=$(printf '%s' "$before_save" | tr -d ' \t\r\n')
+    if [ -z "$before_save" ]; then
+        return 1
+    fi
     now_sec=$(date +%s)
-    # LASTSAVE has 1-second resolution; if a save completed earlier inside the
-    # same wall-clock second, wait for the next second so LASTSAVE strictly advances.
     if [ "$before_save" = "$now_sec" ]; then
         sleep 1
     fi
 
     local bgsave_out
-    bgsave_out=$(redis_cli BGSAVE 2>&1 | tr -d '\r') || return 1
+    if ! bgsave_out=$(redis_cli BGSAVE 2>&1); then
+        return 1
+    fi
+    bgsave_out=$(printf '%s' "$bgsave_out" | tr -d '\r')
     case "$bgsave_out" in
         *"Background saving started"*|*"Background saving scheduled"*) ;;
         *)
@@ -211,8 +292,14 @@ dump_redis() {
     local elapsed=0
     while [ "$elapsed" -lt "$REDIS_BGSAVE_TIMEOUT_SEC" ]; do
         local after_save info
-        after_save=$(redis_cli LASTSAVE | tr -d ' \t\r\n') || return 1
-        info=$(redis_cli INFO persistence | tr -d '\r') || return 1
+        if ! after_save=$(redis_cli LASTSAVE); then
+            return 1
+        fi
+        after_save=$(printf '%s' "$after_save" | tr -d ' \t\r\n')
+        if ! info=$(redis_cli INFO persistence); then
+            return 1
+        fi
+        info=$(printf '%s' "$info" | tr -d '\r')
         if [ "$after_save" != "$before_save" ] \
             && printf '%s\n' "$info" | grep -q "^rdb_bgsave_in_progress:0$"; then
             if ! printf '%s\n' "$info" | grep -q "^rdb_last_bgsave_status:ok$"; then
@@ -243,39 +330,52 @@ dump_redis() {
     [ -n "$cfg_dir" ] && rdb_dir="$cfg_dir"
     [ -n "$cfg_name" ] && rdb_name="$cfg_name"
 
-    "$DOCKER_BIN" cp "${REDIS_CONTAINER}:${rdb_dir}/${rdb_name}" "${REDIS_FILE}.tmp"
-    local magic
-    magic=$(head -c 5 "${REDIS_FILE}.tmp" 2>/dev/null || true)
-    if [ "$magic" != "REDIS" ]; then
-        log "ERROR: copied Redis snapshot missing REDIS header"
-        rm -f "${REDIS_FILE}.tmp"
+    if ! "$DOCKER_BIN" cp "${REDIS_CONTAINER}:${rdb_dir}/${rdb_name}" "${out}.tmp"; then
+        log "ERROR: docker cp failed for Redis RDB"
+        rm -f "${out}.tmp"
         return 1
     fi
-    chmod 600 "${REDIS_FILE}.tmp"
-    mv "${REDIS_FILE}.tmp" "$REDIS_FILE"
+    if ! verify_redis_rdb "${out}.tmp"; then
+        log "ERROR: copied Redis snapshot failed REDIS header / EOF trailer check"
+        rm -f "${out}.tmp"
+        return 1
+    fi
+    chmod 600 "${out}.tmp"
+    mv "${out}.tmp" "$out"
     return 0
 }
 
 dump_governance_data() {
-    TMP_WORK=$(mktemp -d "$BACKUP_DIR/.gov_data_tmp.XXXXXX")
-    "$DOCKER_BIN" cp "${GOV_CONTAINER}:/app/data" "$TMP_WORK/data"
-    # Exclude `/app/data/hf` (docker-compose.full.yml's multi-GB HuggingFace
-    # model cache) while retaining `secrets/` (`continuity_token_secret`) and
-    # other file-backed server state.
-    rm -rf "$TMP_WORK/data/hf"
-    tar -C "$TMP_WORK" -czf "${DATA_FILE}.tmp" data
-    if ! gzip -t "${DATA_FILE}.tmp" 2>/dev/null; then
-        log "ERROR: governance-data archive failed gzip -t"
+    local out="$1"
+    # Stream /app/data from inside the container while skipping /app/data/hf in
+    # place so multi-GB Hugging Face weights never touch host backup disk.
+    if ! "$DOCKER_BIN" exec -i "$GOV_CONTAINER" python -c '
+import os, sys, tarfile
+root = "/app/data"
+if not os.path.isdir(root):
+    sys.exit(2)
+def _skip_hf(ti):
+    if ti.name == "data/hf" or ti.name.startswith("data/hf/"):
+        return None
+    return ti
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w:gz") as tf:
+    tf.add(root, arcname="data", filter=_skip_hf)
+' > "${out}.tmp"; then
+        log "ERROR: streaming /app/data from $GOV_CONTAINER failed"
+        rm -f "${out}.tmp"
         return 1
     fi
-    chmod 600 "${DATA_FILE}.tmp"
-    mv "${DATA_FILE}.tmp" "$DATA_FILE"
-    rm -rf "$TMP_WORK"
-    TMP_WORK=""
+    if ! verify_data_archive "${out}.tmp"; then
+        log "ERROR: governance-data archive failed integrity or root check"
+        rm -f "${out}.tmp"
+        return 1
+    fi
+    chmod 600 "${out}.tmp"
+    mv "${out}.tmp" "$out"
     return 0
 }
 
-encrypt_if_configured() {
+encrypt_stage_artifact() {
     local src="$1"
     if [ -z "$AGE_RECIPIENT" ] && [ -z "$AGE_RECIPIENT_FILE" ]; then
         printf '%s\n' "$src"
@@ -283,11 +383,20 @@ encrypt_if_configured() {
     fi
     local out="${src}.age"
     if [ -n "$AGE_RECIPIENT_FILE" ]; then
-        "$AGE_BIN" -R "$AGE_RECIPIENT_FILE" -o "${out}.tmp" "$src"
+        if ! "$AGE_BIN" -R "$AGE_RECIPIENT_FILE" -o "${out}.tmp" "$src"; then
+            log "ERROR: age exited non-zero for $src"
+            rm -f "${out}.tmp"
+            return 1
+        fi
     else
-        "$AGE_BIN" -r "$AGE_RECIPIENT" -o "${out}.tmp" "$src"
+        if ! "$AGE_BIN" -r "$AGE_RECIPIENT" -o "${out}.tmp" "$src"; then
+            log "ERROR: age exited non-zero for $src"
+            rm -f "${out}.tmp"
+            return 1
+        fi
     fi
     if [ ! -s "${out}.tmp" ]; then
+        log "ERROR: age produced empty output for $src"
         rm -f "${out}.tmp"
         return 1
     fi
@@ -297,6 +406,23 @@ encrypt_if_configured() {
         rm -f "$src"
     fi
     printf '%s\n' "$out"
+    return 0
+}
+
+write_manifest() {
+    local manifest="$1"
+    shift
+    python3 - "$manifest" "$@" <<'PY'
+import hashlib, pathlib, sys
+manifest = pathlib.Path(sys.argv[1])
+lines = []
+for raw in sys.argv[2:]:
+    p = pathlib.Path(raw)
+    h = hashlib.sha256(p.read_bytes()).hexdigest()
+    lines.append(f"{h}  {p.name}\n")
+manifest.write_text("".join(lines), encoding="utf-8")
+PY
+    chmod 600 "$manifest"
 }
 
 prune_series() {
@@ -310,7 +436,9 @@ prune_series() {
 
 # --- main ---
 
-acquire_lock
+case "$KEEP_COUNT" in
+    ''|*[!0-9]*|0) fail "KEEP_COUNT must be a positive integer (got '$KEEP_COUNT')" ;;
+esac
 
 if [ -n "$AGE_RECIPIENT" ] && [ -n "$AGE_RECIPIENT_FILE" ]; then
     fail "set AGE_RECIPIENT or AGE_RECIPIENT_FILE, not both"
@@ -318,42 +446,79 @@ fi
 if [ -n "$AGE_RECIPIENT_FILE" ] && [ ! -r "$AGE_RECIPIENT_FILE" ]; then
     fail "AGE_RECIPIENT_FILE is not readable: $AGE_RECIPIENT_FILE"
 fi
+if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ] && [ -z "$AGE_RECIPIENT" ] && [ -z "$AGE_RECIPIENT_FILE" ]; then
+    fail "BACKUP_KEEP_PLAINTEXT=0 requires AGE_RECIPIENT or AGE_RECIPIENT_FILE"
+fi
+
+acquire_lock
+STAGE_DIR=$(mktemp -d "$BACKUP_DIR/.stage_${TIMESTAMP}_XXXXXX")
+
+STAGE_PG="$STAGE_DIR/governance_${TIMESTAMP}.sql.gz"
+STAGE_REDIS="$STAGE_DIR/redis_${TIMESTAMP}.rdb"
+STAGE_DATA="$STAGE_DIR/governance_data_${TIMESTAMP}.tar.gz"
 
 log "Starting Compose backup ($TIMESTAMP)"
 
-dump_postgres || fail "PostgreSQL dump or verification failed"
-dump_redis || fail "Redis BGSAVE or RDB verification failed"
-dump_governance_data || fail "governance-data archive failed"
+if ! dump_postgres "$STAGE_PG"; then
+    fail "PostgreSQL dump or verification failed"
+fi
+if ! dump_redis "$STAGE_REDIS"; then
+    fail "Redis BGSAVE or RDB verification failed"
+fi
+if ! dump_governance_data "$STAGE_DATA"; then
+    fail "governance-data archive failed"
+fi
 
-PG_FINAL=$(encrypt_if_configured "$PG_FILE") || fail "age encryption failed for $PG_FILE"
-REDIS_FINAL=$(encrypt_if_configured "$REDIS_FILE") || fail "age encryption failed for $REDIS_FILE"
-DATA_FINAL=$(encrypt_if_configured "$DATA_FILE") || fail "age encryption failed for $DATA_FILE"
+if ! STAGE_PG_OUT=$(encrypt_stage_artifact "$STAGE_PG"); then
+    fail "age encryption failed for PostgreSQL dump"
+fi
+if ! STAGE_REDIS_OUT=$(encrypt_stage_artifact "$STAGE_REDIS"); then
+    fail "age encryption failed for Redis RDB"
+fi
+if ! STAGE_DATA_OUT=$(encrypt_stage_artifact "$STAGE_DATA"); then
+    fail "age encryption failed for governance-data archive"
+fi
+
+# Publish all staged files into $BACKUP_DIR only after every capture + encryption succeeded.
+for staged_item in "$STAGE_DIR"/*; do
+    [ -e "$staged_item" ] || continue
+    chmod 600 "$staged_item"
+    mv "$staged_item" "$BACKUP_DIR/$(basename "$staged_item")"
+done
+rmdir "$STAGE_DIR"
+STAGE_DIR=""
+
+PG_FINAL="$BACKUP_DIR/$(basename "$STAGE_PG_OUT")"
+REDIS_FINAL="$BACKUP_DIR/$(basename "$STAGE_REDIS_OUT")"
+DATA_FINAL="$BACKUP_DIR/$(basename "$STAGE_DATA_OUT")"
+MANIFEST_FINAL="$BACKUP_DIR/manifest_${TIMESTAMP}.sha256"
+write_manifest "$MANIFEST_FINAL" "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL"
 
 if [ -n "$BACKUP_SYNC_CMD" ]; then
     log "Running BACKUP_SYNC_CMD"
-    BACKUP_DIR="$BACKUP_DIR" \
-    PG_BACKUP="$PG_FINAL" \
-    REDIS_BACKUP="$REDIS_FINAL" \
-    DATA_BACKUP="$DATA_FINAL" \
-        sh -c "$BACKUP_SYNC_CMD" || fail "BACKUP_SYNC_CMD failed"
+    if ! BACKUP_DIR="$BACKUP_DIR" \
+        PG_BACKUP="$PG_FINAL" \
+        REDIS_BACKUP="$REDIS_FINAL" \
+        DATA_BACKUP="$DATA_FINAL" \
+        MANIFEST_FILE="$MANIFEST_FINAL" \
+        sh -c "$BACKUP_SYNC_CMD"; then
+        fail "BACKUP_SYNC_CMD failed"
+    fi
 fi
 
 TS_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '%s\n' "$TS_ISO" > "${LAST_SUCCESS_FILE}.tmp.$$"
 mv "${LAST_SUCCESS_FILE}.tmp.$$" "$LAST_SUCCESS_FILE"
-write_status_ok "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL"
+write_status_ok "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL" "$MANIFEST_FINAL"
 log "Backup complete + verified: $PG_FINAL, $REDIS_FINAL, $DATA_FINAL"
 
-if [ "$BACKUP_KEEP_PLAINTEXT" != "0" ]; then
-    prune_series "governance_*.sql.gz"
-    prune_series "redis_*.rdb"
-    prune_series "governance_data_*.tar.gz"
-fi
-if [ -n "$AGE_RECIPIENT" ] || [ -n "$AGE_RECIPIENT_FILE" ]; then
-    prune_series "governance_*.sql.gz.age"
-    prune_series "redis_*.rdb.age"
-    prune_series "governance_data_*.tar.gz.age"
-fi
+prune_series "governance_*.sql.gz"
+prune_series "redis_*.rdb"
+prune_series "governance_data_*.tar.gz"
+prune_series "governance_*.sql.gz.age"
+prune_series "redis_*.rdb.age"
+prune_series "governance_data_*.tar.gz.age"
+prune_series "manifest_*.sha256"
 
 if [ -f "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 200 ]; then
     tail -200 "$LOG" > "${LOG}.tmp.$$" && mv "${LOG}.tmp.$$" "$LOG"

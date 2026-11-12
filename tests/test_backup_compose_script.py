@@ -18,7 +18,7 @@ def _write_fake_docker(bin_dir: Path, state_dir: Path) -> Path:
     fake_docker = bin_dir / "fake-docker"
     fake_docker.write_text(
         f"""#!/usr/bin/env python3
-import os, shutil, sys
+import io, os, sys, tarfile
 from pathlib import Path
 
 state = Path({str(state_dir)!r})
@@ -72,19 +72,36 @@ if args[0] == "exec":
             val = "/data" if key == "dir" else "dump.rdb"
             print(f"{{key}}\\n{{val}}")
             sys.exit(0)
+    if cmd[0] == "python":
+        data_mode = os.environ.get("FAKE_DATA_MODE", "ok")
+        if data_mode == "fail":
+            sys.exit(2)
+        if data_mode == "empty":
+            with tarfile.open(fileobj=sys.stdout.buffer, mode="w:gz"):
+                pass
+            sys.exit(0)
+        app_data = state / "fake_app_data"
+        (app_data / "secrets").mkdir(parents=True, exist_ok=True)
+        (app_data / "secrets" / "continuity_token_secret").write_text("secret-seed")
+        (app_data / "hf" / "models--BAAI--bge-m3").mkdir(parents=True, exist_ok=True)
+        (app_data / "hf" / "models--BAAI--bge-m3" / "weights.bin").write_bytes(b"x" * 1024)
+        # Execute the streamed script against fake_app_data instead of /app/data.
+        snippet = cmd[2].replace('"/app/data"', repr(str(app_data)))
+        exec(compile(snippet, "<container-python>", "exec"), {{}})
+        sys.exit(0)
     sys.exit(2)
 
 if args[0] == "cp":
     src, dst = args[1], Path(args[2])
     if src.endswith("/dump.rdb"):
-        dst.write_bytes(b"REDIS0011fake-rdb-payload")
-        sys.exit(0)
-    if src.endswith(":/app/data"):
-        (dst / "secrets").mkdir(parents=True, exist_ok=True)
-        (dst / "secrets" / "continuity_token_secret").write_text("secret-seed")
-        # Simulate docker-compose.full.yml's model cache, which must be excluded.
-        (dst / "hf" / "models--BAAI--bge-m3").mkdir(parents=True, exist_ok=True)
-        (dst / "hf" / "models--BAAI--bge-m3" / "weights.bin").write_bytes(b"x" * 1024)
+        rdb_mode = os.environ.get("FAKE_REDIS_RDB_MODE", "ok")
+        if rdb_mode == "cp_fail":
+            sys.exit(1)
+        if rdb_mode == "truncated":
+            dst.write_bytes(b"REDIS0011partial-without-eof")
+            sys.exit(0)
+        # Valid RDB: 9-byte header + payload + 0xFF EOF opcode + 8-byte CRC64 footer.
+        dst.write_bytes(b"REDIS0011\\xfe\\x00\\xff" + b"\\x00" * 8)
         sys.exit(0)
     sys.exit(3)
 
@@ -112,6 +129,13 @@ def _run_backup(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subp
         "DUMP_RETRY_SLEEP_SEC": "0",
         "REDIS_BGSAVE_TIMEOUT_SEC": "3",
     }
+    for key in (
+        "AGE_RECIPIENT",
+        "AGE_RECIPIENT_FILE",
+        "BACKUP_KEEP_PLAINTEXT",
+        "BACKUP_SYNC_CMD",
+    ):
+        env.pop(key, None)
     if extra_env:
         env.update(extra_env)
 
@@ -119,6 +143,16 @@ def _run_backup(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subp
         ["bash", str(BACKUP_SCRIPT)],
         cwd="/",  # Prove cron invocation outside repo cwd works.
         env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_health(backup_dir: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(HEALTH_SCRIPT)],
+        env={**os.environ, "BACKUP_DIR": str(backup_dir)},
         capture_output=True,
         text=True,
         check=False,
@@ -133,12 +167,14 @@ def test_backup_compose_captures_all_three_stores_and_satisfies_health_check(tmp
     pg_files = list(backup_dir.glob("governance_*.sql.gz"))
     redis_files = list(backup_dir.glob("redis_*.rdb"))
     data_files = list(backup_dir.glob("governance_data_*.tar.gz"))
+    manifests = list(backup_dir.glob("manifest_*.sha256"))
 
     assert len(pg_files) == 1
     assert len(redis_files) == 1
     assert len(data_files) == 1
+    assert len(manifests) == 1
 
-    for artifact in (*pg_files, *redis_files, *data_files):
+    for artifact in (*pg_files, *redis_files, *data_files, *manifests):
         mode = stat.S_IMODE(artifact.stat().st_mode)
         assert mode == 0o600, f"{artifact.name} expected 0600, got {oct(mode)}"
 
@@ -151,13 +187,7 @@ def test_backup_compose_captures_all_three_stores_and_satisfies_health_check(tmp
     assert status["status"] == "ok"
     assert status["file"] == str(pg_files[0])
 
-    health = subprocess.run(
-        ["bash", str(HEALTH_SCRIPT)],
-        env={**os.environ, "BACKUP_DIR": str(backup_dir)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    health = _run_health(backup_dir)
     assert health.returncode == 0, health.stderr
 
 
@@ -170,19 +200,48 @@ def test_backup_compose_rejects_truncated_pg_dump(tmp_path: Path):
     assert list(backup_dir.glob("governance_*.sql.gz")) == []
     status = json.loads((backup_dir / "last_backup_status.json").read_text())
     assert status["status"] == "error"
+    assert _run_health(backup_dir).returncode != 0
 
 
-def test_backup_compose_rejects_failed_redis_bgsave(tmp_path: Path):
+def test_backup_compose_rejects_failed_redis_bgsave_and_health_check_fails(tmp_path: Path):
+    """First-ever run failing after Postgres must not leave a staged .sql.gz
+    behind in $BACKUP_DIR that fools check_governance_backup_health.sh."""
     res = _run_backup(tmp_path, {"FAKE_REDIS_MODE": "err"})
     assert res.returncode != 0
 
     backup_dir = tmp_path / "backups"
     assert not (backup_dir / "last_backup_success.txt").exists()
+    assert list(backup_dir.glob("governance_*.sql.gz")) == []
     status = json.loads((backup_dir / "last_backup_status.json").read_text())
     assert status["status"] == "error"
+    assert _run_health(backup_dir).returncode != 0
 
 
-def test_backup_compose_recipient_encryption_and_plaintext_cleanup(tmp_path: Path):
+def test_backup_compose_rejects_truncated_redis_rdb(tmp_path: Path):
+    res = _run_backup(tmp_path, {"FAKE_REDIS_RDB_MODE": "truncated"})
+    assert res.returncode != 0
+
+    backup_dir = tmp_path / "backups"
+    assert list(backup_dir.glob("redis_*.rdb")) == []
+    assert list(backup_dir.glob("governance_*.sql.gz")) == []
+    assert _run_health(backup_dir).returncode != 0
+
+
+def test_backup_compose_rejects_governance_data_failure(tmp_path: Path):
+    for bad_mode in ("fail", "empty"):
+        sub = tmp_path / bad_mode
+        sub.mkdir()
+        res = _run_backup(sub, {"FAKE_DATA_MODE": bad_mode})
+        assert res.returncode != 0
+        backup_dir = sub / "backups"
+        assert list(backup_dir.glob("governance_data_*.tar.gz")) == []
+        assert list(backup_dir.glob("governance_*.sql.gz")) == []
+        assert _run_health(backup_dir).returncode != 0
+
+
+def test_backup_compose_recipient_encryption_defaults_to_removing_plaintext(tmp_path: Path):
+    """Setting AGE_RECIPIENT_FILE without BACKUP_KEEP_PLAINTEXT must omit
+    plaintext dumps from $BACKUP_DIR by default while still passing health checks."""
     fake_age = tmp_path / "fake-age"
     fake_age.write_text(
         """#!/usr/bin/env python3
@@ -203,7 +262,6 @@ out.write_bytes(b"AGE-ENCRYPTED:" + src.read_bytes())
         {
             "AGE_BIN": str(fake_age),
             "AGE_RECIPIENT_FILE": str(pub),
-            "BACKUP_KEEP_PLAINTEXT": "0",
         },
     )
     assert res.returncode == 0, res.stderr
@@ -215,3 +273,49 @@ out.write_bytes(b"AGE-ENCRYPTED:" + src.read_bytes())
     assert len(list(backup_dir.glob("governance_*.sql.gz.age"))) == 1
     assert len(list(backup_dir.glob("redis_*.rdb.age"))) == 1
     assert len(list(backup_dir.glob("governance_data_*.tar.gz.age"))) == 1
+    assert _run_health(backup_dir).returncode == 0
+
+
+def test_backup_compose_rejects_partial_age_failure(tmp_path: Path):
+    """If age writes partial output and exits non-zero, the run fails without
+    publishing partial ciphertext or marking status ok."""
+    bad_age = tmp_path / "bad-age"
+    bad_age.write_text(
+        """#!/usr/bin/env python3
+import pathlib, sys
+args = sys.argv[1:]
+out = pathlib.Path(args[args.index("-o") + 1])
+out.write_bytes(b"PARTIAL-TRUNCATED-AGE")
+sys.exit(1)
+""",
+        encoding="utf-8",
+    )
+    bad_age.chmod(0o755)
+    pub = tmp_path / "backup.agekey.pub"
+    pub.write_text("age1examplepublicrecipientkey\n", encoding="utf-8")
+
+    res = _run_backup(
+        tmp_path,
+        {
+            "AGE_BIN": str(bad_age),
+            "AGE_RECIPIENT_FILE": str(pub),
+        },
+    )
+    assert res.returncode != 0
+    backup_dir = tmp_path / "backups"
+    assert list(backup_dir.glob("*.age")) == []
+    assert list(backup_dir.glob("*.sql.gz")) == []
+    assert _run_health(backup_dir).returncode != 0
+
+
+def test_backup_compose_recovers_orphaned_empty_lock_and_rejects_keep_zero_without_age(tmp_path: Path):
+    no_age = tmp_path / "no_age"
+    no_age.mkdir()
+    bad = _run_backup(no_age, {"BACKUP_KEEP_PLAINTEXT": "0"})
+    assert bad.returncode != 0
+    assert "requires AGE_RECIPIENT" in bad.stderr
+
+    orphan = tmp_path / "orphan"
+    (orphan / "backups" / ".backup.lock").mkdir(parents=True)
+    ok = _run_backup(orphan, {"LOCK_ORPHAN_SEC": "0"})
+    assert ok.returncode == 0, ok.stderr

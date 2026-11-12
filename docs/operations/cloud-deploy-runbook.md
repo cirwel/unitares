@@ -49,7 +49,7 @@ compared with full-text search alone:
 | Tier | Compose files | Minimum spec | Why |
 |---|---|---|---|
 | **Base FTS** | `docker-compose.yml` + `docker-compose.cloud.yml` | **4 GB RAM / 40 GB SSD** | Comfortable for PostgreSQL 18 + AGE, Redis, BEAM lease plane, Python server, and rolling local backup staging. |
-| **Full Hybrid (`bge-m3`)** | Base + `docker-compose.full.yml` | **8 GB RAM / 80 GB NVMe** | `governance-mcp` holds ~1.7–2.2 GB RSS with `bge-m3` loaded, `/app/data/hf` caches ~4.3 GB of weights, and long-lived Postgres/AGE clusters plus 14-day backup retention routinely exceed 20–35 GB. |
+| **Full Hybrid (`bge-m3`)** | Base + `docker-compose.full.yml` | **8 GB RAM / 80 GB NVMe** | `governance-mcp` holds ~1.7–2.2 GB RSS with `bge-m3` loaded, `/app/data/hf` caches ~4.3 GB of weights, and long-lived Postgres/AGE clusters plus 14-archive backup retention (`KEEP_COUNT=14`, two weeks on a daily schedule) routinely exceed 20–35 GB. |
 
 - **Plain Linux VPS (recommended default).** Plain Docker Engine on Ubuntu/Debian
   is the least surprising environment for these Compose files. Pick a region near
@@ -249,26 +249,30 @@ codes or accept external operator writes.
 a Compose VPS, use [`scripts/ops/backup_compose.sh`](../../scripts/ops/backup_compose.sh)
 together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/ops/check_governance_backup_health.sh):
 
-1. **All three stateful stores are captured atomically (`0600`):**
+1. **All three stateful stores are staged per run and published to `$BACKUP_DIR` (`0600`) only after every artifact verifies** (captures run sequentially against the live stack; for an exact quiescent cutover snapshot, stop writers first as in *Migration and cutover*):
    - `governance_<timestamp>.sql.gz` — `pg_dump` from `unitares-postgres-age`,
      verified with `gzip -t` and pg_dump's completion trailer.
    - `redis_<timestamp>.rdb` — captured after triggering `BGSAVE`, waiting for
      `LASTSAVE` to advance with `rdb_last_bgsave_status:ok`, and checking the
-     `REDIS` file header (most live session/identity bindings and OAuth client
-     registrations live in Redis).
-   - `governance_data_<timestamp>.tar.gz` — `/app/data` from
-     `unitares-governance-mcp` (excluding `/app/data/hf` model weights), so an
-     auto-generated `continuity_token_secret` travels with the dump.
+     `REDISdddd` file header plus `0xff` EOF / CRC64 trailer (most live
+     session/identity bindings and OAuth client registrations live in Redis).
+   - `governance_data_<timestamp>.tar.gz` — streamed directly from `/app/data`
+     inside `unitares-governance-mcp` while skipping `/app/data/hf` model
+     weights in place, so an auto-generated `continuity_token_secret` travels
+     with the dump without copying multi-GB weights onto backup disk.
 2. **Encrypt to a public recipient only, and ship off-box immediately.** Keep
    an `age` public key on the VPS (`AGE_RECIPIENT_FILE=/etc/unitares/backup.agekey.pub`)
    and keep the private decryption key *off* the VPS so a compromised host
    cannot decrypt historical dumps (`core.agents` and audit rows can hold
-   sensitive operational text). Pair with `BACKUP_SYNC_CMD` (`rclone sync` to
-   S3/R2/B2 or encrypted object storage):
+   sensitive operational text). When an `age` recipient is configured,
+   `backup_compose.sh` defaults `BACKUP_KEEP_PLAINTEXT=0`, deleting staged
+   plaintext before publishing `.age` archives and `manifest_<timestamp>.sha256`
+   into `$BACKUP_DIR`. Pair with `BACKUP_SYNC_CMD` filtered to encrypted
+   artifacts and manifests (`rclone sync` to S3/R2/B2 or encrypted object storage):
 
    ```bash
    AGE_RECIPIENT_FILE=/etc/unitares/backup.agekey.pub \
-   BACKUP_SYNC_CMD='rclone sync "$BACKUP_DIR" remote:unitares-backups/' \
+   BACKUP_SYNC_CMD='rclone sync --include "*.age" --include "manifest_*.sha256" "$BACKUP_DIR" remote:unitares-backups/' \
      ./scripts/ops/backup_compose.sh
 
    ./scripts/ops/check_governance_backup_health.sh
@@ -369,7 +373,8 @@ cost; interleaved identity/session state effectively cannot.
      `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` to the cloud host.
   4. Restore into the cloud volumes, verify `/health/ready` and gated
      `/health/deep`, start the cloud tunnels, and repoint workstation
-     `UNITARES_SERVER_URL` and remote embodied clients (`UNITARES_TOOLS_URL`).
+     `UNITARES_SERVER_URL` plus any remote embodied or resident HTTP clients
+     (`POST /v1/tools/call`) to the cloud endpoint.
      When the home machine returns, keep its former server writers disabled so
      it rejoins purely as a client/harness host.
 - **Unplanned outage (source machine already unreachable):** the live dump is
