@@ -47,10 +47,11 @@
   const enrollStart = document.getElementById("enrollStart");
   const stepup = new URLSearchParams(location.search).get("stepup") === "1";
   const enrollmentOnly = new URLSearchParams(location.search).get("enroll") === "1";
-  // The hub approval page sends a stale session here and asks to come back.
-  // Only that same-origin path is honoured, so `next` is no open redirect.
+  // The hub approval page and dashboard step-up tabs send a stale session here
+  // and ask to come back. Only those exact same-origin targets are honoured, so
+  // `next` is no open redirect.
   const next = new URLSearchParams(location.search).get("next") || "";
-  const returnTo = next.startsWith("/auth/hub/authorize?") ? next : "";
+  const returnTo = (next.startsWith("/auth/hub/authorize?") || next === "/#connectors" || next === "/#security") ? next : "";
 
   function message(text, kind) {
     status.textContent = text || "";

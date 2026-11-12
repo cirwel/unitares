@@ -160,6 +160,8 @@ if _oauth_issuer_url:
             static_pkce_verifier,
         )
 
+        from src.oauth_connectors import ConnectorRegistry
+
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "false").lower() in ("true", "1", "yes")
         _oauth_resource_url = (
@@ -177,6 +179,7 @@ if _oauth_issuer_url:
             static_clients=_static_clients,
             # Tokens and DCR clients survive restarts; memory-only if Redis is down.
             store=RedisOAuthStore(),
+            connector_registry=ConnectorRegistry(),
         )
         _auth_settings = AuthSettings(
             issuer_url=_oauth_issuer_url,

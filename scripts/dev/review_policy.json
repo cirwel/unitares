@@ -2,6 +2,9 @@
   "_doc": "Review policy read by review_gate.py. CI reads this file from the PR's base ref as merged there (git show origin/<base>:...), never from the PR head, so a PR cannot remove itself from the list; if the base ref has no copy it uses the trusted default-branch checkout. second_family_paths: fnmatch globs (\"*\" also matches \"/\"); a diff touching any of them needs a passing review (CLEAN, or FINDINGS disposed) from TWO different model families before the review check goes green. See docs/operations/github-workflow-conventions.md#second-family-review.",
   "second_family_paths": [
     "src/oauth_provider.py",
+    "src/oauth_connectors.py",
+    "src/oauth_connector_transport.py",
+    "src/http_routes/connectors.py",
     "src/http_routes/access.py",
     "src/http_agent_tokens.py",
     "src/http_routes/packs.py",

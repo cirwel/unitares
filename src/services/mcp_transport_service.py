@@ -37,6 +37,7 @@ from src.mcp_listen_config import (
     mcp_bearer_tokens,
 )
 from src.mcp_transport import Transport503EmissionMiddleware
+from src.oauth_connectors import ConnectorRegistryUnavailableError
 
 logger = get_logger(__name__)
 
@@ -258,22 +259,44 @@ async def authorize_mcp_request(
     )
     oauth_bearer_ok = False
     oauth_client_id = None
+    oauth_transient_error = False
     if auth_config.oauth_provider is not None:
         required_scopes = (
             auth_config.auth_settings.required_scopes
             if auth_config.auth_settings
             else auth_config.required_scopes
         )
-        oauth_bearer_ok, client_id = await check_oauth_bearer(
-            authorization,
-            auth_config.oauth_provider,
-            required_scopes=required_scopes,
-        )
+        try:
+            oauth_bearer_ok, client_id = await check_oauth_bearer(
+                authorization,
+                auth_config.oauth_provider,
+                required_scopes=required_scopes,
+                raise_on_error=True,
+            )
+        except ConnectorRegistryUnavailableError:
+            oauth_transient_error = True
+            client_id = None
         if client_id:
             oauth_client_id = f"oauth:{client_id}"
 
     if static_bearer_ok or oauth_bearer_ok:
         return AuthDecision(allowed=True, oauth_client_id=oauth_client_id)
+
+    if oauth_transient_error:
+        return AuthDecision(
+            allowed=False,
+            response=JSONResponse(
+                {
+                    "error": "temporarily_unavailable",
+                    "detail": (
+                        "OAuth connector registry is temporarily unavailable; "
+                        "retry shortly"
+                    ),
+                },
+                status_code=503,
+                headers={"Retry-After": "5"},
+            ),
+        )
 
     detail = (
         "valid bearer token or OAuth access token required for /mcp"
@@ -518,6 +541,8 @@ def _register_application_routes(
         mcp_server_name=mcp.name,
         server_build_sha=server_build_sha,
         mount_route_packs=False,
+        oauth_provider=auth_config.oauth_provider,
+        oauth_settings=auth_config.auth_settings,
     )
     register_wave3a_probe_routes(app)
     register_wave3a_admin_routes(app)
@@ -593,6 +618,10 @@ def build_transport_runtime(
             else "OAuth now gates every /mcp request on the main listener",
         )
         auth_config = dataclasses.replace(auth_config, oauth_public_listener_only=False)
+    if getattr(auth_config.oauth_provider, "connector_registry", None) is not None:
+        from src.oauth_connector_transport import install_connector_transport
+
+        install_connector_transport(app, auth_config.oauth_provider)
     if auth_config.oauth_provider is not None and auth_config.static_client_id:
         from src.oauth_provider import StaticClientBasicAuthShim
 

@@ -81,6 +81,7 @@ GATE_CALLS = (
     "_check_http_auth",   # REST data routes: bearer or trusted network
     "_check_read_auth",   # read-only REST routes: _check_http_auth, or a read-only key
     "_session_gate",      # dashboard session routes: validated session
+    "_connector_management_gate",  # operator credential or validated dashboard session
     "_auth_or_response",  # Wave 3a probe: WAVE_3A_PROBE_TOKEN, fail-closed
     "_is_operator",       # Wave 3a admin: operator credential
     "_hub_signin_gate",   # hub approval page: a fresh passkey session, else sign-in
@@ -173,7 +174,8 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # 50 -> 51: /auth/hub/authorize (the hub sign-in approval page). Its GET
 # needs a fresh dashboard session (_hub_signin_gate) and answers 404 until the
 # hub handoff is configured.
-EXPECTED_GET_ROUTES = 51
+# 51 -> 52: /auth/connectors; operator/session gated, never public.
+EXPECTED_GET_ROUTES = 52
 
 
 def test_route_registry_is_readable():
