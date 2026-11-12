@@ -264,6 +264,14 @@ out.write_bytes(b"AGE-ENCRYPTED:" + src.read_bytes())
     pub = tmp_path / "backup.agekey.pub"
     pub.write_text("age1examplepublicrecipientkey\n", encoding="utf-8")
 
+    # Pre-seed a plaintext dump from an earlier unencrypted run; turning on age
+    # with default BACKUP_KEEP_PLAINTEXT=0 must purge it on completion.
+    preexisting = tmp_path / "backups"
+    preexisting.mkdir(parents=True, exist_ok=True)
+    (preexisting / "governance_20250101_000000.sql.gz").write_bytes(b"old-plain")
+    (preexisting / "redis_20250101_000000.rdb").write_bytes(b"old-rdb")
+    (preexisting / "governance_data_20250101_000000.tar.gz").write_bytes(b"old-tar")
+
     res = _run_backup(
         tmp_path,
         {
@@ -331,6 +339,15 @@ def test_backup_compose_recovers_orphaned_empty_lock_and_rejects_keep_zero_witho
     ok = _run_backup(orphan, {"LOCK_ORPHAN_SEC": "0"})
     assert ok.returncode == 0, ok.stderr
     assert not stale_stage.exists()
+
+    # Simulate PID reuse after reboot: live PID (this pytest process) whose command
+    # line is not backup_compose.sh must be reclaimed rather than blocking forever.
+    reused = tmp_path / "reused_pid"
+    reused_lock = reused / "backups" / ".backup.lock"
+    reused_lock.mkdir(parents=True)
+    (reused_lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    ok_reused = _run_backup(reused)
+    assert ok_reused.returncode == 0, ok_reused.stderr
 
 
 def test_backup_compose_rejects_failing_sync_cmd_in_plaintext_mode(tmp_path: Path):

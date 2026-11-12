@@ -44,6 +44,7 @@ DUMP_RETRIES="${DUMP_RETRIES:-3}"
 DUMP_RETRY_SLEEP_SEC="${DUMP_RETRY_SLEEP_SEC:-5}"
 REDIS_BGSAVE_TIMEOUT_SEC="${REDIS_BGSAVE_TIMEOUT_SEC:-120}"
 LOCK_ORPHAN_SEC="${LOCK_ORPHAN_SEC:-10}"
+LOCK_MAX_AGE_SEC="${LOCK_MAX_AGE_SEC:-14400}"
 
 AGE_BIN="${AGE_BIN:-age}"
 AGE_RECIPIENT="${AGE_RECIPIENT:-}"
@@ -64,6 +65,8 @@ mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
 STAGE_DIR=""
 LOCK_OWNED=0
+COMPLETED_OK=0
+STATUS_WRITTEN=0
 
 log() {
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
@@ -77,6 +80,7 @@ import json, os
 print(json.dumps({"status": "error", "timestamp": os.environ["TS"], "detail": os.environ.get("DETAIL", "")}))
 ' >"$tmp"
     mv "$tmp" "$STATUS_JSON"
+    STATUS_WRITTEN=1
 }
 
 write_status_ok() {
@@ -97,20 +101,29 @@ print(json.dumps({
 }))
 ' >"$tmp"
     mv "$tmp" "$STATUS_JSON"
+    STATUS_WRITTEN=1
 }
 
 cleanup() {
+    local rc=$?
     if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
         rm -rf "$STAGE_DIR"
     fi
-    if [ "$LOCK_OWNED" = "1" ] && [ -d "$LOCK_DIR" ]; then
-        rm -rf "$LOCK_DIR"
+    if [ "$LOCK_OWNED" = "1" ]; then
+        if [ "$COMPLETED_OK" != "1" ] && [ "$rc" -ne 0 ] && [ "$STATUS_WRITTEN" != "1" ]; then
+            log "ERROR: backup aborted unexpectedly (exit $rc)" || true
+            write_status_error "backup aborted unexpectedly (exit $rc)" || true
+        fi
+        if [ -d "$LOCK_DIR" ]; then
+            rm -rf "$LOCK_DIR"
+        fi
     fi
 }
 trap cleanup EXIT
 
-is_orphaned_empty_lock() {
-    python3 - "$LOCK_DIR" "$LOCK_ORPHAN_SEC" <<'PY'
+is_lock_older_than() {
+    local threshold="$1"
+    python3 - "$LOCK_DIR" "$threshold" <<'PY'
 import os, sys, time
 lock_dir, max_age = sys.argv[1], float(sys.argv[2])
 try:
@@ -121,6 +134,24 @@ sys.exit(0 if age >= max_age else 1)
 PY
 }
 
+is_live_backup_holder() {
+    local pid="$1"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    if is_lock_older_than "$LOCK_MAX_AGE_SEC"; then
+        return 1
+    fi
+    local cmdline
+    cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    if [ -n "$cmdline" ]; then
+        case "$cmdline" in
+            *backup_compose.sh*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    return 0
+}
+
 acquire_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
         LOCK_OWNED=1
@@ -129,15 +160,15 @@ acquire_lock() {
     fi
     local old_pid
     old_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-    if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
-        log "WARN: removing stale backup lock from exited PID $old_pid"
+    if [ -n "$old_pid" ] && ! is_live_backup_holder "$old_pid"; then
+        log "WARN: removing stale backup lock from exited or reused PID $old_pid"
         rm -rf "$LOCK_DIR"
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             LOCK_OWNED=1
             echo "$$" > "$LOCK_DIR/pid"
             return 0
         fi
-    elif [ -z "$old_pid" ] && is_orphaned_empty_lock; then
+    elif [ -z "$old_pid" ] && is_lock_older_than "$LOCK_ORPHAN_SEC"; then
         log "WARN: removing orphaned backup lock without PID file"
         rm -rf "$LOCK_DIR"
         if mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -425,7 +456,8 @@ manifest = pathlib.Path(sys.argv[1])
 lines = []
 for raw in sys.argv[2:]:
     p = pathlib.Path(raw)
-    h = hashlib.sha256(p.read_bytes()).hexdigest()
+    with p.open("rb") as fh:
+        h = hashlib.file_digest(fh, "sha256").hexdigest()
     lines.append(f"{h}  {p.name}\n")
 manifest.write_text("".join(lines), encoding="utf-8")
 PY
@@ -490,7 +522,9 @@ if ! STAGE_DATA_OUT=$(encrypt_stage_artifact "$STAGE_DATA"); then
 fi
 
 STAGE_MANIFEST="$STAGE_DIR/manifest_${TIMESTAMP}.sha256"
-write_manifest "$STAGE_MANIFEST" "$STAGE_PG_OUT" "$STAGE_REDIS_OUT" "$STAGE_DATA_OUT"
+if ! write_manifest "$STAGE_MANIFEST" "$STAGE_PG_OUT" "$STAGE_REDIS_OUT" "$STAGE_DATA_OUT"; then
+    fail "SHA-256 manifest generation failed"
+fi
 
 # Run off-site upload BEFORE publishing into $BACKUP_DIR so a failing sync
 # never leaves a fresh governance_*.sql.gz in $BACKUP_DIR that satisfies
@@ -526,11 +560,20 @@ TS_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '%s\n' "$TS_ISO" > "${LAST_SUCCESS_FILE}.tmp.$$"
 mv "${LAST_SUCCESS_FILE}.tmp.$$" "$LAST_SUCCESS_FILE"
 write_status_ok "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL" "$MANIFEST_FINAL"
+COMPLETED_OK=1
 log "Backup complete + verified: $PG_FINAL, $REDIS_FINAL, $DATA_FINAL"
 
-prune_series "governance_*.sql.gz"
-prune_series "redis_*.rdb"
-prune_series "governance_data_*.tar.gz"
+if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ]; then
+    # When recipient encryption is active without BACKUP_KEEP_PLAINTEXT=1, also
+    # purge any pre-existing plaintext dumps from earlier unencrypted runs.
+    rm -f "$BACKUP_DIR"/governance_*.sql.gz \
+          "$BACKUP_DIR"/redis_*.rdb \
+          "$BACKUP_DIR"/governance_data_*.tar.gz
+else
+    prune_series "governance_*.sql.gz"
+    prune_series "redis_*.rdb"
+    prune_series "governance_data_*.tar.gz"
+fi
 prune_series "governance_*.sql.gz.age"
 prune_series "redis_*.rdb.age"
 prune_series "governance_data_*.tar.gz.age"
