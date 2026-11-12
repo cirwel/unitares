@@ -1,0 +1,76 @@
+# UNITARES — Single-operator cloud / VPS overlay
+#
+# Layer on top of docker-compose.yml (and optionally docker-compose.full.yml for
+# bge-m3 semantic + hybrid search) when running the stack on an always-on host
+# behind an outbound tunnel or tailnet HTTPS proxy:
+#
+#   # Tailscale serve or host-installed tunnel daemon:
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --wait
+#
+#   # With bundled cloudflared sharing governance-mcp's loopback namespace:
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml \
+#     --profile cloudflare up -d --wait
+#
+# Persist the file list (and `COMPOSE_PROFILES=cloudflare` when using the
+# bundled tunnel) in .env so `./scripts/unitares update` and later
+# `docker compose up -d` commands keep the full stack and recreate cloudflared
+# whenever governance-mcp is recreated:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.cloud.yml
+#   COMPOSE_PROFILES=cloudflare
+#
+# Why UNITARES_OAUTH_PUBLIC_PORT is NOT published on `ports:` here:
+# `bind_public_socket()` in `src/services/mcp_transport_service.py` binds
+# `127.0.0.1:<port>` inside `governance-mcp`'s network namespace. A Docker
+# bridge `ports:` mapping forwards to the container's bridge IP, so it cannot
+# reach that container-loopback socket. The `cloudflared` service below joins
+# `network_mode: "service:governance-mcp"` instead, reaching `127.0.0.1:8772`
+# (OAuth-gated `/mcp`) and `127.0.0.1:8767` directly on container loopback
+# without widening the bind address. See docs/operations/cloud-deploy-runbook.md.
+
+services:
+  governance-mcp:
+    environment:
+      # Per-agent REST check-in digests (<agent_uuid>:sha256:<64 hex>) for
+      # remote embodied/resident callers on POST /v1/tools/call.
+      UNITARES_HTTP_AGENT_TOKENS: ${UNITARES_HTTP_AGENT_TOKENS:-}
+      # Optional OAuth 2.1 gate for remote MCP connectors (Claude.ai, ChatGPT).
+      # Empty values preserve the base Compose behavior.
+      UNITARES_OAUTH_ISSUER_URL: ${UNITARES_OAUTH_ISSUER_URL:-}
+      UNITARES_OAUTH_RESOURCE_URL: ${UNITARES_OAUTH_RESOURCE_URL:-}
+      UNITARES_OAUTH_SECRET: ${UNITARES_OAUTH_SECRET:-}
+      UNITARES_OAUTH_PUBLIC_PORT: ${UNITARES_OAUTH_PUBLIC_PORT:-}
+      UNITARES_OAUTH_REQUIRED: ${UNITARES_OAUTH_REQUIRED:-}
+      UNITARES_OAUTH_DYNAMIC_REGISTRATION: ${UNITARES_OAUTH_DYNAMIC_REGISTRATION:-}
+      UNITARES_OAUTH_AUTO_APPROVE: ${UNITARES_OAUTH_AUTO_APPROVE:-}
+      UNITARES_OAUTH_STATIC_CLIENT_ID: ${UNITARES_OAUTH_STATIC_CLIENT_ID:-}
+      UNITARES_OAUTH_STATIC_CLIENT_SECRET: ${UNITARES_OAUTH_STATIC_CLIENT_SECRET:-}
+      UNITARES_OAUTH_STATIC_REDIRECT_URIS: ${UNITARES_OAUTH_STATIC_REDIRECT_URIS:-}
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.2.1}
+    container_name: unitares-cloudflared
+    profiles:
+      - cloudflare
+    # Share governance-mcp's network namespace so cloudflared can route public
+    # OAuth traffic to http://127.0.0.1:${UNITARES_OAUTH_PUBLIC_PORT} while the
+    # host-published 127.0.0.1:8767 listener stays Bearer-gated. Set
+    # COMPOSE_PROFILES=cloudflare in .env so Compose recreations (`docker compose
+    # up -d`, `./scripts/unitares update`) recreate cloudflared too; if
+    # governance-mcp crash-restarts in place (`restart: unless-stopped` or
+    # `docker restart`), run `docker compose up -d --force-recreate cloudflared`.
+    network_mode: "service:governance-mcp"
+    depends_on:
+      governance-mcp:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # Uses empty-default fallback so non-Cloudflare (Tailscale-only) users can
+      # load this overlay without setting CLOUDFLARE_TUNNEL_TOKEN.
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    restart: unless-stopped
