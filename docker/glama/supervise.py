@@ -91,6 +91,15 @@ def configure():
         account = pwd.getpwnam(user)
         os.chown(directory, account.pw_uid, account.pw_gid)
         os.chmod(directory, 0o700)
+    # PostgreSQL is started with unix_socket_directories=/var/run/postgresql.
+    # The Debian package creates that directory through tmpfiles at boot, which
+    # a container never runs, so it may be absent from the image; without it
+    # the server exits with "could not create lock file".
+    socket_dir = Path('/var/run/postgresql')
+    socket_dir.mkdir(parents=True, exist_ok=True)
+    postgres_account = pwd.getpwnam('postgres')
+    os.chown(socket_dir, postgres_account.pw_uid, postgres_account.pw_gid)
+    os.chmod(socket_dir, 0o2775)
     secret_file = DATA / 'secrets.json'
     if not secret_file.exists():
         if (PG/'PG_VERSION').exists():
