@@ -11,6 +11,10 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Set once the base-table fallback in get_all_latest_agent_states has been
+# reported, so a missing matview is visible without a log line per call.
+_LATEST_STATES_FALLBACK_WARNED = False
+
 
 class StateMixin:
     """Agent state (EISV) snapshot operations."""
@@ -310,33 +314,50 @@ class StateMixin:
             return [self._row_to_agent_state(r) for r in rows]
 
     async def get_all_latest_agent_states(self) -> list[AgentStateRecord]:
-        """Get latest measured state per identity, using matview with base-table fallback.
+        """Get latest measured state per identity in the current epoch.
 
-        The matview is measured-only by definition (migration 019 bakes
-        `WHERE synthetic = false` into the matview SELECT), so the matview
-        path needs no query-time filter. The base-table fallback queries
-        agent_state directly and adds the filter explicitly. Both paths
-        agree: bootstrap rows never appear here. Per onboard-bootstrap-
-        checkin §4.1.
+        Reads the `mv_latest_agent_states` matview and takes `epistemic_class`
+        and the epoch filter from the base row through its primary key. The
+        matview is measured-only by definition (`WHERE synthetic = false` is
+        baked into its SELECT), so bootstrap rows never appear here. Per
+        onboard-bootstrap-checkin §4.1.
+
+        The matview has no `epistemic_class` or `epoch` column on deployments
+        that predate migration 040, which avoided a DROP/CREATE. Selecting
+        `epistemic_class` from the matview therefore failed on every call
+        there, and every call ran the base-table fallback: a sort of all of
+        `core.agent_state` that spills to disk. The key join works on either
+        projection, so the fallback is left for a missing matview only.
+
+        Results can lag a write by the matview refresh interval
+        (`periodic_matview_refresh`).
         """
+        from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
             try:
                 rows = await conn.fetch(
                     """
-                    SELECT state_id, identity_id, agent_id, recorded_at,
-                           entropy, integrity, volatility,
-                           regime, coherence, state_json, epistemic_class
-                    FROM core.mv_latest_agent_states
+                    SELECT m.state_id, m.identity_id, m.agent_id, m.recorded_at,
+                           m.entropy, m.integrity, m.volatility,
+                           m.regime, m.coherence, m.state_json, s.epistemic_class
+                    FROM core.mv_latest_agent_states m
+                    JOIN core.agent_state s ON s.state_id = m.state_id
+                    WHERE s.epoch = $1
                     """,
+                    GovernanceConfig.CURRENT_EPOCH,
                 )
-            except Exception:
-                # Matview may not exist yet, or may still be on the pre-040
-                # projection that lacks epistemic_class. Fall back to the base
-                # table rather than requiring a DROP/CREATE matview migration.
-                # Filter `synthetic = false` here because the base table
-                # contains both measured and synthetic rows.
-                from config.governance_config import GovernanceConfig
-                logger.debug("Matview unavailable, falling back to base table")
+            except Exception as exc:
+                # Matview missing or unreadable. The base table holds both
+                # measured and synthetic rows, so filter `synthetic = false`.
+                global _LATEST_STATES_FALLBACK_WARNED
+                if not _LATEST_STATES_FALLBACK_WARNED:
+                    _LATEST_STATES_FALLBACK_WARNED = True
+                    logger.warning(
+                        "mv_latest_agent_states unreadable (%s); reading latest "
+                        "states from core.agent_state on every call until it is "
+                        "restored. This warning is logged once per process.",
+                        exc,
+                    )
                 rows = await conn.fetch(
                     """
                     SELECT DISTINCT ON (s.identity_id)
