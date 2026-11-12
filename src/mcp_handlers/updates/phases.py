@@ -252,18 +252,23 @@ def _spawn_persist_task(coro, *, name: str) -> None:
 
 # ─── Phase 1: Identity Resolution & Guards ─────────────────────────────
 
-async def _hydrate_registered_agent(ctx: UpdateContext) -> None:
+async def _hydrate_registered_agent(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     """Fill the metadata cache for a registered agent it does not hold yet.
 
     No-op when the agent is cached or has no resolved uuid. A PostgreSQL miss
-    leaves the cache untouched, so the agent is still "new" to the caller. A
-    lookup error does the same: under STRICT_IDENTITY_REQUIRED that ends in
-    the Path C refusal, which is the fail-closed outcome.
+    leaves the cache untouched, so the agent is still "new" to the caller.
+
+    Returns an early-exit response only when the registry could not be read
+    under STRICT_IDENTITY_REQUIRED. "Unreadable" is not "unregistered": the
+    Path C refusal tells the caller to start_session(), which would mint a
+    second identity for an agent that already has one, so the caller is told
+    to retry instead. Without strict identity a lookup error leaves the agent
+    "new", which is what an empty cache meant before this lookup existed.
     """
     agent_uuid = ctx.agent_uuid
     cache = ctx.mcp_server.agent_metadata
     if not agent_uuid or agent_uuid in cache:
-        return
+        return None
     try:
         from src.agent_metadata_persistence import load_agent_metadata_from_postgres
         meta = await load_agent_metadata_from_postgres(agent_uuid)
@@ -272,9 +277,24 @@ async def _hydrate_registered_agent(ctx: UpdateContext) -> None:
             "[PROCESS_UPDATE] registry lookup failed for %s...: %s",
             agent_uuid[:12], e,
         )
-        return
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+        if is_strict_identity_required():
+            return [error_response(
+                "Could not read the agent registry; this check-in was not recorded",
+                error_code="REGISTRY_UNAVAILABLE",
+                error_category="system_error",
+                details={"agent_id": agent_uuid[:12]},
+                recovery={
+                    "action": (
+                        "Retry the same call with the same client_session_id. "
+                        "Do not call start_session(): this is a read failure, "
+                        "not a finding that the agent is unregistered."
+                    ),
+                },
+            )]
+        return None
     if meta is None:
-        return
+        return None
     # setdefault: the bulk load may have landed while the read was in flight,
     # and its entry is the complete one.
     cache.setdefault(agent_uuid, meta)
@@ -283,6 +303,7 @@ async def _hydrate_registered_agent(ctx: UpdateContext) -> None:
         "hydrated one record",
         agent_uuid[:12],
     )
+    return None
 
 
 async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
@@ -406,7 +427,9 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
     # below treats absence as "new" (#3243: the strict gate refused resumed
     # agents in that window). Done ahead of the circuit breaker so a paused
     # agent's status is in the cache when that check runs.
-    await _hydrate_registered_agent(ctx)
+    registry_error = await _hydrate_registered_agent(ctx)
+    if registry_error is not None:
+        return registry_error
 
     # Circuit breaker: paused / archived agents cannot update.
     # Pause TTL: stale pauses auto-expire via the shared helper, letting
@@ -447,6 +470,13 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
         if newly_persisted:
             logger.info(f"Lazy-persisted agent {ctx.agent_uuid[:8]}... on first process_agent_update")
 
+    # The bulk load swaps the cache contents when it finishes, and an entry
+    # hydrated above is dropped if that load's snapshot predates the agent.
+    # Ask again (a no-op when cached) so the flag is set from the registry.
+    # No await separates this from the read on the next line.
+    registry_error = await _hydrate_registered_agent(ctx)
+    if registry_error is not None:
+        return registry_error
     ctx.is_new_agent = ctx.agent_uuid not in mcp_server.agent_metadata
 
     # Label from arguments or existing metadata
@@ -1300,6 +1330,10 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             agent_record = await agent_storage.get_agent(ctx.agent_id)
             if agent_record:
                 ctx.api_key = agent_record.api_key if agent_record.api_key else None
+                if ctx.agent_id not in mcp_server.agent_metadata:
+                    # Evicted since phase 1 (bulk load swap): restore the
+                    # persisted record before settling for a blank entry.
+                    await _hydrate_registered_agent(ctx)
                 if ctx.agent_id not in mcp_server.agent_metadata:
                     await ctx.loop.run_in_executor(None, mcp_server.get_or_create_metadata, ctx.agent_id)
                 ctx.meta = mcp_server.agent_metadata.get(ctx.agent_id)

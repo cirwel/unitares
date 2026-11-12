@@ -110,17 +110,53 @@ async def test_unregistered_agent_is_still_refused_under_strict(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lookup_error_fails_closed(monkeypatch):
-    """An unreadable registry is not evidence of registration."""
+async def test_lookup_error_under_strict_asks_for_a_retry_not_a_new_identity(monkeypatch):
+    """An unreadable registry is neither registration nor its absence. The
+    Path C refusal would tell a registered agent to start_session(), minting
+    a second identity over a transient read failure."""
     _patch_context(monkeypatch)
+    _registry(monkeypatch, RuntimeError("pool closed"))
+    ctx = _cold_ctx()
+
+    result = await resolve_identity_and_guards(ctx)
+
+    assert result is not None
+    data = parse_result(result)
+    assert data["success"] is False
+    assert data["error_code"] == "REGISTRY_UNAVAILABLE"
+    assert "start_session" in data["recovery"]["action"]
+    assert AGENT_UUID not in ctx.mcp_server.agent_metadata
+
+
+@pytest.mark.asyncio
+async def test_lookup_error_without_strict_keeps_the_old_meaning_of_a_miss(monkeypatch):
+    _patch_context(monkeypatch, strict=False)
     _registry(monkeypatch, RuntimeError("pool closed"))
     ctx = _cold_ctx()
 
     assert await resolve_identity_and_guards(ctx) is None
     assert ctx.is_new_agent is True
 
-    data = parse_result(await execute_locked_update(ctx))
-    assert data["status"] == "identity_required"
+
+@pytest.mark.asyncio
+async def test_entry_evicted_by_the_bulk_load_mid_phase_is_restored(monkeypatch):
+    """The bulk load replaces the cache contents when it lands. If its
+    snapshot lacks the agent, the entry hydrated at the top of the phase is
+    gone by the time the "new agent" flag is read; the phase asks again."""
+    _patch_context(monkeypatch)
+    lookup = _registry(monkeypatch, _record())
+    ctx = _cold_ctx()
+
+    async def _persist_then_swap(*a, **k):
+        ctx.mcp_server.agent_metadata.clear()
+        return False
+    monkeypatch.setattr(id_handlers, "ensure_agent_persisted", _persist_then_swap)
+
+    assert await resolve_identity_and_guards(ctx) is None
+
+    assert ctx.is_new_agent is False
+    assert AGENT_UUID in ctx.mcp_server.agent_metadata
+    assert lookup.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -182,16 +218,43 @@ async def test_bulk_load_landing_mid_lookup_keeps_its_entry(monkeypatch):
     assert ctx.mcp_server.agent_metadata[AGENT_UUID] is bulk
 
 
-def test_bulk_and_single_loaders_build_the_same_entry():
-    """Both loaders go through one builder, so a persisted field cannot reach
-    the cache by one route and not the other."""
-    record = _record(status="paused", paused_at="2026-11-12T01:09:00+00:00",
-                     thread_id="t-1", node_index=4, total_updates=9)
-    meta = persistence._metadata_from_agent_record(record, "2026-11-12T00:00:00+00:00")
+@pytest.mark.asyncio
+async def test_bulk_and_single_loaders_build_the_same_entry(monkeypatch):
+    """Run both loaders over one persisted record and compare the entries
+    field by field, so a field cannot reach the cache by one route only."""
+    from dataclasses import asdict
+    from unittest.mock import MagicMock
 
-    assert (meta.status, meta.paused_at) == ("paused", "2026-11-12T01:09:00+00:00")
-    assert (meta.thread_id, meta.node_index, meta.total_updates) == ("t-1", 4, 9)
-    assert meta.created_at == "2026-04-07T00:00:00+00:00"
+    import src.agent_profile as agent_profile
+
+    profile = {"total_updates": 3}
+    record = _record(
+        status="paused", paused_at="2026-11-12T01:09:00+00:00",
+        thread_id="t-1", node_index=4, total_updates=9,
+        trajectory_current={"E": 0.5}, profile=profile,
+    )
+    record.last_activity_at = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    identity = SimpleNamespace(agent_id=AGENT_UUID, metadata=record.metadata)
+
+    db = MagicMock()
+    db.get_identities_batch = AsyncMock(return_value={AGENT_UUID: identity})
+    db.get_provisional_lineage_set = AsyncMock(return_value=set())
+    db.is_lineage_provisional = AsyncMock(return_value=False)
+    db.get_agent_label = AsyncMock(return_value=record.metadata["label"])
+    monkeypatch.setattr(dbmod, "get_db", lambda: db)
+    monkeypatch.setattr(agent_storage, "list_agents", AsyncMock(return_value=[record]))
+    monkeypatch.setattr(agent_storage, "get_agent", AsyncMock(return_value=record))
+    hydrated = []
+    monkeypatch.setattr(agent_profile, "hydrate_profile",
+                        lambda aid, p: hydrated.append((aid, p)))
+
+    bulk = (await persistence._load_metadata_from_postgres_async())[AGENT_UUID]
+    single = await persistence.load_agent_metadata_from_postgres(AGENT_UUID)
+
+    assert asdict(single) == asdict(bulk)
+    assert (single.status, single.paused_at) == ("paused", "2026-11-12T01:09:00+00:00")
+    assert (single.thread_id, single.node_index, single.total_updates) == ("t-1", 4, 9)
+    assert hydrated == [(AGENT_UUID, profile), (AGENT_UUID, profile)]
 
 
 @pytest.mark.asyncio

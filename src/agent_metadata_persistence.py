@@ -142,7 +142,8 @@ async def load_agent_metadata_from_postgres(agent_id: str) -> Optional[AgentMeta
     can be registered and absent from it: the bulk load has not finished yet
     (the first moments after a server start), or the agent is older than the
     bulk loader's row cap. A caller about to act on "not registered" asks here
-    first. One indexed read on ``core.identities`` plus the latest state row.
+    first. One indexed read on ``core.identities`` plus the latest state row,
+    then the same label, profile and trust-tier steps the bulk loader applies.
 
     Does not write the cache; the caller decides where the entry goes. A
     ``deleted`` identity is reported as not registered, matching the bulk
@@ -163,6 +164,12 @@ async def load_agent_metadata_from_postgres(agent_id: str) -> Optional[AgentMeta
             meta.label = label
     except Exception as e:
         logger.debug(f"Label read skipped for {agent_id[:8]}...: {e}")
+    try:
+        if agent.metadata and "profile" in agent.metadata:
+            from src.agent_profile import hydrate_profile
+            hydrate_profile(agent_id, agent.metadata["profile"])
+    except Exception as e:
+        logger.debug(f"Profile hydration skipped for {agent_id[:8]}...: {e}")
     try:
         if agent.metadata and "trajectory_current" in agent.metadata:
             from src.identity.trust_tier_routing import resolve_trust_tier
