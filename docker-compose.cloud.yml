@@ -11,10 +11,13 @@
 #   docker compose -f docker-compose.yml -f docker-compose.cloud.yml \
 #     --profile cloudflare up -d --wait
 #
-# Persist the file list in .env so `./scripts/unitares update` and later
-# `docker compose` commands keep the same stack:
+# Persist the file list (and `COMPOSE_PROFILES=cloudflare` when using the
+# bundled tunnel) in .env so `./scripts/unitares update` and later
+# `docker compose up -d` commands keep the full stack and recreate cloudflared
+# whenever governance-mcp is recreated:
 #
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.cloud.yml
+#   COMPOSE_PROFILES=cloudflare
 #
 # Why UNITARES_OAUTH_PUBLIC_PORT is NOT published on `ports:` here:
 # `bind_public_socket()` in `src/services/mcp_transport_service.py` binds
@@ -51,9 +54,11 @@ services:
       - cloudflare
     # Share governance-mcp's network namespace so cloudflared can route public
     # OAuth traffic to http://127.0.0.1:${UNITARES_OAUTH_PUBLIC_PORT} while the
-    # host-published 127.0.0.1:8767 listener stays Bearer-gated. Note: if
-    # governance-mcp is recreated or restarted outside Compose, restart
-    # cloudflared too so it rejoins the new network namespace.
+    # host-published 127.0.0.1:8767 listener stays Bearer-gated. Set
+    # COMPOSE_PROFILES=cloudflare in .env so Compose recreations (`docker compose
+    # up -d`, `./scripts/unitares update`) recreate cloudflared too; if
+    # governance-mcp crash-restarts in place (`restart: unless-stopped` or
+    # `docker restart`), run `docker compose up -d --force-recreate cloudflared`.
     network_mode: "service:governance-mcp"
     depends_on:
       governance-mcp:

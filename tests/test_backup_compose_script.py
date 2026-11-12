@@ -72,6 +72,10 @@ if args[0] == "exec":
             val = "/data" if key == "dir" else "dump.rdb"
             print(f"{{key}}\\n{{val}}")
             sys.exit(0)
+    if cmd[0] == "redis-check-rdb":
+        if os.environ.get("FAKE_REDIS_RDB_MODE") == "corrupt_crc":
+            sys.exit(1)
+        sys.exit(0)
     if cmd[0] == "python":
         data_mode = os.environ.get("FAKE_DATA_MODE", "ok")
         if data_mode == "fail":
@@ -218,13 +222,16 @@ def test_backup_compose_rejects_failed_redis_bgsave_and_health_check_fails(tmp_p
 
 
 def test_backup_compose_rejects_truncated_redis_rdb(tmp_path: Path):
-    res = _run_backup(tmp_path, {"FAKE_REDIS_RDB_MODE": "truncated"})
-    assert res.returncode != 0
+    for bad_rdb in ("truncated", "corrupt_crc"):
+        sub = tmp_path / bad_rdb
+        sub.mkdir()
+        res = _run_backup(sub, {"FAKE_REDIS_RDB_MODE": bad_rdb})
+        assert res.returncode != 0
 
-    backup_dir = tmp_path / "backups"
-    assert list(backup_dir.glob("redis_*.rdb")) == []
-    assert list(backup_dir.glob("governance_*.sql.gz")) == []
-    assert _run_health(backup_dir).returncode != 0
+        backup_dir = sub / "backups"
+        assert list(backup_dir.glob("redis_*.rdb")) == []
+        assert list(backup_dir.glob("governance_*.sql.gz")) == []
+        assert _run_health(backup_dir).returncode != 0
 
 
 def test_backup_compose_rejects_governance_data_failure(tmp_path: Path):
@@ -317,5 +324,20 @@ def test_backup_compose_recovers_orphaned_empty_lock_and_rejects_keep_zero_witho
 
     orphan = tmp_path / "orphan"
     (orphan / "backups" / ".backup.lock").mkdir(parents=True)
+    # Simulate a leftover crashed .stage_* directory containing plaintext.
+    stale_stage = orphan / "backups" / ".stage_20260101_000000_aaaaaa"
+    stale_stage.mkdir(parents=True)
+    (stale_stage / "governance_20260101_000000.sql.gz").write_bytes(b"stale")
     ok = _run_backup(orphan, {"LOCK_ORPHAN_SEC": "0"})
     assert ok.returncode == 0, ok.stderr
+    assert not stale_stage.exists()
+
+
+def test_backup_compose_rejects_failing_sync_cmd_in_plaintext_mode(tmp_path: Path):
+    """A failing BACKUP_SYNC_CMD in plaintext mode must not publish a .sql.gz
+    into $BACKUP_DIR that satisfies check_governance_backup_health.sh."""
+    res = _run_backup(tmp_path, {"BACKUP_SYNC_CMD": "exit 1"})
+    assert res.returncode != 0
+    backup_dir = tmp_path / "backups"
+    assert list(backup_dir.glob("governance_*.sql.gz")) == []
+    assert _run_health(backup_dir).returncode != 0

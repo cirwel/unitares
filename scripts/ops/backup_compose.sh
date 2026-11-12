@@ -9,8 +9,9 @@
 #   1. PostgreSQL + Apache AGE SQL dump (`governance_<ts>.sql.gz`), verified
 #      with `gzip -t` and pg_dump's completion trailer.
 #   2. Redis RDB snapshot (`redis_<ts>.rdb`) after a fresh `BGSAVE` advances
-#      `LASTSAVE` with `rdb_last_bgsave_status:ok` and a verified `REDISdddd`
-#      header plus `0xff` EOF / 8-byte CRC64 trailer.
+#      `LASTSAVE` with `rdb_last_bgsave_status:ok`, verified in-container with
+#      `redis-check-rdb` (CRC64 + structure) and checked after copy for the
+#      `REDISdddd` header and `0xff` EOF marker.
 #   3. File-backed governance server data (`governance_data_<ts>.tar.gz`
 #      streamed from `/app/data` while skipping `/app/data/hf` model weights in
 #      place, without copying weights to host disk) so the auto-generated
@@ -18,7 +19,9 @@
 #   4. Optional recipient-only `age` encryption (`AGE_RECIPIENT` or
 #      `AGE_RECIPIENT_FILE`) — keep the private decryption key off the VPS.
 #      When an `age` recipient is set, `BACKUP_KEEP_PLAINTEXT` defaults to `0`
-#      so plaintext dumps are never published into `$BACKUP_DIR`.
+#      so plaintext dumps are removed inside `.stage_<ts>_*` before publishing
+#      to `$BACKUP_DIR` (any orphaned `.stage_*` directory from a prior SIGKILL
+#      or crash is swept on the next lock acquisition).
 #
 # Note: `.env` itself is NOT copied into these archives; escrow deployment
 # credentials separately in a password manager or secret store.
@@ -330,13 +333,17 @@ dump_redis() {
     [ -n "$cfg_dir" ] && rdb_dir="$cfg_dir"
     [ -n "$cfg_name" ] && rdb_name="$cfg_name"
 
+    if ! "$DOCKER_BIN" exec -i "$REDIS_CONTAINER" redis-check-rdb "${rdb_dir}/${rdb_name}" >/dev/null 2>&1; then
+        log "ERROR: in-container redis-check-rdb failed for ${rdb_dir}/${rdb_name}"
+        return 1
+    fi
     if ! "$DOCKER_BIN" cp "${REDIS_CONTAINER}:${rdb_dir}/${rdb_name}" "${out}.tmp"; then
         log "ERROR: docker cp failed for Redis RDB"
         rm -f "${out}.tmp"
         return 1
     fi
     if ! verify_redis_rdb "${out}.tmp"; then
-        log "ERROR: copied Redis snapshot failed REDIS header / EOF trailer check"
+        log "ERROR: copied Redis snapshot failed REDIS header / EOF marker check"
         rm -f "${out}.tmp"
         return 1
     fi
@@ -451,6 +458,9 @@ if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ] && [ -z "$AGE_RECIPIENT" ] && [ -z "$AGE_R
 fi
 
 acquire_lock
+# Sweep any leftover staging dirs from a prior SIGKILL, OOM, or host reboot now
+# that we hold the exclusive backup lock.
+rm -rf "$BACKUP_DIR"/.stage_*
 STAGE_DIR=$(mktemp -d "$BACKUP_DIR/.stage_${TIMESTAMP}_XXXXXX")
 
 STAGE_PG="$STAGE_DIR/governance_${TIMESTAMP}.sql.gz"
@@ -479,7 +489,26 @@ if ! STAGE_DATA_OUT=$(encrypt_stage_artifact "$STAGE_DATA"); then
     fail "age encryption failed for governance-data archive"
 fi
 
-# Publish all staged files into $BACKUP_DIR only after every capture + encryption succeeded.
+STAGE_MANIFEST="$STAGE_DIR/manifest_${TIMESTAMP}.sha256"
+write_manifest "$STAGE_MANIFEST" "$STAGE_PG_OUT" "$STAGE_REDIS_OUT" "$STAGE_DATA_OUT"
+
+# Run off-site upload BEFORE publishing into $BACKUP_DIR so a failing sync
+# never leaves a fresh governance_*.sql.gz in $BACKUP_DIR that satisfies
+# check_governance_backup_health.sh's mtime fallback.
+if [ -n "$BACKUP_SYNC_CMD" ]; then
+    log "Running BACKUP_SYNC_CMD"
+    if ! BACKUP_DIR="$BACKUP_DIR" \
+        BACKUP_STAGE_DIR="$STAGE_DIR" \
+        PG_BACKUP="$STAGE_PG_OUT" \
+        REDIS_BACKUP="$STAGE_REDIS_OUT" \
+        DATA_BACKUP="$STAGE_DATA_OUT" \
+        MANIFEST_FILE="$STAGE_MANIFEST" \
+        sh -c "$BACKUP_SYNC_CMD"; then
+        fail "BACKUP_SYNC_CMD failed"
+    fi
+fi
+
+# Publish all staged files into $BACKUP_DIR only after capture, encryption, and sync succeeded.
 for staged_item in "$STAGE_DIR"/*; do
     [ -e "$staged_item" ] || continue
     chmod 600 "$staged_item"
@@ -491,20 +520,7 @@ STAGE_DIR=""
 PG_FINAL="$BACKUP_DIR/$(basename "$STAGE_PG_OUT")"
 REDIS_FINAL="$BACKUP_DIR/$(basename "$STAGE_REDIS_OUT")"
 DATA_FINAL="$BACKUP_DIR/$(basename "$STAGE_DATA_OUT")"
-MANIFEST_FINAL="$BACKUP_DIR/manifest_${TIMESTAMP}.sha256"
-write_manifest "$MANIFEST_FINAL" "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL"
-
-if [ -n "$BACKUP_SYNC_CMD" ]; then
-    log "Running BACKUP_SYNC_CMD"
-    if ! BACKUP_DIR="$BACKUP_DIR" \
-        PG_BACKUP="$PG_FINAL" \
-        REDIS_BACKUP="$REDIS_FINAL" \
-        DATA_BACKUP="$DATA_FINAL" \
-        MANIFEST_FILE="$MANIFEST_FINAL" \
-        sh -c "$BACKUP_SYNC_CMD"; then
-        fail "BACKUP_SYNC_CMD failed"
-    fi
-fi
+MANIFEST_FINAL="$BACKUP_DIR/$(basename "$STAGE_MANIFEST")"
 
 TS_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '%s\n' "$TS_ISO" > "${LAST_SUCCESS_FILE}.tmp.$$"

@@ -92,10 +92,14 @@ def test_env_example_documents_cloud_vars_without_unsafe_oauth_defaults():
 
 def test_runbook_names_cloud_overlay_backup_script_and_ingress():
     runbook = (ROOT / "docs/operations/cloud-deploy-runbook.md").read_text(encoding="utf-8")
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "docker-compose.cloud.yml" in runbook
+    assert "COMPOSE_PROFILES=cloudflare" in runbook
+    assert "COMPOSE_PROFILES=cloudflare" in example
     assert "scripts/ops/backup_compose.sh" in runbook
     assert "http://127.0.0.1:8772" in runbook
     assert "http_status:404" in runbook
+    assert 'rclone copy "$BACKUP_STAGE_DIR"' in runbook
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI unavailable")

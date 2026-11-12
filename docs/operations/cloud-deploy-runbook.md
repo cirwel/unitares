@@ -70,8 +70,10 @@ compared with full-text search alone:
 1. Provision the host; install Docker Engine with the Compose plugin.
 2. Clone the repository at a published release tag (see `README.md#install`) and enter it.
 3. `cp .env.example .env`, set `COMPOSE_FILE=docker-compose.yml:docker-compose.cloud.yml`
-   (append `:docker-compose.full.yml` for `bge-m3` hybrid search so `./scripts/unitares update`
-   preserves the full overlay stack), and **replace every development default**.
+   (append `:docker-compose.full.yml` for `bge-m3` hybrid search, and add
+   `COMPOSE_PROFILES=cloudflare` when running the bundled `cloudflared` service so
+   `docker compose up -d` and `./scripts/unitares update` preserve and recreate the
+   entire overlay stack), and **replace every development default**.
    The Compose file ships loopback-only dev values that must not survive on a
    host with a public route to it:
    - `POSTGRES_PASSWORD` — non-default; set before the first volume initialization.
@@ -162,18 +164,23 @@ unauthenticated tailnet-to-loopback TCP proxy.
   mapping cannot reach it. In `docker-compose.cloud.yml`, the opt-in
   `cloudflared` service sets `network_mode: "service:governance-mcp"`, sharing
   that container loopback directly:
-  1. Set `CLOUDFLARE_TUNNEL_TOKEN`, `UNITARES_OAUTH_ISSUER_URL=https://governance.example.com`,
+  1. Set `COMPOSE_PROFILES=cloudflare`, `CLOUDFLARE_TUNNEL_TOKEN`,
+     `UNITARES_OAUTH_ISSUER_URL=https://governance.example.com`,
      `UNITARES_OAUTH_PUBLIC_PORT=8772`, and `UNITARES_OAUTH_REQUIRED=1` in `.env`
      (alongside a non-empty `UNITARES_MCP_BEARER_TOKENS` for the main `:8767`
-     listener).
+     listener). Persisting `COMPOSE_PROFILES=cloudflare` in `.env` ensures every
+     subsequent `docker compose up -d` (including secret rotation and
+     `./scripts/unitares update`) recreates `cloudflared` whenever `governance-mcp`
+     is recreated.
   2. In the Cloudflare Zero Trust tunnel dashboard, route `governance.example.com`
      to `http://127.0.0.1:8772` with a fallback catch-all rule of `http_status:404`
      (never point the public tunnel at Postgres/Redis or leave an unauthenticated
      listener behind it).
-  3. Start with `docker compose --profile cloudflare up -d --wait`. If
-     `governance-mcp` is later recreated or restarted outside Compose, run
-     `docker compose --profile cloudflare up -d --force-recreate cloudflared` so
-     `cloudflared` rejoins the new network namespace.
+  3. Start with `docker compose up -d --wait`. Note: if `governance-mcp` later
+     crash-restarts in place (`restart: unless-stopped` or `docker restart`),
+     `cloudflared` stays attached to the old network sandbox until recreated via
+     `docker compose up -d --force-recreate cloudflared` (run `cloudflared` on
+     the host instead if you want tunnel survival across container crash-restarts).
   4. Sanity-check from outside:
      `curl -i https://governance.example.com/mcp/ -H 'Accept: text/event-stream'`
      must return `401` (OAuth challenge), never `200` or `421`.
@@ -182,16 +189,18 @@ unauthenticated tailnet-to-loopback TCP proxy.
   `http://127.0.0.1:8767` (host loopback), not container-internal `:8772`. If a
   host-level `cloudflared` is your public OAuth ingress, leave
   `UNITARES_OAUTH_PUBLIC_PORT` unset so OAuth gates `/mcp` on `:8767` directly.
-  When using the Compose `--profile cloudflare` container for public OAuth on
-  `:8772`, host `127.0.0.1:8767` remains available on the VPS for Bearer-gated
-  local callers or a secondary connector daemon. Reusing the public hostname
-  that previously pointed at the home machine means remote MCP client URLs do
-  not change at cutover.
+  When using the bundled `cloudflared` container (`COMPOSE_PROFILES=cloudflare`)
+  for public OAuth on `:8772`, host `127.0.0.1:8767` remains available on the VPS
+  for Bearer-gated local callers or a secondary connector daemon. Reusing the
+  public hostname that previously pointed at the home machine means remote MCP
+  client URLs do not change at cutover.
 - **Tailscale HTTPS (`tailscale serve`):** join the VPS to your tailnet and
-  expose `http://127.0.0.1:8767` over `tailscale serve` HTTPS (still requiring
-  `UNITARES_MCP_BEARER_TOKENS` or `UNITARES_HTTP_AGENT_TOKENS`, with the
-  tailnet's `https://<node>.<tailnet>.ts.net` hostname and origin added to
-  `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS`).
+  expose `http://127.0.0.1:8767` over `tailscale serve` HTTPS with a non-empty
+  `UNITARES_MCP_BEARER_TOKENS` allowlist (required so `/mcp` is Bearer-gated and
+  REST stays strict; `UNITARES_HTTP_AGENT_TOKENS` is an optional per-agent
+  addition for `POST /v1/tools/call`, never a substitute for the bearer
+  allowlist), and add `https://<node>.<tailnet>.ts.net` to
+  `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS`.
 
 Either way the governance HTTP surface is now reachable beyond a single
 workstation, which is why step 3 above is not optional: the dev-default signing
@@ -253,8 +262,9 @@ together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/op
    - `governance_<timestamp>.sql.gz` — `pg_dump` from `unitares-postgres-age`,
      verified with `gzip -t` and pg_dump's completion trailer.
    - `redis_<timestamp>.rdb` — captured after triggering `BGSAVE`, waiting for
-     `LASTSAVE` to advance with `rdb_last_bgsave_status:ok`, and checking the
-     `REDISdddd` file header plus `0xff` EOF / CRC64 trailer (most live
+     `LASTSAVE` to advance with `rdb_last_bgsave_status:ok`, validating CRC64
+     and RDB structure in-container via `redis-check-rdb`, and checking the
+     copied file's `REDISdddd` header and `0xff` EOF marker (most live
      session/identity bindings and OAuth client registrations live in Redis).
    - `governance_data_<timestamp>.tar.gz` — streamed directly from `/app/data`
      inside `unitares-governance-mcp` while skipping `/app/data/hf` model
@@ -266,13 +276,15 @@ together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/op
    cannot decrypt historical dumps (`core.agents` and audit rows can hold
    sensitive operational text). When an `age` recipient is configured,
    `backup_compose.sh` defaults `BACKUP_KEEP_PLAINTEXT=0`, deleting staged
-   plaintext before publishing `.age` archives and `manifest_<timestamp>.sha256`
-   into `$BACKUP_DIR`. Pair with `BACKUP_SYNC_CMD` filtered to encrypted
-   artifacts and manifests (`rclone sync` to S3/R2/B2 or encrypted object storage):
+   plaintext inside `.stage_<timestamp>_*` before uploading and publishing `.age`
+   archives plus `manifest_<timestamp>.sha256` into `$BACKUP_DIR` (any orphaned
+   `.stage_*` directory from a prior crash is swept on the next lock acquisition).
+   Use `rclone copy "$BACKUP_STAGE_DIR"` (never `rclone sync`, which would mirror
+   local pruning or wipe remote history from a rebuilt host):
 
    ```bash
    AGE_RECIPIENT_FILE=/etc/unitares/backup.agekey.pub \
-   BACKUP_SYNC_CMD='rclone sync --include "*.age" --include "manifest_*.sha256" "$BACKUP_DIR" remote:unitares-backups/' \
+   BACKUP_SYNC_CMD='rclone copy "$BACKUP_STAGE_DIR" remote:unitares-backups/' \
      ./scripts/ops/backup_compose.sh
 
    ./scripts/ops/check_governance_backup_health.sh
@@ -283,10 +295,20 @@ together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/op
    OAuth client secrets, bearer allowlists, and `POSTGRES_PASSWORD`).
 
 **A backup that has never been restored is a hypothesis.** Do one restore
-drill per deployment: fresh volumes, load the SQL dump, drop the RDB into
-the Redis volume, restore `/app/data/secrets`, `docker compose up -d --wait`,
-and confirm `start_session` / `check_working_state` sees the expected identity
-history.
+drill per deployment on fresh volumes:
+1. Restore the PostgreSQL SQL dump (see *PostgreSQL + Apache AGE restore notes* below)
+   and unpack `governance_data_<timestamp>.tar.gz` into `/app/data` (`secrets/`).
+2. Because `docker-compose.yml` runs `redis-server --appendonly yes` (and Redis 7+
+   ignores `dump.rdb` when AOF is enabled with no `appendonlydir`), bootstrap
+   Redis from the RDB once before starting normal AOF mode: copy
+   `redis_<timestamp>.rdb` into `/data/dump.rdb` on the fresh `redis-data`
+   volume, start Redis once with `--appendonly no` (`docker compose run --rm -d --name redis-restore redis redis-server --appendonly no`),
+   run `docker exec redis-restore redis-cli BGREWRITEAOF` and wait for
+   `aof_rewrite_in_progress:0`, then stop `redis-restore` and bring up the stack
+   normally (`docker compose up -d --wait`).
+3. Confirm both `docker compose exec -T redis redis-cli DBSIZE` (non-zero session /
+   OAuth state) and `start_session` / `check_working_state` against Postgres
+   identity history.
 
 ### PostgreSQL + Apache AGE restore notes
 
