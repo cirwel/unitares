@@ -113,8 +113,9 @@ async def _load_metadata_from_postgres_async() -> dict:
     # capped read silently dropped the oldest identities once it grew past the
     # cap (#3246). Deleted rows are requested and filtered here rather than in
     # list_agents, so a page's length is the number of rows PostgreSQL
-    # returned and "short" reliably means "last". Offset paging over
-    # created_at DESC can repeat a row if an identity is minted mid-load; the
+    # returned and "short" reliably means "last". list_identities orders by
+    # (created_at, identity_id) DESC, so page boundaries are stable. Offset
+    # paging can still repeat a row if an identity is minted mid-load; the
     # dict below is keyed by agent_id, so a repeat is harmless.
     agents = []
     offset = 0

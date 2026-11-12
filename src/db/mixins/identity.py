@@ -207,7 +207,7 @@ class IdentityMixin:
                            i.status, i.parent_agent_id, i.spawn_reason, i.disabled_at, i.last_activity_at, i.metadata
                     FROM core.identities i
                     WHERE i.status = $1{participated_clause}
-                    ORDER BY i.created_at DESC
+                    ORDER BY i.created_at DESC, i.identity_id DESC
                     LIMIT $2 OFFSET $3
                     """,
                     status, limit, offset,
@@ -226,7 +226,7 @@ class IdentityMixin:
                     SELECT i.identity_id, i.agent_id, i.api_key_hash, i.created_at, i.updated_at,
                            i.status, i.parent_agent_id, i.spawn_reason, i.disabled_at, i.last_activity_at, i.metadata
                     FROM core.identities i{no_status_where}
-                    ORDER BY i.created_at DESC
+                    ORDER BY i.created_at DESC, i.identity_id DESC
                     LIMIT $1 OFFSET $2
                     """,
                     limit, offset,
