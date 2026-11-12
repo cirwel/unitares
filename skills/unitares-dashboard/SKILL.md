@@ -22,6 +22,10 @@ source_files:
   - unitares/dashboard/redesign/sections/knowledge-flow.js
   - unitares/dashboard/redesign/sections/risk.js
   - unitares/dashboard/redesign/sections/security.js
+  - unitares/dashboard/redesign/sections/connectors.js
+  - unitares/dashboard/tests/connectors.test.js
+  - unitares/src/http_routes/connectors.py
+  - unitares/src/oauth_connectors.py
   - unitares/dashboard/package.json
   - unitares/dashboard/EXTENSIONS.md
   - unitares/dashboard/tests/risk-history.test.js
@@ -69,7 +73,7 @@ worked reference. It is still a core module for
 ## Core or extension? Decide first
 
 The shipped tabs are Overview, Agents, Discoveries, Dialectic, Activity,
-Timeline, EISV, Risk and Security. A new tab belongs in core only if **any install** can read
+Timeline, EISV, Risk, Connectors and Security. A new tab belongs in core only if **any install** can read
 it: it renders on an empty roster, names no resident, and describes product
 state rather than one deployment's instruments. Otherwise it is an
 **extension**: it lives outside this repo, in the directory named by
@@ -267,8 +271,8 @@ badge). The WS plumbing lives in `ws.js`.
 
 ## Mostly read-only — explicit authenticated write surfaces
 
-The redesign sends the read bearer token everywhere; core sections are
-read-only except one area. (Operator and model adjudication of findings, with
+Ordinary data reads use the read bearer or dashboard session. Core sections
+are read-only except the authenticated Security and Connectors areas. (Operator and model adjudication of findings, with
 its queue and verdict routes, was removed 2026-09-27. An extension that calls a
 route-pack route needs that pack enabled on the server via
 `UNITARES_ROUTE_PACKS`, with its installed handler declared by the trusted
@@ -290,6 +294,23 @@ credential gate to every extension handler; no fleet packs are built in.)
   server's named fix as a neutral setup hint rather than a red session error.
   Only that exact 503 body counts as "not configured"; any other answer, or
   none, keeps the error.
+
+- **Connectors**: live-only `DATA.connectors/createConnector/revokeConnector`
+  accessors call `/auth/connectors` and `/auth/connectors/{client_id}/revoke`.
+  Reads require an operator credential or dashboard session. Session writes
+  additionally require the CSRF header and recent sign-in; operator-token
+  requests authenticate explicitly. The gate checks any supplied Origin
+  against the actual dashboard origin and configured auth origins. Agent
+  MCP/API bearers alone grant no access. Each connector has its own durable
+  registration and a one-time secret; disabling it denies existing tokens as
+  well as future sign-ins. OAuth and migration 082 must be configured before
+  this UI can create registrations. No failed call falls back to a snapshot.
+  `connectorRequest` in `data.js` surfaces the server's actionable errors.
+  Keep credentials out of local/session storage and URLs. The module clears
+  displayed credentials on pagehide/hash navigation; `activateSection` also
+  calls `Connectors.clearCredentials()` because its `pushState` navigation
+  does not fire hashchange. This form is manually refreshed, never added to
+  `RELOAD` where a refresh could discard one-time credentials or user input.
 
 The operator credential is provisioned directly through the Security pane's
 password input and retained only in that browser's local storage. Use HTTPS for

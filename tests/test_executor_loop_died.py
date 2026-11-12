@@ -64,11 +64,29 @@ def test_run_forever_raises_emits_uncaught():
     assert kwargs["payload"]["error_class"] == "RuntimeError"
     assert "incident_id" in kwargs["payload"]
     assert len(kwargs["payload"]["incident_id"]) == 36
-    # _loop_ready was set before run_forever() was called — caller can still
-    # inspect this if it's ever useful, but the assert here just pins that
-    # the emit didn't happen *before* loop_ready (which would mean we wrapped
-    # too aggressively).
-    assert pool._loop_ready.is_set()
+    # The mocked run_forever never executes the scheduled readiness callback.
+    # A caller must not be told the loop is ready before it actually runs.
+    assert not pool._loop_ready.is_set()
+
+
+def test_loop_ready_is_signalled_only_after_loop_is_running():
+    """The creation waiter is released by the live loop, not its thread prologue."""
+    from src.db.executor_pool import ExecutorPool
+
+    pool = ExecutorPool.__new__(ExecutorPool)
+    pool._loop = asyncio.new_event_loop()
+    pool._loop_ready = threading.Event()
+    pool._closed_flag = False
+    thread = threading.Thread(target=pool._run_loop, daemon=True)
+    thread.start()
+    try:
+        assert pool._loop_ready.wait(timeout=1.0)
+        assert pool._loop.is_running()
+    finally:
+        pool._closed_flag = True
+        pool._loop.call_soon_threadsafe(pool._loop.stop)
+        thread.join(timeout=1.0)
+        pool._loop.close()
 
 
 def test_run_forever_returns_without_close_emits_premature_return():
@@ -120,3 +138,159 @@ def test_emit_failure_does_not_swallow_uncaught_exception():
         # Original RuntimeError propagates, NOT ValueError from emit
         with pytest.raises(RuntimeError, match="loop crashed"):
             pool._run_loop()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_startup_timeout_cleans_up_thread_and_loop(monkeypatch):
+    """If `_loop_ready.wait` times out during `__init__` or `create()`,
+    `ExecutorPool` raises `ConnectionError`:
+    - When the thread is genuinely stalled past `THREAD_JOIN_TIMEOUT_SECONDS`,
+      `_abort_startup*` avoids closing `loop` underneath the live thread, and
+      the queued `loop.stop()` terminates `run_forever()` on its first tick
+      without emitting `executor_loop_died.premature_return`.
+    - When the thread has already exited, `_abort_startup*` closes `loop`."""
+    import src.db.executor_pool as ep_mod
+    from src.db.executor_pool import ExecutorPool
+
+    created_loops = []
+    spawned_threads = []
+    real_new_event_loop = asyncio.new_event_loop
+    real_run_loop = ExecutorPool._run_loop
+
+    def tracking_new_event_loop():
+        loop = real_new_event_loop()
+        created_loops.append(loop)
+        return loop
+
+    release_stalled = threading.Event()
+
+    def delayed_real_run_loop(self):
+        spawned_threads.append(threading.current_thread())
+        release_stalled.wait(timeout=2.0)
+        real_run_loop(self)
+
+    monkeypatch.setattr(ep_mod.asyncio, "new_event_loop", tracking_new_event_loop)
+    monkeypatch.setattr(ep_mod, "LOOP_START_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(ep_mod, "THREAD_JOIN_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(ExecutorPool, "_run_loop", delayed_real_run_loop)
+
+    with patch(
+        "src.coordination_failure_emit.emit_coordination_failure_sync"
+    ) as mock_emit:
+        # 1. Truly stalled threads (still alive when join times out):
+        with pytest.raises(ConnectionError, match="failed to start"):
+            ExecutorPool(MagicMock())
+
+        with pytest.raises(ConnectionError, match="failed to start"):
+            await ExecutorPool.create(lambda: asyncio.sleep(0))
+
+        assert len(created_loops) == 2
+        # Loops must NOT be closed while the stalled threads are still alive.
+        for loop in created_loops:
+            assert not loop.is_closed()
+
+        # Releasing the stalled threads runs real `_run_loop`, which immediately
+        # processes the queued `loop.stop()` and exits cleanly with zero emits.
+        release_stalled.set()
+        for thread in spawned_threads:
+            thread.join(timeout=1.0)
+            assert not thread.is_alive()
+        for loop in created_loops:
+            assert not loop.is_running()
+            loop.close()
+
+        mock_emit.assert_not_called()
+
+    # 2. Thread already dead before join completes -> loop is closed immediately:
+    monkeypatch.setattr(ExecutorPool, "_run_loop", lambda self: None)
+    with pytest.raises(ConnectionError, match="failed to start"):
+        ExecutorPool(MagicMock())
+    assert created_loops[-1].is_closed()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_create_factory_failure_cleans_up_thread_and_loop():
+    """If `create_pool_factory` raises inside `ExecutorPool.create()`, the
+    spawned executor thread and event loop are stopped and closed so retries
+    from `PostgresBackend._create_pool` do not leak threads."""
+    from src.db.executor_pool import ExecutorPool
+
+    seen = {}
+
+    async def failing_pool():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["thread"] = threading.current_thread()
+        raise OSError("postgres unreachable")
+
+    with pytest.raises(OSError, match="postgres unreachable"):
+        await ExecutorPool.create(failing_pool)
+
+    assert not seen["thread"].is_alive()
+    assert not seen["loop"].is_running()
+    assert seen["loop"].is_closed()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_create_cancelled_mid_flight_unwinds_factory_before_loop_stop():
+    """Cancelling a caller task awaiting `ExecutorPool.create()` mid-creation
+    cancels and drains the factory task on the executor loop before stopping and
+    closing that loop."""
+    from src.db.executor_pool import ExecutorPool
+
+    factory_started = threading.Event()
+    seen = {"unwound": False}
+
+    async def slow_pool():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["thread"] = threading.current_thread()
+        factory_started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            await asyncio.sleep(0)
+            seen["unwound"] = True
+
+    task = asyncio.create_task(ExecutorPool.create(slow_pool))
+    await asyncio.to_thread(factory_started.wait, 2.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen["unwound"] is True
+    assert not seen["thread"].is_alive()
+    assert not seen["loop"].is_running()
+    assert seen["loop"].is_closed()
+
+
+@pytest.mark.asyncio
+async def test_executor_pool_create_cancelled_wedged_cleanup_stops_and_closes_loop(monkeypatch):
+    """If a cancelled `create_pool_factory` hangs inside its `finally` cleanup
+    past `CLOSE_TIMEOUT_SECONDS`, `_abort_startup` force-stops the executor loop,
+    joins the thread, and closes the loop instead of leaving it unclosed."""
+    import src.db.executor_pool as ep_mod
+    from src.db.executor_pool import ExecutorPool
+
+    monkeypatch.setattr(ep_mod, "CLOSE_TIMEOUT_SECONDS", 0.03)
+    monkeypatch.setattr(ep_mod, "THREAD_JOIN_TIMEOUT_SECONDS", 0.2)
+
+    factory_started = threading.Event()
+    seen = {}
+
+    async def wedged_cleanup_pool():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["thread"] = threading.current_thread()
+        factory_started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            await asyncio.sleep(60)
+
+    task = asyncio.create_task(ExecutorPool.create(wedged_cleanup_pool))
+    await asyncio.to_thread(factory_started.wait, 2.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not seen["thread"].is_alive()
+    assert not seen["loop"].is_running()
+    assert seen["loop"].is_closed()
