@@ -280,8 +280,8 @@ together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/op
    archives plus `manifest_<timestamp>.sha256` into `$BACKUP_DIR` (any orphaned
    `.stage_*` directory from a prior crash is swept on the next lock acquisition;
    if the host already holds earlier unencrypted dumps, verify `age -d` on one
-   encrypted set first and then run once with `PURGE_PRIOR_PLAINTEXT=1` to
-   remove the older plaintext files).
+   encrypted set first and then run once with `PURGE_PRIOR_PLAINTEXT=1`
+   alongside `AGE_RECIPIENT_FILE` to remove the older plaintext files).
    Use `rclone copy "$BACKUP_STAGE_DIR"` (never `rclone sync`, which would mirror
    local pruning or wipe remote history from a rebuilt host):
 

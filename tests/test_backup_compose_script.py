@@ -391,6 +391,80 @@ def test_backup_compose_recovers_orphaned_empty_lock_and_rejects_keep_zero_witho
         holder.wait(timeout=5)
 
 
+def test_backup_compose_rejects_purge_without_age_and_empty_manifest_failure(tmp_path: Path):
+    purge_no_age = tmp_path / "purge_no_age"
+    purge_no_age.mkdir()
+    bad_purge = _run_backup(purge_no_age, {"PURGE_PRIOR_PLAINTEXT": "1"})
+    assert bad_purge.returncode != 0
+    assert "PURGE_PRIOR_PLAINTEXT=1 requires AGE_RECIPIENT" in bad_purge.stderr
+
+    # Simulate disk full inside write_manifest after creating an empty .sha256 file:
+    # if write_manifest failed to check python3 exit status / non-empty output,
+    # trailing `chmod 600` would return 0 and publish an empty manifest.
+    site_dir = tmp_path / "site_hook"
+    site_dir.mkdir()
+    (site_dir / "sitecustomize.py").write_text(
+        """import pathlib
+_orig = pathlib.Path.write_text
+def _boom(self, data, *args, **kwargs):
+    if self.name.startswith("manifest_") and self.name.endswith(".sha256"):
+        self.open("wb").close()
+        raise OSError("simulated disk full during manifest write")
+    return _orig(self, data, *args, **kwargs)
+pathlib.Path.write_text = _boom
+""",
+        encoding="utf-8",
+    )
+    manifest_fail = tmp_path / "manifest_fail"
+    manifest_fail.mkdir()
+    res = _run_backup(manifest_fail, {"PYTHONPATH": str(site_dir)})
+    assert res.returncode != 0
+    backup_dir = manifest_fail / "backups"
+    assert list(backup_dir.glob("manifest_*.sha256")) == []
+    assert list(backup_dir.glob("governance_*.sql.gz")) == []
+    status = json.loads((backup_dir / "last_backup_status.json").read_text())
+    assert status["status"] == "error"
+
+
+def test_backup_compose_lock_token_preservation_and_empty_ps_age_fallback(tmp_path: Path):
+    # 1. If a displaced run's lock token no longer matches .backup.lock/token,
+    # its EXIT cleanup must NOT delete the successor's lock directory.
+    token_case = tmp_path / "token_case"
+    token_case.mkdir()
+    displaced = _run_backup(
+        token_case,
+        {
+            "BACKUP_SYNC_CMD": 'printf "successor_token\\n" > "$BACKUP_DIR/.backup.lock/token"; exit 1',
+        },
+    )
+    assert displaced.returncode != 0
+    assert (token_case / "backups" / ".backup.lock").exists()
+
+    # 2. When `ps` returns empty args (e.g. hidepid=2), LOCK_MAX_AGE_SEC decides
+    # whether a live PID holds the lock (age < max) or is reclaimed (age >= max).
+    empty_ps_bin = tmp_path / "empty_ps_bin"
+    empty_ps_bin.mkdir()
+    fake_ps = empty_ps_bin / "ps"
+    fake_ps.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_ps.chmod(0o755)
+    patched_path = f"{empty_ps_bin}:{os.environ.get('PATH', '')}"
+
+    young = tmp_path / "empty_ps_young"
+    young_lock = young / "backups" / ".backup.lock"
+    young_lock.mkdir(parents=True)
+    (young_lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    blocked = _run_backup(young, {"PATH": patched_path, "LOCK_MAX_AGE_SEC": "3600"})
+    assert blocked.returncode != 0
+    assert young_lock.exists()
+
+    expired = tmp_path / "empty_ps_expired"
+    expired_lock = expired / "backups" / ".backup.lock"
+    expired_lock.mkdir(parents=True)
+    (expired_lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    reclaimed = _run_backup(expired, {"PATH": patched_path, "LOCK_MAX_AGE_SEC": "0"})
+    assert reclaimed.returncode == 0, reclaimed.stderr
+
+
 def test_backup_compose_rejects_failing_sync_cmd_in_plaintext_mode(tmp_path: Path):
     """A failing BACKUP_SYNC_CMD in plaintext mode must not publish a .sql.gz
     into $BACKUP_DIR that satisfies check_governance_backup_health.sh."""

@@ -535,6 +535,9 @@ fi
 if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ] && [ -z "$AGE_RECIPIENT" ] && [ -z "$AGE_RECIPIENT_FILE" ]; then
     fail "BACKUP_KEEP_PLAINTEXT=0 requires AGE_RECIPIENT or AGE_RECIPIENT_FILE"
 fi
+if [ "$PURGE_PRIOR_PLAINTEXT" = "1" ] && [ "$BACKUP_KEEP_PLAINTEXT" != "0" ]; then
+    fail "PURGE_PRIOR_PLAINTEXT=1 requires AGE_RECIPIENT or AGE_RECIPIENT_FILE with BACKUP_KEEP_PLAINTEXT=0"
+fi
 
 acquire_lock
 # Sweep any leftover staging dirs from a prior SIGKILL, OOM, or host reboot now
