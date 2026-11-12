@@ -49,7 +49,15 @@ class Client:
             try:
                 response = self.messages.get(timeout=2)
             except queue.Empty:
-                assert self.process.poll() is None, f'container exited {self.process.returncode}; see {self.name}.stderr.log'
+                if self.process.poll() is not None:
+                    # The log file is gone with the runner, so a bare pointer to
+                    # it leaves a CI failure undiagnosable. Print its tail.
+                    self.log.flush()
+                    tail = ''.join(open(self.log.name, errors='replace').readlines()[-60:])
+                    raise AssertionError(
+                        f'container exited {self.process.returncode}; '
+                        f'last lines of {self.name}.stderr.log:\n{tail}'
+                    )
                 assert time.monotonic() < deadline, 'MCP timeout'
                 continue
             assert 'stdout_contamination' not in response, response
