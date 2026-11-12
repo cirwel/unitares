@@ -137,6 +137,7 @@ def _run_backup(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subp
         "AGE_RECIPIENT",
         "AGE_RECIPIENT_FILE",
         "BACKUP_KEEP_PLAINTEXT",
+        "PURGE_PRIOR_PLAINTEXT",
         "BACKUP_SYNC_CMD",
     ):
         env.pop(key, None)
@@ -264,8 +265,9 @@ out.write_bytes(b"AGE-ENCRYPTED:" + src.read_bytes())
     pub = tmp_path / "backup.agekey.pub"
     pub.write_text("age1examplepublicrecipientkey\n", encoding="utf-8")
 
-    # Pre-seed a plaintext dump from an earlier unencrypted run; turning on age
-    # with default BACKUP_KEEP_PLAINTEXT=0 must purge it on completion.
+    # Pre-seed a plaintext dump from an earlier unencrypted run: by default,
+    # turning on age emits no NEW plaintext while preserving prior restore points
+    # until the operator verifies decryption and opts into PURGE_PRIOR_PLAINTEXT=1.
     preexisting = tmp_path / "backups"
     preexisting.mkdir(parents=True, exist_ok=True)
     (preexisting / "governance_20250101_000000.sql.gz").write_bytes(b"old-plain")
@@ -282,13 +284,24 @@ out.write_bytes(b"AGE-ENCRYPTED:" + src.read_bytes())
     assert res.returncode == 0, res.stderr
 
     backup_dir = tmp_path / "backups"
-    assert list(backup_dir.glob("*.sql.gz")) == []
-    assert list(backup_dir.glob("*.rdb")) == []
-    assert list(backup_dir.glob("*.tar.gz")) == []
+    assert [p.name for p in backup_dir.glob("*.sql.gz")] == ["governance_20250101_000000.sql.gz"]
     assert len(list(backup_dir.glob("governance_*.sql.gz.age"))) == 1
     assert len(list(backup_dir.glob("redis_*.rdb.age"))) == 1
     assert len(list(backup_dir.glob("governance_data_*.tar.gz.age"))) == 1
     assert _run_health(backup_dir).returncode == 0
+
+    purge = _run_backup(
+        tmp_path,
+        {
+            "AGE_BIN": str(fake_age),
+            "AGE_RECIPIENT_FILE": str(pub),
+            "PURGE_PRIOR_PLAINTEXT": "1",
+        },
+    )
+    assert purge.returncode == 0, purge.stderr
+    assert list(backup_dir.glob("*.sql.gz")) == []
+    assert list(backup_dir.glob("*.rdb")) == []
+    assert list(backup_dir.glob("*.tar.gz")) == []
 
 
 def test_backup_compose_rejects_partial_age_failure(tmp_path: Path):

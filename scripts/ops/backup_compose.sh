@@ -19,9 +19,12 @@
 #   4. Optional recipient-only `age` encryption (`AGE_RECIPIENT` or
 #      `AGE_RECIPIENT_FILE`) — keep the private decryption key off the VPS.
 #      When an `age` recipient is set, `BACKUP_KEEP_PLAINTEXT` defaults to `0`
-#      so plaintext dumps are removed inside `.stage_<ts>_*` before publishing
-#      to `$BACKUP_DIR` (any orphaned `.stage_*` directory from a prior SIGKILL
-#      or crash is swept on the next lock acquisition).
+#      so new plaintext dumps are removed inside `.stage_<ts>_*` before
+#      publishing to `$BACKUP_DIR` (any orphaned `.stage_*` directory from a
+#      prior crash is swept on the next lock acquisition; set
+#      `PURGE_PRIOR_PLAINTEXT=1` after verifying `age -d` to delete older
+#      unencrypted archives from `$BACKUP_DIR`, and `LOCK_MAX_AGE_SEC` bounds
+#      unreadable cross-user locks under `hidepid=2`).
 #
 # Note: `.env` itself is NOT copied into these archives; escrow deployment
 # credentials separately in a password manager or secret store.
@@ -54,6 +57,7 @@ if [ -n "$AGE_RECIPIENT" ] || [ -n "$AGE_RECIPIENT_FILE" ]; then
 else
     BACKUP_KEEP_PLAINTEXT="${BACKUP_KEEP_PLAINTEXT:-1}"
 fi
+PURGE_PRIOR_PLAINTEXT="${PURGE_PRIOR_PLAINTEXT:-0}"
 BACKUP_SYNC_CMD="${BACKUP_SYNC_CMD:-}"
 
 STATUS_JSON="$BACKUP_DIR/last_backup_status.json"
@@ -65,6 +69,8 @@ mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
 STAGE_DIR=""
 LOCK_OWNED=0
+LOCK_TOKEN=""
+SCRIPT_NAME="$(basename "$0")"
 COMPLETED_OK=0
 STATUS_WRITTEN=0
 
@@ -114,7 +120,8 @@ cleanup() {
             log "ERROR: backup aborted unexpectedly (exit $rc)" || true
             write_status_error "backup aborted unexpectedly (exit $rc)" || true
         fi
-        if [ -d "$LOCK_DIR" ]; then
+        if [ -d "$LOCK_DIR" ] && [ -n "$LOCK_TOKEN" ] \
+            && [ "$(cat "$LOCK_DIR/token" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
             rm -rf "$LOCK_DIR"
         fi
     fi
@@ -136,26 +143,58 @@ PY
 
 is_live_backup_holder() {
     local pid="$1"
-    [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null || return 1
-    if is_lock_older_than "$LOCK_MAX_AGE_SEC"; then
-        return 1
-    fi
+    local recorded_cmd
+    recorded_cmd=$(cat "$LOCK_DIR/cmd" 2>/dev/null || true)
+    [ -n "$recorded_cmd" ] || recorded_cmd="backup_compose.sh"
     local cmdline
     cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
-    if [ -n "$cmdline" ]; then
-        case "$cmdline" in
-            *backup_compose.sh*) return 0 ;;
-            *) return 1 ;;
-        esac
-    fi
-    return 0
+    python3 - "$pid" "$recorded_cmd" "$cmdline" "$LOCK_DIR" "$LOCK_MAX_AGE_SEC" <<'PY'
+import os, shlex, sys, time
+pid_s, recorded_cmd, cmdline, lock_dir, max_age_s = sys.argv[1:6]
+try:
+    pid = int(pid_s)
+    if pid <= 0:
+        sys.exit(1)
+    os.kill(pid, 0)
+except (ValueError, ProcessLookupError):
+    sys.exit(1)
+except PermissionError:
+    pass
+
+cmdline = cmdline.strip()
+if cmdline:
+    try:
+        tokens = shlex.split(cmdline)
+    except ValueError:
+        tokens = cmdline.split()
+    exe = os.path.basename(tokens[0]) if tokens else ""
+    shells = {"sh", "bash", "dash", "zsh", "ksh"}
+    is_backup = (
+        exe == recorded_cmd
+        or (exe in shells and any(os.path.basename(t) == recorded_cmd for t in tokens[1:]))
+    )
+    sys.exit(0 if is_backup else 1)
+
+# `ps` could not read args (e.g. hidepid=2): fall back to LOCK_MAX_AGE_SEC.
+try:
+    age = time.time() - os.path.getmtime(lock_dir)
+except OSError:
+    sys.exit(1)
+sys.exit(0 if age < float(max_age_s) else 1)
+PY
+}
+
+record_lock_metadata() {
+    LOCK_TOKEN="$$_$(date +%s)"
+    LOCK_OWNED=1
+    printf '%s\n' "$SCRIPT_NAME" > "$LOCK_DIR/cmd"
+    printf '%s\n' "$LOCK_TOKEN" > "$LOCK_DIR/token"
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
 }
 
 acquire_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
-        LOCK_OWNED=1
-        echo "$$" > "$LOCK_DIR/pid"
+        record_lock_metadata
         return 0
     fi
     local old_pid
@@ -164,16 +203,14 @@ acquire_lock() {
         log "WARN: removing stale backup lock from exited or reused PID $old_pid"
         rm -rf "$LOCK_DIR"
         if mkdir "$LOCK_DIR" 2>/dev/null; then
-            LOCK_OWNED=1
-            echo "$$" > "$LOCK_DIR/pid"
+            record_lock_metadata
             return 0
         fi
     elif [ -z "$old_pid" ] && is_lock_older_than "$LOCK_ORPHAN_SEC"; then
         log "WARN: removing orphaned backup lock without PID file"
         rm -rf "$LOCK_DIR"
         if mkdir "$LOCK_DIR" 2>/dev/null; then
-            LOCK_OWNED=1
-            echo "$$" > "$LOCK_DIR/pid"
+            record_lock_metadata
             return 0
         fi
     fi
@@ -456,9 +493,11 @@ manifest = pathlib.Path(sys.argv[1])
 lines = []
 for raw in sys.argv[2:]:
     p = pathlib.Path(raw)
+    digest = hashlib.sha256()
     with p.open("rb") as fh:
-        h = hashlib.file_digest(fh, "sha256").hexdigest()
-    lines.append(f"{h}  {p.name}\n")
+        for chunk in iter(lambda: fh.read(1048576), b""):
+            digest.update(chunk)
+    lines.append(f"{digest.hexdigest()}  {p.name}\n")
 manifest.write_text("".join(lines), encoding="utf-8")
 PY
     chmod 600 "$manifest"
@@ -563,12 +602,11 @@ write_status_ok "$PG_FINAL" "$REDIS_FINAL" "$DATA_FINAL" "$MANIFEST_FINAL"
 COMPLETED_OK=1
 log "Backup complete + verified: $PG_FINAL, $REDIS_FINAL, $DATA_FINAL"
 
-if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ]; then
-    # When recipient encryption is active without BACKUP_KEEP_PLAINTEXT=1, also
-    # purge any pre-existing plaintext dumps from earlier unencrypted runs.
+if [ "$BACKUP_KEEP_PLAINTEXT" = "0" ] && [ "$PURGE_PRIOR_PLAINTEXT" = "1" ]; then
     rm -f "$BACKUP_DIR"/governance_*.sql.gz \
           "$BACKUP_DIR"/redis_*.rdb \
-          "$BACKUP_DIR"/governance_data_*.tar.gz
+          "$BACKUP_DIR"/governance_data_*.tar.gz 2>/dev/null \
+        || log "WARN: could not remove one or more prior plaintext dumps"
 else
     prune_series "governance_*.sql.gz"
     prune_series "redis_*.rdb"

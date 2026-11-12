@@ -277,10 +277,11 @@ together with [`scripts/ops/check_governance_backup_health.sh`](../../scripts/op
    sensitive operational text). When an `age` recipient is configured,
    `backup_compose.sh` defaults `BACKUP_KEEP_PLAINTEXT=0`, deleting staged
    plaintext inside `.stage_<timestamp>_*` before uploading and publishing `.age`
-   archives plus `manifest_<timestamp>.sha256` into `$BACKUP_DIR` (any
-   pre-existing plaintext dumps in `$BACKUP_DIR` from earlier unencrypted runs
-   are purged on completion, and any orphaned `.stage_*` directory from a prior
-   crash is swept on the next lock acquisition).
+   archives plus `manifest_<timestamp>.sha256` into `$BACKUP_DIR` (any orphaned
+   `.stage_*` directory from a prior crash is swept on the next lock acquisition;
+   if the host already holds earlier unencrypted dumps, verify `age -d` on one
+   encrypted set first and then run once with `PURGE_PRIOR_PLAINTEXT=1` to
+   remove the older plaintext files).
    Use `rclone copy "$BACKUP_STAGE_DIR"` (never `rclone sync`, which would mirror
    local pruning or wipe remote history from a rebuilt host):
 
