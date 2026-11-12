@@ -391,11 +391,25 @@ async def load_metadata_async(force: bool = False) -> None:
         return
 
     try:
+        cached_before = set(agent_metadata)
         result = await _load_metadata_from_postgres_async()
+        # An entry that appeared while the read was in flight and is absent
+        # from its result is newer than the snapshot: an identity minted
+        # meanwhile, or one a check-in read individually on a cache miss.
+        # Dropping it would make a registered agent look unregistered until
+        # the next load. Entries cached before the read and absent from the
+        # result are still dropped, which is how a deletion leaves the cache.
+        added_during_load = {
+            agent_id: meta
+            for agent_id, meta in agent_metadata.items()
+            if agent_id not in cached_before and agent_id not in result
+        }
         # CRITICAL: Use .clear()/.update() to preserve the dict reference
-        # across all modules that imported agent_metadata.
+        # across all modules that imported agent_metadata. No await separates
+        # the three calls, so no reader sees a partial cache.
         agent_metadata.clear()
         agent_metadata.update(result)
+        agent_metadata.update(added_during_load)
         _metadata_cache_state["last_load_time"] = time.time()
         _metadata_cache_state["dirty"] = False
         _model._metadata_loaded = True

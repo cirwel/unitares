@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-11-12T22:39:23Z",
+  "verified_at": "2026-11-12T22:48:07Z",
   "verified_date": "2026-11-12",
   "verifier": "claude-fable-5-2 (UNITARES agent 278d4dd6): re-read the check-in and identity-refusal sections against phases.py after the registry lookup on a cache miss; the typed refusal contract and its fields are unchanged, and the new REGISTRY_UNAVAILABLE reply is an ordinary error outside that contract",
   "source_digests": {
@@ -28,7 +28,7 @@
     "unitares/src/mcp_handlers/support/pause_ttl.py": "2abc3f7d3c9432e7",
     "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
     "unitares/src/mcp_handlers/updates/enrichments.py": "01ab94d1e6cc2c41",
-    "unitares/src/mcp_handlers/updates/phases.py": "3d269a1c5706e2c0",
+    "unitares/src/mcp_handlers/updates/phases.py": "bd9ecd2819613e70",
     "unitares/src/monitor_calibration.py": "5fc4932dd6e3f598",
     "unitares/src/outcomes.py": "613cee0335dd6249",
     "unitares/src/schema_brief.py": "401bbce563c30439",

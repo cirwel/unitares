@@ -296,7 +296,8 @@ async def _hydrate_registered_agent(ctx: UpdateContext) -> Optional[Sequence[Tex
     if meta is None:
         return None
     # setdefault: the bulk load may have landed while the read was in flight,
-    # and its entry is the complete one.
+    # and its entry is the complete one. If it lands later instead,
+    # load_metadata_async keeps entries added while it was reading.
     cache.setdefault(agent_uuid, meta)
     logger.info(
         "[PROCESS_UPDATE] agent %s... registered in PG but not cached; "
@@ -470,13 +471,6 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
         if newly_persisted:
             logger.info(f"Lazy-persisted agent {ctx.agent_uuid[:8]}... on first process_agent_update")
 
-    # The bulk load swaps the cache contents when it finishes, and an entry
-    # hydrated above is dropped if that load's snapshot predates the agent.
-    # Ask again (a no-op when cached) so the flag is set from the registry.
-    # No await separates this from the read on the next line.
-    registry_error = await _hydrate_registered_agent(ctx)
-    if registry_error is not None:
-        return registry_error
     ctx.is_new_agent = ctx.agent_uuid not in mcp_server.agent_metadata
 
     # Label from arguments or existing metadata
@@ -1330,10 +1324,6 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             agent_record = await agent_storage.get_agent(ctx.agent_id)
             if agent_record:
                 ctx.api_key = agent_record.api_key if agent_record.api_key else None
-                if ctx.agent_id not in mcp_server.agent_metadata:
-                    # Evicted since phase 1 (bulk load swap): restore the
-                    # persisted record before settling for a blank entry.
-                    await _hydrate_registered_agent(ctx)
                 if ctx.agent_id not in mcp_server.agent_metadata:
                     await ctx.loop.run_in_executor(None, mcp_server.get_or_create_metadata, ctx.agent_id)
                 ctx.meta = mcp_server.agent_metadata.get(ctx.agent_id)

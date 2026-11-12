@@ -139,24 +139,47 @@ async def test_lookup_error_without_strict_keeps_the_old_meaning_of_a_miss(monke
 
 
 @pytest.mark.asyncio
-async def test_entry_evicted_by_the_bulk_load_mid_phase_is_restored(monkeypatch):
-    """The bulk load replaces the cache contents when it lands. If its
-    snapshot lacks the agent, the entry hydrated at the top of the phase is
-    gone by the time the "new agent" flag is read; the phase asks again."""
-    _patch_context(monkeypatch)
-    lookup = _registry(monkeypatch, _record())
-    ctx = _cold_ctx()
+async def test_bulk_load_keeps_entries_added_while_it_was_reading(monkeypatch):
+    """The bulk load replaces the cache contents when it lands. An entry
+    added during its read and absent from its snapshot (a check-in's single
+    read, a fresh mint) stays; an entry that predates the read and is absent
+    from the snapshot goes, which is how a deletion leaves the cache."""
+    import src.agent_metadata_model as model
 
-    async def _persist_then_swap(*a, **k):
-        ctx.mcp_server.agent_metadata.clear()
-        return False
-    monkeypatch.setattr(id_handlers, "ensure_agent_persisted", _persist_then_swap)
+    cache = persistence.agent_metadata
+    monkeypatch.setattr(model, "_metadata_loaded", False)
+    saved = dict(cache)
+    cache.clear()
+    stale, hydrated, fresh = object(), object(), object()
+    cache["gone-before-load"] = stale
+
+    async def _snapshot():
+        cache["hydrated-mid-load"] = hydrated
+        return {"in-snapshot": fresh}
+    monkeypatch.setattr(persistence, "_load_metadata_from_postgres_async", _snapshot)
+    monkeypatch.setattr(persistence, "_hydrate_metadata_cache_async", AsyncMock())
+    try:
+        await persistence.load_metadata_async(force=True)
+        assert dict(cache) == {"in-snapshot": fresh, "hydrated-mid-load": hydrated}
+    finally:
+        cache.clear()
+        cache.update(saved)
+
+
+@pytest.mark.asyncio
+async def test_lazily_persisted_first_checkin_is_still_new(monkeypatch):
+    """One registry read per check-in, taken before lazy persistence: an
+    agent whose row is written by this very check-in keeps the new-agent
+    path (purpose, created event, default class tags)."""
+    _patch_context(monkeypatch)
+    lookup = _registry(monkeypatch, None)
+    monkeypatch.setattr(id_handlers, "ensure_agent_persisted", AsyncMock(return_value=True))
+    ctx = _cold_ctx()
 
     assert await resolve_identity_and_guards(ctx) is None
 
-    assert ctx.is_new_agent is False
-    assert AGENT_UUID in ctx.mcp_server.agent_metadata
-    assert lookup.await_count == 2
+    assert ctx.is_new_agent is True
+    lookup.assert_awaited_once_with(AGENT_UUID)
 
 
 @pytest.mark.asyncio
