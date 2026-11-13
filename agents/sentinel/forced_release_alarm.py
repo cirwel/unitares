@@ -32,7 +32,7 @@ from typing import Any, Mapping
 import httpx
 
 from agents.common.http_client import (
-    build_auth_headers,
+    async_send_with_bearer_fallback,
     resolve_governance_base_url,
 )
 
@@ -146,7 +146,6 @@ async def poll_forced_release_alarms(
 ) -> tuple[list[ForcedReleaseAlarm], datetime | None]:
     """Poll Core's `/v1/lease-plane/alarm-events` endpoint and classify alarms."""
     base_url = resolve_governance_base_url(api_url)
-    headers = build_auth_headers(api_token)
     params: dict[str, str] = {}
     if last_event_ts is not None:
         normalized_since = _as_utc_datetime(last_event_ts)
@@ -155,13 +154,21 @@ async def poll_forced_release_alarms(
 
     url = f"{base_url}/v1/lease-plane/alarm-events"
     if http_client is not None:
-        resp = await http_client.get(
-            url, headers=headers, params=params, timeout=ALARM_POLL_HTTP_TIMEOUT_S,
+        resp = await async_send_with_bearer_fallback(
+            lambda hdrs: http_client.get(
+                url, headers=hdrs, params=params, timeout=ALARM_POLL_HTTP_TIMEOUT_S,
+            ),
+            explicit_token=api_token,
+            base_url=base_url,
         )
     else:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url, headers=headers, params=params, timeout=ALARM_POLL_HTTP_TIMEOUT_S,
+            resp = await async_send_with_bearer_fallback(
+                lambda hdrs: client.get(
+                    url, headers=hdrs, params=params, timeout=ALARM_POLL_HTTP_TIMEOUT_S,
+                ),
+                explicit_token=api_token,
+                base_url=base_url,
             )
 
     if resp.status_code == 404:

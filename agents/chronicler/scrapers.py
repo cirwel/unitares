@@ -28,9 +28,8 @@ from typing import Any, Callable
 import httpx
 
 from agents.common.http_client import (
-    build_auth_headers,
     resolve_governance_base_url,
-    resolve_http_bearer_token,
+    send_with_bearer_fallback,
 )
 
 SNAPSHOT_TIMEOUT_S = 10.0
@@ -74,19 +73,27 @@ def _fetch_metrics_snapshot() -> dict[str, Any]:
         return payload
 
     scoped_url, scoped_token, scoped_client = _active_scope or (None, None, None)
-    base_url = resolve_governance_base_url(scoped_url)
-    headers = build_auth_headers(scoped_token)
+    effective_url = scoped_url or os.environ.get("UNITARES_METRICS_URL", "").strip() or None
+    base_url = resolve_governance_base_url(effective_url)
     url = f"{base_url}/v1/metrics/snapshot"
 
     try:
         if scoped_client is not None:
-            resp = scoped_client.get(
-                url, headers=headers, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+            resp = send_with_bearer_fallback(
+                lambda hdrs: scoped_client.get(
+                    url, headers=hdrs, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+                ),
+                explicit_token=scoped_token,
+                base_url=base_url,
             )
         else:
             with httpx.Client() as one_shot:
-                resp = one_shot.get(
-                    url, headers=headers, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+                resp = send_with_bearer_fallback(
+                    lambda hdrs: one_shot.get(
+                        url, headers=hdrs, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+                    ),
+                    explicit_token=scoped_token,
+                    base_url=base_url,
                 )
         if resp.status_code >= 400:
             raise RuntimeError(

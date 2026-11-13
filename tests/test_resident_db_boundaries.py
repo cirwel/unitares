@@ -423,13 +423,14 @@ class TestLeasePlaneRoutesValidation:
 
 
 class TestSentinelBlindPoller:
-    """Repeated `/v1/lease-plane/alarm-events` failures surface a high-severity
-    `poller_blind` finding without advancing the event cursor."""
+    """Repeated `/v1/lease-plane/alarm-events` failures notify locally once and
+    retry `post_finding_result` until Core accepts/dedupes the finding."""
 
     @pytest.mark.asyncio
-    async def test_three_consecutive_failures_emit_poller_blind_once_then_recover(
+    async def test_blind_poller_retries_until_delivered_notifies_once_then_recovers(
         self, monkeypatch
     ):
+        from agents.common.findings import DELIVERED, FAILED
         from agents.sentinel import agent as sentinel_mod
 
         agent = sentinel_mod.SentinelAgent.__new__(sentinel_mod.SentinelAgent)
@@ -445,12 +446,17 @@ class TestSentinelBlindPoller:
         agent.save_state = lambda s: (persisted.clear(), persisted.update(json.loads(json.dumps(s))))
 
         emitted: list[dict[str, Any]] = []
+        outcomes = [FAILED, DELIVERED]
+
+        def _fake_post_finding_result(**kw):
+            emitted.append(kw)
+            return outcomes.pop(0) if outcomes else DELIVERED
+
+        notifications: list[tuple[str, str]] = []
+        monkeypatch.setattr(sentinel_mod, "post_finding_result", _fake_post_finding_result)
         monkeypatch.setattr(
-            sentinel_mod,
-            "post_finding",
-            lambda **kw: emitted.append(kw),
+            sentinel_mod, "notify", lambda title, msg: notifications.append((title, msg))
         )
-        monkeypatch.setattr(sentinel_mod, "notify", lambda *_a, **_kw: None)
 
         def _fail_poll(_api_url, _cursor):
             raise RuntimeError("401 Unauthorized")
@@ -463,20 +469,32 @@ class TestSentinelBlindPoller:
         assert persisted["forced_release_alarm"]["consecutive_failures"] == 2
         assert persisted["forced_release_alarm"]["last_event_ts"] == "2026-11-12T00:00:00+00:00"
         assert emitted == []
+        assert notifications == []
 
-        # Failure 3: hits _BLIND_POLLER_THRESHOLD -> emits high-severity poller_blind!
+        # Failure 3: hits _BLIND_POLLER_THRESHOLD -> notifies locally once;
+        # first post_finding_result fails (e.g. Core unreachable/401), so not marked delivered!
         await agent._emit_forced_release_alarms()
         assert persisted["forced_release_alarm"]["consecutive_failures"] == 3
+        assert len(notifications) == 1
         assert len(emitted) == 1
         assert emitted[0]["severity"] == "high"
         assert emitted[0]["extra"]["alarm_kind"] == "poller_blind"
+        assert not persisted["forced_release_alarm"].get("blind_alarm_delivered", False)
 
-        # Failure 4: does not spam duplicate poller_blind every cycle.
+        # Failure 4: does NOT re-page local notify, DOES retry post_finding_result -> DELIVERED!
         await agent._emit_forced_release_alarms()
         assert persisted["forced_release_alarm"]["consecutive_failures"] == 4
-        assert len(emitted) == 1
+        assert len(notifications) == 1
+        assert len(emitted) == 2
+        assert persisted["forced_release_alarm"]["blind_alarm_delivered"] is True
 
-        # Recovery on next poll resets consecutive_failures to 0.
+        # Failure 5: already delivered + notified -> neither re-fires.
+        await agent._emit_forced_release_alarms()
+        assert persisted["forced_release_alarm"]["consecutive_failures"] == 5
+        assert len(notifications) == 1
+        assert len(emitted) == 2
+
+        # Recovery on next poll resets consecutive_failures and delivery flags.
         new_ts = datetime(2026, 11, 12, 1, 0, 0, tzinfo=timezone.utc)
         monkeypatch.setattr(
             sentinel_mod,
@@ -485,11 +503,274 @@ class TestSentinelBlindPoller:
         )
         await agent._emit_forced_release_alarms()
         assert persisted["forced_release_alarm"]["consecutive_failures"] == 0
+        assert "blind_alarm_delivered" not in persisted["forced_release_alarm"]
+        assert "blind_alarm_notified" not in persisted["forced_release_alarm"]
         assert persisted["forced_release_alarm"]["last_event_ts"] == new_ts.isoformat()
 
 
+class TestBearerFallbackAndUrlNormalization:
+    """Covers `UNITARES_REST_STRICT=0` 401 bearer fallback + winner caching,
+    reverse-proxy path-prefix preservation, and `UNITARES_METRICS_URL` scoping."""
+
+    def test_bearer_fallback_supports_both_strict_and_loosened_postures_and_caches_winner(
+        self, monkeypatch
+    ):
+        from agents.common.http_client import (
+            clear_bearer_preference_cache,
+            send_with_bearer_fallback,
+        )
+
+        clear_bearer_preference_cache()
+
+        # Client has BOTH tokens set and NO local UNITARES_REST_STRICT hint.
+        monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "mcp-tok")
+        monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "http-tok")
+
+        seen_auth: list[str] = []
+        try:
+            # 1) Loosened Core (`UNITARES_REST_STRICT=0` -> accepts only `http-tok`):
+            # succeeds on attempt 1 with `http-tok`!
+            with httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda req: (
+                        seen_auth.append(req.headers.get("authorization", ""))
+                        or (
+                            httpx.Response(200, json={"ok": True})
+                            if req.headers.get("authorization") == "Bearer http-tok"
+                            else httpx.Response(401, json={"error": "Unauthorized"})
+                        )
+                    )
+                )
+            ) as loose_client:
+                r_loose = send_with_bearer_fallback(
+                    lambda hdrs: loose_client.get(
+                        "https://loose.example/v1/probe", headers=hdrs
+                    ),
+                    base_url="https://loose.example",
+                )
+                assert r_loose.status_code == 200
+                assert seen_auth == ["Bearer http-tok"]
+
+            # 2) Strict Core (`UNITARES_REST_STRICT=1` -> accepts only `mcp-tok`):
+            # retries once on 401 with `mcp-tok` and caches `mcp-tok` for that base URL!
+            seen_auth.clear()
+            with httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda req: (
+                        seen_auth.append(req.headers.get("authorization", ""))
+                        or (
+                            httpx.Response(200, json={"ok": True})
+                            if req.headers.get("authorization") == "Bearer mcp-tok"
+                            else httpx.Response(401, json={"error": "Unauthorized"})
+                        )
+                    )
+                )
+            ) as strict_client:
+                r1 = send_with_bearer_fallback(
+                    lambda hdrs: strict_client.get(
+                        "https://gov.example/unitares/v1/probe", headers=hdrs
+                    ),
+                    base_url="https://gov.example/unitares",
+                )
+                assert r1.status_code == 200
+                assert seen_auth == ["Bearer http-tok", "Bearer mcp-tok"]
+
+                # Second call to same base URL uses cached `mcp-tok` immediately.
+                r2 = send_with_bearer_fallback(
+                    lambda hdrs: strict_client.get(
+                        "https://gov.example/unitares/v1/probe", headers=hdrs
+                    ),
+                    base_url="https://gov.example/unitares",
+                )
+                assert r2.status_code == 200
+                assert seen_auth == [
+                    "Bearer http-tok",
+                    "Bearer mcp-tok",
+                    "Bearer mcp-tok",
+                ]
+        finally:
+            clear_bearer_preference_cache()
+
+    @pytest.mark.asyncio
+    async def test_async_bearer_fallback_against_real_access_gate(self, monkeypatch):
+        from starlette.responses import JSONResponse
+        from agents.common.http_client import (
+            async_send_with_bearer_fallback,
+            clear_bearer_preference_cache,
+        )
+        from src.http_routes import access
+
+        clear_bearer_preference_cache()
+        calls = 0
+
+        async def _endpoint(request):
+            nonlocal calls
+            calls += 1
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITARES_MCP_BEARER_TOKENS": "mcp-tok",
+                    "UNITARES_REST_STRICT": "1",
+                    "UNITARES_HTTP_API_TOKEN": "http-tok",
+                },
+                clear=False,
+            ):
+                if not access._check_http_auth(request, http_api_token="http-tok"):
+                    return access._http_unauthorized()
+            return JSONResponse({"ok": True})
+
+        app = Starlette(routes=[Route("/v1/probe", _endpoint)])
+        monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "mcp-tok")
+        monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "http-tok")
+
+        try:
+            transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 54321))
+            async with httpx.AsyncClient(
+                transport=transport, base_url="https://gov.example"
+            ) as client:
+                r1 = await async_send_with_bearer_fallback(
+                    lambda hdrs: client.get("/v1/probe", headers=hdrs),
+                    base_url="https://gov.example",
+                )
+                assert r1.status_code == 200
+                assert calls == 2
+
+                r2 = await async_send_with_bearer_fallback(
+                    lambda hdrs: client.get("/v1/probe", headers=hdrs),
+                    base_url="https://gov.example",
+                )
+                assert r2.status_code == 200
+                assert calls == 3
+        finally:
+            clear_bearer_preference_cache()
+
+    def test_url_normalization_preserves_reverse_proxy_prefix_and_scopes_metrics_url(
+        self, monkeypatch
+    ):
+        from agents.chronicler import scrapers
+        from agents.common.http_client import resolve_governance_base_url
+
+        assert resolve_governance_base_url("https://host/unitares") == "https://host/unitares"
+        assert resolve_governance_base_url("https://host/unitares/") == "https://host/unitares"
+        assert resolve_governance_base_url("https://host/unitares/mcp/") == "https://host/unitares"
+        assert (
+            resolve_governance_base_url("https://host/unitares/v1/tools/call")
+            == "https://host/unitares"
+        )
+        assert (
+            resolve_governance_base_url("https://host/unitares/api/findings")
+            == "https://host/unitares"
+        )
+
+        # UNITARES_METRICS_URL must NOT hijack Sentinel/Vigil's governance base URL...
+        monkeypatch.delenv("GOV_REST_URL", raising=False)
+        monkeypatch.setenv("UNITARES_METRICS_URL", "https://metrics-host/unitares")
+        monkeypatch.setenv("MCP_SERVER_URL", "https://core-host:8767/mcp/")
+        assert resolve_governance_base_url() == "https://core-host:8767"
+
+        # ...while Chronicler's snapshot fetcher DOES honor UNITARES_METRICS_URL + prefix!
+        scrapers.clear_snapshot_cache()
+        seen_urls: list[str] = []
+
+        class _FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def get(self, url, **_kw):
+                seen_urls.append(url)
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "metrics": {"agents.active.7d": 3.0},
+                        "finding_counts_7d": {},
+                        "errors": {},
+                    },
+                )
+
+        with patch("agents.chronicler.scrapers.httpx.Client", return_value=_FakeClient()):
+            snap = scrapers._fetch_metrics_snapshot()
+        assert seen_urls == ["https://metrics-host/unitares/v1/metrics/snapshot"]
+        assert snap["metrics"]["agents.active.7d"] == 3.0
+        scrapers.clear_snapshot_cache()
+
+
+class TestSitrepExactWindowAndUrl:
+    """SitrepGenerator honors configured `mcp_url` and queries exact `since`."""
+
+    @pytest.mark.asyncio
+    async def test_sitrep_honors_mcp_url_and_exact_fractional_or_long_window(
+        self, monkeypatch
+    ):
+        import importlib
+        from agents.sentinel.agent import FleetState, SitrepGenerator
+        from src.http_routes.telemetry import http_lifecycle_recent
+
+        audit_db = importlib.import_module("src.audit_db")
+        captured_queries: list[dict[str, Any]] = []
+
+        async def _fake_query_audit(**kw):
+            captured_queries.append(kw)
+            return []
+
+        monkeypatch.setattr(audit_db, "query_audit_events_async", _fake_query_audit)
+        monkeypatch.delenv("GOV_REST_URL", raising=False)
+        monkeypatch.delenv("MCP_SERVER_URL", raising=False)
+        monkeypatch.setenv("UNITARES_METRICS_URL", "http://wrong-metrics-host:9999")
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "strict-tok")
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "strict-tok")
+
+        app = Starlette(routes=[Route("/v1/lifecycle/recent", http_lifecycle_recent)])
+        seen_request_urls: list[str] = []
+
+        real_async_client = httpx.AsyncClient
+
+        def _patched_async_client(*_a, **kw):
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 54321))
+            client = real_async_client(transport=transport, timeout=kw.get("timeout", 15.0))
+            orig_get = client.get
+
+            async def _recording_get(url, *args, **kwargs):
+                seen_request_urls.append(str(url))
+                return await orig_get(url, *args, **kwargs)
+
+            client.get = _recording_get  # type: ignore[method-assign]
+            return client
+
+        fleet = FleetState()
+        sitrep = SitrepGenerator(fleet, mcp_url="http://core-host:8767/mcp/")
+
+        with patch("httpx.AsyncClient", side_effect=_patched_async_client):
+            before = datetime.now(timezone.utc)
+            out_short = await sitrep.generate(hours=0.25)
+            out_long = await sitrep.generate(hours=200.0)
+
+        assert "unavailable" not in out_short
+        assert "unavailable" not in out_long
+        assert seen_request_urls == [
+            "http://core-host:8767/v1/lifecycle/recent",
+            "http://core-host:8767/v1/lifecycle/recent",
+        ]
+        assert len(captured_queries) == 2
+
+        since_short = datetime.fromisoformat(captured_queries[0]["start_time"])
+        delta_short_min = (before - since_short).total_seconds() / 60.0
+        assert 14.0 <= delta_short_min <= 16.0, f"expected ~15m window, got {delta_short_min}m"
+
+        since_long = datetime.fromisoformat(captured_queries[1]["start_time"])
+        delta_long_h = (before - since_long).total_seconds() / 3600.0
+        assert 199.5 <= delta_long_h <= 200.5, f"expected ~200h window, got {delta_long_h}h"
+
+
 class TestVigilRemoteRetrievalEval:
-    """Parity between `agents.vigil.remote_eval` and `scripts.eval.metrics`."""
+    """Parity between `agents.vigil.remote_eval` and `scripts.eval.metrics`,
+    plus Core-sourced ranker config tag selection."""
 
     @pytest.mark.parametrize(
         "ranked,relevant",
@@ -519,7 +800,7 @@ class TestVigilRemoteRetrievalEval:
         )
 
     def test_run_remote_retrieval_eval_produces_vigil_compatible_shape(self, tmp_path: Path):
-        from agents.vigil.agent import _normalize_eval_metrics
+        from agents.vigil.agent import _derive_eval_config_tag, _normalize_eval_metrics
         from agents.vigil.remote_eval import run_remote_retrieval_eval
 
         labels = tmp_path / "labels.json"
@@ -538,16 +819,39 @@ class TestVigilRemoteRetrievalEval:
         def _fake_search(query: str, limit: int) -> dict[str, Any]:
             assert limit == 20
             if query == "q_hit":
-                return {"success": True, "discoveries": [{"id": "doc-1"}, {"id": "other"}]}
-            return {"success": True, "discoveries": [{"id": "other"}]}
+                return {
+                    "success": True,
+                    "search_mode_used": "hybrid_rrf",
+                    "discoveries": [{"id": "doc-1"}, {"id": "other"}],
+                }
+            return {
+                "success": True,
+                "search_mode_used": "hybrid_rrf",
+                "discoveries": [{"id": "other"}],
+            }
 
-        report = run_remote_retrieval_eval(labels_path=labels, search_fn=_fake_search)
+        report = run_remote_retrieval_eval(
+            labels_path=labels,
+            search_fn=_fake_search,
+            config_fn=lambda: {
+                "embedding_model": "bge-m3",
+                "hybrid": True,
+                "graph_expand": False,
+                "rerank": False,
+            },
+        )
         assert report["corpus"] == {
             "path": "labels.json",
             "pair_count": 2,
             "scored_pair_count": 2,
             "schema_version": 1,
         }
+        assert report["config"]["hybrid"] is True
+        assert report["config"]["rerank"] is False
+        assert report["config"]["embedding_model"] == "bge-m3"
+        assert report["config"]["config_source"] == "core"
+        assert report["config"]["search_modes_observed"] == ["hybrid_rrf"]
+        assert _derive_eval_config_tag(report["config"]) == "hybrid_rrf"
         assert report["aggregate"]["flat_miss_count"] == 1
         assert report["aggregate"]["flat_miss_rate"] == 0.5
 
@@ -557,6 +861,56 @@ class TestVigilRemoteRetrievalEval:
         assert flat["MRR"] == pytest.approx(0.5, abs=1e-6)
         assert "latency_p50" in flat
         assert "latency_p95" in flat
+
+    @pytest.mark.asyncio
+    async def test_vigil_eval_step_picks_core_hybrid_baseline_when_local_env_unset(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from agents.vigil.agent import VigilAgent
+
+        for k in (
+            "UNITARES_EMBEDDING_MODEL",
+            "UNITARES_ENABLE_HYBRID",
+            "UNITARES_ENABLE_GRAPH_EXPANSION",
+            "UNITARES_ENABLE_RELATED_EXPANSION",
+            "UNITARES_ENABLE_RERANKER",
+        ):
+            monkeypatch.delenv(k, raising=False)
+
+        (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(
+            json.dumps({"aggregate": {"ndcg@10": {"mean": 0.80}}})
+        )
+        (tmp_path / "baseline_2026-04-20_default.json").write_text(
+            json.dumps({"aggregate": {"ndcg@10": {"mean": 0.40}}})
+        )
+
+        observed_urls: list[str | None] = []
+
+        def _fake_eval(base_url: str | None = None) -> dict[str, Any]:
+            observed_urls.append(base_url)
+            return {
+                "config": {
+                    "embedding_model": "bge-m3",
+                    "hybrid": True,
+                    "graph_expand": False,
+                    "rerank": False,
+                    "config_source": "core",
+                },
+                "aggregate": {"ndcg@10": {"mean": 0.78}},
+            }
+
+        vigil = VigilAgent(mcp_url="http://core-host:8767/mcp/", with_eval=True)
+        with (
+            patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path),
+            patch("agents.vigil.agent._run_eval_subprocess", side_effect=_fake_eval),
+        ):
+            result = await vigil._run_eval_step()
+
+        assert observed_urls == ["http://core-host:8767/mcp/"]
+        assert result["ran"] is True
+        assert result["config_tag"] == "hybrid_rrf"
+        assert result["baseline"] == "baseline_2026-04-20_hybrid_rrf.json"
+        assert result["regression"] is False
 
 
 class TestServerTelemetryPostgresRoundTrip:

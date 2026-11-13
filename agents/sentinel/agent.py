@@ -42,14 +42,19 @@ sys.path.insert(0, str(project_root))
 
 from agents.common.config import GOV_MCP_URL, GOV_WS_URL
 from agents.common.http_client import (
-    build_auth_headers,
+    async_send_with_bearer_fallback,
     resolve_governance_base_url,
 )
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 from unitares_sdk.models import CheckinResult
 from unitares_sdk.utils import notify
-from agents.common.findings import post_finding, compute_fingerprint
+from agents.common.findings import (
+    REACHED_GOVERNANCE,
+    compute_fingerprint,
+    post_finding,
+    post_finding_result,
+)
 from agents.sentinel.phase_b_promotion import (
     PhaseBEvaluatorError,
     detect_transitions as detect_phase_b_transitions,
@@ -383,8 +388,9 @@ class FleetState:
 class SitrepGenerator:
     """Template-based situation report from audit trail and fleet state."""
 
-    def __init__(self, fleet: FleetState):
+    def __init__(self, fleet: FleetState, mcp_url: str | None = None):
         self.fleet = fleet
+        self.mcp_url = mcp_url
 
     async def generate(self, hours: float = 6.0) -> str:
         """Generate a situation report covering the last N hours."""
@@ -439,14 +445,16 @@ class SitrepGenerator:
         try:
             import httpx
 
-            base_url = resolve_governance_base_url()
-            window_hours = max(1, min(168, int(round(hours)) or 1))
+            base_url = resolve_governance_base_url(self.mcp_url)
             async with httpx.AsyncClient() as http_client:
-                resp = await http_client.get(
-                    f"{base_url}/v1/lifecycle/recent",
-                    headers=build_auth_headers(),
-                    params={"hours": str(window_hours), "limit": "50"},
-                    timeout=10.0,
+                resp = await async_send_with_bearer_fallback(
+                    lambda hdrs: http_client.get(
+                        f"{base_url}/v1/lifecycle/recent",
+                        headers=hdrs,
+                        params={"since": since.isoformat(), "limit": "50"},
+                        timeout=10.0,
+                    ),
+                    base_url=base_url,
                 )
             if resp.status_code >= 400:
                 raise RuntimeError(f"HTTP {resp.status_code}")
@@ -544,7 +552,7 @@ class SentinelAgent(GovernanceAgent):
         self.ws_url = ws_url
         self.analysis_interval = analysis_interval
         self.fleet = FleetState()
-        self.sitrep = SitrepGenerator(self.fleet)
+        self.sitrep = SitrepGenerator(self.fleet, mcp_url=self.mcp_url)
         self._ws_connected = False
         self._cycle_count = 0
         self._findings_total = 0
@@ -704,9 +712,12 @@ class SentinelAgent(GovernanceAgent):
 
         State: stores `last_event_ts` as ISO8601 string and `consecutive_failures`
         under `forced_release_alarm` so successive cycles don't re-emit seen
-        events and repeated HTTP/auth failures surface as a blind-poller alarm.
+        events. On `>= _BLIND_POLLER_THRESHOLD` consecutive failures, emits a
+        local notification immediately and retries `post_finding_result` on each
+        subsequent failed cycle until Core accepts or dedupes the finding.
         """
         api_url = resolve_governance_base_url(getattr(self, "mcp_url", None))
+        findings_url = f"{api_url}/api/findings"
         state = self.load_state()
         alarm_state = state.setdefault("forced_release_alarm", {})
         cursor_str = alarm_state.get("last_event_ts")
@@ -720,27 +731,40 @@ class SentinelAgent(GovernanceAgent):
         except Exception as e:
             failures = int(alarm_state.get("consecutive_failures", 0)) + 1
             alarm_state["consecutive_failures"] = failures
-            self.save_state(state)
             log(f"forced-release alarm poll failed ({failures}x): {e}")
-            if failures == _BLIND_POLLER_THRESHOLD:
+            if failures >= _BLIND_POLLER_THRESHOLD:
                 msg = (
                     f"forced-release alarm poller blind after {failures} "
                     f"consecutive failures: {e}"
                 )
-                post_finding(
-                    event_type="sentinel_alarm_finding",
-                    severity="high",
-                    message=msg,
-                    agent_id=self.agent_uuid or "sentinel",
-                    agent_name="Sentinel",
-                    fingerprint=compute_fingerprint(["forced_release", "poller_blind", api_url]),
-                    extra={"alarm_kind": "poller_blind", "consecutive_failures": failures},
-                )
+                if not alarm_state.get("blind_alarm_notified", False):
+                    notify("Sentinel poller blind", msg)
+                    alarm_state["blind_alarm_notified"] = True
+                if not alarm_state.get("blind_alarm_delivered", False):
+                    outcome = post_finding_result(
+                        event_type="sentinel_alarm_finding",
+                        severity="high",
+                        message=msg,
+                        agent_id=self.agent_uuid or "sentinel",
+                        agent_name="Sentinel",
+                        fingerprint=compute_fingerprint(["forced_release", "poller_blind", api_url]),
+                        extra={"alarm_kind": "poller_blind", "consecutive_failures": failures},
+                        url=findings_url,
+                    )
+                    if outcome in REACHED_GOVERNANCE:
+                        alarm_state["blind_alarm_delivered"] = True
+            self.save_state(state)
             return
 
         state_dirty = False
-        if alarm_state.get("consecutive_failures", 0):
+        if (
+            alarm_state.get("consecutive_failures", 0)
+            or alarm_state.get("blind_alarm_delivered")
+            or alarm_state.get("blind_alarm_notified")
+        ):
             alarm_state["consecutive_failures"] = 0
+            alarm_state.pop("blind_alarm_delivered", None)
+            alarm_state.pop("blind_alarm_notified", None)
             state_dirty = True
 
         conflict_surface_kinds: list[str] = []
@@ -757,6 +781,7 @@ class SentinelAgent(GovernanceAgent):
                 agent_name="Sentinel",
                 fingerprint=alarm.fingerprint,
                 extra={"alarm_kind": alarm.kind, **alarm.extra},
+                url=findings_url,
             )
             if alarm.kind == "conflict_batch":
                 kind = alarm.extra.get("surface_kind")

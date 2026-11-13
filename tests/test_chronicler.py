@@ -399,13 +399,30 @@ class TestAgentRun:
         assert len(snapshot_gets) == 1
         assert snapshot_gets[0]["headers"]["Authorization"] == "Bearer mcp-secret"
 
-    def test_resolve_http_bearer_token_prefers_mcp_bearer(self, monkeypatch):
-        """Regression: launchd plist sets `UNITARES_MCP_BEARER_TOKEN` while strict
-        mode ignores `UNITARES_HTTP_API_TOKEN`."""
-        from agents.common.http_client import resolve_http_bearer_token
+    def test_resolve_http_bearer_token_supports_mcp_only_and_dual_token_postures(
+        self, monkeypatch
+    ):
+        """Regression: launchd plist sets only `UNITARES_MCP_BEARER_TOKEN` (must resolve),
+        while dual-token environments without `UNITARES_REST_STRICT=1` try
+        `UNITARES_HTTP_API_TOKEN` first (`UNITARES_REST_STRICT=0` compatibility) and
+        keep `UNITARES_MCP_BEARER_TOKEN` as the 401 fallback candidate."""
+        from agents.common.http_client import (
+            clear_bearer_preference_cache,
+            iter_http_bearer_tokens,
+            resolve_http_bearer_token,
+        )
 
+        clear_bearer_preference_cache()
+        monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
+        monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
         monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "strict-mcp-token")
+        assert resolve_http_bearer_token() == "strict-mcp-token"
+
         monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "legacy-http-token")
+        assert resolve_http_bearer_token() == "legacy-http-token"
+        assert iter_http_bearer_tokens() == ["legacy-http-token", "strict-mcp-token"]
+
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
         assert resolve_http_bearer_token() == "strict-mcp-token"
 
         monkeypatch.delenv("UNITARES_MCP_BEARER_TOKEN", raising=False)

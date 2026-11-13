@@ -23,8 +23,8 @@ from typing import Any
 import httpx
 
 from agents.common.http_client import (
-    build_auth_headers,
     resolve_governance_base_url,
+    send_with_bearer_fallback,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -82,14 +82,21 @@ def _run_evaluator(
 ) -> dict[str, Any]:
     """Query Core's `GET /v1/lease-plane/phase-b/{surface_kind}` endpoint."""
     base_url = resolve_governance_base_url(api_url)
-    headers = build_auth_headers(api_token)
     url = f"{base_url}/v1/lease-plane/phase-b/{surface_kind}"
 
     if http_client is not None:
-        resp = http_client.get(url, headers=headers, timeout=PHASE_B_HTTP_TIMEOUT_S)
+        resp = send_with_bearer_fallback(
+            lambda hdrs: http_client.get(url, headers=hdrs, timeout=PHASE_B_HTTP_TIMEOUT_S),
+            explicit_token=api_token,
+            base_url=base_url,
+        )
     else:
         with httpx.Client() as client:
-            resp = client.get(url, headers=headers, timeout=PHASE_B_HTTP_TIMEOUT_S)
+            resp = send_with_bearer_fallback(
+                lambda hdrs: client.get(url, headers=hdrs, timeout=PHASE_B_HTTP_TIMEOUT_S),
+                explicit_token=api_token,
+                base_url=base_url,
+            )
 
     if resp.status_code >= 400:
         raise RuntimeError(
