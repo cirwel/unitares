@@ -252,6 +252,61 @@ def _spawn_persist_task(coro, *, name: str) -> None:
 
 # ─── Phase 1: Identity Resolution & Guards ─────────────────────────────
 
+async def _hydrate_registered_agent(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
+    """Fill the metadata cache for a registered agent it does not hold yet.
+
+    No-op when the agent is cached or has no resolved uuid. A PostgreSQL miss
+    leaves the cache untouched, so the agent is still "new" to the caller.
+
+    Returns an early-exit response only when the registry could not be read
+    under STRICT_IDENTITY_REQUIRED. "Unreadable" is not "unregistered": the
+    Path C refusal tells the caller to start_session(), which would mint a
+    second identity for an agent that already has one, so the caller is told
+    to retry instead. Without strict identity a lookup error leaves the agent
+    "new", which is what an empty cache meant before this lookup existed.
+    """
+    agent_uuid = ctx.agent_uuid
+    cache = ctx.mcp_server.agent_metadata
+    if not agent_uuid or agent_uuid in cache:
+        return None
+    try:
+        from src.agent_metadata_persistence import load_agent_metadata_from_postgres
+        meta = await load_agent_metadata_from_postgres(agent_uuid)
+    except Exception as e:
+        logger.warning(
+            "[PROCESS_UPDATE] registry lookup failed for %s...: %s",
+            agent_uuid[:12], e,
+        )
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+        if is_strict_identity_required():
+            return [error_response(
+                "Could not read the agent registry; this check-in was not recorded",
+                error_code="REGISTRY_UNAVAILABLE",
+                error_category="system_error",
+                details={"agent_id": agent_uuid[:12]},
+                recovery={
+                    "action": (
+                        "Retry the same call with the same client_session_id. "
+                        "Do not call start_session(): this is a read failure, "
+                        "not a finding that the agent is unregistered."
+                    ),
+                },
+            )]
+        return None
+    if meta is None:
+        return None
+    # setdefault: the bulk load may have landed while the read was in flight,
+    # and its entry is the complete one. If it lands later instead,
+    # load_metadata_async keeps entries added while it was reading.
+    cache.setdefault(agent_uuid, meta)
+    logger.info(
+        "[PROCESS_UPDATE] agent %s... registered in PG but not cached; "
+        "hydrated one record",
+        agent_uuid[:12],
+    )
+    return None
+
+
 async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     """Resolve UUID identity, check circuit breaker, lazy-persist, set label.
 
@@ -365,6 +420,17 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                     "related_tools": ["bind_session", "identity", "onboard"],
                 }
             )]
+
+    # agent_metadata caches the registry; it is not the registry. A registered
+    # agent is absent from it until the background load finishes after a
+    # server start, and stays absent if it is older than the bulk loader's row
+    # cap. On a miss, read the one record from PostgreSQL before anything
+    # below treats absence as "new" (#3243: the strict gate refused resumed
+    # agents in that window). Done ahead of the circuit breaker so a paused
+    # agent's status is in the cache when that check runs.
+    registry_error = await _hydrate_registered_agent(ctx)
+    if registry_error is not None:
+        return registry_error
 
     # Circuit breaker: paused / archived agents cannot update.
     # Pause TTL: stale pauses auto-expire via the shared helper, letting
