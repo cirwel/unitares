@@ -2360,6 +2360,46 @@ class TestGetAgentMetadataEdgeCases:
             assert data["current_state"]["coherence"] == 0.9
 
     @pytest.mark.asyncio
+    async def test_get_metadata_live_record_beats_stale_cache(self, server):
+        """A snapshot cached before a check-in must not be served, or written
+        back over the live record, once this process holds a newer one.
+
+        Seen live 2026-11-12: agent(action='get') cached total_updates=0, a
+        check-in moved the database and the live record to 1, and every get
+        for the rest of the TTL still answered 0 with the old last_update.
+        """
+        live = make_agent_meta(label="Live", total_updates=1)
+        server.agent_metadata = {"agent-uuid-123": live}
+        server.monitors = {}
+
+        stale = {
+            "status": "active", "label": "Live", "tags": [], "notes": "",
+            "purpose": None, "total_updates": 0,
+            "last_update": "2026-01-01T00:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        mock_cache = AsyncMock()
+        mock_cache.get = AsyncMock(return_value=stale)
+        # What the cache-hit path would rebuild from the stale snapshot.
+        stale_meta = make_agent_meta(
+            label="Live", total_updates=0, last_update=stale["last_update"]
+        )
+
+        with patch("src.agent_state.AgentMetadata", MagicMock(return_value=stale_meta)), \
+             patch_lifecycle_server(server), \
+             patch("src.cache.get_metadata_cache", return_value=mock_cache):
+            from src.mcp_handlers.lifecycle.handlers import handle_get_agent_metadata
+            result = await handle_get_agent_metadata({"target_agent": "agent-uuid-123"})
+            data = _parse(result)
+
+        assert data["total_updates"] == 1
+        assert server.agent_metadata["agent-uuid-123"] is live
+        mock_cache.get.assert_not_awaited()
+        # The slow path refreshes the cache from the live record.
+        mock_cache.set.assert_awaited_once()
+        assert mock_cache.set.await_args.args[0] == "agent-uuid-123"
+
+    @pytest.mark.asyncio
     async def test_get_metadata_label_lookup_in_memory(self, server):
         """Label lookup resolves against in-memory cache (reload path removed for anyio deadlock fix)."""
         meta = make_agent_meta(label="FoundInMemory", total_updates=10)
