@@ -446,9 +446,14 @@ class TestSentinelBlindPoller:
         agent.save_state = lambda s: (persisted.clear(), persisted.update(json.loads(json.dumps(s))))
 
         emitted: list[dict[str, Any]] = []
+        call_threads: list[int] = []
         outcomes = [FAILED, DELIVERED]
+        import threading
+
+        loop_thread_id = threading.get_ident()
 
         def _fake_post_finding_result(**kw):
+            call_threads.append(threading.get_ident())
             emitted.append(kw)
             return outcomes.pop(0) if outcomes else DELIVERED
 
@@ -493,6 +498,10 @@ class TestSentinelBlindPoller:
         assert persisted["forced_release_alarm"]["consecutive_failures"] == 5
         assert len(notifications) == 1
         assert len(emitted) == 2
+        assert len(call_threads) == 2
+        assert all(tid != loop_thread_id for tid in call_threads), (
+            "blind-poller post_finding_result retries must run in executor off the event loop"
+        )
 
         # Recovery on next poll resets consecutive_failures and delivery flags.
         new_ts = datetime(2026, 11, 12, 1, 0, 0, tzinfo=timezone.utc)
@@ -529,32 +538,9 @@ class TestBearerFallbackAndUrlNormalization:
 
         seen_auth: list[str] = []
         try:
-            # 1) Loosened Core (`UNITARES_REST_STRICT=0` -> accepts only `http-tok`):
-            # succeeds on attempt 1 with `http-tok`!
-            with httpx.Client(
-                transport=httpx.MockTransport(
-                    lambda req: (
-                        seen_auth.append(req.headers.get("authorization", ""))
-                        or (
-                            httpx.Response(200, json={"ok": True})
-                            if req.headers.get("authorization") == "Bearer http-tok"
-                            else httpx.Response(401, json={"error": "Unauthorized"})
-                        )
-                    )
-                )
-            ) as loose_client:
-                r_loose = send_with_bearer_fallback(
-                    lambda hdrs: loose_client.get(
-                        "https://loose.example/v1/probe", headers=hdrs
-                    ),
-                    base_url="https://loose.example",
-                )
-                assert r_loose.status_code == 200
-                assert seen_auth == ["Bearer http-tok"]
-
-            # 2) Strict Core (`UNITARES_REST_STRICT=1` -> accepts only `mcp-tok`):
-            # retries once on 401 with `mcp-tok` and caches `mcp-tok` for that base URL!
-            seen_auth.clear()
+            # 1) Remote strict Core (`UNITARES_REST_STRICT=1` -> accepts only `mcp-tok`):
+            # non-loopback URL sends `mcp-tok` on attempt 1 with zero 401s and never
+            # sends `http-tok`.
             with httpx.Client(
                 transport=httpx.MockTransport(
                     lambda req: (
@@ -567,27 +553,51 @@ class TestBearerFallbackAndUrlNormalization:
                     )
                 )
             ) as strict_client:
-                r1 = send_with_bearer_fallback(
+                r_strict = send_with_bearer_fallback(
                     lambda hdrs: strict_client.get(
                         "https://gov.example/unitares/v1/probe", headers=hdrs
                     ),
                     base_url="https://gov.example/unitares",
                 )
-                assert r1.status_code == 200
-                assert seen_auth == ["Bearer http-tok", "Bearer mcp-tok"]
+                assert r_strict.status_code == 200
+                assert seen_auth == ["Bearer mcp-tok"]
 
-                # Second call to same base URL uses cached `mcp-tok` immediately.
-                r2 = send_with_bearer_fallback(
-                    lambda hdrs: strict_client.get(
-                        "https://gov.example/unitares/v1/probe", headers=hdrs
+            # 2) Remote loosened Core (`UNITARES_REST_STRICT=0` -> accepts only `http-tok`):
+            # tries `mcp-tok` first, retries once on 401 with `http-tok`, and caches
+            # `http-tok` for subsequent calls in-process.
+            seen_auth.clear()
+            with httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda req: (
+                        seen_auth.append(req.headers.get("authorization", ""))
+                        or (
+                            httpx.Response(200, json={"ok": True})
+                            if req.headers.get("authorization") == "Bearer http-tok"
+                            else httpx.Response(401, json={"error": "Unauthorized"})
+                        )
+                    )
+                )
+            ) as loose_client:
+                r1 = send_with_bearer_fallback(
+                    lambda hdrs: loose_client.get(
+                        "https://loose.example/v1/probe", headers=hdrs
                     ),
-                    base_url="https://gov.example/unitares",
+                    base_url="https://loose.example",
+                )
+                assert r1.status_code == 200
+                assert seen_auth == ["Bearer mcp-tok", "Bearer http-tok"]
+
+                r2 = send_with_bearer_fallback(
+                    lambda hdrs: loose_client.get(
+                        "https://loose.example/v1/probe", headers=hdrs
+                    ),
+                    base_url="https://loose.example",
                 )
                 assert r2.status_code == 200
                 assert seen_auth == [
+                    "Bearer mcp-tok",
                     "Bearer http-tok",
-                    "Bearer mcp-tok",
-                    "Bearer mcp-tok",
+                    "Bearer http-tok",
                 ]
         finally:
             clear_bearer_preference_cache()
@@ -627,19 +637,33 @@ class TestBearerFallbackAndUrlNormalization:
 
         try:
             transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 54321))
+            # Remote strict host succeeds on first try with `mcp-tok`.
             async with httpx.AsyncClient(
                 transport=transport, base_url="https://gov.example"
-            ) as client:
-                r1 = await async_send_with_bearer_fallback(
-                    lambda hdrs: client.get("/v1/probe", headers=hdrs),
+            ) as remote_client:
+                r_remote = await async_send_with_bearer_fallback(
+                    lambda hdrs: remote_client.get("/v1/probe", headers=hdrs),
                     base_url="https://gov.example",
+                )
+                assert r_remote.status_code == 200
+                assert calls == 1
+
+            # Loopback host against strict Core retries once on 401 (`http-tok` -> `mcp-tok`)
+            # and caches `mcp-tok` for the second call.
+            calls = 0
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://localhost:8767"
+            ) as local_client:
+                r1 = await async_send_with_bearer_fallback(
+                    lambda hdrs: local_client.get("/v1/probe", headers=hdrs),
+                    base_url="http://localhost:8767",
                 )
                 assert r1.status_code == 200
                 assert calls == 2
 
                 r2 = await async_send_with_bearer_fallback(
-                    lambda hdrs: client.get("/v1/probe", headers=hdrs),
-                    base_url="https://gov.example",
+                    lambda hdrs: local_client.get("/v1/probe", headers=hdrs),
+                    base_url="http://localhost:8767",
                 )
                 assert r2.status_code == 200
                 assert calls == 3
@@ -911,6 +935,162 @@ class TestVigilRemoteRetrievalEval:
         assert result["config_tag"] == "hybrid_rrf"
         assert result["baseline"] == "baseline_2026-04-20_hybrid_rrf.json"
         assert result["regression"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_check_retrieval_config_round_trips_through_remote_eval_and_503_fallback(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """End-to-end contract: `get_health_check_data` populates
+        `checks.knowledge_graph.retrieval_config` in both lite and full modes,
+        `run_remote_retrieval_eval` parses that exact wire shape over HTTP, and
+        when `/health/deep` returns 503 during warmup, observed
+        `search_mode_used='hybrid_rrf_graph'` still preserves `graph_expand=True`
+        (`hybrid_graph`)."""
+        from unittest.mock import AsyncMock, MagicMock
+        from agents.vigil.agent import _derive_eval_config_tag
+        from agents.vigil.remote_eval import run_remote_retrieval_eval
+        from src.services.runtime_queries import get_health_check_data
+
+        monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
+        monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+        monkeypatch.setenv("UNITARES_ENABLE_RELATED_EXPANSION", "1")
+        monkeypatch.setenv("UNITARES_ENABLE_RERANKER", "0")
+
+        mock_audit = MagicMock()
+        mock_audit.log_file = MagicMock()
+        mock_audit.log_file.exists.return_value = True
+        mock_db = AsyncMock()
+        mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
+        mock_db.init = AsyncMock()
+        mock_cal = MagicMock()
+        mock_cal.get_pending_updates.return_value = 0
+
+        with (
+            patch("src.calibration.calibration_checker", mock_cal),
+            patch("src.telemetry.telemetry_collector", MagicMock()),
+            patch("src.audit_log.audit_logger", mock_audit),
+            patch("src.db.get_db", return_value=mock_db),
+            patch(
+                "src.calibration_db.calibration_health_check_async",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "backend": "postgres"},
+            ),
+            patch(
+                "src.audit_db.audit_health_check_async",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "backend": "postgres"},
+            ),
+            patch("src.cache.is_redis_available", return_value=False),
+            patch("src.embeddings.embeddings_available", return_value=True),
+        ):
+            full_health = await get_health_check_data({"lite": False})
+            lite_health = await get_health_check_data({"lite": True})
+
+        expected_cfg = {
+            "embedding_model": "bge-m3",
+            "hybrid": True,
+            "graph_expand": True,
+            "rerank": False,
+        }
+        assert full_health["checks"]["knowledge_graph"]["retrieval_config"] == expected_cfg
+        assert lite_health["checks"]["knowledge_graph"]["retrieval_config"] == expected_cfg
+
+        labels = tmp_path / "labels.json"
+        labels.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "pairs": [{"query": "q_graph", "relevant_ids": ["doc-1"]}],
+                }
+            )
+        )
+
+        # Clear Vigil's local env so only Core's response can select `hybrid_graph`.
+        for k in (
+            "UNITARES_EMBEDDING_MODEL",
+            "UNITARES_ENABLE_HYBRID",
+            "UNITARES_ENABLE_GRAPH_EXPANSION",
+            "UNITARES_ENABLE_RELATED_EXPANSION",
+            "UNITARES_ENABLE_RERANKER",
+        ):
+            monkeypatch.delenv(k, raising=False)
+
+        real_client_cls = httpx.Client
+
+        # Case A: `/health/deep` returns 200 with the real `full_health` payload.
+        def _transport_200(req: httpx.Request) -> httpx.Response:
+            if req.url.path.endswith("/health/deep"):
+                return httpx.Response(200, json=full_health)
+            if req.url.path.endswith("/v1/tools/call"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "result": {
+                            "success": True,
+                            "search_mode_used": "hybrid_rrf_graph",
+                            "discoveries": [{"id": "doc-1"}],
+                        },
+                    },
+                )
+            return httpx.Response(404)
+
+        with patch(
+            "agents.vigil.remote_eval.httpx.Client",
+            side_effect=lambda **kw: real_client_cls(
+                transport=httpx.MockTransport(_transport_200), **kw
+            ),
+        ):
+            report_200 = run_remote_retrieval_eval(
+                labels_path=labels,
+                base_url="https://gov.example/mcp/",
+                api_token="tok",
+            )
+
+        assert report_200["config"]["config_source"] == "core"
+        assert report_200["config"]["embedding_model"] == "bge-m3"
+        assert report_200["config"]["graph_expand"] is True
+        assert _derive_eval_config_tag(report_200["config"]) == "hybrid_graph"
+
+        # Case B: `/health/deep` stays 503 throughout warmup -> observed
+        # `search_mode_used="hybrid_rrf_graph"` STILL sets `graph_expand=True`
+        # and selects `hybrid_graph` rather than `hybrid_rrf`!
+        def _transport_503(req: httpx.Request) -> httpx.Response:
+            if req.url.path.endswith("/health/deep"):
+                return httpx.Response(
+                    503,
+                    json={"status": "unavailable", "retry_after_seconds": 5},
+                )
+            if req.url.path.endswith("/v1/tools/call"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "result": {
+                            "success": True,
+                            "search_mode_used": "hybrid_rrf_graph",
+                            "discoveries": [{"id": "doc-1"}],
+                        },
+                    },
+                )
+            return httpx.Response(404)
+
+        with patch(
+            "agents.vigil.remote_eval.httpx.Client",
+            side_effect=lambda **kw: real_client_cls(
+                transport=httpx.MockTransport(_transport_503), **kw
+            ),
+        ):
+            report_503 = run_remote_retrieval_eval(
+                labels_path=labels,
+                base_url="https://gov.example/mcp/",
+                api_token="tok",
+            )
+
+        assert report_503["config"]["config_source"] == "observed_search_mode"
+        assert report_503["config"]["hybrid"] is True
+        assert report_503["config"]["graph_expand"] is True
+        assert _derive_eval_config_tag(report_503["config"]) == "hybrid_graph"
 
 
 class TestServerTelemetryPostgresRoundTrip:

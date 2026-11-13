@@ -25,6 +25,7 @@ Architecture:
 """
 
 import asyncio
+import functools
 import json
 import os
 import signal
@@ -741,15 +742,24 @@ class SentinelAgent(GovernanceAgent):
                     notify("Sentinel poller blind", msg)
                     alarm_state["blind_alarm_notified"] = True
                 if not alarm_state.get("blind_alarm_delivered", False):
-                    outcome = post_finding_result(
-                        event_type="sentinel_alarm_finding",
-                        severity="high",
-                        message=msg,
-                        agent_id=self.agent_uuid or "sentinel",
-                        agent_name="Sentinel",
-                        fingerprint=compute_fingerprint(["forced_release", "poller_blind", api_url]),
-                        extra={"alarm_kind": "poller_blind", "consecutive_failures": failures},
-                        url=findings_url,
+                    outcome = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            post_finding_result,
+                            event_type="sentinel_alarm_finding",
+                            severity="high",
+                            message=msg,
+                            agent_id=self.agent_uuid or "sentinel",
+                            agent_name="Sentinel",
+                            fingerprint=compute_fingerprint(
+                                ["forced_release", "poller_blind", api_url]
+                            ),
+                            extra={
+                                "alarm_kind": "poller_blind",
+                                "consecutive_failures": failures,
+                            },
+                            url=findings_url,
+                        ),
                     )
                     if outcome in REACHED_GOVERNANCE:
                         alarm_state["blind_alarm_delivered"] = True

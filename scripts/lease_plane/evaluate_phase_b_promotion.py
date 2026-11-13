@@ -41,7 +41,7 @@ from src.lease_plane_phase_b import (  # noqa: E402
     EvaluationReport,
     KNOWN_SURFACE_KINDS,
     NON_WRITE_SURFACE_KINDS,
-    SYNTHETIC_SESSION_PREFIXES,
+    SYNTHETIC_SESSION_PREFIXES as SYNTHETIC_SESSION_PREFIXES,
     UnknownSurfaceKindError,
     build_criterion_1,
     build_criterion_2,

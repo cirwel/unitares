@@ -421,9 +421,23 @@ class TestAgentRun:
         monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "legacy-http-token")
         assert resolve_http_bearer_token() == "legacy-http-token"
         assert iter_http_bearer_tokens() == ["legacy-http-token", "strict-mcp-token"]
+        assert (
+            resolve_http_bearer_token(base_url="https://gov.example.test")
+            == "strict-mcp-token"
+        )
+        assert iter_http_bearer_tokens(base_url="https://gov.example.test") == [
+            "strict-mcp-token",
+            "legacy-http-token",
+        ]
 
         monkeypatch.setenv("UNITARES_REST_STRICT", "1")
         assert resolve_http_bearer_token() == "strict-mcp-token"
+
+        monkeypatch.setenv("UNITARES_REST_STRICT", "0")
+        assert (
+            resolve_http_bearer_token(base_url="https://gov.example.test")
+            == "legacy-http-token"
+        )
 
         monkeypatch.delenv("UNITARES_MCP_BEARER_TOKEN", raising=False)
         assert resolve_http_bearer_token() == "legacy-http-token"

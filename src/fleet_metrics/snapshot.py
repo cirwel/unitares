@@ -11,7 +11,10 @@ import copy
 import time
 from typing import Any
 
-from src.db.mixins.audit import FINDING_COUNTS_7D_SQL, fetch_finding_counts_7d
+from src.db.mixins.audit import (
+    FINDING_COUNTS_7D_SQL as FINDING_COUNTS_7D_SQL,
+    fetch_finding_counts_7d,
+)
 from src.db.mixins.knowledge_graph import KG_DISCOVERIES_COUNT_SQL
 from src.db.mixins.state import AGENT_STATE_SNAPSHOT_SCALAR_SQL
 from src.fleet_metrics.catalog import require

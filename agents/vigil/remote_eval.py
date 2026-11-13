@@ -288,11 +288,19 @@ def run_remote_retrieval_eval(
             recalls.append(rec)
             mrrs.append(m)
             latencies.append(dt_ms)
+
+        if core_cfg is None and config_fn is None and owned_client is not None:
+            core_cfg = _probe_core_retrieval_config(
+                owned_client,
+                resolved_base,
+                api_token=api_token,
+            )
     finally:
         if owned_client is not None:
             owned_client.close()
 
     observed_hybrid = any("hybrid" in mode for mode in search_modes_observed)
+    observed_graph = any("graph" in mode for mode in search_modes_observed)
     observed_rerank = any("rerank" in mode for mode in search_modes_observed)
     config_source = (
         "core"
@@ -313,7 +321,7 @@ def run_remote_retrieval_eval(
         "graph_expand": (
             bool(core_cfg["graph_expand"])
             if (core_cfg is not None and "graph_expand" in core_cfg)
-            else None
+            else (True if observed_graph else (False if search_modes_observed else None))
         ),
         "rerank": (
             bool(core_cfg["rerank"])

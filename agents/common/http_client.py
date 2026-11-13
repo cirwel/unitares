@@ -13,11 +13,15 @@ Credential resolution & `UNITARES_REST_STRICT` posture:
 - Under explicit loosened posture (`UNITARES_REST_STRICT=0` even with
   `UNITARES_MCP_BEARER_TOKENS` set on Core) or local non-strict posture, Core
   validates HTTP bearers against `UNITARES_HTTP_API_TOKEN`.
-- Because a remote client cannot observe Core's `UNITARES_REST_STRICT` env var
-  a priori, `send_with_bearer_fallback` / `async_send_with_bearer_fallback`
-  try the preferred candidate first and, if Core answers `401` while a distinct
-  secondary env token is also configured, retry once with the alternate token
-  and cache the winning token for that base URL in-process.
+- When both env tokens are present and `UNITARES_REST_STRICT` is unset on the
+  client, non-loopback targets (e.g. `https://gov.example`) try
+  `UNITARES_MCP_BEARER_TOKEN` first so one-shot remote residents and CLI tools
+  authenticate cleanly without a 401 or sending a local HTTP token, while
+  loopback targets (`localhost` / `127.0.0.1` / `::1`) try
+  `UNITARES_HTTP_API_TOKEN` first. If Core answers `401` while a distinct
+  secondary env token is configured, `send_with_bearer_fallback` /
+  `async_send_with_bearer_fallback` retry once with the alternate token and
+  cache the winning env var in-process for long-lived residents.
 """
 
 from __future__ import annotations
@@ -79,6 +83,14 @@ def resolve_governance_base_url(explicit_url: str | None = None) -> str:
     return DEFAULT_GOVERNANCE_BASE_URL
 
 
+def _is_loopback_base_url(base_url: str | None) -> bool:
+    """True when `base_url` is absent or targets a loopback host (`localhost`, `127.0.0.1`, `::1`)."""
+    if not base_url or not base_url.strip():
+        return True
+    host = (urlsplit(base_url.strip()).hostname or "").lower()
+    return host in {"", "localhost", "127.0.0.1", "::1"}
+
+
 def _ordered_env_token_pairs(base_url: str | None = None) -> list[tuple[str, str]]:
     """Return `(env_name, token)` candidates in attempt order."""
     mcp_token = os.environ.get("UNITARES_MCP_BEARER_TOKEN", "").strip()
@@ -87,12 +99,18 @@ def _ordered_env_token_pairs(base_url: str | None = None) -> list[tuple[str, str
     strict_hint = os.environ.get("UNITARES_REST_STRICT", "").strip().lower()
     if strict_hint in {"1", "true", "yes", "on"}:
         env_order = ["UNITARES_MCP_BEARER_TOKEN", "UNITARES_HTTP_API_TOKEN"]
+    elif strict_hint in {"0", "false", "no", "off"}:
+        env_order = ["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]
+    elif not _is_loopback_base_url(base_url):
+        # Non-loopback targets (e.g. `https://gov.example`) default to strict
+        # posture on Core whenever `UNITARES_MCP_BEARER_TOKENS` is set, so one-shot
+        # remote residents and CLI tools try `UNITARES_MCP_BEARER_TOKEN` first
+        # without incurring a 401 or sending a local HTTP token.
+        env_order = ["UNITARES_MCP_BEARER_TOKEN", "UNITARES_HTTP_API_TOKEN"]
     else:
-        # Default to UNITARES_HTTP_API_TOKEN first when both are set so loosened
-        # or local servers (`UNITARES_REST_STRICT=0`) succeed on the first call,
-        # while strict servers (`UNITARES_REST_STRICT=1`) either receive
-        # UNITARES_MCP_BEARER_TOKEN directly (when HTTP token is unset) or retry
-        # once on 401 and cache UNITARES_MCP_BEARER_TOKEN for the base URL.
+        # Loopback targets (`localhost` / `127.0.0.1` / `::1`) default to
+        # `UNITARES_HTTP_API_TOKEN` first; long-lived residents against a strict
+        # local server retry once on 401 and cache the winner in-process.
         env_order = ["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]
 
     if base_url:
