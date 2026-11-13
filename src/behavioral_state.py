@@ -178,7 +178,8 @@ class BehavioralEISV:
     read_update_count: int = 0
 
     @property
-    def _evidence_count(self) -> int:
+    def evidence_count(self) -> int:
+        """Check-ins the state's maturity counts (see read_update_count)."""
         return self.read_update_count if self.hold_unread else self.update_count
 
     def has_reading(self, dimension: str) -> bool:
@@ -364,9 +365,19 @@ class BehavioralEISV:
         read, or nothing read recently, holds no evidence to be confident in,
         so it must not take verdict authority or supply the primary EISV.
         """
-        if self.hold_unread and len(self.unscored_dimensions) == len(DIMENSIONS):
+        # State restored from before readings were counted is the exception:
+        # it has maturity (read_update_count) but no per-axis record yet, and
+        # keeps its confidence until its first reading puts it on the normal
+        # rule. Zeroing it would send every restored agent, and any read of
+        # one before its next check-in, to the cold-start path at deploy.
+        carried_over = self.read_update_count > 0 and not any(self.readings.values())
+        if (
+            self.hold_unread
+            and not carried_over
+            and len(self.unscored_dimensions) == len(DIMENSIONS)
+        ):
             return 0.0
-        count = self._evidence_count
+        count = self.evidence_count
         if count >= BOOTSTRAP_UPDATES:
             return 1.0
         return count / BOOTSTRAP_UPDATES
@@ -374,7 +385,7 @@ class BehavioralEISV:
     @property
     def baseline_confidence(self) -> float:
         """How stable is the behavioral baseline. 0 = no data, 1 = fully characterized."""
-        count = self._evidence_count
+        count = self.evidence_count
         if count >= BASELINE_WARMUP_UPDATES:
             return 1.0
         if count < 5:
@@ -408,7 +419,7 @@ class BehavioralEISV:
         Positive = above baseline, negative = below baseline.
         """
         stats = getattr(self, f"_baseline_{dimension}", None)
-        if stats is None or not self.is_baselined:
+        if stats is None or not self.is_baselined or not self.is_scored(dimension):
             return 0.0
         current = getattr(self, dimension, 0.5)
         return stats.z_score(current, min_std=eisv_min_std_for_dimension(dimension, self.alphas))
@@ -435,11 +446,13 @@ class BehavioralEISV:
 
     def to_dict(self) -> Dict:
         """Export current state for inclusion in governance responses."""
-        if self.update_count == 0:
+        # Phase follows the same count confidence and baselining use.
+        evidence = self.evidence_count
+        if evidence == 0:
             phase = "uninitialized"
-        elif self.update_count < BOOTSTRAP_UPDATES:
+        elif evidence < BOOTSTRAP_UPDATES:
             phase = "bootstrapping"
-        elif self.update_count < BASELINE_WARMUP_UPDATES:
+        elif evidence < BASELINE_WARMUP_UPDATES:
             phase = "warming_up"
         else:
             phase = "baselined"
@@ -458,7 +471,7 @@ class BehavioralEISV:
             "unscored": self.unscored_dimensions,
             "warmup": {
                 "phase": phase,
-                "updates_completed": self.update_count,
+                "updates_completed": evidence,
                 "baseline_target": BASELINE_WARMUP_UPDATES,
                 "baseline_confidence": round(self.baseline_confidence, 2),
                 "is_baselined": self.is_baselined,
@@ -547,8 +560,7 @@ class BehavioralEISV:
         # starts unread, so the first real reading seeds it. With the hold off
         # every check-in is a reading, as it always was.
         # Maturity carries over: state from before the hold counted every
-        # check-in, and resetting it would drop every restored agent back to
-        # the cold-start path at deploy.
+        # check-in (see the carried-over case in ``confidence``).
         state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
         if isinstance(persisted_readings, dict):
@@ -579,4 +591,11 @@ class BehavioralEISV:
         persisted_version = int(data.get("v_formula_version", 1))
         if persisted_version < V_FORMULA_VERSION and state.is_baselined:
             state._reseed_v_baseline()
+        if state.hold_unread and not isinstance(persisted_readings, dict):
+            # Baselines persisted before readings were counted were built on
+            # the filled-in numbers. Every dimension starts unread, so they
+            # are emptied now instead of being reported next to a placeholder
+            # until the first reading restarts them anyway.
+            for dimension in DIMENSIONS:
+                setattr(state, f"_baseline_{dimension}", WelfordStats())
         return state

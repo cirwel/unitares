@@ -454,7 +454,9 @@ def build_result(
         from src.behavioral_state import BASELINE_WARMUP_UPDATES
         _baseline_status = {
             "is_baselined": _beh.is_baselined,
-            "updates_completed": getattr(_beh, 'update_count', None),
+            # The count is_baselined is measured in (check-ins that read
+            # something, under the hold), so the two cannot disagree.
+            "updates_completed": getattr(_beh, 'evidence_count', None),
             "baseline_target": BASELINE_WARMUP_UPDATES,
         }
     result['risk_attribution'] = _build_risk_attribution(

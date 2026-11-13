@@ -106,7 +106,11 @@ def test_first_reading_seeds_the_value_and_restarts_the_baseline():
     restored = BehavioralEISV.from_dict(persisted)
     assert restored.I == pytest.approx(0.68, abs=1e-3)  # kept, as a placeholder
     assert restored.unread_dimensions == ["E", "I", "S", "V"]
-    assert restored._baseline_I.count == 40
+    # The baseline built on filled numbers is not carried next to a placeholder.
+    assert restored._baseline_I.count == 0
+    assert restored.deviation("I") == 0.0
+    # Maturity carries over until the first reading: no cold-start drop at deploy.
+    assert restored.confidence == 1.0 and restored.is_baselined
 
     restored.update(None, 0.45, None)
     assert restored.I == 0.45  # not smoothed into the placeholder
@@ -320,3 +324,27 @@ def test_flag_off_hand_built_state_ramps_on_update_count():
     state = BehavioralEISV(E=0.5, update_count=20, hold_unread=False)
     state.update(0.9, 0.5, 0.2)
     assert state.E == pytest.approx(0.88 * 0.5 + 0.12 * 0.9)  # past the ramp
+
+
+def test_warmup_phase_counts_what_baselining_counts():
+    state = BehavioralEISV()
+    for _ in range(6):
+        state.update(None, None, None)
+    for _ in range(24):
+        state.update(0.7, 0.7, 0.2)
+    warmup = state.to_dict()["warmup"]
+    assert state.update_count == 30 and state.evidence_count == 24
+    assert warmup["updates_completed"] == 24
+    assert warmup["phase"] == "warming_up" and warmup["is_baselined"] is False
+
+
+def test_guidance_does_not_cite_a_baseline_that_did_not_score_the_axis():
+    state = BehavioralEISV()
+    for _ in range(30):
+        state.update(0.8, None, 0.2)
+    state.update(0.8, 0.10, 0.2)  # first I reading, scored on fixed thresholds
+
+    result = assess_behavioral_state(state)
+    assert result.components["low_I"] > 0.0
+    assert result.guidance is not None
+    assert "baseline" not in result.guidance and "typical" not in result.guidance

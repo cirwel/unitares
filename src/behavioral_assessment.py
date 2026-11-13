@@ -578,7 +578,15 @@ def _generate_guidance(
     if top_value < 0.01:
         return None
 
-    if state.is_baselined:
+    dimension = _COMPONENT_DIMENSION.get(top_component)
+    # "Below your baseline" is only true of a component the baseline scored;
+    # an axis still short of baseline samples was scored on fixed thresholds.
+    baseline_scored = state.is_baselined and not (
+        state.hold_unread
+        and dimension is not None
+        and getattr(state, f"_baseline_{dimension}").count < _MIN_BASELINE_SAMPLES
+    )
+    if baseline_scored:
         guidance_map = {
             "low_E": (
                 f"Energy below your baseline (E={state.E:.2f}, typical={state._baseline_E.mean:.2f}). "

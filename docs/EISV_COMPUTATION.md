@@ -239,6 +239,12 @@ identity of EISV itself.
   against the 30-update target, enabling self-relative (Welford) z-score
   deviations from the agent's own behavioral baseline. The coordinates
   themselves remain weighted indices, not z-scores.
+- **With unread axes held (the default)** these stages count check-ins that
+  read something, not all check-ins. The sensor needs three decisions of
+  history, so a new agent's first three check-ins read nothing: the Φ prior
+  owns check-ins 1–5, fixed thresholds apply on 6–27, and self-relative scoring
+  starts at check-in 28, later still if more check-ins read nothing. An axis
+  with fewer than 5 baseline samples stays on the fixed thresholds.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution

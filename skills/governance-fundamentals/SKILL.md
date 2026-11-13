@@ -102,7 +102,9 @@ thresholds; check-in 25 enables self-relative z-score deviation against the
 agent's Welford baseline (the stage boundaries derive from
 `BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3` over `BOOTSTRAP_UPDATES = 10`, and
 `is_baselined` at `baseline_confidence >= 0.8` with the confidence ramp
-`(update_count - 5) / 25`). Absolute safety floors and basin-health gates
+`(update_count - 5) / 25`). With unread axes held (the default) these counts
+are check-ins that read something: a new agent's first three check-ins read
+nothing, which moves the boundaries to check-ins 6 and 28. Absolute safety floors and basin-health gates
 remain in force throughout for axes with a recent reading; an unscored axis
 raises no risk and trips no floor.
 
