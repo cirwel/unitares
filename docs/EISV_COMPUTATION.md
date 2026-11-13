@@ -162,6 +162,14 @@ No human oracle is needed for runtime drift estimation. Independent exogenous ou
 
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
 
+**Unread axes are held, not filled** (`UNITARES_HOLD_UNREAD_AXES`, default `1`, era `HU1`; set to `0`/`false`/`no`/`off` to restore filling). The fill above still produces the arithmetic the component record and the shadow ablations report, and it is still the legacy ODE's anchor. The behavioral state no longer consumes it for an axis that had no supplied base term:
+- The sensor reports no reading for that axis, and the optional blends on it are discarded for the check-in (they adjust a reading, and there is none).
+- The smoothed value keeps its last reading, takes no baseline sample and no trend entry. `V` steps only when `E` and `I` were both read on the same check-in.
+- The first reading on an axis seeds its value and restarts its baseline. State restored from before `HU1` starts with every axis unread: it keeps the numbers it had, as placeholders, until a reading replaces them.
+- The assessment scores an axis only while it has a reading from the last 10 check-ins (`STALE_AFTER_UPDATES`, a chosen bound equal to the bootstrap length). An unscored axis contributes no risk, its absolute floor does not fire, and it is listed in `behavioral.assessment.unscored_axes`; a `safe` verdict says nothing about it. `behavioral.state` carries `readings`, `since_reading`, `unread` and `unscored` per axis.
+- The published `E`/`I`/`S`/`V` stay numbers: the last reading, or the bootstrap value (0.5, 0.5, 0.2, 0.0) for an axis never read. Read them with `unread`.
+- Before three check-ins of history the sensor cannot run; under the hold those check-ins read nothing, where the response-structure inputs used to stand in.
+
 Optional blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set engineering parameters.
 
 **De-looping and per-agent calibration switches** (both **default ON** (`1`, era `SN1`), hashed into the instrument configuration in `src/eisv_instrument.py`; set to `0`/`false`/`no`/`off` to restore the legacy self-loop and shared-fleet-calibration formulas above):

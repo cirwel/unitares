@@ -587,6 +587,11 @@ def build_result(
                 'coherence_source': BEHAVIORAL_COHERENCE_SOURCE,
                 'coherence_role': BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
                 'components': behavioral_assessment.components,
+                # Axes with no recent reading: not scored, so the verdict
+                # says nothing about them (BehavioralEISV.is_scored).
+                'unscored_axes': list(
+                    getattr(behavioral_assessment, 'unscored_axes', ()) or ()
+                ),
                 'guidance': behavioral_assessment.guidance,
                 'absolute_floor_observation': getattr(
                     monitor,

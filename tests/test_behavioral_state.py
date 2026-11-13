@@ -285,6 +285,7 @@ class TestRawObsPersistence:
 
     def test_raw_obs_reflects_clamping_not_smoothing(self):
         state = BehavioralEISV()
+        state.update(0.6, 0.6, 0.3)  # the first reading seeds the values
         state.update(1.5, -0.2, 0.5)  # clamped to [0,1] in update()
         d = state.to_dict_for_persistence()
         # raw obs is the clamped input, NOT the EMA-smoothed E/I/S

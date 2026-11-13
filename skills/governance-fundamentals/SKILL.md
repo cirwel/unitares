@@ -83,9 +83,11 @@ For the formulas and producer distinctions, see the repository's
 - **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
 
 An axis is a reading only when at least one of its base terms was supplied.
-When none was, the sensor writes a mid-range default in its place and the
-number looks like any other. The check-in response says which is which in
-`reading_coverage`: `measured` lists the axes with a supplied base term,
+When none was, the axis is held: the published number stays at its last
+reading, or at a bootstrap placeholder if it was never read, and the
+assessment stops scoring it once ten check-ins pass without a reading
+(`behavioral.assessment.unscored_axes` lists the axes a verdict says nothing
+about). The check-in response says which is which in `reading_coverage`: `measured` lists the axes with a supplied base term,
 `defaulted` lists the rest with the terms that were missing, and
 `v_rests_on_defaults` is true when E or I is a default, since V is derived from
 them. A defaulted axis is a placeholder, not a low or high reading. Filtered
@@ -101,7 +103,8 @@ agent's Welford baseline (the stage boundaries derive from
 `BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3` over `BOOTSTRAP_UPDATES = 10`, and
 `is_baselined` at `baseline_confidence >= 0.8` with the confidence ramp
 `(update_count - 5) / 25`). Absolute safety floors and basin-health gates
-remain in force throughout.
+remain in force throughout for axes with a recent reading; an unscored axis
+raises no risk and trips no floor.
 
 The roadmap target for richer cold-start grounding (a class-anchor reference
 blend) is in `docs/ontology/eisv-proprioception-contract.md`, *Core

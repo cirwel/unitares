@@ -180,7 +180,9 @@ def test_an_estimator_change_is_detected():
     original_update = BehavioralEISV.update
 
     def nudged(self, E, I, S, *args, **kwargs):
-        return original_update(self, E + 0.01, I, S, *args, **kwargs)
+        # A held axis arrives as None; nudge whichever readings are present.
+        nudge = lambda v: v if v is None else v + 0.01  # noqa: E731
+        return original_update(self, nudge(E), I, nudge(S), *args, **kwargs)
 
     logging.disable(logging.CRITICAL)
     try:

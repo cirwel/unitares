@@ -64,7 +64,7 @@ _SENTINEL_PAUSE_STATE = {"E": 0.6608, "I": 0.6572, "S": 0.379, "V": 0.046}
 def _build(baseline_mean_m2: Dict[str, Tuple[float, float]],
            current: Dict[str, float], count: int = 1239) -> BehavioralEISV:
     """Rebuild a baselined BehavioralEISV from (mean, m2) baseline + current EISV."""
-    st = BehavioralEISV()
+    st = BehavioralEISV(hold_unread=False)
     for dim, (mean, m2) in baseline_mean_m2.items():
         bl: WelfordStats = getattr(st, f"_baseline_{dim}")
         bl.count, bl.mean, bl.m2 = count, mean, m2
@@ -77,7 +77,7 @@ def _build(baseline_mean_m2: Dict[str, Tuple[float, float]],
 def _build_from_stats(baseline_stats: Dict[str, dict],
                       current: Dict[str, float]) -> Optional[BehavioralEISV]:
     """Rebuild from a persisted ``baseline_stats`` dict (to_dict() form)."""
-    st = BehavioralEISV()
+    st = BehavioralEISV(hold_unread=False)
     counts = []
     for dim in ("E", "I", "S", "V"):
         d = baseline_stats.get(dim)

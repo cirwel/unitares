@@ -144,7 +144,12 @@ from src.monitor_metrics import (
 )
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
-from src.behavioral_sensor import compute_behavioral_sensor_eisv
+from src.behavioral_sensor import (
+    compute_behavioral_sensor_components,
+    compute_behavioral_sensor_eisv,
+    hold_unread,
+    hold_unread_axes_enabled,
+)
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
     ODE_CONTROL_FEEDBACK_ROLE,
@@ -1334,7 +1339,18 @@ class UNITARESMonitor:
             call_outcome_history = self._cached_outcome_history
 
         sensor_eisv = agent_state.get('sensor_eisv')
-        if sensor_eisv:
+        behavioral_reading = agent_state.get('_behavioral_reading')
+        if sensor_eisv and isinstance(behavioral_reading, dict):
+            # Behavioral sensor computed upstream (updates/phases.py). The
+            # reading carries None on an axis no base term was supplied for;
+            # BehavioralEISV.update holds that axis instead of smoothing a
+            # filled-in constant into it. sensor_eisv itself keeps the filled
+            # arithmetic for the legacy ODE anchor.
+            beh_E_obs = behavioral_reading.get('E')
+            beh_I_obs = behavioral_reading.get('I')
+            beh_S_obs = behavioral_reading.get('S')
+            beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
+        elif sensor_eisv:
             # Use externally supplied sensor EISV directly when available
             beh_E_obs = float(sensor_eisv.get('E', 0.5))
             beh_I_obs = float(sensor_eisv.get('I', 0.5))
@@ -1349,7 +1365,7 @@ class UNITARESMonitor:
                 epistemic_class=agent_state.get('epistemic_class'),
             )
             # Non-embodied agents: compute from behavioral_sensor
-            beh_sensor = compute_behavioral_sensor_eisv(
+            sensor_inputs = dict(
                 decision_history=self.state.decision_history,
                 coherence_history=self.state.coherence_history,
                 regime_history=self.state.regime_history,
@@ -1372,6 +1388,13 @@ class UNITARESMonitor:
                 outcome_history=call_outcome_history,
                 tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
             )
+            beh_sensor = compute_behavioral_sensor_eisv(**sensor_inputs)
+            if beh_sensor:
+                # Same hold as the upstream path: None on an axis no base
+                # term was supplied for.
+                beh_sensor = hold_unread(
+                    beh_sensor, compute_behavioral_sensor_components(**sensor_inputs)
+                )
             if beh_sensor:
                 beh_E_obs = beh_sensor['E']
                 beh_I_obs = beh_sensor['I']
@@ -1382,17 +1405,23 @@ class UNITARESMonitor:
                 # When template divergence is excluded (#2418), I_input and
                 # S_input are treated as absent and use the same 0.5 / 0.2
                 # missing-input defaults as None.
-                beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                beh_I_obs = (
-                    0.5
-                    if exclude_template_div or continuity_metrics.I_input is None
-                    else continuity_metrics.I_input
-                )
-                beh_S_obs = (
-                    0.2
-                    if exclude_template_div or continuity_metrics.S_input is None
-                    else continuity_metrics.S_input
-                )
+                # Under the hold these response-structure inputs are not
+                # readings (in the full formula they only adjust one), so all
+                # three axes are held until the sensor has history to read.
+                if hold_unread_axes_enabled():
+                    beh_E_obs = beh_I_obs = beh_S_obs = None
+                else:
+                    beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
+                    beh_I_obs = (
+                        0.5
+                        if exclude_template_div or continuity_metrics.I_input is None
+                        else continuity_metrics.I_input
+                    )
+                    beh_S_obs = (
+                        0.2
+                        if exclude_template_div or continuity_metrics.S_input is None
+                        else continuity_metrics.S_input
+                    )
                 beh_obs_source = 'continuity_fallback'
                 # Replace any upstream attempted sensor trace with the fallback
                 # actually consumed. Telemetry failure must not alter intake.
@@ -1792,7 +1821,10 @@ class UNITARESMonitor:
                 'void_active': void_active,
                 'unitares_verdict': unitares_verdict,
                 'gap_suppressed': gap_suppression_pending,
-                'beh_obs': [round(beh_E_obs, 4), round(beh_I_obs, 4), round(beh_S_obs, 4)],
+                'beh_obs': [
+                    None if obs is None else round(obs, 4)
+                    for obs in (beh_E_obs, beh_I_obs, beh_S_obs)
+                ],
                 'drift': {
                     'emotional': round(drift_vector.calibration_deviation, 4),
                     'epistemic': round(drift_vector.coherence_deviation, 4),

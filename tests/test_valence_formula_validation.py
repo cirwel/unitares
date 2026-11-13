@@ -48,6 +48,10 @@ class TestSeam:
             s.update(e, i, sv)
             ae, ai, av = ref.alphas["E"], ref.alphas["I"], ref.alphas["V"]
             boost = 0.5 * (1.0 - ref.update_count / 10) if ref.update_count < 10 else 0.0
+            if ref.update_count == 0:
+                # The first reading seeds each value (hold-unread, default on).
+                ae = ai = av = 1.0
+                boost = 0.0
             ref.E = (1 - (ae + boost)) * ref.E + (ae + boost) * e
             ref.I = (1 - (ai + boost)) * ref.I + (ai + boost) * i
             ref.V = (1 - (av + boost)) * ref.V + (av + boost) * (e - i)  # v2: raw imbalance

@@ -1,10 +1,11 @@
 """Agent-facing account of which behavioral axes were measured this check-in.
 
 Each of E, I and S is built from one or more base terms. When none of an
-axis's base terms was supplied, the sensor writes a mid-range default in its
-place, so the published number looks the same as a reading. Nothing in the
-check-in response said which was which: an agent could not tell a measured E
-from a filled-in one, and two agents with no inputs looked identical.
+axis's base terms was supplied, the formula substitutes a mid-range default.
+Under the hold (``behavioral_sensor.hold_unread_axes_enabled``) the behavioral
+state does not consume that default and keeps the axis's last reading, but the
+published number is still a number, and with the hold off it is the default
+itself. This account says, per check-in, which axes were read.
 
 This module reads the derivation the check-in already built
 (``eisv_telemetry.build_behavioral_derivation``) and restates, per axis,

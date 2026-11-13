@@ -23,6 +23,8 @@ def _state(**overrides: float) -> BehavioralEISV:
     values.update(overrides)
     for dimension, value in values.items():
         setattr(state, dimension, value)
+    # Hand-built values stand for readings; an unread axis is not scored.
+    state.readings = dict.fromkeys(("E", "I", "S", "V"), 1)
     return state
 
 

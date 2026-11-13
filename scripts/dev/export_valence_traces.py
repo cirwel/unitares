@@ -106,7 +106,12 @@ def main() -> int:
             "agent_id": aid,
             "label": label,
             "db_label": db_label,
-            "observations": [[float(x) for x in row[:3]] for row in oh],
+            # Rows with a held (None) axis carry no E-I pair to replay.
+            "observations": [
+                [float(x) for x in row[:3]]
+                for row in oh
+                if all(x is not None for x in row[:3])
+            ],
         })
 
     rows.sort(key=lambda r: len(r["observations"]), reverse=True)

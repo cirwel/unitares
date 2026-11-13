@@ -50,6 +50,15 @@ class AssessmentResult:
     # result is unchanged; see floor_breach_caution_*_enabled below.
     floor_breach_caution: Optional[Dict[str, Any]] = None
 
+    # Dimensions this assessment did not score because the behavioral state
+    # holds no recent reading for them (never read, or stale). Their risk
+    # components are 0 by construction, so a "safe" verdict says nothing about
+    # them. Empty when every dimension was scored.
+    unscored_axes: tuple = ()
+
+
+# Risk component -> the behavioral dimension it scores.
+_COMPONENT_DIMENSION = {"low_E": "E", "low_I": "I", "high_S": "S", "high_V": "V"}
 
 # Verdict thresholds
 RISK_SAFE_THRESHOLD = 0.35
@@ -289,9 +298,18 @@ def assess_behavioral_state(
     for key, value in floor_components.items():
         components[key] = max(components.get(key, 0.0), value)
 
+    # A dimension with no recent reading is not scored: its value is a
+    # placeholder or a stale hold, so neither its deviation nor its floor is
+    # evidence about this check-in. This is the last word on those components,
+    # after the floors above. With the hold off nothing is unscored.
+    unscored_axes = tuple(state.unscored_dimensions)
+    for key, dimension in _COMPONENT_DIMENSION.items():
+        if dimension in unscored_axes and key in components:
+            components[key] = 0.0
+
     # --- Trend bonus: improving E+I reduces risk slightly ---
     trend_bonus = 0.0
-    if state.update_count >= 5:
+    if state.update_count >= 5 and "E" not in unscored_axes and "I" not in unscored_axes:
         e_trend = state.trend("E")
         i_trend = state.trend("I")
         if e_trend > 0.005 and i_trend > 0.005:
@@ -362,6 +380,7 @@ def assess_behavioral_state(
         components={k: round(v, 4) for k, v in components.items()},
         guidance=guidance,
         floor_breach_caution=floor_breach_caution,
+        unscored_axes=unscored_axes,
     )
 
 
@@ -518,7 +537,13 @@ def _score_absolute_floors(state: BehavioralEISV) -> Dict[str, float]:
     if abs(state.V) > ABSOLUTE_V_CEILING:
         components["high_V"] = 0.20 * min(1.0, (abs(state.V) - ABSOLUTE_V_CEILING) / (1.0 - ABSOLUTE_V_CEILING))
 
-    return components
+    # A floor on a dimension with no recent reading is a floor on a placeholder
+    # or a stale hold, not a breach (see BehavioralEISV.is_scored).
+    return {
+        key: value
+        for key, value in components.items()
+        if state.is_scored(_COMPONENT_DIMENSION[key])
+    }
 
 
 def _generate_guidance(

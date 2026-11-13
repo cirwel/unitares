@@ -106,9 +106,9 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
                 ),
                 "raw_observation": (
                     {
-                        "E": float(beh.obs_history[-1][0]),
-                        "I": float(beh.obs_history[-1][1]),
-                        "S": float(beh.obs_history[-1][2]),
+                        # None where the sensor had no reading this check-in.
+                        key: (None if value is None else float(value))
+                        for key, value in zip("EIS", beh.obs_history[-1])
                     }
                     if getattr(beh, "obs_history", None)
                     else None

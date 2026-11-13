@@ -43,7 +43,7 @@ import psycopg2.extras  # noqa: E402
 
 
 def rebuild(beisv) -> BehavioralEISV:
-    st = BehavioralEISV()
+    st = BehavioralEISV(hold_unread=False)
     bs = beisv.get("baseline_stats") or {}
     counts = []
     for dim in ("E", "I", "S", "V"):

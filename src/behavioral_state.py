@@ -10,11 +10,13 @@ from the agent's own characteristic operating point instead of fixed thresholds.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.agent_behavioral_baseline import WelfordStats
+from src.behavioral_sensor import hold_unread_axes_enabled
 
 
 # Per-dimension EMA alphas.
@@ -39,6 +41,15 @@ V_MIN = -1.0
 V_MAX = 1.0
 EIS_MIN = 0.0
 EIS_MAX = 1.0
+
+DIMENSIONS = ("E", "I", "S", "V")
+
+# A held value stops being scored once this many check-ins have passed without
+# a reading for its dimension. The number is a choice, not a fit: it is the
+# bootstrap length, and at the default alphas the EMA half-life is 4 to 8
+# readings, so before the hold a single reading had mostly washed out of the
+# smoothed value over the same span.
+STALE_AFTER_UPDATES = 10
 
 # History cap
 MAX_HISTORY = 100
@@ -151,6 +162,76 @@ class BehavioralEISV:
     _baseline_S: WelfordStats = field(default_factory=WelfordStats)
     _baseline_V: WelfordStats = field(default_factory=WelfordStats)
 
+    # How many check-ins supplied a reading for each dimension, and how many
+    # check-ins have passed since the last one. An axis the sensor could not
+    # read (see behavioral_sensor.hold_unread_axes_enabled) is held: its value
+    # above is the last reading, or the bootstrap value when the count is 0.
+    # V counts a reading only when both E and I were read on the same check-in.
+    readings: Dict[str, int] = field(default_factory=lambda: dict.fromkeys(DIMENSIONS, 0))
+    since_reading: Dict[str, int] = field(default_factory=lambda: dict.fromkeys(DIMENSIONS, 0))
+    # Fixed when the state is created or restored, so one state never mixes
+    # the two update rules.
+    hold_unread: bool = field(default_factory=hold_unread_axes_enabled)
+
+    def has_reading(self, dimension: str) -> bool:
+        """Whether any check-in has supplied a reading for this dimension."""
+        return self.readings.get(dimension, 0) > 0
+
+    def is_scored(self, dimension: str) -> bool:
+        """Whether this dimension's value is recent evidence the assessment may score.
+
+        With the hold off every check-in is a reading, so this is always True.
+        With it on, a dimension is scored only once it has a reading and while
+        fewer than STALE_AFTER_UPDATES check-ins have passed since the last
+        one. A held number older than that is the last thing observed, not the
+        agent's current state.
+        """
+        if not self.hold_unread:
+            return True
+        return (
+            self.has_reading(dimension)
+            and self.since_reading.get(dimension, 0) < STALE_AFTER_UPDATES
+        )
+
+    @property
+    def unscored_dimensions(self) -> List[str]:
+        """Dimensions the assessment does not score: never read, or stale."""
+        return [d for d in DIMENSIONS if not self.is_scored(d)]
+
+    @property
+    def unread_dimensions(self) -> List[str]:
+        """Dimensions with no reading on record; their values are placeholders."""
+        return [d for d in DIMENSIONS if not self.has_reading(d)]
+
+    def _step(self, dimension: str, observation: float, low: float, high: float) -> None:
+        """Fold one reading into a dimension's smoothed value and baseline.
+
+        The first reading seeds the value: before it the field holds a
+        bootstrap constant (or, for state restored from before readings were
+        counted, a number built from filled-in defaults), and smoothing a real
+        reading into that would carry the placeholder forward. Later readings
+        take the EMA step, with the fast catch-up ramp keyed on this
+        dimension's own reading count.
+        """
+        count = self.readings.get(dimension, 0)
+        if count == 0 and self.hold_unread:
+            value = observation
+            setattr(self, f"_baseline_{dimension}", WelfordStats())
+            history: List[float] = []
+        else:
+            alpha = self.alphas[dimension]
+            if count < BOOTSTRAP_UPDATES:
+                alpha += 0.5 * (1.0 - count / BOOTSTRAP_UPDATES)
+            value = (1.0 - alpha) * getattr(self, dimension) + alpha * observation
+            history = list(getattr(self, f"{dimension}_history"))
+        value = max(low, min(high, value))
+        setattr(self, dimension, value)
+        history.append(value)
+        setattr(self, f"{dimension}_history", history[-MAX_HISTORY:])
+        getattr(self, f"_baseline_{dimension}").update(value)
+        self.readings[dimension] = count + 1
+        self.since_reading[dimension] = 0
+
     def _raw_valence(self, E_obs: float, I_obs: float) -> float:
         """Pre-EMA valence (E-I imbalance) input fed into V's own EMA.
 
@@ -170,78 +251,51 @@ class BehavioralEISV:
 
     def update(
         self,
-        E_obs: float,
-        I_obs: float,
-        S_obs: float,
+        E_obs: Optional[float],
+        I_obs: Optional[float],
+        S_obs: Optional[float],
     ) -> None:
-        """Update behavioral state from observations.
+        """Update behavioral state from this check-in's observations.
 
         Args:
-            E_obs: Observed energy [0, 1] — from tool success, decision quality
-            I_obs: Observed integrity [0, 1] — from calibration accuracy, coherence
-            S_obs: Observed entropy [0, 1] — from drift, instability, divergence
-        """
-        # Clamp inputs
-        E_obs = max(0.0, min(1.0, E_obs))
-        I_obs = max(0.0, min(1.0, I_obs))
-        S_obs = max(0.0, min(1.0, S_obs))
+            E_obs: Observed energy [0, 1], or None when the sensor had no reading
+            I_obs: Observed integrity [0, 1], or None when it had no reading
+            S_obs: Observed entropy [0, 1], or None when it had no reading
 
-        # Record raw observations before EMA smoothing
-        self.obs_history.append([E_obs, I_obs, S_obs])
+        A None axis is held: no smoothing step, no baseline sample and no
+        trend-history entry, so its value stays the last reading. V is the
+        smoothed E-I imbalance of one check-in's observations, so it steps
+        only when both E and I were read.
+        """
+        observations = {"E": E_obs, "I": I_obs, "S": S_obs}
+        for dimension, value in observations.items():
+            if value is not None:
+                value = float(value)
+                # A non-finite observation is no reading; clamping it would
+                # write NaN into the smoothed value and its baseline for good.
+                observations[dimension] = (
+                    max(0.0, min(1.0, value)) if math.isfinite(value) else None
+                )
+
+        # Record raw observations before EMA smoothing (None for a held axis)
+        self.obs_history.append([observations["E"], observations["I"], observations["S"]])
         if len(self.obs_history) > MAX_HISTORY:
             self.obs_history = self.obs_history[-MAX_HISTORY:]
 
-        # During bootstrap, ramp alpha from 0.5 (fast catch-up) down to configured value
-        if self.update_count < BOOTSTRAP_UPDATES:
-            ramp = 1.0 - (self.update_count / BOOTSTRAP_UPDATES)
-            bootstrap_boost = 0.5 - 0.0  # max extra alpha during bootstrap
-            alpha_E = self.alphas["E"] + bootstrap_boost * ramp
-            alpha_I = self.alphas["I"] + bootstrap_boost * ramp
-            alpha_S = self.alphas["S"] + bootstrap_boost * ramp
-            alpha_V = self.alphas["V"] + bootstrap_boost * ramp
-        else:
-            alpha_E = self.alphas["E"]
-            alpha_I = self.alphas["I"]
-            alpha_S = self.alphas["S"]
-            alpha_V = self.alphas["V"]
+        for dimension in DIMENSIONS:
+            self.since_reading[dimension] = self.since_reading.get(dimension, 0) + 1
 
-        # EMA update: new = (1 - alpha) * old + alpha * observation
-        self.E = (1.0 - alpha_E) * self.E + alpha_E * E_obs
-        self.I = (1.0 - alpha_I) * self.I + alpha_I * I_obs
-        self.S = (1.0 - alpha_S) * self.S + alpha_S * S_obs
+        for dimension in ("E", "I", "S"):
+            if observations[dimension] is not None:
+                self._step(dimension, observations[dimension], EIS_MIN, EIS_MAX)
 
         # V: EMA-smoothed E-I imbalance — a derived, sign-actionable readout,
         # not a true integral. As of V_FORMULA_VERSION 2 this is the gap of the
         # RAW observations smoothed once (single-EMA, less lag), replacing the
         # earlier double-smoothing. The formula lives behind _raw_valence; see
         # scripts/dev/validate_valence_formula.py for the trace-replay gate.
-        raw_v = self._raw_valence(E_obs, I_obs)
-        self.V = (1.0 - alpha_V) * self.V + alpha_V * raw_v
-
-        # Clamp to valid ranges
-        self.E = max(EIS_MIN, min(EIS_MAX, self.E))
-        self.I = max(EIS_MIN, min(EIS_MAX, self.I))
-        self.S = max(EIS_MIN, min(EIS_MAX, self.S))
-        self.V = max(V_MIN, min(V_MAX, self.V))
-
-        # Record history
-        self.E_history.append(self.E)
-        self.I_history.append(self.I)
-        self.S_history.append(self.S)
-        self.V_history.append(self.V)
-
-        # Trim history
-        if len(self.E_history) > MAX_HISTORY:
-            self.E_history = self.E_history[-MAX_HISTORY:]
-            self.I_history = self.I_history[-MAX_HISTORY:]
-            self.S_history = self.S_history[-MAX_HISTORY:]
-            self.V_history = self.V_history[-MAX_HISTORY:]
-
-        # Feed smoothed values to baseline stats
-        self._baseline_E.update(self.E)
-        self._baseline_I.update(self.I)
-        self._baseline_S.update(self.S)
-        self._baseline_V.update(self.V)
+        if observations["E"] is not None and observations["I"] is not None:
+            self._step("V", self._raw_valence(observations["E"], observations["I"]), V_MIN, V_MAX)
 
         self.update_count += 1
         self.last_update_time = time.monotonic()
@@ -262,10 +316,11 @@ class BehavioralEISV:
             updates arrive. The deviation() min-std floor bounds it meanwhile.
         """
         fresh = WelfordStats()
-        if self.obs_history:
+        rows = [row for row in self.obs_history if row[0] is not None and row[1] is not None]
+        if rows:
             v = BOOTSTRAP_V
             replayed: List[float] = []
-            for idx, row in enumerate(self.obs_history):
+            for idx, row in enumerate(rows):
                 e_obs = max(0.0, min(1.0, float(row[0])))
                 i_obs = max(0.0, min(1.0, float(row[1])))
                 if idx < BOOTSTRAP_UPDATES:
@@ -372,6 +427,10 @@ class BehavioralEISV:
             "V": round(self.V, 4),
             "confidence": round(self.confidence, 2),
             "updates": self.update_count,
+            "readings": {d: int(self.readings.get(d, 0)) for d in DIMENSIONS},
+            "since_reading": {d: int(self.since_reading.get(d, 0)) for d in DIMENSIONS},
+            "unread": self.unread_dimensions,
+            "unscored": self.unscored_dimensions,
             "warmup": {
                 "phase": phase,
                 "updates_completed": self.update_count,
@@ -415,7 +474,7 @@ class BehavioralEISV:
         # scripts/analysis/eisv_self_predictability.py scope limit). Absent before
         # the first update() (no observation recorded yet).
         if self.obs_history:
-            d["raw_obs"] = [round(v, 4) for v in self.obs_history[-1]]
+            d["raw_obs"] = [None if v is None else round(v, 4) for v in self.obs_history[-1]]
         return d
 
     def to_dict_with_history(self) -> Dict:
@@ -425,7 +484,10 @@ class BehavioralEISV:
         d["I_history"] = [round(v, 4) for v in self.I_history[-MAX_HISTORY:]]
         d["S_history"] = [round(v, 4) for v in self.S_history[-MAX_HISTORY:]]
         d["V_history"] = [round(v, 4) for v in self.V_history[-MAX_HISTORY:]]
-        d["obs_history"] = [[round(v, 4) for v in row] for row in self.obs_history[-MAX_HISTORY:]]
+        d["obs_history"] = [
+            [None if v is None else round(v, 4) for v in row]
+            for row in self.obs_history[-MAX_HISTORY:]
+        ]
         d["alphas"] = dict(self.alphas)
         d["v_formula_version"] = V_FORMULA_VERSION
         # Persist baseline statistics for cross-restart continuity
@@ -450,7 +512,23 @@ class BehavioralEISV:
         state.I_history = [float(v) for v in data.get("I_history", [])]
         state.S_history = [float(v) for v in data.get("S_history", [])]
         state.V_history = [float(v) for v in data.get("V_history", [])]
-        state.obs_history = [[float(v) for v in row] for row in data.get("obs_history", [])]
+        state.obs_history = [
+            [None if v is None else float(v) for v in row]
+            for row in data.get("obs_history", [])
+        ]
+        # State persisted before readings were counted carries numbers the
+        # filled-in formula produced, with no record of which were readings.
+        # Under the hold they are kept as placeholders and every dimension
+        # starts unread, so the first real reading seeds it. With the hold off
+        # every check-in is a reading, as it always was.
+        persisted_readings = data.get("readings")
+        if isinstance(persisted_readings, dict):
+            state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
+            persisted_since = data.get("since_reading")
+            if isinstance(persisted_since, dict):
+                state.since_reading = {d: int(persisted_since.get(d, 0) or 0) for d in DIMENSIONS}
+        elif not state.hold_unread:
+            state.readings = dict.fromkeys(DIMENSIONS, state.update_count)
         if "alphas" in data:
             state.alphas = {k: float(v) for k, v in data["alphas"].items()}
         # Restore baseline statistics (backward compat: missing = fresh WelfordStats)

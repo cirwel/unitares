@@ -132,6 +132,72 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+HOLD_UNREAD_AXES_ENV = "UNITARES_HOLD_UNREAD_AXES"
+HOLD_UNREAD_AXES_MODE = "hold_v1"
+_READING_DIMENSIONS = ("E", "I", "S")
+
+
+def hold_unread_axes_enabled() -> bool:
+    """Return True when an axis with no supplied base term is held, not filled.
+
+    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default ON; set to
+    ``0``/``false``/``no``/``off``/``""`` to restore filling). Each of E, I and
+    S is built from base terms and then adjusted by blends. When no base term
+    was supplied, the formula substitutes a constant (0.85 for E, 0.75 for I,
+    the drift and divergence defaults for S) and the blends adjust that
+    constant, so the published number looks like a reading without being one.
+
+    With the hold on, such an axis reports ``None`` for the check-in: the
+    smoothed behavioral state keeps its previous value, takes no baseline
+    sample, and V steps only when both E and I were read. The blends are
+    discarded for that axis because they adjust a reading and there is none.
+    The component record and the shadow ablations still carry the filled
+    arithmetic, so what the formula would have published stays inspectable.
+    """
+    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "1").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def unread_axes(components: Mapping | None) -> tuple[str, ...]:
+    """Axes of a component record whose base terms are all unobserved.
+
+    An axis counts as read when at least one base term is flagged
+    ``observed``; this is the same rule ``src/reading_coverage.py`` reports to
+    the agent. A malformed record yields no unread axes, so a telemetry defect
+    can never withhold a reading.
+    """
+    dimensions = components.get("dimensions") if isinstance(components, Mapping) else None
+    if not isinstance(dimensions, Mapping):
+        return ()
+    unread = []
+    for dimension in _READING_DIMENSIONS:
+        record = dimensions.get(dimension)
+        base_terms = record.get("components") if isinstance(record, Mapping) else None
+        if not isinstance(base_terms, list) or not base_terms:
+            continue
+        if not any(
+            isinstance(term, Mapping) and term.get("observed") is True
+            for term in base_terms
+        ):
+            unread.append(dimension)
+    return tuple(unread)
+
+
+def hold_unread(observation: Mapping | None, components: Mapping | None) -> dict | None:
+    """The observation the behavioral state consumes: unread axes become None.
+
+    Returns the observation unchanged when the hold is off. V is the sensor's
+    diagnostic slope reading and is passed through.
+    """
+    if observation is None:
+        return None
+    result = dict(observation)
+    if hold_unread_axes_enabled():
+        for dimension in unread_axes(components):
+            result[dimension] = None
+    return result
+
+
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
 LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
 LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6

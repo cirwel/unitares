@@ -317,16 +317,8 @@ def test_behavioral_update_stays_convex_for_any_valid_rate(rate, start, readings
         _assert_convex_step(prev, b, obs)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "update() clamps with max(0, min(1, x)); min(1.0, nan) is 1.0, so a NaN "
-        "reading is recorded as the maximal value. Whether production can feed "
-        "NaN here is not established. Fixing it changes the live behavioral "
-        "update (an instrument change)."
-    ),
-)
+# Was a strict xfail until the hold-unread change: update() clamped NaN to 1.0.
+# A non-finite observation is now no reading, and the axis is held.
 @pytest.mark.parametrize("slot", [0, 1, 2])
 def test_a_nan_reading_is_not_treated_as_maximal(slot):
     b = BehavioralEISV()
