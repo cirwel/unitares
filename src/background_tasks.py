@@ -155,29 +155,6 @@ async def concept_extraction_background_task(interval_hours: float = 24.0):
 
 
 # ---------------------------------------------------------------------------
-# Materialized view refresh (moved from per-insert to periodic)
-# ---------------------------------------------------------------------------
-
-async def periodic_matview_refresh():
-    """Refresh mv_latest_agent_states periodically instead of per-insert."""
-    await asyncio.sleep(30.0)
-    while True:
-        try:
-            from src.db import get_db
-            db = get_db()
-            async with db.acquire() as conn:
-                await conn.execute(
-                    "REFRESH MATERIALIZED VIEW CONCURRENTLY core.mv_latest_agent_states"
-                )
-            record_success("matview_refresh", log=logger)
-        except Exception as e:
-            # Every 60s: record_failure warns on the first failure and on a
-            # changed error, not on each repeat.
-            record_failure("matview_refresh", e, log=logger)
-        await asyncio.sleep(60)
-
-
-# ---------------------------------------------------------------------------
 # Partition maintenance
 # ---------------------------------------------------------------------------
 
@@ -824,7 +801,6 @@ def start_all_background_tasks(set_ready):
         name="r2_lineage_eval_sweeper",
     )
     logger.info("[R2_SWEEPER] Started lineage-eval sweep (every 30m, 6h re-eval guard)")
-    _supervised_create_task(periodic_matview_refresh(), name="matview_refresh")
     _supervised_create_task(periodic_partition_maintenance(), name="partition_maintenance")
     # Concurrent identity binding sweeper (#123): marks bindings stale once
     # they fall outside the live window so the diagnose view and v2
