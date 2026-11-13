@@ -11,7 +11,7 @@ defmodule UnitaresSentinel.EISVWebSocket do
   use GenServer
   require Logger
 
-  alias UnitaresSentinel.FleetState
+  alias UnitaresSentinel.{BearerClient, FleetState}
 
   @default_url "ws://localhost:8767/ws/eisv"
   @default_reconnect_ms 10_000
@@ -22,6 +22,9 @@ defmodule UnitaresSentinel.EISVWebSocket do
             connect_timeout_ms: @default_connect_timeout_ms,
             fleet_state: FleetState,
             connect_on_init?: true,
+            auth_opts: [],
+            token_index: 0,
+            active_token: nil,
             conn: nil,
             websocket: nil,
             ref: nil,
@@ -50,13 +53,28 @@ defmodule UnitaresSentinel.EISVWebSocket do
       reconnect_ms: Keyword.get(opts, :reconnect_ms, @default_reconnect_ms),
       connect_timeout_ms: Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms),
       fleet_state: Keyword.get(opts, :fleet_state, FleetState),
-      connect_on_init?: Keyword.get(opts, :connect_on_init?, true)
+      connect_on_init?: Keyword.get(opts, :connect_on_init?, true),
+      auth_opts: Keyword.get(opts, :auth_opts, [])
     }
 
     if state.connect_on_init? do
       {:ok, state, {:continue, :connect}}
     else
       {:ok, state}
+    end
+  end
+
+  @doc false
+  def select_upgrade_auth(url, auth_opts \\ [], token_index \\ 0) do
+    candidates = BearerClient.bearer_candidates(Keyword.put(auth_opts, :url, url))
+
+    case candidates do
+      [] ->
+        {[], nil}
+
+      list ->
+        token = Enum.at(list, rem(max(token_index, 0), length(list)))
+        {[{"authorization", "Bearer " <> token}], token}
     end
   end
 
@@ -125,6 +143,9 @@ defmodule UnitaresSentinel.EISVWebSocket do
   defp connect(state) do
     uri = URI.parse(state.url)
 
+    {upgrade_hdrs, active_token} =
+      select_upgrade_auth(state.url, state.auth_opts, state.token_index)
+
     with {:ok, schemes} <- schemes(uri),
          {:ok, host} <- host(uri),
          {:ok, conn} <-
@@ -133,12 +154,13 @@ defmodule UnitaresSentinel.EISVWebSocket do
              mode: :active,
              timeout: state.connect_timeout_ms
            ),
-         {:ok, conn, ref} <- Mint.WebSocket.upgrade(schemes.ws, conn, path(uri), []) do
+         {:ok, conn, ref} <- Mint.WebSocket.upgrade(schemes.ws, conn, path(uri), upgrade_hdrs) do
       {:noreply,
        %{
          state
          | conn: conn,
            ref: ref,
+           active_token: active_token,
            websocket: nil,
            connected?: false,
            upgrade_status: nil,
@@ -176,12 +198,19 @@ defmodule UnitaresSentinel.EISVWebSocket do
   defp handle_response({:done, ref}, %{ref: ref, websocket: nil} = state) do
     case Mint.WebSocket.new(state.conn, ref, state.upgrade_status, state.upgrade_headers) do
       {:ok, conn, websocket} ->
+        BearerClient.record_winner(state.url, state.active_token, state.auth_opts)
         Logger.info("Sentinel EISV WebSocket connected to #{state.url}")
-        %{state | conn: conn, websocket: websocket, connected?: true}
+        %{state | conn: conn, websocket: websocket, connected?: true, token_index: 0}
 
       {:error, conn, reason} ->
         Logger.warning("Sentinel EISV WebSocket upgrade failed: #{inspect(reason)}")
-        reconnect(%{state | conn: conn})
+
+        next_index =
+          if state.upgrade_status in [401, 403],
+            do: state.token_index + 1,
+            else: state.token_index
+
+        reconnect(%{state | conn: conn, token_index: next_index})
     end
   end
 
@@ -267,6 +296,7 @@ defmodule UnitaresSentinel.EISVWebSocket do
       | conn: nil,
         websocket: nil,
         ref: nil,
+        active_token: nil,
         connected?: false,
         upgrade_status: nil,
         upgrade_headers: []

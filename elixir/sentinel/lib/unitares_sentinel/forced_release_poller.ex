@@ -77,8 +77,11 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   @max_pending_alarms 200
   # At the 3s findings timeout, 5 stalled POSTs cost 15s of the 30s tick.
   @max_deliveries_per_tick 5
+  @max_consecutive_failures_before_alarm 3
+  @default_http_timeout_ms 15_000
 
   alias UnitaresSentinel.{
+    BearerClient,
     CycleState,
     Findings,
     ForcedReleasePoller.Logic,
@@ -90,6 +93,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   @type opts :: [
           prior_cursor: DateTime.t() | nil,
           db: GenServer.server(),
+          transport: :db | :http,
+          http_get: fun(),
+          http_opts: keyword(),
           persist: boolean(),
           state_path: Path.t() | nil,
           emit_findings: boolean(),
@@ -98,6 +104,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           lease_opts: keyword(),
           lease_blocked_alert_after_seconds: pos_integer(),
           lease_blocked_state_path: Path.t() | false | nil,
+          max_consecutive_failures: pos_integer(),
           tick_timeout_ms: pos_integer(),
           first_boot_lookback_seconds: non_neg_integer()
         ]
@@ -120,11 +127,34 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   """
   @spec tick(opts()) :: {[Logic.alarm()], DateTime.t() | nil}
   def tick(opts \\ []) do
-    db = Keyword.get(opts, :db, UnitaresSentinel.DB)
+    case poll_cycle(opts) do
+      {:ok, alarms, new_cursor} ->
+        {alarms, new_cursor}
+
+      {:error, _reason} ->
+        {[], Keyword.get(opts, :prior_cursor)}
+    end
+  end
+
+  @doc false
+  def poll_cycle(opts \\ []) do
     prior_cursor = Keyword.get(opts, :prior_cursor)
     persist? = Keyword.get(opts, :persist, false)
+    transport = select_transport(opts)
 
-    case query_all_rows_in_transaction(db, prior_cursor) do
+    fetch_result =
+      case transport do
+        :http ->
+          query_all_rows_http(prior_cursor, opts)
+
+        :db ->
+          query_all_rows_in_transaction(
+            Keyword.get(opts, :db) || UnitaresSentinel.DB,
+            prior_cursor
+          )
+      end
+
+    case fetch_result do
       {:ok, %{ad_hoc: ad_hoc, deprecation: dep, conflict: conf}} ->
         {alarms, new_cursor} =
           Logic.build_all_alarms(ad_hoc, dep, conf, prior_cursor)
@@ -140,28 +170,43 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           persist_cursor(new_cursor, opts)
         end
 
-        {alarms, new_cursor}
+        {:ok, alarms, new_cursor}
 
       {:error, reason} ->
         # v0.1.3 §B6 all-or-nothing cursor advance — covers the `{:error, _}`
-        # return class (real DB errors: connection drop mid-transaction,
-        # constraint violation, server-side rollback, query-level error).
+        # return class (real DB/HTTP errors: connection drop mid-transaction,
+        # HTTP 5xx/401, malformed payload, query-level error).
         # The cursor MUST NOT advance and the persist MUST NOT happen.
-        # Returning `{[], prior_cursor}` preserves both invariants.
-        #
-        # The other failure class is process exit (e.g. `:noproc` if the
-        # registered Postgrex name doesn't exist). That bypasses this match
-        # arm entirely — the GenServer dies, the supervisor restarts it,
-        # `init/1` re-reads the cursor from disk, and the on-disk cursor
-        # was never advanced (because no successful tick wrote it). Both
-        # paths preserve the §B6 invariant; only this path returns cleanly.
-        # Mirrors Python's caught-exception early return at agent.py:671-673
-        # where save_state is never reached on poll failure.
+        # Returning `{[], prior_cursor}` from `tick/1` preserves both invariants.
         Logger.warning(
-          "ForcedReleasePoller.tick: transaction failed — #{inspect(reason)} — cursor unchanged"
+          "ForcedReleasePoller.tick: #{transport} poll failed — #{inspect(reason)} — cursor unchanged"
         )
 
-        {[], prior_cursor}
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  def select_transport(opts \\ []) do
+    cond do
+      Keyword.has_key?(opts, :http_get) or Keyword.get(opts, :transport) == :http ->
+        :http
+
+      Keyword.get(opts, :db) != nil or Keyword.get(opts, :transport) == :db ->
+        :db
+
+      Application.get_env(:unitares_sentinel, :query_transport) in [:http, "http"] ->
+        :http
+
+      Application.get_env(:unitares_sentinel, :query_transport) in [:db, "db"] ->
+        :db
+
+      Application.get_env(:unitares_sentinel, :start_postgrex, true) == false and
+          Process.whereis(UnitaresSentinel.DB) == nil ->
+        :http
+
+      true ->
+        :db
     end
   end
 
@@ -288,6 +333,173 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     |> Enum.into(%{}, fn {col, val} -> {String.to_atom(col), val} end)
   end
 
+  defp query_all_rows_http(prior_cursor, opts) do
+    http_opts = merge_http_opts(opts)
+    base_url = BearerClient.governance_base_url(http_opts)
+
+    url =
+      case prior_cursor do
+        nil ->
+          base_url <> "/v1/lease-plane/alarm-events"
+
+        %DateTime{} = dt ->
+          base_url <>
+            "/v1/lease-plane/alarm-events?" <>
+            URI.encode_query(%{"since" => DateTime.to_iso8601(dt)})
+      end
+
+    case BearerClient.get(url, Keyword.put_new(http_opts, :timeout_ms, @default_http_timeout_ms)) do
+      {:ok, 200, body} ->
+        decode_http_alarm_events(body)
+
+      {:ok, status, body} ->
+        {:error, {:http_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp decode_http_alarm_events(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok,
+       %{
+         "success" => true,
+         "ad_hoc" => ad_hoc_raw,
+         "deprecation_batches" => dep_raw,
+         "conflict_batches" => conf_raw
+       }}
+      when is_list(ad_hoc_raw) and is_list(dep_raw) and is_list(conf_raw) ->
+        with {:ok, ad_hoc} <- parse_rows(ad_hoc_raw, :ad_hoc, &parse_ad_hoc_row/1),
+             {:ok, dep} <- parse_rows(dep_raw, :deprecation_batch, &parse_deprecation_row/1),
+             {:ok, conf} <- parse_rows(conf_raw, :conflict_batch, &parse_conflict_row/1) do
+          {:ok, %{ad_hoc: ad_hoc, deprecation: dep, conflict: conf}}
+        end
+
+      {:ok, other} ->
+        {:error, {:invalid_payload, other}}
+
+      {:error, reason} ->
+        {:error, {:invalid_json, reason}}
+    end
+  end
+
+  defp parse_rows(list, class, row_parser) do
+    list
+    |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
+      case row_parser.(raw) do
+        {:ok, row} -> {:cont, {:ok, [row | acc]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_row, class, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, parsed} -> {:ok, Enum.reverse(parsed)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp parse_ad_hoc_row(%{
+         "event_id" => event_id,
+         "ts" => ts_raw,
+         "surface_id" => surface_id,
+         "surface_kind" => surface_kind
+       } = row)
+       when is_binary(event_id) and is_binary(surface_id) and is_binary(surface_kind) do
+    lease_id = Map.get(row, "lease_id")
+
+    if (is_nil(lease_id) or is_binary(lease_id)) do
+      with {:ok, ts} <- parse_iso_utc(ts_raw) do
+        {:ok,
+         %{
+           event_id: event_id,
+           ts: ts,
+           lease_id: lease_id,
+           surface_id: surface_id,
+           surface_kind: surface_kind
+         }}
+      end
+    else
+      {:error, {:invalid_lease_id, lease_id}}
+    end
+  end
+
+  defp parse_ad_hoc_row(other), do: {:error, other}
+
+  defp parse_deprecation_row(%{
+         "deprecation_id" => deprecation_id,
+         "surface_kind" => surface_kind,
+         "sweep_completed_at" => sweep_raw,
+         "event_count" => event_count,
+         "first_ts" => first_raw,
+         "last_ts" => last_raw
+       })
+       when is_binary(deprecation_id) and is_binary(surface_kind) and is_integer(event_count) and
+              event_count >= 0 do
+    with {:ok, sweep_completed_at} <- parse_iso_utc(sweep_raw),
+         {:ok, first_ts} <- parse_iso_utc(first_raw),
+         {:ok, last_ts} <- parse_iso_utc(last_raw) do
+      {:ok,
+       %{
+         deprecation_id: deprecation_id,
+         surface_kind: surface_kind,
+         sweep_completed_at: sweep_completed_at,
+         event_count: event_count,
+         first_ts: first_ts,
+         last_ts: last_ts
+       }}
+    end
+  end
+
+  defp parse_deprecation_row(other), do: {:error, other}
+
+  defp parse_conflict_row(%{
+         "surface_id" => surface_id,
+         "surface_kind" => surface_kind,
+         "event_count" => event_count,
+         "first_ts" => first_raw,
+         "last_ts" => last_raw
+       })
+       when is_binary(surface_id) and is_binary(surface_kind) and is_integer(event_count) and
+              event_count >= 0 do
+    with {:ok, first_ts} <- parse_iso_utc(first_raw),
+         {:ok, last_ts} <- parse_iso_utc(last_raw) do
+      {:ok,
+       %{
+         surface_id: surface_id,
+         surface_kind: surface_kind,
+         event_count: event_count,
+         first_ts: first_ts,
+         last_ts: last_ts
+       }}
+    end
+  end
+
+  defp parse_conflict_row(other), do: {:error, other}
+
+  defp parse_iso_utc(raw) when is_binary(raw) do
+    case DateTime.from_iso8601(String.trim(raw)) do
+      {:ok, dt, _offset} -> {:ok, dt}
+      {:error, reason} -> {:error, {:invalid_timestamp, raw, reason}}
+    end
+  end
+
+  defp parse_iso_utc(other), do: {:error, {:invalid_timestamp, other}}
+
+  defp merge_http_opts(opts) do
+    base = Keyword.get(opts, :http_opts, [])
+
+    Enum.reduce(
+      [:http_get, :base_url, :url, :env, :bearer_token, :api_token, :timeout_ms, :uds_socket],
+      base,
+      fn key, acc ->
+        case Keyword.fetch(opts, key) do
+          {:ok, val} -> Keyword.put_new(acc, key, val)
+          :error -> acc
+        end
+      end
+    )
+  end
+
   defp persist_cursor(new_cursor, opts) do
     # Review: reviewer Critical-1 (PR #376). Building from %{} would
     # silently erase any sibling keys in the shadow file — most importantly
@@ -336,7 +548,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
   @impl true
   def init(opts) do
-    db = Keyword.get(opts, :db, UnitaresSentinel.DB)
+    db = Keyword.get(opts, :db)
 
     interval_ms =
       Keyword.get(
@@ -387,10 +599,17 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
     state = %{
       db: db,
+      transport: Keyword.get(opts, :transport),
+      http_get: Keyword.get(opts, :http_get),
+      http_opts: Keyword.get(opts, :http_opts, []),
       cursor: cursor,
       interval_ms: interval_ms,
       jitter_ms: jitter_ms,
       first_boot_lookback_seconds: first_boot_lookback_seconds,
+      max_consecutive_failures:
+        Keyword.get(opts, :max_consecutive_failures, @max_consecutive_failures_before_alarm),
+      consecutive_failures: 0,
+      blind_alarm_delivered?: false,
       emit_findings?:
         Keyword.get(
           opts,
@@ -515,7 +734,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
             )
 
             schedule_next_tick(state)
-            {:noreply, %{state | running?: false}}
+
+            {:noreply,
+             %{
+               state
+               | running?: false,
+                 consecutive_failures: Map.get(state, :consecutive_failures, 0) + 1
+             }}
         end
       after
         release_runtime_lease(lease, state)
@@ -549,46 +774,117 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
       |> max_cursor(file_cursor)
       |> apply_first_boot_lookback(state)
 
-    {alarms, new_cursor} =
-      tick(prior_cursor: effective_prior, db: state.db, persist: false)
+    poll_opts =
+      [prior_cursor: effective_prior, persist: false, http_opts: Map.get(state, :http_opts, [])]
+      |> maybe_put_opt(:db, state.db)
+      |> maybe_put_opt(:transport, Map.get(state, :transport))
+      |> maybe_put_opt(:http_get, Map.get(state, :http_get))
 
-    now_ms = System.system_time(:millisecond)
+    case poll_cycle(poll_opts) do
+      {:ok, alarms, new_cursor} ->
+        now_ms = System.system_time(:millisecond)
 
-    {fresh, conflict_realert} =
-      Logic.throttle_conflicts(
-        alarms,
+        {fresh, conflict_realert} =
+          Logic.throttle_conflicts(
+            alarms,
+            state
+            |> Map.get(:conflict_realert, UnitaresSentinel.ReAlert.new())
+            |> UnitaresSentinel.ReAlert.prune(now_ms),
+            now_ms
+          )
+
+        # The cursor advances past every row this tick read, delivered or not, so
+        # an alarm whose POST failed would never be rebuilt from the database.
+        # Undelivered alarms are carried in memory (bounded, lost on restart like
+        # the rest of this GenServer's state) and bypass the throttle, which
+        # already admitted them. Delivery order and eviction both go by severity,
+        # this tick's alarms ahead of older ones (eviction by severity, then
+        # queue age: Findings.cap_queue/2), and at most
+        # @max_deliveries_per_tick POSTs are attempted, so a stalled endpoint can
+        # neither eat the tick deadline nor push a fresh high alarm out behind a
+        # backlog. Governance dedups on fingerprint, so resending one that did land
+        # is harmless.
+        pending =
+          fresh
+          |> Logic.order_for_delivery(Map.get(state, :pending_alarms, []))
+          |> emit_findings(state)
+          |> Findings.cap_queue(@max_pending_alarms)
+
+        if new_cursor != nil and not same_cursor?(new_cursor, effective_prior) do
+          persist_cursor(new_cursor, [])
+        end
+
         state
-        |> Map.get(:conflict_realert, UnitaresSentinel.ReAlert.new())
-        |> UnitaresSentinel.ReAlert.prune(now_ms),
-        now_ms
-      )
+        |> Map.put(:conflict_realert, conflict_realert)
+        |> Map.put(:pending_alarms, pending)
+        |> Map.merge(%{
+          running?: false,
+          cursor: new_cursor,
+          consecutive_failures: 0,
+          blind_alarm_delivered?: false
+        })
 
-    # The cursor advances past every row this tick read, delivered or not, so
-    # an alarm whose POST failed would never be rebuilt from the database.
-    # Undelivered alarms are carried in memory (bounded, lost on restart like
-    # the rest of this GenServer's state) and bypass the throttle, which
-    # already admitted them. Delivery order and eviction both go by severity,
-    # this tick's alarms ahead of older ones (eviction by severity, then
-    # queue age: Findings.cap_queue/2), and at most
-    # @max_deliveries_per_tick POSTs are attempted, so a stalled endpoint can
-    # neither eat the tick deadline nor push a fresh high alarm out behind a
-    # backlog. Governance dedups on fingerprint, so resending one that did land
-    # is harmless.
-    pending =
-      fresh
-      |> Logic.order_for_delivery(Map.get(state, :pending_alarms, []))
-      |> emit_findings(state)
-      |> Findings.cap_queue(@max_pending_alarms)
+      {:error, reason} ->
+        failures = Map.get(state, :consecutive_failures, 0) + 1
+        threshold = Map.get(state, :max_consecutive_failures, @max_consecutive_failures_before_alarm)
 
-    if new_cursor != nil and not same_cursor?(new_cursor, effective_prior) do
-      persist_cursor(new_cursor, [])
+        pending =
+          state
+          |> Map.get(:pending_alarms, [])
+          |> emit_findings(state)
+          |> Findings.cap_queue(@max_pending_alarms)
+
+        blind_delivered? =
+          maybe_emit_blind_poller_alarm(state, poll_opts, failures, threshold, reason)
+
+        state
+        |> Map.put(:pending_alarms, pending)
+        |> Map.merge(%{
+          running?: false,
+          consecutive_failures: failures,
+          blind_alarm_delivered?: blind_delivered?
+        })
     end
-
-    state
-    |> Map.put(:conflict_realert, conflict_realert)
-    |> Map.put(:pending_alarms, pending)
-    |> Map.merge(%{running?: false, cursor: new_cursor})
   end
+
+  defp maybe_emit_blind_poller_alarm(state, poll_opts, failures, threshold, reason) do
+    already_delivered? = Map.get(state, :blind_alarm_delivered?, false)
+
+    cond do
+      already_delivered? ->
+        true
+
+      failures < threshold ->
+        false
+
+      not state.emit_findings? ->
+        false
+
+      true ->
+        target_label = blind_target_label(poll_opts, state.db)
+
+        blind_alarm = %{
+          kind: "poller_blind",
+          severity: "high",
+          summary:
+            "forced-release alarm poller blind after #{failures} consecutive failures: #{inspect(reason)}",
+          fingerprint: Findings.compute_fingerprint(["forced_release", "poller_blind", target_label]),
+          extra: %{consecutive_failures: failures}
+        }
+
+        Findings.post_alarm_result(blind_alarm, state.findings_opts) in [:accepted, :deduped]
+    end
+  end
+
+  defp blind_target_label(poll_opts, db) do
+    case select_transport(poll_opts) do
+      :http -> BearerClient.governance_base_url(merge_http_opts(poll_opts))
+      :db -> "postgrex:#{inspect(db || UnitaresSentinel.DB)}"
+    end
+  end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, val), do: Keyword.put(opts, key, val)
 
   defp schedule_next_tick(state) do
     Process.send_after(self(), :tick, schedule_delay(state.interval_ms, state.jitter_ms))
