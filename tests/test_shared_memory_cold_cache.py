@@ -29,7 +29,7 @@ async def test_cold_registry_status_enforced(gate, status, code):
     lookup.return_value = meta(status)
     result = await check_agent_can_operate_async('agent')
     assert (parse_result(result)['error_code'] if result else None) == code
-    assert server.agent_metadata['agent'] is lookup.return_value
+    assert server.agent_metadata == {}
     lookup.assert_awaited_once_with('agent')
 
 
@@ -53,11 +53,12 @@ async def test_confirmed_absence_preserves_new_writer_policy(gate):
 
 
 @pytest.mark.asyncio
-async def test_cached_agent_needs_no_lookup(gate):
+async def test_cached_active_agent_still_checks_durable_status(gate):
     server, lookup = gate
     server.agent_metadata['agent'] = meta('active')
-    assert await check_agent_can_operate_async('agent') is None
-    lookup.assert_not_awaited()
+    lookup.return_value = meta('paused')
+    assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == 'AGENT_PAUSED'
+    lookup.assert_awaited_once_with('agent')
 
 
 @pytest.mark.asyncio
@@ -84,4 +85,32 @@ async def test_stale_active_bulk_snapshot_does_not_override_restrictive_lookup(g
     lookup.side_effect = load
     assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == code
     assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == code
-    lookup.assert_awaited_once()
+    assert lookup.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,code', [('paused', 'AGENT_PAUSED'), ('archived', 'AGENT_ARCHIVED')])
+async def test_stale_restrictive_read_never_replaces_resumed_object(gate, status, code):
+    server, lookup = gate
+    resumed = meta('active')
+    async def load(_):
+        server.agent_metadata['agent'] = resumed
+        return meta(status)
+    lookup.side_effect = load
+    assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == code
+    assert server.agent_metadata['agent'] is resumed
+    assert resumed.status == 'active'
+    lookup.side_effect = None
+    lookup.return_value = meta('active')
+    assert await check_agent_can_operate_async('agent') is None
+    assert server.agent_metadata['agent'] is resumed
+
+
+@pytest.mark.asyncio
+async def test_cached_active_registry_outage_is_not_permission(gate):
+    server, lookup = gate
+    active = meta('active')
+    server.agent_metadata['agent'] = active
+    lookup.side_effect = RuntimeError('offline')
+    assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == 'REGISTRY_UNAVAILABLE'
+    assert server.agent_metadata['agent'] is active
