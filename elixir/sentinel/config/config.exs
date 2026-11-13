@@ -12,7 +12,7 @@ bool_env = fn name, default ->
       # Total for exactly the reason `int_env` below is, and the argument is not
       # weaker here — it is stronger. `scripts/start.sh` sources the secrets
       # env file explicitly named by `$UNITARES_SECRETS_ENV` and then exports all
-      # NINE of these knobs from `${VAR:-default}`, so both the launchd plist and secrets.env can set them;
+      # TEN of these knobs from `${VAR:-default}`, so both the launchd plist and secrets.env can set them;
       # config.exs is evaluated on every `mix run --no-halt`, so a raise here
       # exits non-zero and hands launchd (`KeepAlive=true`) a crash-looping
       # resident. `UNITARES_SENTINEL_EMIT_FINDINGS=y` is a knob an operator
@@ -97,6 +97,21 @@ end
 first_boot_lookback_seconds =
   int_env.("UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS", 7 * 24 * 60 * 60)
 
+gov_rest_base =
+  case System.get_env("GOV_REST_URL") do
+    nil ->
+      nil
+
+    "" ->
+      nil
+
+    raw ->
+      case String.trim(raw) do
+        "" -> nil
+        trimmed -> String.trim_trailing(trimmed, "/")
+      end
+  end
+
 config :unitares_sentinel,
   start_application: bool_env.("UNITARES_SENTINEL_START_APPLICATION", true),
   database_url:
@@ -129,10 +144,20 @@ config :unitares_sentinel,
   analysis_initial_delay_ms: 5_000,
   analysis_jitter_ms: 5_000,
   analysis_tick_timeout_ms: 45_000,
-  websocket_url: System.get_env("GOV_WS_URL") || "ws://localhost:8767/ws/eisv",
+  websocket_url:
+    System.get_env("GOV_WS_URL") ||
+      (if gov_rest_base do
+         gov_rest_base
+         |> String.replace_prefix("https://", "wss://")
+         |> String.replace_prefix("http://", "ws://")
+         |> Kernel.<>("/ws/eisv")
+       else
+         "ws://localhost:8767/ws/eisv"
+       end),
   websocket_reconnect_ms: 10_000,
   first_boot_lookback_seconds: first_boot_lookback_seconds,
-  lease_advisory_enabled: true,
+  governance_base_url: gov_rest_base,
+  lease_advisory_enabled: bool_env.("UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED", true),
   # Seconds a resident may be refused its advisory lease before it reports its
   # OWN starvation to /api/findings (2026-07-31 immortal-lease incident: 5,703
   # consecutive "tick skipped by lease enforcement" warnings, zero alerts).
@@ -150,14 +175,19 @@ config :unitares_sentinel,
   lease_enforced_surface_kinds: System.get_env("LEASE_PLANE_ENFORCED_SURFACE_KINDS"),
   lease_plane_base_url: System.get_env("LEASE_PLANE_BASE_URL") || "http://127.0.0.1:8788",
   lease_plane_timeout_ms: 2_000,
-  findings_url: System.get_env("UNITARES_FINDINGS_URL") || "http://localhost:8767/api/findings",
+  findings_url:
+    System.get_env("UNITARES_FINDINGS_URL") ||
+      (if gov_rest_base, do: gov_rest_base <> "/api/findings", else: "http://localhost:8767/api/findings"),
   findings_timeout_ms: 3_000,
   findings_agent_id: System.get_env("UNITARES_SENTINEL_AGENT_ID") || "sentinel",
   findings_agent_name: "Sentinel",
   emit_findings: bool_env.("UNITARES_SENTINEL_EMIT_FINDINGS", true),
   emit_checkins: bool_env.("UNITARES_SENTINEL_EMIT_CHECKINS", false),
   governance_tools_url:
-    System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") || "http://localhost:8767/v1/tools/call",
+    System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") ||
+      (if gov_rest_base,
+         do: gov_rest_base <> "/v1/tools/call",
+         else: "http://localhost:8767/v1/tools/call"),
   governance_checkin_timeout_ms: 45_000
 
 if File.exists?("config/#{config_env()}.exs") do
