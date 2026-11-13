@@ -167,10 +167,11 @@ async def test_bulk_load_keeps_entries_added_while_it_was_reading(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lazily_persisted_first_checkin_is_still_new(monkeypatch):
-    """One registry read per check-in, taken before lazy persistence: an
-    agent whose row is written by this very check-in keeps the new-agent
-    path (purpose, created event, default class tags)."""
+async def test_one_registry_read_taken_before_lazy_persistence(monkeypatch):
+    """The phase reads the registry once, before lazy persistence, and does
+    not read it again afterwards: whether a first check-in counts as new is
+    left to ensure_agent_persisted and the cache, as it was before. (The
+    stand-in here writes no cache entry, so the flag stays True.)"""
     _patch_context(monkeypatch)
     lookup = _registry(monkeypatch, None)
     monkeypatch.setattr(id_handlers, "ensure_agent_persisted", AsyncMock(return_value=True))

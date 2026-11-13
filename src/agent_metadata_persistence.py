@@ -401,7 +401,9 @@ async def load_metadata_async(force: bool = False) -> None:
         # result are still dropped, which is how a deletion leaves the cache.
         added_during_load = {
             agent_id: meta
-            for agent_id, meta in agent_metadata.items()
+            # list(): other threads insert into the cache (get_or_create_metadata
+            # runs in an executor), and iterating the live dict could raise.
+            for agent_id, meta in list(agent_metadata.items())
             if agent_id not in cached_before and agent_id not in result
         }
         # CRITICAL: Use .clear()/.update() to preserve the dict reference
