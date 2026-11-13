@@ -160,6 +160,44 @@ def compute_agent_signature(
         return {"uuid": None}
 
 
+async def check_agent_can_operate_async(agent_uuid: str) -> Optional[TextContent]:
+    """Resolve a cache miss before enforcing the shared-memory pause gate.
+
+    A missing cache entry is not evidence of an unpaused identity. Registry
+    failures block this traversal regardless of strict-identity mode. A
+    confirmed registry miss preserves the existing anonymous/new-writer
+    policy; identity admission remains the caller's responsibility.
+    """
+    from ..shared import get_mcp_server
+    from ..error_handling import error_response
+    server = get_mcp_server()
+    if agent_uuid not in server.agent_metadata:
+        try:
+            from src.agent_metadata_persistence import load_agent_metadata_from_postgres
+            meta = await load_agent_metadata_from_postgres(agent_uuid)
+        except Exception:
+            logger.warning("Pause-gate registry lookup failed for %s", agent_uuid[:12])
+            return error_response(
+                "Could not verify agent status; nothing was stored. Retry the same call.",
+                error_code="REGISTRY_UNAVAILABLE",
+                error_category="system_error",
+                recovery={"action": "Retry with the same client_session_id; do not mint a new identity."},
+            )
+        # A concurrent pause wins over an older active lookup. Conversely,
+        # never let an active bulk-load snapshot erase a restrictive registry
+        # result. In a concurrent resume this conservatively retains the
+        # hold until normal lifecycle recovery or a later metadata refresh.
+        current = server.agent_metadata.get(agent_uuid)
+        if (meta is not None and meta.status in ("paused", "archived")
+                and current is not None and current.status not in ("paused", "archived")):
+            server.agent_metadata[agent_uuid] = meta
+        if agent_uuid not in server.agent_metadata:
+            if meta is None:
+                return None
+            server.agent_metadata[agent_uuid] = meta
+    return check_agent_can_operate(agent_uuid)
+
+
 def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
     """
     Check if agent is allowed to perform operations (circuit breaker enforcement).
@@ -171,9 +209,18 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
     mcp_server = get_mcp_server()
 
     if agent_uuid not in mcp_server.agent_metadata:
-        return None
+        return error_response(
+            "Agent status is not cached; use the registry-aware operation gate.",
+            error_code="REGISTRY_UNAVAILABLE",
+            error_category="system_error",
+        )
 
-    meta = mcp_server.agent_metadata[agent_uuid]
+    return _check_agent_status(agent_uuid, mcp_server.agent_metadata[agent_uuid])
+
+
+def _check_agent_status(agent_uuid: str, meta: Any) -> Optional[TextContent]:
+    """Apply the existing pause/archival policy to a verified metadata row."""
+    from ..error_handling import error_response
 
     if meta.status == "paused":
         # Pause TTL: this synchronous gate schedules a token-fenced durable

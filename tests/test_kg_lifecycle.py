@@ -812,13 +812,21 @@ class TestLeaveNote:
         assert discovery.agent_id.startswith("anonkg_")
 
     @pytest.mark.asyncio
-    async def test_leave_note_paused_agent(self, patch_common, registered_agent, mock_mcp_server):
+    @pytest.mark.parametrize("cold_cache", [False, True])
+    async def test_leave_note_paused_agent(self, patch_common, registered_agent, mock_mcp_server, cold_cache, monkeypatch):
         """Paused agents cannot leave notes (circuit breaker)."""
         _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
         from datetime import datetime as _dt
         mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
+
+        if cold_cache:
+            persisted = mock_mcp_server.agent_metadata.pop(registered_agent)
+            monkeypatch.setattr(
+                "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+                AsyncMock(return_value=persisted),
+            )
 
         from src.mcp_handlers.knowledge.handlers import handle_leave_note
 

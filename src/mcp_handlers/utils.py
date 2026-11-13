@@ -10,6 +10,7 @@ from .serialization import _make_json_serializable
 from .support.agent_auth import (
     compute_agent_signature,
     check_agent_can_operate,
+    check_agent_can_operate_async,
     require_argument,
     require_agent_id,
     require_registered_agent,
@@ -44,6 +45,7 @@ __all__ = [
     "_make_json_serializable",
     "compute_agent_signature",
     "check_agent_can_operate",
+    "check_agent_can_operate_async",
     "require_argument",
     "require_agent_id",
     "require_registered_agent",
