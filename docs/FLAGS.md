@@ -30,7 +30,6 @@ additions merge cleanly. -->
 | `GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION` | `'false'` | — | config/governance_config.py |
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW` | `'true'` | — | config/governance_config.py |
-| `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgres@localhost:5432/governance'` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
 | `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_URL` | varies: `None (no reader fallback)` (src/dialectic_reviewer_config.py); `'http://localhost:8767/mcp/'` (src/gateway/constants.py); `''` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | The governance MCP URL the reviewer connects to | src/dialectic_reviewer_config.py, src/gateway/constants.py (+2 more) |
@@ -130,7 +129,7 @@ additions merge cleanly. -->
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
-| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+18 more) |
+| `UNITARES_HTTP_API_TOKEN` | varies: `None (no reader fallback)` (src/http_routes/dashboard.py, src/http_routes/effects.py, src/http_routes/findings.py, src/http_routes/health.py, src/http_routes/lease_identity.py, src/http_routes/lease_plane_telemetry.py, src/http_routes/metrics_api.py, src/http_routes/overview.py, src/http_routes/packs.py, src/http_routes/residents.py, src/http_routes/substrate.py, src/http_routes/telemetry.py, src/http_routes/timeline.py, src/http_routes/tools.py, agents/common/findings.py, agents/sdk/src/unitares_sdk/lease_plane/client.py, agents/sentinel/routes.py, agents/vigil/routes.py, agents/watcher/routes.py, scripts/ops/automation_census_route.py); `''` (agents/common/http_client.py) | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+19 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_HUB_CALLBACK_URL` | `''` | Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404 | src/dashboard_auth.py |
@@ -161,14 +160,14 @@ additions merge cleanly. -->
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOW_NULL_ORIGIN` | `True` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
-| `UNITARES_MCP_BEARER_TOKEN` | `None (no reader fallback)` | (fixed settings, secret bindings) for the reviewer's launch profile | src/dialectic_reviewer_config.py, src/gateway/client.py (+5 more) |
+| `UNITARES_MCP_BEARER_TOKEN` | varies: `None (no reader fallback)` (src/dialectic_reviewer_config.py, src/gateway/client.py, src/mcp_compat.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_server_std.py, agents/sdk/src/unitares_sdk/client.py, agents/sdk/src/unitares_sdk/sync_client.py); `''` (agents/common/http_client.py) | (fixed settings, secret bindings) for the reviewer's launch profile | src/dialectic_reviewer_config.py, src/gateway/client.py (+6 more) |
 | `UNITARES_MCP_BEARER_TOKENS` | `[] (via split_csv_env)` | Allowlist of bearer tokens accepted on the ``/mcp`` endpoint | src/mcp_listen_config.py |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
-| `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
+| `UNITARES_METRICS_URL` | varies: `DEFAULT_URL` (agents/chronicler/agent.py); `''` (agents/common/http_client.py) | read by main() | agents/chronicler/agent.py, agents/common/http_client.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
 | `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
