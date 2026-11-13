@@ -44,39 +44,44 @@ class TestTokeiScraper:
 
 
 class TestDbScrapers:
-    """DB-backed scrapers delegate to `_fetchval`. Test each one calls it
-    with the right SQL shape — the actual DB round-trip is integration-tested
-    elsewhere."""
+    """DB-backed scrapers read Core's `/v1/metrics/snapshot` over HTTP, while
+    `src.fleet_metrics.snapshot` owns the canonical SQL queries on Core."""
 
     def test_agents_active_7d_queries_distinct_governed_agents(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=42.0) as m:
+        snap = {"success": True, "metrics": {"agents.active.7d": 42.0}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.agents_active_7d(tmp_path)
 
         assert value == 42.0
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["agents.active.7d"]
         assert "count(DISTINCT identity_id)" in sql
         assert "core.agent_state" in sql
         assert "7 days" in sql
 
     def test_kg_entries_count_queries_discoveries(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=137.0) as m:
+        snap = {"success": True, "metrics": {"kg.entries.count": 137.0}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.kg_entries_count(tmp_path)
 
         assert value == 137.0
-        assert "knowledge.discoveries" in m.call_args.args[0]
+        assert "knowledge.discoveries" in SNAPSHOT_SCALAR_QUERIES["kg.entries.count"]
 
     def test_checkins_7d_filters_process_agent_update(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=9001.0) as m:
+        snap = {"success": True, "metrics": {"checkins.7d": 9001.0}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.checkins_7d(tmp_path)
 
         assert value == 9001.0
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["checkins.7d"]
         assert "tool_name = 'process_agent_update'" in sql
         assert "7 days" in sql
 
@@ -88,19 +93,21 @@ class TestDbScrapers:
 
 
 class TestGovernanceHealthScrapers:
-    """The governance-health series — EISV/verdict/finding aggregates that were
-    live-only until now. Each reads core.agent_state or audit.events over a
-    trailing 7-day window. Tests pin the SQL shape (table, window, filter) so a
+    """The governance-health series — EISV/verdict/finding aggregates fetched
+    via `/v1/metrics/snapshot`. Tests verify both client extraction and the
+    server SQL shape (`SNAPSHOT_SCALAR_QUERIES` + `FINDING_COUNTS_7D_SQL`) so a
     refactor can't silently change what the chart means."""
 
     def test_coherence_mean_averages_nonsynthetic_checkins(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=0.49) as m:
+        snap = {"success": True, "metrics": {"governance.coherence.mean.7d": 0.49}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.governance_coherence_mean_7d(tmp_path)
 
         assert value == 0.49
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["governance.coherence.mean.7d"]
         assert "avg(coherence)" in sql
         assert "core.agent_state" in sql
         assert "synthetic = false" in sql
@@ -108,23 +115,27 @@ class TestGovernanceHealthScrapers:
 
     def test_risk_mean_averages_risk_score(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=0.07) as m:
+        snap = {"success": True, "metrics": {"governance.risk.mean.7d": 0.07}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.governance_risk_mean_7d(tmp_path)
 
         assert value == 0.07
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["governance.risk.mean.7d"]
         assert "avg(risk_score)" in sql
         assert "synthetic = false" in sql
 
     def test_guide_counts_guide_action(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=310.0) as m:
+        snap = {"success": True, "metrics": {"governance.guide.7d": 310.0}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.governance_guide_7d(tmp_path)
 
         assert value == 310.0
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["governance.guide.7d"]
         assert "state_json->>'action' = 'guide'" in sql
         assert "7 days" in sql
 
@@ -132,26 +143,38 @@ class TestGovernanceHealthScrapers:
         """Hard interventions = anything that isn't approve/guide, kept
         open-ended so a new hard-stop action folds in without a code change."""
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import SNAPSHOT_SCALAR_QUERIES
 
-        with patch.object(scrapers, "_fetchval", return_value=3.0) as m:
+        snap = {"success": True, "metrics": {"governance.pause.7d": 3.0}, "errors": {}}
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.governance_pause_7d(tmp_path)
 
         assert value == 3.0
-        sql = m.call_args.args[0]
+        sql = SNAPSHOT_SCALAR_QUERIES["governance.pause.7d"]
         assert "NOT IN ('approve', 'guide')" in sql
         assert "IS NOT NULL" in sql  # NULL action must not count as a pause
 
     def test_sentinel_findings_count_durable_audit_events(self, tmp_path: Path):
         from agents.chronicler import scrapers
+        from src.fleet_metrics.snapshot import FINDING_COUNTS_7D_SQL
 
-        with patch.object(scrapers, "_fetchval", return_value=135.0) as m:
+        snap = {
+            "success": True,
+            "metrics": {},
+            "finding_counts_7d": {
+                "sentinel_finding": 120,
+                "sentinel_alarm_finding": 15,
+                "watcher_finding": 999,
+            },
+            "errors": {},
+        }
+        with patch.object(scrapers, "_fetch_metrics_snapshot", return_value=snap):
             value = scrapers.governance_sentinel_findings_7d(tmp_path)
 
         assert value == 135.0
-        sql = m.call_args.args[0]
-        assert "audit.events" in sql
-        assert "sentinel_finding" in sql
-        assert "sentinel_alarm_finding" in sql
+        assert "audit.events" in FINDING_COUNTS_7D_SQL
+        assert "right(event_type, 8) = '_finding'" in FINDING_COUNTS_7D_SQL
+        assert "7 days" in FINDING_COUNTS_7D_SQL
 
 
 class TestTestsCountScraper:
@@ -207,11 +230,13 @@ class FakeHttpClient:
         self,
         response: FakeHttpResponse | None = None,
         priors: dict[str, list[dict]] | None = None,
+        snapshot_response: FakeHttpResponse | None = None,
     ):
         self.calls: list[dict] = []
         self.gets: list[dict] = []
         self._response = response or FakeHttpResponse(201)
         self._priors = priors or {}
+        self._snapshot_response = snapshot_response
 
     def __enter__(self):
         return self
@@ -232,6 +257,19 @@ class FakeHttpClient:
 
     def get(self, url, *, headers, params, timeout):
         self.gets.append({"url": url, "headers": headers, "params": params})
+        if url.endswith("/v1/metrics/snapshot"):
+            if self._snapshot_response is not None:
+                return self._snapshot_response
+            return FakeJsonResponse(
+                200,
+                {
+                    "success": True,
+                    "window": "7d",
+                    "metrics": {},
+                    "finding_counts_7d": {},
+                    "errors": {},
+                },
+            )
         name = params.get("name")
         return FakeJsonResponse(
             200, {"success": True, "points": self._priors.get(name, [])}
@@ -334,6 +372,44 @@ class TestAgentRun:
             chronicler.run("http://127.0.0.1:8767", token="secret-123", repo_root=tmp_path)
 
         assert fake.calls[0]["headers"]["authorization"] == "Bearer secret-123"
+
+    def test_snapshot_fetched_once_per_run_including_negative_cache(self, tmp_path: Path):
+        """8 DB-backed scrapers share a single `/v1/metrics/snapshot` GET per run,
+        even when `/v1/metrics/snapshot` returns HTTP 500."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler import scrapers as scrapers_mod
+
+        fake = FakeHttpClient(snapshot_response=FakeHttpResponse(500, "db down"))
+        subset = {
+            "agents.active.7d": scrapers_mod.agents_active_7d,
+            "kg.entries.count": scrapers_mod.kg_entries_count,
+            "checkins.7d": scrapers_mod.checkins_7d,
+        }
+        with (
+            patch.object(chronicler, "SCRAPERS", subset),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            report = chronicler.run(
+                "http://127.0.0.1:8767", token="mcp-secret", repo_root=tmp_path
+            )
+
+        assert report.successes == 0
+        assert report.failures == 3
+        snapshot_gets = [g for g in fake.gets if g["url"].endswith("/v1/metrics/snapshot")]
+        assert len(snapshot_gets) == 1
+        assert snapshot_gets[0]["headers"]["Authorization"] == "Bearer mcp-secret"
+
+    def test_resolve_http_bearer_token_prefers_mcp_bearer(self, monkeypatch):
+        """Regression: launchd plist sets `UNITARES_MCP_BEARER_TOKEN` while strict
+        mode ignores `UNITARES_HTTP_API_TOKEN`."""
+        from agents.common.http_client import resolve_http_bearer_token
+
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "strict-mcp-token")
+        monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "legacy-http-token")
+        assert resolve_http_bearer_token() == "strict-mcp-token"
+
+        monkeypatch.delenv("UNITARES_MCP_BEARER_TOKEN", raising=False)
+        assert resolve_http_bearer_token() == "legacy-http-token"
 
     def test_post_error_metric_survives_if_server_unreachable(self, tmp_path: Path):
         """If the post-error call itself fails, we still complete the loop."""

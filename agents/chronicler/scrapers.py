@@ -5,6 +5,11 @@ returns the scalar value at call time. Scrapers are pure "measure
 something" functions — Chronicler handles HTTP posting, error emission,
 and cadence. That separation keeps each scraper independently testable.
 
+Database-backed fleet metrics are fetched from Core's authenticated
+`GET /v1/metrics/snapshot` endpoint (one HTTP round-trip per scrape cycle,
+with per-metric error isolation and negative caching) so Chronicler never
+opens a direct PostgreSQL connection or imports `src.*`.
+
 A scraper may raise on failure; Chronicler catches the exception, logs
 it, and emits `<name>.error = 1` so silent breakage shows up in the
 dashboard instead of as a missing line.
@@ -12,40 +17,105 @@ dashboard instead of as a missing line.
 
 from __future__ import annotations
 
-import asyncio
+from contextlib import contextmanager
 import functools
 import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
-# Local development DSN; deployments can select their own database.
-DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/governance"
+import httpx
+
+from agents.common.http_client import (
+    build_auth_headers,
+    resolve_governance_base_url,
+    resolve_http_bearer_token,
+)
+
+SNAPSHOT_TIMEOUT_S = 10.0
+
+_active_scope: tuple[str | None, str | None, httpx.Client | None] | None = None
+_snapshot_cache: tuple[str, Any] | None = None
 
 
-def _fetchval(sql: str) -> float:
-    """Run ``sql`` against the governance DB and return the scalar as float.
+def clear_snapshot_cache() -> None:
+    """Clear the per-run `/v1/metrics/snapshot` cache (positive and negative)."""
+    global _snapshot_cache
+    _snapshot_cache = None
 
-    Uses asyncpg under a one-shot ``asyncio.run`` because Chronicler is a
-    daily cron, not a long-running process — the per-call loop is cheap at
-    this cadence and keeps scrapers stateless (no shared pool to plumb).
-    """
-    import asyncpg  # local import: keeps test-time patching simple
 
-    dsn = os.environ.get("CHRONICLER_DB_DSN", DEFAULT_DSN)
+@contextmanager
+def snapshot_scope(
+    *,
+    base_url: str | None = None,
+    token: str | None = None,
+    client: httpx.Client | None = None,
+):
+    """Bind `(base_url, token, client)` and bound snapshot caching to one run."""
+    global _active_scope
+    prev_scope = _active_scope
+    clear_snapshot_cache()
+    _active_scope = (base_url, token, client)
+    try:
+        yield
+    finally:
+        _active_scope = prev_scope
+        clear_snapshot_cache()
 
-    async def _run() -> float:
-        conn = None
-        try:
-            conn = await asyncpg.connect(dsn)
-            value = await conn.fetchval(sql)
-            return float(value or 0)
-        finally:
-            if conn is not None:
-                await conn.close()
 
-    return asyncio.run(_run())
+def _fetch_metrics_snapshot() -> dict[str, Any]:
+    """Fetch `/v1/metrics/snapshot` once per scrape run, caching failures too."""
+    global _snapshot_cache
+    if _snapshot_cache is not None:
+        kind, payload = _snapshot_cache
+        if kind == "error":
+            raise RuntimeError(str(payload))
+        return payload
+
+    scoped_url, scoped_token, scoped_client = _active_scope or (None, None, None)
+    base_url = resolve_governance_base_url(scoped_url)
+    headers = build_auth_headers(scoped_token)
+    url = f"{base_url}/v1/metrics/snapshot"
+
+    try:
+        if scoped_client is not None:
+            resp = scoped_client.get(
+                url, headers=headers, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+            )
+        else:
+            with httpx.Client() as one_shot:
+                resp = one_shot.get(
+                    url, headers=headers, params={}, timeout=SNAPSHOT_TIMEOUT_S,
+                )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"GET /v1/metrics/snapshot returned HTTP {resp.status_code}: "
+                f"{getattr(resp, 'text', '')[:200]}"
+            )
+        body = resp.json()
+        if not isinstance(body, dict) or not body.get("success"):
+            raise RuntimeError(
+                f"GET /v1/metrics/snapshot rejected: {body!r}"
+            )
+    except Exception as exc:
+        _snapshot_cache = ("error", f"{type(exc).__name__}: {exc}")
+        raise
+
+    _snapshot_cache = ("ok", body)
+    return body
+
+
+def _snapshot_metric(name: str) -> float:
+    """Extract one scalar `name` from `/v1/metrics/snapshot`, raising on server error."""
+    snap = _fetch_metrics_snapshot()
+    errors = snap.get("errors") or {}
+    if name in errors:
+        raise RuntimeError(f"server snapshot error for {name}: {errors[name]}")
+    metrics = snap.get("metrics") or {}
+    if name not in metrics or metrics[name] is None:
+        raise RuntimeError(f"metric {name!r} missing from /v1/metrics/snapshot")
+    return float(metrics[name])
 
 
 def tokei_unitares_src_code(repo_root: Path) -> float:
@@ -100,37 +170,25 @@ def tests_unitares_count(repo_root: Path) -> float:
 
 
 def agents_active_7d(_repo_root: Path) -> float:
-    """Distinct governed agents that checked in (wrote state) in the last 7 days.
-
-    Counts participating identities in ``core.agent_state`` — NOT distinct
-    ``audit.tool_usage.agent_id``, which is inflated ~130x by per-lease
-    presence ids that onboard-and-vanish ephemerals mint (lease.acquire/
-    lease.release pairs that never reach a real check-in).
-    """
-    return _fetchval(
-        "SELECT count(DISTINCT identity_id) FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days'"
-    )
+    """Distinct governed agents that checked in (wrote state) in the last 7 days."""
+    return _snapshot_metric("agents.active.7d")
 
 
 def kg_entries_count(_repo_root: Path) -> float:
     """Total discoveries in the knowledge graph — cumulative growth."""
-    return _fetchval("SELECT count(*) FROM knowledge.discoveries")
+    return _snapshot_metric("kg.entries.count")
 
 
 def checkins_7d(_repo_root: Path) -> float:
     """process_agent_update calls in the last 7 days — governance traffic."""
-    return _fetchval(
-        "SELECT count(*) FROM audit.tool_usage "
-        "WHERE ts > now() - interval '7 days' AND tool_name = 'process_agent_update'"
-    )
+    return _snapshot_metric("checkins.7d")
 
 
 # ---------------------------------------------------------------------------
 # Governance-state series. The metrics above answer "how big / how busy";
 # these retain EISV / verdict / finding time series that were previously
-# live-only. Each reads core.agent_state or audit.events over a trailing 7-day
-# window, so they share the `.7d` convention. Individual metrics carry their own
+# live-only. Each reads Core's `/v1/metrics/snapshot` trailing 7-day aggregates,
+# so they share the `.7d` convention. Individual metrics carry their own
 # interpretation; the compatibility coherence mean is not itself health.
 # ---------------------------------------------------------------------------
 
@@ -141,57 +199,42 @@ def governance_coherence_mean_7d(_repo_root: Path) -> float:
     This legacy aggregate predates producer provenance. It must be stratified by
     ``state_json.coherence_form`` before interpretation; legacy_tanh_v movement
     is directional control-feedback movement, not a fleet-health trend."""
-    return _fetchval(
-        "SELECT avg(coherence) FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
-    )
+    return _snapshot_metric("governance.coherence.mean.7d")
 
 
 def governance_risk_mean_7d(_repo_root: Path) -> float:
     """Fleet-mean risk_score over the last 7 days — counterpart to coherence."""
-    return _fetchval(
-        "SELECT avg(risk_score) FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
-    )
+    return _snapshot_metric("governance.risk.mean.7d")
 
 
 def governance_guide_7d(_repo_root: Path) -> float:
-    """`guide` sub-actions in the last 7 days — soft governance corrections.
-
-    The verdict sub-action is persisted in state_json->>'action'. `guide` is a
-    proceed-with-nudge; its count shows how often governance is steering rather
-    than just approving."""
-    return _fetchval(
-        "SELECT count(*) FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
-        "AND state_json->>'action' = 'guide'"
-    )
+    """`guide` sub-actions in the last 7 days — soft governance corrections."""
+    return _snapshot_metric("governance.guide.7d")
 
 
 def governance_pause_7d(_repo_root: Path) -> float:
-    """Hard governance interventions in the last 7 days — pauses/blocks/rejects.
-
-    Anything that is neither approve nor guide (e.g. cirs_block, pause, reject).
-    Kept open-ended via NOT IN so a new hard-stop action folds in automatically
-    instead of being silently dropped."""
-    return _fetchval(
-        "SELECT count(*) FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
-        "AND state_json->>'action' IS NOT NULL "
-        "AND state_json->>'action' NOT IN ('approve', 'guide')"
-    )
+    """Hard governance interventions in the last 7 days — pauses/blocks/rejects."""
+    return _snapshot_metric("governance.pause.7d")
 
 
 def governance_sentinel_findings_7d(_repo_root: Path) -> float:
     """Sentinel findings (incl. forced-release alarms) in the last 7 days.
 
-    Reads the durable audit.events store — the same source /v1/sentinel/backlog
-    queries — so the count tracks what the analytical resident is flagging over
-    time, not just what's currently in the in-memory ring."""
-    return _fetchval(
-        "SELECT count(*) FROM audit.events "
-        "WHERE event_type IN ('sentinel_finding', 'sentinel_alarm_finding') "
-        "AND ts > now() - interval '7 days'"
+    Aggregates `sentinel_finding` + `sentinel_alarm_finding` from Core's
+    product-neutral `finding_counts_7d` map on `/v1/metrics/snapshot`.
+    """
+    snap = _fetch_metrics_snapshot()
+    errors = snap.get("errors") or {}
+    if "finding_counts_7d" in errors:
+        raise RuntimeError(
+            f"server snapshot error for finding_counts_7d: {errors['finding_counts_7d']}"
+        )
+    counts = snap.get("finding_counts_7d")
+    if not isinstance(counts, dict):
+        raise RuntimeError("finding_counts_7d missing from /v1/metrics/snapshot")
+    return float(
+        int(counts.get("sentinel_finding", 0))
+        + int(counts.get("sentinel_alarm_finding", 0))
     )
 
 
