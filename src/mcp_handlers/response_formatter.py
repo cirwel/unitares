@@ -130,13 +130,14 @@ def _surfaced_outcomes_in_e(response_data: dict) -> Optional[dict]:
 def _surfaced_reading_coverage(response_data: dict) -> Optional[dict]:
     """The reading-coverage account when filtered modes should show it.
 
-    Only when at least one axis is a default and the set of defaulted axes
-    changed since the last account shown: a fully measured reading costs
-    nothing, and an unchanged one is not repeated every check-in. Full mode
+    Only when the set of defaulted axes changed since the previous check-in,
+    in either direction: an unchanged account is not repeated, and a reading
+    that becomes fully measured is said once so the earlier notice does not
+    stand. A process's first fully measured reading is not a change. Full mode
     carries the raw key regardless.
     """
     coverage = response_data.get("reading_coverage")
-    if isinstance(coverage, dict) and coverage.get("defaulted") and coverage.get("changed"):
+    if isinstance(coverage, dict) and coverage.get("changed"):
         return coverage
     return None
 
@@ -943,7 +944,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         mirror_signals.append(mirror_line(outcomes_in_e))
 
     # 8. Reading coverage: which axes are defaults instead of readings, said
-    # once per change so a filled-in number is not read as a measurement.
+    # on each change so a filled-in number is not read as a measurement.
     reading_coverage = _surfaced_reading_coverage(response_data)
     if reading_coverage is not None:
         from src.reading_coverage import mirror_line as coverage_line

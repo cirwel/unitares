@@ -117,12 +117,19 @@ def mirror_line(coverage: Mapping[str, Any]) -> str:
     defaulted = coverage.get("defaulted") or {}
     measured = list(coverage.get("measured") or [])
     axes = [axis for axis in AXES if axis in defaulted]
+    if not axes:
+        return f"Reading coverage: {_join(measured)} were all measured in this check-in."
     verb = "is a default" if len(axes) == 1 else "are defaults"
     parts = [f"Reading coverage: {_join(axes)} in this check-in {verb}, not a reading."]
     for axis in axes:
-        reads = [TERM_READS[name] for name in defaulted[axis] if name in TERM_READS]
+        # Any one supplied base term makes the axis a reading, so every
+        # distinct thing the axis can read is named, joined by "or".
+        reads = list(dict.fromkeys(
+            TERM_READS[name] for name in defaulted[axis] if name in TERM_READS
+        ))
         if reads:
-            parts.append(f"{axis} reads {reads[0]}; none was supplied.")
+            missing = "neither was supplied" if len(reads) == 2 else "none was supplied"
+            parts.append(f"{axis} reads {', or '.join(reads)}; {missing}.")
     if measured:
         parts.append(f"{_join(measured)} {'was' if len(measured) == 1 else 'were'} measured.")
     if coverage.get("v_rests_on_defaults"):

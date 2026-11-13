@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now says which of E, I and S were measured and which are defaults written in
   place of a missing input, and that V is not a reading when E or I is a
   default. Filtered response modes show it, with a `Reading coverage:` mirror
-  line, when an axis is a default and the set of defaulted axes changed since
-  it was last shown; full mode always carries it. Measurement-only: it restates
+  line, whenever the set of defaulted axes changes from the previous check-in,
+  including when a reading becomes fully measured; a process's first fully
+  measured reading is not shown. Full mode always carries it. Measurement-only: it restates
   the component record and changes no value, verdict or policy input.
 
 ---

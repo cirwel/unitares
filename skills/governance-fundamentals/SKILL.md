@@ -89,7 +89,8 @@ number looks like any other. The check-in response says which is which in
 `defaulted` lists the rest with the terms that were missing, and
 `v_rests_on_defaults` is true when E or I is a default, since V is derived from
 them. A defaulted axis is a placeholder, not a low or high reading. Filtered
-response modes show the account when the set of defaulted axes changes; full
+response modes show the account whenever the set of defaulted axes changes from
+the previous check-in, including when a reading becomes fully measured; full
 mode always carries it.
 
 The headline math is proprioceptive residuals. The live estimation stages are

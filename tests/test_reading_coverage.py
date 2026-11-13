@@ -151,13 +151,28 @@ def test_filtered_modes_show_it_once_per_change(mode):
     assert not any(str(s).startswith("Reading coverage:") for s in repeat.get("mirror", []))
 
 
-def test_fully_measured_reading_costs_nothing():
-    coverage = dict(
-        _coverage(drift_norm=0.3, complexity_divergence=0.13, outcome_history=_good_outcomes()),
-        changed=True,
+def test_becoming_fully_measured_is_shown_once():
+    measured = _coverage(
+        drift_norm=0.3, complexity_divergence=0.13, outcome_history=_good_outcomes()
     )
-    shown = format_response(_payload(coverage), {"response_mode": "compact"})
-    assert "reading_coverage" not in shown
+
+    shown = format_response(_payload(dict(measured, changed=True)), {"response_mode": "mirror"})
+    assert shown["reading_coverage"]["defaulted"] == {}
+    assert "Reading coverage: E, I and S were all measured in this check-in." in shown["mirror"]
+
+    quiet = format_response(_payload(dict(measured, changed=False)), {"response_mode": "mirror"})
+    assert "reading_coverage" not in quiet
+
+
+def test_mirror_line_names_every_term_a_defaulted_s_could_read():
+    line = mirror_line(_coverage())
+
+    assert line.startswith("Reading coverage: E, I and S in this check-in are defaults")
+    assert (
+        "S reads the drift reading for this check-in, or the gap between the "
+        "complexity you report and the complexity estimated from your report "
+        "text; neither was supplied."
+    ) in line
 
 
 def test_full_mode_carries_it_always():
@@ -197,7 +212,30 @@ def test_enrichment_marks_change_per_monitor():
         enrich_reading_coverage(ctx)
         return ctx.response_data.get("reading_coverage")
 
+    measured = dict(
+        drift_norm=0.3, complexity_divergence=0.13, outcome_history=_good_outcomes()
+    )
     assert run(derivation(drift_norm=0.3))["changed"] is True
     assert run(derivation(drift_norm=0.4))["changed"] is False  # same defaulted set
     assert run(derivation(drift_norm=0.3, complexity_divergence=0.13))["changed"] is True
+    assert run(derivation(**measured))["changed"] is True  # became fully measured
+    assert run(derivation(**measured))["changed"] is False
+    assert run(derivation(drift_norm=0.3))["changed"] is True  # and back
     assert run(None) is None
+
+
+def test_first_fully_measured_reading_in_a_process_is_not_news():
+    from src.mcp_handlers.updates.enrichments import enrich_reading_coverage
+
+    inputs = _inputs(
+        drift_norm=0.3, complexity_divergence=0.13, outcome_history=_good_outcomes()
+    )
+    derivation = build_behavioral_derivation(
+        **inputs, computed=compute_behavioral_sensor_eisv(**inputs)
+    )
+    ctx = SimpleNamespace(
+        agent_state={"_eisv_derivation": derivation}, monitor=SimpleNamespace(), response_data={}
+    )
+    enrich_reading_coverage(ctx)
+
+    assert ctx.response_data["reading_coverage"]["changed"] is False

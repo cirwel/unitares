@@ -1199,7 +1199,7 @@ def build_experience_envelope(
         if isinstance(outcomes_in_e, dict) and not include_raw:
             envelope["outcomes_in_e"] = outcomes_in_e
         # The reading-coverage account rides the same way: the formatter
-        # decided whether this turn shows it (a defaulted axis and changed).
+        # decided whether this turn shows it (the defaulted set changed).
         reading_coverage = payload.get("reading_coverage")
         if isinstance(reading_coverage, dict) and not include_raw:
             envelope["reading_coverage"] = reading_coverage
