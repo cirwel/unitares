@@ -34,6 +34,15 @@ services:
       # Per-agent REST check-in digests (<agent_uuid>:sha256:<64 hex>) for
       # remote embodied/resident callers on POST /v1/tools/call.
       UNITARES_HTTP_AGENT_TOKENS: ${UNITARES_HTTP_AGENT_TOKENS:-}
+      # Deployment-specific resident roster, manifest/inference paths, and
+      # read-only / operator-hub digests (commonly synced into .env via
+      # scripts/ops/apply_dotenv_overlay.py). Empty values preserve base defaults.
+      UNITARES_RESIDENTS: ${UNITARES_RESIDENTS:-}
+      UNITARES_RESIDENT_PROGRESS_MANIFEST: ${UNITARES_RESIDENT_PROGRESS_MANIFEST:-}
+      UNITARES_INFERENCE_HOSTS_FILE: ${UNITARES_INFERENCE_HOSTS_FILE:-}
+      UNITARES_READ_ONLY_TOKENS: ${UNITARES_READ_ONLY_TOKENS:-}
+      UNITARES_HUB_CALLBACK_URL: ${UNITARES_HUB_CALLBACK_URL:-}
+      UNITARES_HUB_TOKEN: ${UNITARES_HUB_TOKEN:-}
       # Optional OAuth 2.1 gate for remote MCP connectors (Claude.ai, ChatGPT).
       # Empty values preserve the base Compose behavior.
       UNITARES_OAUTH_ISSUER_URL: ${UNITARES_OAUTH_ISSUER_URL:-}
@@ -46,6 +55,11 @@ services:
       UNITARES_OAUTH_STATIC_CLIENT_ID: ${UNITARES_OAUTH_STATIC_CLIENT_ID:-}
       UNITARES_OAUTH_STATIC_CLIENT_SECRET: ${UNITARES_OAUTH_STATIC_CLIENT_SECRET:-}
       UNITARES_OAUTH_STATIC_REDIRECT_URIS: ${UNITARES_OAUTH_STATIC_REDIRECT_URIS:-}
+    volumes:
+      # Read-only mounts so opt-in UNITARES_ROUTE_PACKS handlers under agents/
+      # or scripts/ops/ (omitted from the base image) resolve on a VPS checkout.
+      - ./agents:/app/agents:ro
+      - ./scripts/ops:/app/scripts/ops:ro
 
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.2.1}
