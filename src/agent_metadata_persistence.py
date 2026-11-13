@@ -90,6 +90,10 @@ def _write_metadata_snapshot_json_sync() -> None:
         os.close(lock_fd)
 
 
+# Rows per read when filling the cache. A page size, not a ceiling.
+_LOAD_PAGE_SIZE = 5000
+
+
 def _metadata_from_agent_record(agent, now: str) -> AgentMetadata:
     """Build the in-memory ``AgentMetadata`` for one ``AgentRecord``.
 
@@ -139,9 +143,8 @@ async def load_agent_metadata_from_postgres(agent_id: str) -> Optional[AgentMeta
     """Read one agent's metadata from PostgreSQL, or None if it is not registered.
 
     ``agent_metadata`` is a cache of the registry, not the registry. An agent
-    can be registered and absent from it: the bulk load has not finished yet
-    (the first moments after a server start), or the agent is older than the
-    bulk loader's row cap. A caller about to act on "not registered" asks here
+    can be registered and absent from it while the bulk load has not finished
+    (the first moments after a server start). A caller about to act on "not registered" asks here
     first. One indexed read on ``core.identities`` plus the latest state row,
     then the same label, profile and trust-tier steps the bulk loader applies.
 
@@ -202,19 +205,34 @@ async def _load_metadata_from_postgres_async() -> dict:
     """
     from src import agent_storage
 
-    agents = await agent_storage.list_agents(
-        limit=10000,
-        include_archived=True,
-        include_deleted=False,
-        # This is the cold-start loader for the in-memory agent_metadata
-        # cache, which backs operator audit / orphan classification
-        # (lifecycle/operations.py) and onboarding-bug visibility. It MUST
-        # see every onboarded identity, including never-participated ones —
-        # filtering them here would silently hide the orphan population the
-        # operator tools exist to surface. The participated-only default is
-        # applied at user/dashboard-facing listing surfaces, not here.
-        include_unparticipated=True,
-    )
+    # Page until a short page: the registry has no row ceiling, and a single
+    # capped read silently dropped the oldest identities once it grew past the
+    # cap (#3246). Deleted rows are requested and filtered here rather than in
+    # list_agents, so a page's length is the number of rows PostgreSQL
+    # returned and "short" reliably means "last". Offset paging over
+    # created_at DESC can repeat a row if an identity is minted mid-load; the
+    # dict below is keyed by agent_id, so a repeat is harmless.
+    agents = []
+    offset = 0
+    while True:
+        page = await agent_storage.list_agents(
+            limit=_LOAD_PAGE_SIZE,
+            offset=offset,
+            include_archived=True,
+            include_deleted=True,
+            # This is the cold-start loader for the in-memory agent_metadata
+            # cache, which backs operator audit / orphan classification
+            # (lifecycle/operations.py) and onboarding-bug visibility. It MUST
+            # see every onboarded identity, including never-participated ones —
+            # filtering them here would silently hide the orphan population the
+            # operator tools exist to surface. The participated-only default is
+            # applied at user/dashboard-facing listing surfaces, not here.
+            include_unparticipated=True,
+        )
+        agents.extend(a for a in page if a.status != "deleted")
+        if len(page) < _LOAD_PAGE_SIZE:
+            break
+        offset += _LOAD_PAGE_SIZE
 
     result = {}
     now = datetime.now(timezone.utc).isoformat()
