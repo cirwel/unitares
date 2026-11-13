@@ -777,6 +777,7 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "behavioral_source": behavioral_source,
         "behavioral_confidence": confidence,
         "missing_inputs": ["eisv_telemetry"],
+        "unobserved_share": None,
         "shadow_ablation_schema": None,
         "legacy_coherence_behavioral_shadow_recorded": False,
         "legacy_coherence_behavioral_shadow_eligible": None,

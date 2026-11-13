@@ -618,3 +618,13 @@ def test_summary_projects_unobserved_share_mean_and_none_without_it():
 
     assert with_share["unobserved_share"] == 0.53
     assert without["unobserved_share"] is None
+
+
+def test_legacy_state_summary_has_the_same_keys_as_an_envelope_summary():
+    from src.eisv_telemetry import summarize_state_eisv_telemetry
+
+    legacy = summarize_state_eisv_telemetry({"behavioral_eisv": {"obs_source": "behavioral"}})
+    current = summarize_eisv_telemetry({"derivation": {}})
+
+    assert set(legacy) == set(current)
+    assert legacy["unobserved_share"] is None
