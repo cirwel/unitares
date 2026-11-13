@@ -34,7 +34,16 @@ COMPACTION_KIND = "context_compaction"
 # what the process is (docs/ontology/identity.md, *Compaction*).
 PROBE_KIND = "context_compaction_probe"
 PROBE_ANSWERS = ("same_process", "new_process", "cannot_tell", "no_answer")
-VALID_KINDS = {*ACTIVITY_KINDS, COMPACTION_KIND, PROBE_KIND}
+# What a host's own record says happened to an agent's tool calls over one
+# window: how many completed, how many the host marked as errors, how many of
+# those never ran, and how many repeated an earlier failing call. Stored on the
+# same identity-bound path and deliberately NOT an activity kind: the activity
+# read model summarizes timed windows, and these windows follow the host's
+# transcript instead, so summing the two together would mix two quantities.
+# Nothing reads this kind yet; it is collected unscored.
+TOOL_OUTCOME_KIND = "tool_outcome_rollup"
+TOOL_OUTCOME_WINDOW_BASES = ("transcript_cursor",)
+VALID_KINDS = {*ACTIVITY_KINDS, COMPACTION_KIND, PROBE_KIND, TOOL_OUTCOME_KIND}
 RUNTIME_EVENT_TYPES = tuple(RUNTIME_EVENT_PREFIX + kind for kind in ACTIVITY_KINDS)
 COMPACTION_EVENT_TYPE = RUNTIME_EVENT_PREFIX + COMPACTION_KIND
 PROBE_EVENT_TYPE = RUNTIME_EVENT_PREFIX + PROBE_KIND
@@ -651,6 +660,66 @@ def _session_is_live(session: Any, now: datetime) -> bool:
     return expires_at > now
 
 
+def _required_count(payload: dict[str, Any], field: str, *, maximum: int) -> int:
+    """A count the caller must state: an int in range, never a bool or a default.
+
+    ``bool`` is a subclass of ``int`` in Python, so ``True`` would otherwise be
+    stored as 1. A missing count is refused rather than read as zero, because
+    for this kind "not reported" and "none" are different facts.
+    """
+    value = payload.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeObservationError(f"'{field}' must be an integer")
+    if value < 0 or value > maximum:
+        raise RuntimeObservationError(f"'{field}' must be between 0 and {maximum}")
+    return value
+
+
+def _normalize_tool_outcomes(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the counts of one tool-outcome window.
+
+    ``tool_delta`` counts tool calls whose result landed in the window.
+    ``tool_error_delta`` counts those the host marked as errors.
+    ``tool_not_executed_delta`` counts the errors the host's record shows never
+    ran (refused, blocked or interrupted), as far as the sender could
+    recognize them. ``repeat_failure_delta`` counts executed errors identical
+    to an earlier failing call. Each is a subset of the one before it or of
+    the errors, and a payload that says otherwise is refused, not stored.
+    """
+    tool_delta = _required_count(payload, "tool_delta", maximum=1_000_000)
+    errors = _required_count(payload, "tool_error_delta", maximum=1_000_000)
+    not_executed = _required_count(payload, "tool_not_executed_delta", maximum=1_000_000)
+    repeats = _required_count(payload, "repeat_failure_delta", maximum=1_000_000)
+    if errors > tool_delta:
+        raise RuntimeObservationError("'tool_error_delta' cannot exceed 'tool_delta'")
+    if not_executed > errors:
+        raise RuntimeObservationError(
+            "'tool_not_executed_delta' cannot exceed 'tool_error_delta'"
+        )
+    if repeats > errors - not_executed:
+        raise RuntimeObservationError(
+            "'repeat_failure_delta' cannot exceed the executed errors"
+        )
+    truncated = payload.get("window_truncated")
+    if not isinstance(truncated, bool):
+        raise RuntimeObservationError("'window_truncated' must be true or false")
+    basis = str(payload.get("window_basis") or "").strip().lower()
+    if basis not in TOOL_OUTCOME_WINDOW_BASES:
+        raise RuntimeObservationError(
+            f"'window_basis' must be one of {sorted(TOOL_OUTCOME_WINDOW_BASES)}"
+        )
+    return {
+        "tool_delta": tool_delta,
+        "tool_error_delta": errors,
+        "tool_not_executed_delta": not_executed,
+        "repeat_failure_delta": repeats,
+        # True when the window is known to be incomplete, so every count in it
+        # is a lower bound.
+        "window_truncated": truncated,
+        "window_basis": basis,
+    }
+
+
 def _normalize_probe(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate a continuity-probe answer and the compaction it answers.
 
@@ -786,6 +855,7 @@ def _normalize(
             "heartbeat": "hook_parent_process_liveness",
             COMPACTION_KIND: "host_reported_context_compaction",
             PROBE_KIND: "agent_reported_continuity_belief",
+            TOOL_OUTCOME_KIND: "host_transcript_tool_results",
         }.get(kind, "completed_tool_event_receipts"),
         "host_process_scope": "hook_parent" if kind == "heartbeat" else None,
         "session_activity_evidence": False,
@@ -806,6 +876,10 @@ def _normalize(
     elif kind == PROBE_KIND:
         normalized["tool_delta"] = 0
         normalized.update(_normalize_probe(payload))
+    elif kind == TOOL_OUTCOME_KIND:
+        # Counts of what already happened. They are not evidence that the
+        # session is running now, so they never extend it.
+        normalized.update(_normalize_tool_outcomes(payload))
     else:
         normalized["session_activity_evidence"] = normalized["tool_delta"] > 0
 
