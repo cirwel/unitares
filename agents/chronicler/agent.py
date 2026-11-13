@@ -23,8 +23,8 @@ which `/v1/residents` and the resident strip already surface daily.
 
 Environment:
     UNITARES_METRICS_URL        base URL (default http://127.0.0.1:8767)
-    UNITARES_HTTP_API_TOKEN     bearer token; optional if running locally
-                                (trusted-network bypass handles 127.0.0.1)
+    UNITARES_MCP_BEARER_TOKEN   bearer token for strict / hosted Core (preferred)
+    UNITARES_HTTP_API_TOKEN     fallback bearer token for non-strict local Core
     CHRONICLER_REPO_ROOT        repo to scrape (default: working directory)
     CHRONICLER_KG_DIGEST        set to 1 to also write the per-run KG digest
                                 (default off — see above for why)
@@ -61,7 +61,8 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from agents.chronicler.scrapers import SCRAPERS
+from agents.chronicler.scrapers import SCRAPERS, snapshot_scope
+from agents.common.http_client import resolve_http_bearer_token
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 
@@ -233,7 +234,9 @@ def run(
     # against it — see fetch_prior's docstring for what that cost last time.
     read_spent = 0.0
 
-    with httpx.Client() as client:
+    with httpx.Client() as client, snapshot_scope(
+        base_url=base_url, token=token, client=client,
+    ):
         for name, scraper in sorted(SCRAPERS.items()):
             try:
                 value = float(scraper(repo_root))
@@ -544,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     base_url = os.environ.get("UNITARES_METRICS_URL", DEFAULT_URL).rstrip("/")
-    token = os.environ.get("UNITARES_HTTP_API_TOKEN") or None
+    token = resolve_http_bearer_token()
     repo_root = Path(os.environ.get("CHRONICLER_REPO_ROOT", os.getcwd())).resolve()
 
     log.info("chronicler start: url=%s repo=%s scrapers=%d", base_url, repo_root, len(SCRAPERS))

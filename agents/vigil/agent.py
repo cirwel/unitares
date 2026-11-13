@@ -51,6 +51,7 @@ from agents.common.findings import (
 )
 from agents.vigil.checks.registry import load_plugins
 from agents.vigil.checks.runner import run_health_checks
+from agents.vigil.remote_eval import run_remote_retrieval_eval
 from agents.watcher.floor_state import load_floor, recompute_floor
 
 # Paths
@@ -79,7 +80,6 @@ CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
-RETRIEVAL_EVAL_SCRIPT = project_root / "scripts" / "eval" / "retrieval_eval.py"
 NDCG_REGRESSION_THRESHOLD = 0.05  # absolute drop in nDCG@10 that flags regression
 
 # Watcher calibration: recompute the precision floor at most once per day.
@@ -409,28 +409,18 @@ def _eval_corpus_mismatch(current: Any, baseline: Any) -> Optional[str]:
 
 
 def _run_eval_subprocess() -> Dict[str, Any]:
-    """Invoke the eval harness as a subprocess; return parsed JSON metrics.
+    """Run KG retrieval evaluation over Core's REST surface; return JSON metrics.
 
-    Sync function — designed to be called via ``run_in_executor`` from the
-    async cycle. Returns ``{}`` on any failure (caller handles).
+    Retains the historical ``_run_eval_subprocess`` hook name for caller/test
+    compatibility while delegating to ``run_remote_retrieval_eval`` instead of
+    spawning the server-local ``scripts/eval/retrieval_eval.py`` script.
+    Sync function — called via ``run_in_executor`` from the async cycle.
+    Returns ``{}`` on any failure (caller handles).
     """
     try:
-        proc = subprocess.run(
-            ["python3", str(RETRIEVAL_EVAL_SCRIPT), "--json"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if proc.returncode != 0:
-            log(f"eval subprocess returned {proc.returncode}: {proc.stderr[:200]}")
-            return {}
-        return json.loads(proc.stdout)
-    except subprocess.TimeoutExpired:
-        log("eval subprocess timed out after 300s")
-        return {}
-    except json.JSONDecodeError as e:
-        log(f"eval subprocess JSON parse failed: {e}")
-        return {}
+        return run_remote_retrieval_eval(labels_path=RETRIEVAL_EVAL_DIR / "labels.json")
     except Exception as e:
-        log(f"eval subprocess failed: {e}")
+        log(f"remote retrieval eval failed: {e}")
         return {}
 
 
@@ -957,10 +947,10 @@ class VigilAgent(GovernanceAgent):
         return top_stale[:top_n]
 
     async def _run_eval_step(self) -> Dict[str, Any]:
-        """KG hygiene v1: run retrieval_eval as a subprocess; diff against baseline.
+        """KG hygiene v1: run remote retrieval eval over Core REST; diff against baseline.
 
-        Subprocess runs via ``run_in_executor`` to avoid the anyio-asyncpg
-        deadlock surface (the eval script itself awaits asyncpg internally).
+        Sync HTTP evaluation runs via ``run_in_executor`` so the async heartbeat
+        loop never blocks on synchronous REST calls.
 
         Returns a dict with keys: ``ran`` (bool), ``metrics`` (dict),
         ``baseline`` (str|None), ``delta`` (dict), ``regression`` (bool),

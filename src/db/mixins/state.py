@@ -1088,3 +1088,30 @@ SELECT jsonb_build_object(
 )
 FROM summary
 """
+
+
+AGENT_STATE_SNAPSHOT_SCALAR_SQL: Dict[str, str] = {
+    "agents.active.7d": (
+        "SELECT count(DISTINCT identity_id) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days'"
+    ),
+    "governance.coherence.mean.7d": (
+        "SELECT avg(coherence) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    ),
+    "governance.risk.mean.7d": (
+        "SELECT avg(risk_score) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    ),
+    "governance.guide.7d": (
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' = 'guide'"
+    ),
+    "governance.pause.7d": (
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' IS NOT NULL "
+        "AND state_json->>'action' NOT IN ('approve', 'guide')"
+    ),
+}

@@ -143,6 +143,21 @@ async def http_get_metrics_catalog(request):
     })
 
 
+async def http_get_metrics_snapshot(request):
+    """GET /v1/metrics/snapshot — server-computed trailing-7d / total scalars."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+    try:
+        from src.fleet_metrics.snapshot import collect_metrics_snapshot
+
+        snapshot = await collect_metrics_snapshot()
+        return JSONResponse({"success": True, **snapshot})
+    except Exception as e:
+        logger.error(f"Error computing metrics snapshot: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 async def http_get_progress_flat_recent(request):
     """GET /v1/progress_flat/recent?hours=24 — latest snapshot per
     configured resident plus the probe-self row.

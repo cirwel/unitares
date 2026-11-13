@@ -41,6 +41,10 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from agents.common.config import GOV_MCP_URL, GOV_WS_URL
+from agents.common.http_client import (
+    build_auth_headers,
+    resolve_governance_base_url,
+)
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 from unitares_sdk.models import CheckinResult
@@ -431,33 +435,41 @@ class SitrepGenerator:
                     lines.append(line)
                 lines.append("")
 
-        # Query audit DB for deeper history
-        # TODO: replace direct src.audit_db import with an SDK/MCP tool
-        # once an audit query endpoint exists (last direct src/ import in agents/)
+        # Query Core's authenticated /v1/lifecycle/recent HTTP route for deeper history
         try:
-            from src.audit_db import query_audit_events_async
-            audit_events = await query_audit_events_async(
-                start_time=since.isoformat(),
-                limit=50,
-                order="desc",
-            )
-            if audit_events:
-                lifecycle_events = [e for e in audit_events if "lifecycle" in e.get("event_type", "")]
-                if lifecycle_events:
-                    lines.append(f"## Audit Trail ({len(lifecycle_events)} lifecycle events)")
-                    for e in lifecycle_events[:15]:
-                        ts = e.get("timestamp", "?")
-                        if isinstance(ts, str) and len(ts) > 16:
-                            ts = ts[11:16]
-                        agent = (e.get("agent_id") or "?")[:8]
-                        etype = e.get("event_type", "?")
-                        details = e.get("details", {})
-                        reason = details.get("reason", "")
-                        line = f"  {ts} [{agent}] {etype}"
-                        if reason:
-                            line += f" — {reason}"
-                        lines.append(line)
-                    lines.append("")
+            import httpx
+
+            base_url = resolve_governance_base_url()
+            window_hours = max(1, min(168, int(round(hours)) or 1))
+            async with httpx.AsyncClient() as http_client:
+                resp = await http_client.get(
+                    f"{base_url}/v1/lifecycle/recent",
+                    headers=build_auth_headers(),
+                    params={"hours": str(window_hours), "limit": "50"},
+                    timeout=10.0,
+                )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            payload = resp.json()
+            lifecycle_events = [
+                e for e in (payload.get("events") or [])
+                if "lifecycle" in e.get("event_type", "")
+            ]
+            if lifecycle_events:
+                lines.append(f"## Audit Trail ({len(lifecycle_events)} lifecycle events)")
+                for e in lifecycle_events[:15]:
+                    ts = e.get("timestamp", "?")
+                    if isinstance(ts, str) and len(ts) > 16:
+                        ts = ts[11:16]
+                    agent = (e.get("agent_id") or "?")[:8]
+                    etype = e.get("event_type", "?")
+                    details = e.get("details", {})
+                    reason = e.get("reason") or details.get("reason", "")
+                    line = f"  {ts} [{agent}] {etype}"
+                    if reason:
+                        line += f" — {reason}"
+                    lines.append(line)
+                lines.append("")
         except Exception as e:
             lines.append(f"## Audit Trail (unavailable: {e})")
             lines.append("")
@@ -482,43 +494,23 @@ class SitrepGenerator:
 # ---------------------------------------------------------------------------
 
 _POLL_TIMEOUT_S = 30.0
+_BLIND_POLLER_THRESHOLD = 3
 
 
-def _poll_sync_forced_release(db_url: str, last_event_ts: "datetime | None"):
-    """Sync wrapper for `poll_forced_release_alarms` to be called via
-    `loop.run_in_executor` (CLAUDE.md anyio mitigation pattern 2).
+def _poll_sync_forced_release(
+    api_url: str | None, last_event_ts: "datetime | None"
+):
+    """Sync wrapper for `poll_forced_release_alarms` called via `run_in_executor`.
 
-    Sentinel's cycle runs inside the GovernanceAgent SDK's anyio scope
-    (`unitares_sdk/client.py` wraps MCP calls in `anyio.fail_after`).
-    Awaiting `asyncpg.connect()` directly inside that scope can deadlock —
-    the prior 30h wedge cited at lines 63-69 was this exact pathology.
-    This wrapper runs the asyncpg work on a thread executor with
-    `asyncio.run()`, which creates a fresh inner event loop. Because asyncpg
-    pools and futures bind to whichever loop is running when the awaitable is
-    evaluated, asyncpg binds to that
-    inner loop, runs to completion, and tears down inside `asyncio.run()` —
-    never crossing the outer anyio loop.
-
-    The inner `asyncio.wait_for(..., timeout=_POLL_TIMEOUT_S)` is
-    defense-in-depth (council CONCERN — architect + reviewer convergence):
-    `loop.run_in_executor` cannot cancel a running thread, so a CYCLE_TIMEOUT
-    cancellation in the outer loop frees the awaiting task but the executor
-    thread keeps running until asyncpg returns. With sustained DB outage
-    that's up to asyncpg's default 60s connect timeout — longer than
-    CYCLE_TIMEOUT (45s), so threads accumulate ~1/cycle and the default
-    ThreadPoolExecutor (~12-14 threads) eventually exhausts. The inner
-    wait_for forces the executor thread itself to release at 30s, well
-    inside CYCLE_TIMEOUT. asyncio.TimeoutError propagates through the
-    caller's existing try/except.
-
-    Returns the same `(alarms, new_cursor)` tuple as
-    `poll_forced_release_alarms`. Exceptions propagate unchanged.
+    Runs the HTTP alarm poll inside a dedicated inner event loop bounded by
+    `_POLL_TIMEOUT_S` so outer `GovernanceAgent` anyio scopes cannot wedge or
+    accumulate stuck executor threads during a Core outage.
     """
     from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
 
     return asyncio.run(
         asyncio.wait_for(
-            poll_forced_release_alarms(db_url=db_url, last_event_ts=last_event_ts),
+            poll_forced_release_alarms(api_url=api_url, last_event_ts=last_event_ts),
             timeout=_POLL_TIMEOUT_S,
         )
     )
@@ -708,45 +700,48 @@ class SentinelAgent(GovernanceAgent):
         )
 
     async def _emit_forced_release_alarms(self) -> None:
-        """Poll lease_plane_events for forced-release alarms; emit findings.
+        """Poll Core's `/v1/lease-plane/alarm-events` for forced-release alarms.
 
-        State: stores last_event_ts as ISO8601 string under
-        `forced_release_alarm.last_event_ts` so successive cycles don't
-        re-emit alarms for already-seen events.
-
-        DB URL: GOVERNANCE_DATABASE_URL env var, default to localhost governance.
-        Failures are logged and swallowed — alarm polling MUST NOT break the
-        Sentinel cycle.
-
-        anyio-asyncio mitigation (CLAUDE.md "Known Issue"): the
-        `poll_forced_release_alarms` call does `asyncpg.connect()` + multiple
-        `await conn.fetch(...)`. Sentinel's `run_cycle` runs inside the
-        GovernanceAgent SDK's `run_once`, which is anyio-based. `await`-ing
-        asyncpg directly from inside the anyio task group can deadlock — the
-        prior wedge cited at line 67 (~30h) was this exact pathology.
-        Mitigation: pattern 2 from CLAUDE.md — push the asyncpg call to a
-        thread executor via `_poll_sync_forced_release`, which runs
-        `asyncio.run(...)` in the executor thread. asyncpg binds to that
-        fresh inner loop (loop-binding happens at create time, so a new loop
-        scoped to the executor call is safe), runs to completion, tears down.
-        The outer anyio task group is unblocked throughout.
+        State: stores `last_event_ts` as ISO8601 string and `consecutive_failures`
+        under `forced_release_alarm` so successive cycles don't re-emit seen
+        events and repeated HTTP/auth failures surface as a blind-poller alarm.
         """
-        db_url = os.environ.get(
-            "GOVERNANCE_DATABASE_URL",
-            "postgresql://postgres:postgres@localhost:5432/governance",
-        )
+        api_url = resolve_governance_base_url(getattr(self, "mcp_url", None))
         state = self.load_state()
-        cursor_str = state.get("forced_release_alarm", {}).get("last_event_ts")
+        alarm_state = state.setdefault("forced_release_alarm", {})
+        cursor_str = alarm_state.get("last_event_ts")
         cursor = datetime.fromisoformat(cursor_str) if cursor_str else None
 
         loop = asyncio.get_running_loop()
         try:
             alarms, new_cursor = await loop.run_in_executor(
-                None, _poll_sync_forced_release, db_url, cursor,
+                None, _poll_sync_forced_release, api_url, cursor,
             )
         except Exception as e:
-            log(f"forced-release alarm poll failed: {e}")
+            failures = int(alarm_state.get("consecutive_failures", 0)) + 1
+            alarm_state["consecutive_failures"] = failures
+            self.save_state(state)
+            log(f"forced-release alarm poll failed ({failures}x): {e}")
+            if failures == _BLIND_POLLER_THRESHOLD:
+                msg = (
+                    f"forced-release alarm poller blind after {failures} "
+                    f"consecutive failures: {e}"
+                )
+                post_finding(
+                    event_type="sentinel_alarm_finding",
+                    severity="high",
+                    message=msg,
+                    agent_id=self.agent_uuid or "sentinel",
+                    agent_name="Sentinel",
+                    fingerprint=compute_fingerprint(["forced_release", "poller_blind", api_url]),
+                    extra={"alarm_kind": "poller_blind", "consecutive_failures": failures},
+                )
             return
+
+        state_dirty = False
+        if alarm_state.get("consecutive_failures", 0):
+            alarm_state["consecutive_failures"] = 0
+            state_dirty = True
 
         conflict_surface_kinds: list[str] = []
         for alarm in alarms:
@@ -769,32 +764,27 @@ class SentinelAgent(GovernanceAgent):
                     conflict_surface_kinds.append(kind)
 
         if new_cursor is not None and new_cursor != cursor:
-            state.setdefault("forced_release_alarm", {})["last_event_ts"] = (
-                new_cursor.isoformat()
-            )
+            alarm_state["last_event_ts"] = new_cursor.isoformat()
+            state_dirty = True
+        if state_dirty:
             self.save_state(state)
 
-        await self._emit_phase_b_transitions(conflict_surface_kinds, db_url)
+        await self._emit_phase_b_transitions(conflict_surface_kinds, api_url)
 
     async def _emit_phase_b_transitions(
-        self, surface_kinds: list[str], db_url: str
+        self, surface_kinds: list[str], api_url: str | None = None
     ) -> None:
-        """Run the §6.1 Phase B promotion evaluator for each surface_kind that
-        had a conflict-batch alarm this cycle, and emit a transition finding
-        only when one or more criteria flip status (or overall promotable
-        flips) vs. the last recorded verdict.
-
-        Failures are logged and swallowed — promotion-evaluator failure MUST
-        NOT break the Sentinel cycle. Subprocess + sync psycopg2 inside the
-        evaluator means no anyio loop binding hazard; we still push to a
-        thread executor for consistency with the surrounding alarm path.
+        """Query `/v1/lease-plane/phase-b/{surface_kind}` for each surface_kind
+        that had a conflict-batch alarm this cycle, and emit a transition finding
+        only when one or more criteria flip status vs. the last recorded verdict.
         """
         if not surface_kinds:
             return
         loop = asyncio.get_running_loop()
         try:
             transitions = await loop.run_in_executor(
-                None, lambda: detect_phase_b_transitions(surface_kinds, db_url=db_url),
+                None,
+                lambda: detect_phase_b_transitions(surface_kinds, api_url=api_url),
             )
         except PhaseBEvaluatorError as e:
             log(f"phase-B evaluator failed: {e}")
