@@ -375,3 +375,39 @@ async def count_lifecycle_pauses_since(conn, epoch_started_at) -> int:
         WHERE ts >= $1 AND event_type = 'lifecycle_paused'
     """
     return int((await conn.fetchval(pause_sql, epoch_started_at)) or 0)
+
+
+# Product-neutral finding counts grouped by event_type. Uses `right(..., 8)`
+# rather than `LIKE '%_finding'` because `_` is a single-character wildcard in
+# SQL LIKE patterns.
+FINDING_COUNTS_7D_SQL = (
+    "SELECT event_type, count(*) AS cnt FROM audit.events "
+    "WHERE right(event_type, 8) = '_finding' "
+    "AND ts > now() - interval '7 days' "
+    "GROUP BY event_type"
+)
+
+
+async def fetch_finding_counts_7d(conn) -> Dict[str, int]:
+    """Count `_finding` audit events over the trailing 7 days grouped by `event_type`."""
+    rows = await conn.fetch(FINDING_COUNTS_7D_SQL)
+    counts: Dict[str, int] = {}
+    for row in rows:
+        etype = row["event_type"]
+        if isinstance(etype, str) and etype:
+            counts[etype] = int(row["cnt"] or 0)
+    return counts
+
+
+async def count_service_down_events_within(conn, window_delta) -> int:
+    """Count `lease_plane_down` / `service_down` audit events within `window_delta`."""
+    n_down = await conn.fetchval(
+        """
+        SELECT count(*) AS n
+        FROM audit.events
+        WHERE event_type IN ('lease_plane_down', 'service_down')
+          AND ts > now() - $1::interval
+        """,
+        window_delta,
+    )
+    return int(n_down or 0)

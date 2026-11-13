@@ -14,13 +14,20 @@ Tests the forced-release alarm wiring in `agents/sentinel/forced_release_alarm.p
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import sys
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
+from starlette.applications import Starlette
+from starlette.routing import Route
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -80,6 +87,99 @@ async def _emit_event(
     return event_id
 
 
+_STRICT_BEARER = "test-pr3b-strict-bearer"
+
+
+class _DirectTestDb:
+    """Minimal `get_db()` stand-in backed directly by `TEST_DB_URL` on the caller loop."""
+
+    @asynccontextmanager
+    async def acquire(self):
+        c = await asyncpg.connect(TEST_DB_URL)
+        try:
+            yield c
+        finally:
+            await c.close()
+
+
+async def _poll_over_http(*, last_event_ts: datetime | None):
+    """Exercise the full Core `/v1/lease-plane/alarm-events` ASGI route + strict
+    bearer auth + `poll_forced_release_alarms` client against `TEST_DB_URL`."""
+    from unittest.mock import patch
+
+    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+    from src import agent_storage
+    from src.http_routes.lease_plane_telemetry import http_get_lease_alarm_events
+
+    app = Starlette(
+        routes=[
+            Route(
+                "/v1/lease-plane/alarm-events",
+                http_get_lease_alarm_events,
+                methods=["GET"],
+            )
+        ]
+    )
+    env_overrides = {
+        "UNITARES_REST_STRICT": "1",
+        "UNITARES_MCP_BEARER_TOKENS": _STRICT_BEARER,
+    }
+    transport = httpx.ASGITransport(app=app)
+    with (
+        patch.dict(os.environ, env_overrides, clear=False),
+        patch.object(agent_storage, "get_db", return_value=_DirectTestDb()),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await poll_forced_release_alarms(
+                last_event_ts=last_event_ts,
+                api_url="http://testserver",
+                api_token=_STRICT_BEARER,
+                http_client=client,
+            )
+
+
+@pytest.fixture
+def live_alarm_http_server(monkeypatch):
+    """Loopback HTTP server serving `/v1/lease-plane/alarm-events` for sync-thread tests."""
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", _STRICT_BEARER)
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.headers.get("Authorization") != f"Bearer {_STRICT_BEARER}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            payload = json.dumps(
+                {
+                    "success": True,
+                    "polled_at": "2026-11-12T00:00:00+00:00",
+                    "since": None,
+                    "ad_hoc": [],
+                    "deprecation_batches": [],
+                    "conflict_batches": [],
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
 # §9: test_sentinel_force_release_alarm_wired
 @pytest.mark.asyncio
 async def test_sentinel_force_release_alarm_per_event():
@@ -89,19 +189,15 @@ async def test_sentinel_force_release_alarm_per_event():
     §9 alias above lets `audit_rfc_section_9_gates.py` recognize it as
     the RFC-named "wired" gate without a separate redundant test.
     """
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
         await _cleanup(conn)
         # Seed two ad-hoc forced events.
-        e1 = await _emit_event(conn, event_type="forced", surface_id="td:/pr3b_a")
-        e2 = await _emit_event(conn, event_type="forced", surface_id="td:/pr3b_b")
+        await _emit_event(conn, event_type="forced", surface_id="td:/pr3b_a")
+        await _emit_event(conn, event_type="forced", surface_id="td:/pr3b_b")
 
-        alarms, new_cursor = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, new_cursor = await _poll_over_http(last_event_ts=None)
         # One alarm per event; both should appear.
         per_event = [a for a in alarms if a.kind == "ad_hoc"]
         assert len(per_event) == 2, f"expected 2 ad-hoc alarms, got {len(per_event)}"
@@ -116,23 +212,17 @@ async def test_sentinel_force_release_alarm_per_event():
 @pytest.mark.asyncio
 async def test_sentinel_force_release_alarm_dedupes_via_cursor():
     """Re-polling with the cursor returned by a previous poll yields zero new alarms."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
         await _cleanup(conn)
         await _emit_event(conn, event_type="forced", surface_id="td:/pr3b_dedupe")
 
-        first_alarms, cursor = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        first_alarms, cursor = await _poll_over_http(last_event_ts=None)
         assert len([a for a in first_alarms if a.kind == "ad_hoc"]) >= 1
 
         # Re-poll with the cursor; no new alarms.
-        second_alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=cursor,
-        )
+        second_alarms, _ = await _poll_over_http(last_event_ts=cursor)
         ad_hoc_second = [a for a in second_alarms if a.kind == "ad_hoc"]
         assert ad_hoc_second == [], (
             f"cursor-based dedup failed; got {len(ad_hoc_second)} re-emitted alarms"
@@ -146,8 +236,6 @@ async def test_sentinel_force_release_alarm_dedupes_via_cursor():
 async def test_sentinel_batch_alarm_for_deprecation_sweep():
     """RFC §7.11.5: N lease.deprecation_swept events from same deprecation_id
     produce ONE summary alarm, not N per-event alarms."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -170,9 +258,7 @@ async def test_sentinel_batch_alarm_for_deprecation_sweep():
                 payload={"deprecation_id": str(depr_id), "kind": "td"},
             )
 
-        alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, _ = await _poll_over_http(last_event_ts=None)
         batched = [a for a in alarms if a.kind == "deprecation_batch"]
         assert len(batched) == 1, (
             f"expected exactly 1 batched alarm for deprecation_id={depr_id}, got {len(batched)}"
@@ -195,8 +281,6 @@ async def test_sentinel_batch_alarm_for_deprecation_sweep():
 async def test_sentinel_batch_alarm_only_after_sweep_completed_at():
     """Batched alarm waits for sweep_completed_at to be set on the
     deprecated_schemes row — partial sweeps don't fire premature alarms."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -216,9 +300,7 @@ async def test_sentinel_batch_alarm_only_after_sweep_completed_at():
             payload={"deprecation_id": str(depr_id), "kind": "td"},
         )
 
-        alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, _ = await _poll_over_http(last_event_ts=None)
         # No batched alarm yet (sweep still in progress).
         batched = [
             a for a in alarms if a.kind == "deprecation_batch"
@@ -232,9 +314,7 @@ async def test_sentinel_batch_alarm_only_after_sweep_completed_at():
             "WHERE deprecation_id = $1",
             depr_id,
         )
-        alarms2, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms2, _ = await _poll_over_http(last_event_ts=None)
         batched2 = [
             a for a in alarms2 if a.kind == "deprecation_batch"
             and a.extra.get("deprecation_id") == str(depr_id)
@@ -324,10 +404,7 @@ async def test_sentinel_reserved_test_surface_excluded_from_alarms():
     high-severity alarm each `pytest` invocation. The cursor must still advance
     past the event so it isn't re-scanned indefinitely.
     """
-    from agents.sentinel.forced_release_alarm import (
-        RESERVED_TEST_SURFACE_PREFIX,
-        poll_forced_release_alarms,
-    )
+    from agents.sentinel.forced_release_alarm import RESERVED_TEST_SURFACE_PREFIX
 
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
@@ -340,9 +417,7 @@ async def test_sentinel_reserved_test_surface_excluded_from_alarms():
             conn, event_type="conflict_held_by_other", surface_id=conflict_surface,
         )
 
-        alarms, new_cursor = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, new_cursor = await _poll_over_http(last_event_ts=None)
         reserved = [
             a for a in alarms
             if str(a.extra.get("surface_id", "")).startswith(RESERVED_TEST_SURFACE_PREFIX)
@@ -364,8 +439,6 @@ async def test_sentinel_reserved_test_surface_excluded_from_alarms():
 async def test_sentinel_conflict_alarm_batched_per_surface():
     """N conflict_held_by_other events on the same surface in one cycle
     produce ONE summary alarm with count=N — not N per-event alarms."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -376,9 +449,7 @@ async def test_sentinel_conflict_alarm_batched_per_surface():
                 surface_id="td:/pr3b_conflict_same",
             )
 
-        alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, _ = await _poll_over_http(last_event_ts=None)
         conflict = [a for a in alarms if a.kind == "conflict_batch"]
         assert len(conflict) == 1, (
             f"expected 1 conflict_batch alarm, got {len(conflict)}"
@@ -401,8 +472,6 @@ async def test_sentinel_conflict_alarm_batched_per_surface():
 @pytest.mark.asyncio
 async def test_sentinel_conflict_alarm_separate_per_surface():
     """Conflicts on different surfaces produce one alarm per surface."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -412,9 +481,7 @@ async def test_sentinel_conflict_alarm_separate_per_surface():
                 conn, event_type="conflict_held_by_other", surface_id=sid,
             )
 
-        alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        alarms, _ = await _poll_over_http(last_event_ts=None)
         conflict = [a for a in alarms if a.kind == "conflict_batch"]
         surface_ids = {a.extra["surface_id"] for a in conflict}
         assert surface_ids == {
@@ -431,8 +498,6 @@ async def test_sentinel_conflict_alarm_dedupes_via_cursor():
     """Re-polling with the cursor returned by a previous poll yields zero new
     conflict_batch alarms — and a fresh conflict on the same surface AFTER
     the cursor produces a new alarm with a distinct fingerprint."""
-    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -442,17 +507,13 @@ async def test_sentinel_conflict_alarm_dedupes_via_cursor():
             surface_id="td:/pr3b_conflict_dedupe",
         )
 
-        first_alarms, cursor = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=None,
-        )
+        first_alarms, cursor = await _poll_over_http(last_event_ts=None)
         first_conflict = [a for a in first_alarms if a.kind == "conflict_batch"]
         assert len(first_conflict) == 1
         first_fp = first_conflict[0].fingerprint
 
         # Re-poll with cursor: no new alarms.
-        second_alarms, cursor2 = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=cursor,
-        )
+        second_alarms, cursor2 = await _poll_over_http(last_event_ts=cursor)
         second_conflict = [a for a in second_alarms if a.kind == "conflict_batch"]
         assert second_conflict == [], (
             f"cursor dedup failed; got {len(second_conflict)} re-emitted conflict alarms"
@@ -465,9 +526,7 @@ async def test_sentinel_conflict_alarm_dedupes_via_cursor():
             conn, event_type="conflict_held_by_other",
             surface_id="td:/pr3b_conflict_dedupe",
         )
-        third_alarms, _ = await poll_forced_release_alarms(
-            db_url=TEST_DB_URL, last_event_ts=cursor2,
-        )
+        third_alarms, _ = await _poll_over_http(last_event_ts=cursor2)
         third_conflict = [a for a in third_alarms if a.kind == "conflict_batch"]
         assert len(third_conflict) == 1
         assert third_conflict[0].fingerprint != first_fp, (
@@ -478,55 +537,43 @@ async def test_sentinel_conflict_alarm_dedupes_via_cursor():
         await conn.close()
 
 
-# ---------- _poll_sync_forced_release: anyio-asyncio mitigation (CLAUDE.md pattern 2) ----------
+# ---------- _poll_sync_forced_release: executor isolation ----------
 
 
-def test_poll_sync_forced_release_returns_same_tuple_shape_when_no_events():
+def test_poll_sync_forced_release_returns_same_tuple_shape_when_no_events(
+    live_alarm_http_server: str,
+):
     """`_poll_sync_forced_release` must return the same `(alarms, new_cursor)`
-    tuple shape as the async `poll_forced_release_alarms` it wraps. Sync
-    callable so the GovernanceAgent SDK's anyio task group can dispatch it
-    via `loop.run_in_executor` without crossing event loops (asyncpg connections are bound
-    to the loop that created them).
+    tuple shape as the async `poll_forced_release_alarms` it wraps.
     """
     from agents.sentinel.agent import _poll_sync_forced_release
 
-    # Use TEST_DB_URL via env so the helper picks it up. Cursor=None to poll
-    # everything; with the 'forced' event_type query and a clean test DB this
-    # returns ([], None or whatever the latest ts is).
-    alarms, new_cursor = _poll_sync_forced_release(TEST_DB_URL, None)
+    alarms, new_cursor = _poll_sync_forced_release(live_alarm_http_server, None)
     assert isinstance(alarms, list)
-    # new_cursor is either None (no events ever) or a datetime (max ts seen).
     from datetime import datetime as _dt
     assert new_cursor is None or isinstance(new_cursor, _dt)
 
 
-def test_poll_sync_forced_release_loop_free_thread_succeeds_twice():
-    """Sanity: two consecutive calls from a loop-free thread (the pytest
-    main thread) succeed without leaving a running event loop between them.
-    Confirms `asyncio.run` teardown is clean per call.
+def test_poll_sync_forced_release_loop_free_thread_succeeds_twice(
+    live_alarm_http_server: str,
+):
+    """Sanity: two consecutive calls from a loop-free thread succeed without
+    leaving a running event loop or leaked client between them.
     """
     from agents.sentinel.agent import _poll_sync_forced_release
 
-    alarms_1, cursor_1 = _poll_sync_forced_release(TEST_DB_URL, None)
-    alarms_2, cursor_2 = _poll_sync_forced_release(TEST_DB_URL, None)
+    alarms_1, _ = _poll_sync_forced_release(live_alarm_http_server, None)
+    alarms_2, _ = _poll_sync_forced_release(live_alarm_http_server, None)
 
     assert isinstance(alarms_1, list)
     assert isinstance(alarms_2, list)
 
 
-def test_poll_sync_forced_release_callable_via_run_in_executor():
-    """Council CONCERN 2 (reviewer): the production dispatch path runs
-    `_poll_sync_forced_release` inside a thread launched by
-    `loop.run_in_executor` from inside an `asyncio.run` context — NOT
-    directly from a loop-free pytest thread. This test exercises the
-    actual runtime shape: spin up an outer asyncio loop, dispatch to the
-    default ThreadPoolExecutor, await the result, and dispatch a SECOND
-    time from the same outer loop to verify no asyncpg loop-binding leak
-    between consecutive executor invocations.
-
-    This was confirmed against the live server before merge; this test pins the
-    behavior so a future refactor of `_poll_sync_forced_release` (e.g.,
-    accidentally capturing the outer loop reference) breaks loud.
+def test_poll_sync_forced_release_callable_via_run_in_executor(
+    live_alarm_http_server: str,
+):
+    """Exercise the production dispatch shape: outer asyncio loop -> default
+    ThreadPoolExecutor -> two consecutive `_poll_sync_forced_release` calls.
     """
     import asyncio
     from agents.sentinel.agent import _poll_sync_forced_release
@@ -534,10 +581,10 @@ def test_poll_sync_forced_release_callable_via_run_in_executor():
     async def driver():
         loop = asyncio.get_running_loop()
         alarms_1, _ = await loop.run_in_executor(
-            None, _poll_sync_forced_release, TEST_DB_URL, None,
+            None, _poll_sync_forced_release, live_alarm_http_server, None,
         )
         alarms_2, _ = await loop.run_in_executor(
-            None, _poll_sync_forced_release, TEST_DB_URL, None,
+            None, _poll_sync_forced_release, live_alarm_http_server, None,
         )
         return alarms_1, alarms_2
 
@@ -547,27 +594,20 @@ def test_poll_sync_forced_release_callable_via_run_in_executor():
 
 
 def test_poll_sync_forced_release_timeout_propagates(monkeypatch):
-    """Council CONCERN 1 (architect + reviewer convergence): the wrapper
-    bounds executor-thread lifetime via `asyncio.wait_for(..., timeout=30s)`
-    so a wedged asyncpg call doesn't accumulate threads in the default
-    ThreadPoolExecutor. Inject a poll function that sleeps longer than
-    `_POLL_TIMEOUT_S` and verify TimeoutError propagates.
+    """The wrapper bounds executor-thread lifetime via `asyncio.wait_for` so a
+    wedged HTTP call doesn't accumulate threads in the default ThreadPoolExecutor.
     """
     import asyncio
     from agents.sentinel import agent as agent_mod
 
-    # Override the timeout for fast test execution.
     monkeypatch.setattr(agent_mod, "_POLL_TIMEOUT_S", 0.2)
 
-    async def _wedged_poll(*, db_url, last_event_ts):
-        await asyncio.sleep(5.0)  # well over the test timeout
+    async def _wedged_poll(*, api_url=None, last_event_ts=None, **_kw):
+        await asyncio.sleep(5.0)
         return [], None
 
-    # Patch the lazy import — the wrapper does
-    # `from agents.sentinel.forced_release_alarm import poll_forced_release_alarms`
-    # inside the function body, so we need to patch the source module.
     from agents.sentinel import forced_release_alarm
     monkeypatch.setattr(forced_release_alarm, "poll_forced_release_alarms", _wedged_poll)
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
-        agent_mod._poll_sync_forced_release(TEST_DB_URL, None)
+        agent_mod._poll_sync_forced_release("http://127.0.0.1:8767", None)
