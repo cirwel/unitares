@@ -284,8 +284,10 @@ def _assert_convex_step(prev, new, obs):
     readings=st.lists(reading, min_size=1, max_size=40),
 )
 def test_behavioral_update_is_a_convex_ema_step_with_default_rates(start, warmup, readings):
+    # hold_unread=False: the fill-era step from an arbitrary start. Under the
+    # hold the first reading seeds the value (tests/test_hold_unread_axes.py).
     b = BehavioralEISV(E=start[0], I=start[1], S=start[2], V=start[3],
-                       update_count=warmup)
+                       update_count=warmup, hold_unread=False)
     for obs in readings:
         prev = {"E": b.E, "I": b.I, "S": b.S, "V": b.V}
         b.update(*obs)

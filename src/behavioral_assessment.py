@@ -57,6 +57,9 @@ class AssessmentResult:
     unscored_axes: tuple = ()
 
 
+# WelfordStats.z_score returns 0.0 below this many samples.
+_MIN_BASELINE_SAMPLES = 5
+
 # Risk component -> the behavioral dimension it scores.
 _COMPONENT_DIMENSION = {"low_E": "E", "low_I": "I", "high_S": "S", "high_V": "V"}
 
@@ -290,6 +293,15 @@ def assess_behavioral_state(
     # Score components based on baseline status
     if state.is_baselined:
         components = _score_self_relative(state, rho, continuity_energy, ctx)
+        if state.hold_unread:
+            # An axis seeded late (or restarted on restore) has too few
+            # baseline samples for a z-score, which would read as "no
+            # deviation". Until it has them, that axis is scored against the
+            # fixed thresholds, as a state without a baseline is.
+            fixed = _score_fixed_threshold(state, rho, continuity_energy, ctx)
+            for key, dimension in _COMPONENT_DIMENSION.items():
+                if getattr(state, f"_baseline_{dimension}").count < _MIN_BASELINE_SAMPLES:
+                    components[key] = fixed[key]
     else:
         components = _score_fixed_threshold(state, rho, continuity_energy, ctx)
 

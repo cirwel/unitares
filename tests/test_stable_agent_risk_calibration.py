@@ -37,7 +37,7 @@ def _baselined(mean_m2, current, count=1239):
         bl.count, bl.mean, bl.m2 = count, mean, m2
     for dim, val in current.items():
         setattr(st, dim, val)
-    st.update_count = count
+    st.update_count = st.read_update_count = count
     # Hand-built values stand for readings; an unread axis is not scored.
     st.readings = dict.fromkeys(("E", "I", "S", "V"), count)
     return st

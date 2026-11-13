@@ -250,3 +250,73 @@ def test_monitor_holds_unread_axes_and_reports_them():
     assert "I" in result["behavioral"]["assessment"]["unscored_axes"]
     assert result["behavioral"]["state"]["unread"] == state.unread_dimensions
     assert all(isinstance(result["metrics"][k], float) for k in "EISV")
+
+
+# --- authority and late-seeded axes (review findings) ----------------------
+
+
+def test_a_state_with_nothing_read_has_no_confidence_and_takes_no_authority():
+    state = BehavioralEISV()
+    for _ in range(5):
+        state.update(None, None, None)
+    assert state.update_count == 5 and state.read_update_count == 0
+    assert state.confidence == 0.0
+    assert state.is_baselined is False
+
+    state.update(None, None, 0.3)
+    assert state.read_update_count == 1
+    assert state.confidence == pytest.approx(0.1)
+
+
+def test_confidence_drops_when_every_reading_has_gone_stale():
+    state = BehavioralEISV()
+    for _ in range(12):
+        state.update(0.7, 0.7, 0.2)
+    assert state.confidence == 1.0
+    for _ in range(STALE_AFTER_UPDATES):
+        state.update(None, None, None)
+    assert state.unscored_dimensions == ["E", "I", "S", "V"]
+    assert state.confidence == 0.0
+
+
+def test_cold_start_checkins_do_not_hand_the_verdict_to_an_unread_state():
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("hold-unread-cold-start", load_state=False)
+    for _ in range(3):
+        monitor.process_update(
+            {"response_text": "Reviewed the change and ran the tests.", "complexity": 0.5}
+        )
+    state = monitor._behavioral_state
+    # The sensor needs three decisions of history, so nothing is read yet.
+    assert state.read_update_count == 0
+    assert state.confidence == 0.0
+    assert monitor.get_primary_eisv() == (
+        float(monitor.state.E), float(monitor.state.I),
+        float(monitor.state.S), float(monitor.state.V),
+    )
+
+
+def test_late_seeded_axis_is_scored_on_fixed_thresholds_until_it_has_a_baseline():
+    state = BehavioralEISV()
+    for _ in range(30):
+        state.update(0.8, None, 0.2)
+    assert state.is_baselined
+
+    # First I readings arrive low: above the absolute floor (0.30), below the
+    # fixed threshold (0.40). A z-score is unavailable below 5 samples.
+    state.update(0.8, 0.35, 0.2)
+    assert state._baseline_I.count == 1
+    result = assess_behavioral_state(state)
+    assert result.components["low_I"] == pytest.approx(0.30 * (0.4 - 0.35) / 0.4)
+
+    for _ in range(4):
+        state.update(0.8, 0.35, 0.2)
+    assert state._baseline_I.count == 5  # now self-relative, at its own level
+    assert assess_behavioral_state(state).components["low_I"] == 0.0
+
+
+def test_flag_off_hand_built_state_ramps_on_update_count():
+    state = BehavioralEISV(E=0.5, update_count=20, hold_unread=False)
+    state.update(0.9, 0.5, 0.2)
+    assert state.E == pytest.approx(0.88 * 0.5 + 0.12 * 0.9)  # past the ramp

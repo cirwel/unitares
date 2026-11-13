@@ -4,7 +4,7 @@
   "numpy": "2.4.0",
   "platform": "Darwin",
   "python": "3.14.8",
-  "recorded_from_commit": "d95e7e959712442e489ee079badbe48bc685523c",
+  "recorded_from_commit": "a1e4c97d23a3e780a0e2f03433680ed9f30853f5",
   "working_tree_dirty": true
  },
  "schema": "unitares.eisv_preservation.estimator_trajectories.v0",
@@ -1119,10 +1119,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.5,
-    "I": 0.5,
-    "S": 0.2,
-    "V": 0.0,
+    "E": 0.71947482,
+    "I": 0.79782641,
+    "S": 0.29691353,
+    "V": -0.01478982,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -1139,8 +1139,8 @@
      "derived_complexity": 0.11519711
     },
     "phi": 0.09769658,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.34189464,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1154,10 +1154,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.55215769,
-    "I": 0.5,
-    "S": 0.4963477,
-    "V": 0.0,
+    "E": 0.72534101,
+    "I": 0.79746642,
+    "S": 0.28408191,
+    "V": -0.0184678,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -1174,8 +1174,8 @@
      "derived_complexity": 0.11519711
     },
     "phi": 0.10060255,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.33517029,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1189,10 +1189,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.55215769,
-    "I": 0.5,
-    "S": 0.50280304,
-    "V": 0.0,
+    "E": 0.73097939,
+    "I": 0.79725494,
+    "S": 0.27277697,
+    "V": -0.02161328,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -1209,8 +1209,8 @@
      "derived_complexity": 0.11519711
     },
     "phi": 0.10138132,
-    "regime": "EXPLORATION",
-    "risk_score": 0.1511,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.3299099,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1895,7 +1895,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 25
     },
@@ -1910,7 +1910,7 @@
     },
     "phi": 0.16826983,
     "regime": "EXPLORATION",
-    "risk_score": 0.0,
+    "risk_score": 0.0038,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1930,7 +1930,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 26
     },
@@ -1945,7 +1945,7 @@
     },
     "phi": 0.17015446,
     "regime": "EXPLORATION",
-    "risk_score": 0.0,
+    "risk_score": 0.0038,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1965,7 +1965,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "continuity_fallback",
      "update_count": 27
     },
@@ -1980,7 +1980,7 @@
     },
     "phi": 0.06466705,
     "regime": "EXPLORATION",
-    "risk_score": 0.0,
+    "risk_score": 0.0038,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": null,
@@ -1993,7 +1993,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "continuity_fallback",
      "update_count": 28
     },
@@ -2008,7 +2008,7 @@
     },
     "phi": 0.07296606,
     "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "risk_score": 0.1538,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2028,7 +2028,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "continuity_fallback",
      "update_count": 29
     },
@@ -2043,7 +2043,7 @@
     },
     "phi": 0.08068606,
     "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "risk_score": 0.1538,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2063,7 +2063,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 30
     },
@@ -2078,7 +2078,7 @@
     },
     "phi": 0.08791775,
     "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "risk_score": 0.1542,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2502,11 +2502,11 @@
     "verdict": "high-risk"
    },
    {
-    "E": 0.5,
-    "I": 0.5,
-    "S": 0.2,
-    "V": 0.0,
-    "action": "proceed",
+    "E": 0.73634129,
+    "I": 0.79683442,
+    "S": 0.33131561,
+    "V": -0.01320819,
+    "action": "pause",
     "behavioral": {
      "is_baselined": false,
      "obs_source": "continuity_fallback",
@@ -2522,10 +2522,10 @@
      "derived_complexity": 0.0
     },
     "phi": -0.24959563,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
-    "status": "healthy",
-    "sub_action": "approve",
+    "regime": "CONVERGENCE",
+    "risk_score": 1.0,
+    "status": "critical",
+    "sub_action": "cirs_block",
     "trajectory_validation": {
      "current_norm": 0.91282155,
      "improvement": -0.00906036,
@@ -2534,14 +2534,14 @@
      "prev_verdict": "pause",
      "quality": 0.47736459
     },
-    "verdict": "safe"
+    "verdict": "high-risk"
    },
    {
-    "E": 0.3,
-    "I": 0.5,
-    "S": 0.89923077,
-    "V": 0.0,
-    "action": "proceed",
+    "E": 0.74675045,
+    "I": 0.79579447,
+    "S": 0.32833903,
+    "V": -0.01576179,
+    "action": "pause",
     "behavioral": {
      "is_baselined": false,
      "obs_source": "behavioral_sensor",
@@ -2557,26 +2557,26 @@
      "derived_complexity": 0.0
     },
     "phi": -0.25560254,
-    "regime": "EXPLORATION",
-    "risk_score": 0.3847,
-    "status": "healthy",
-    "sub_action": "guide",
+    "regime": "CONVERGENCE",
+    "risk_score": 1.0,
+    "status": "critical",
+    "sub_action": "cirs_block",
     "trajectory_validation": {
      "current_norm": 0.92468869,
      "improvement": -0.01186714,
      "norm_delta": 0.01186714,
      "prev_norm": 0.91282155,
-     "prev_verdict": "proceed",
+     "prev_verdict": "pause",
      "quality": 0.47036691
     },
-    "verdict": "caution"
+    "verdict": "high-risk"
    },
    {
-    "E": 0.3,
-    "I": 0.5,
-    "S": 0.89923077,
-    "V": 0.0,
-    "action": "proceed",
+    "E": 0.75647528,
+    "I": 0.79477509,
+    "S": 0.32624472,
+    "V": -0.01754181,
+    "action": "pause",
     "behavioral": {
      "is_baselined": false,
      "obs_source": "behavioral_sensor",
@@ -2592,19 +2592,19 @@
      "derived_complexity": 0.0
     },
     "phi": -0.2634236,
-    "regime": "EXPLORATION",
-    "risk_score": 0.3847,
-    "status": "healthy",
-    "sub_action": "guide",
+    "regime": "CONVERGENCE",
+    "risk_score": 1.0,
+    "status": "critical",
+    "sub_action": "cirs_block",
     "trajectory_validation": {
      "current_norm": 0.93792913,
      "improvement": -0.01324043,
      "norm_delta": 0.01324043,
      "prev_norm": 0.92468869,
-     "prev_verdict": "proceed",
+     "prev_verdict": "pause",
      "quality": 0.46694719
     },
-    "verdict": "caution"
+    "verdict": "high-risk"
    },
    {
     "E": 0.3,
@@ -2617,7 +2617,7 @@
      "obs_source": "behavioral_sensor",
      "update_count": 6
     },
-    "coherence": 0.49068695,
+    "coherence": 0.49068696,
     "confidence_source": "external",
     "continuity": {
      "E_input": 0.3,
@@ -2626,7 +2626,7 @@
      "complexity_divergence": 0.9,
      "derived_complexity": 0.0
     },
-    "phi": -0.27234216,
+    "phi": -0.27234215,
     "regime": "EXPLORATION",
     "risk_score": 0.3847,
     "status": "healthy",
@@ -2636,7 +2636,7 @@
      "improvement": -0.01382436,
      "norm_delta": 0.01382436,
      "prev_norm": 0.93792913,
-     "prev_verdict": "proceed",
+     "prev_verdict": "pause",
      "quality": 0.46549404
     },
     "verdict": "caution"
@@ -2707,10 +2707,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.5,
-    "I": 0.5,
-    "S": 0.2,
-    "V": 0.0,
+    "E": 0.71874019,
+    "I": 0.79779075,
+    "S": 0.29802282,
+    "V": -0.01485252,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -2727,8 +2727,8 @@
      "derived_complexity": 0.15184398
     },
     "phi": 0.1101576,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.33464235,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2742,10 +2742,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.58147519,
-    "I": 0.5,
-    "S": 0.45585797,
-    "V": 0.0,
+    "E": 0.74392629,
+    "I": 0.79718842,
+    "S": 0.24637031,
+    "V": -0.02875301,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -2762,8 +2762,8 @@
      "derived_complexity": 0.15184398
     },
     "phi": 0.13690121,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.42154939,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2777,10 +2777,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.58147519,
-    "I": 0.5,
-    "S": 0.46336286,
-    "V": 0.0,
+    "E": 0.74827704,
+    "I": 0.79740716,
+    "S": 0.23913492,
+    "V": -0.03034429,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -2797,8 +2797,8 @@
      "derived_complexity": 0.15184398
     },
     "phi": 0.1355817,
-    "regime": "EXPLORATION",
-    "risk_score": 0.0,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.29900148,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2912,10 +2912,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.5,
-    "I": 0.5,
-    "S": 0.2,
-    "V": 0.0,
+    "E": 0.71736044,
+    "I": 0.79790936,
+    "S": 0.29404125,
+    "V": -0.01498748,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -2932,8 +2932,8 @@
      "derived_complexity": 0.14710549
     },
     "phi": 0.13849935,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.32203368,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2947,10 +2947,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.65768439,
-    "I": 0.5,
-    "S": 0.3597621,
-    "V": 0.0,
+    "E": 0.72270517,
+    "I": 0.79760214,
+    "S": 0.28053085,
+    "V": -0.01880161,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -2967,8 +2967,8 @@
      "derived_complexity": 0.14710549
     },
     "phi": 0.14014789,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.31587902,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2982,10 +2982,10 @@
     "verdict": "safe"
    },
    {
-    "E": 0.65768439,
-    "I": 0.5,
-    "S": 0.37032204,
-    "V": 0.0,
+    "E": 0.72790239,
+    "I": 0.79744937,
+    "S": 0.26867264,
+    "V": -0.022108,
     "action": "proceed",
     "behavioral": {
      "is_baselined": false,
@@ -3002,8 +3002,8 @@
      "derived_complexity": 0.14710549
     },
     "phi": 0.13966955,
-    "regime": "EXPLORATION",
-    "risk_score": 0.15,
+    "regime": "CONVERGENCE",
+    "risk_score": 0.31119437,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3688,7 +3688,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 25
     },
@@ -3703,7 +3703,7 @@
     },
     "phi": -0.10045265,
     "regime": "EXPLORATION",
-    "risk_score": 0.2073,
+    "risk_score": 0.2911,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3723,7 +3723,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 26
     },
@@ -3738,7 +3738,7 @@
     },
     "phi": -0.09862551,
     "regime": "EXPLORATION",
-    "risk_score": 0.2124,
+    "risk_score": 0.3,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3758,7 +3758,7 @@
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
-     "is_baselined": true,
+     "is_baselined": false,
      "obs_source": "behavioral_sensor",
      "update_count": 27
     },
@@ -3773,7 +3773,7 @@
     },
     "phi": -0.09702804,
     "regime": "EXPLORATION",
-    "risk_score": 0.2168,
+    "risk_score": 0.3077,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {

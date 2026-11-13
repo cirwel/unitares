@@ -140,7 +140,7 @@ def replay(packet):
             boost = 0.5 * max(0, 1 - n_before / BOOTSTRAP_UPDATES)
             gains = {d: behavior["alphas"][d] + boost for d in DIMENSIONS}
             if all(0 <= a <= 1 for a in gains.values()):
-                state = BehavioralEISV(**previous["smoothed"], alphas=dict(behavior["alphas"]), update_count=n_before, hold_unread=False)
+                state = BehavioralEISV(**previous["smoothed"], alphas=dict(behavior["alphas"]), update_count=n_before, hold_unread=False)  # replays the fill-era recurrence
                 state.update(**{f"{d}_obs": behavior["raw_observation"][d] for d in DIMENSIONS[:3]})
                 errors = {d: abs(getattr(state, d) - behavior["smoothed"][d]) for d in DIMENSIONS}
                 bounds = {d: (2 + (gains[d] if d == "V" else 0)) * ROUNDING for d in DIMENSIONS}

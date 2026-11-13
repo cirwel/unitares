@@ -172,6 +172,14 @@ class BehavioralEISV:
     # Fixed when the state is created or restored, so one state never mixes
     # the two update rules.
     hold_unread: bool = field(default_factory=hold_unread_axes_enabled)
+    # Check-ins that supplied a reading for at least one dimension. Under the
+    # hold this, not update_count, is what the state's maturity is measured
+    # in: a check-in that read nothing adds no evidence.
+    read_update_count: int = 0
+
+    @property
+    def _evidence_count(self) -> int:
+        return self.read_update_count if self.hold_unread else self.update_count
 
     def has_reading(self, dimension: str) -> bool:
         """Whether any check-in has supplied a reading for this dimension."""
@@ -214,14 +222,18 @@ class BehavioralEISV:
         dimension's own reading count.
         """
         count = self.readings.get(dimension, 0)
+        # With the hold off every check-in is a reading, so the ramp is keyed
+        # on update_count exactly as before (this also covers a state built by
+        # hand with only update_count set).
+        ramp_count = count if self.hold_unread else self.update_count
         if count == 0 and self.hold_unread:
             value = observation
             setattr(self, f"_baseline_{dimension}", WelfordStats())
             history: List[float] = []
         else:
             alpha = self.alphas[dimension]
-            if count < BOOTSTRAP_UPDATES:
-                alpha += 0.5 * (1.0 - count / BOOTSTRAP_UPDATES)
+            if ramp_count < BOOTSTRAP_UPDATES:
+                alpha += 0.5 * (1.0 - ramp_count / BOOTSTRAP_UPDATES)
             value = (1.0 - alpha) * getattr(self, dimension) + alpha * observation
             history = list(getattr(self, f"{dimension}_history"))
         value = max(low, min(high, value))
@@ -297,6 +309,8 @@ class BehavioralEISV:
         if observations["E"] is not None and observations["I"] is not None:
             self._step("V", self._raw_valence(observations["E"], observations["I"]), V_MIN, V_MAX)
 
+        if any(value is not None for value in observations.values()):
+            self.read_update_count += 1
         self.update_count += 1
         self.last_update_time = time.monotonic()
 
@@ -343,19 +357,29 @@ class BehavioralEISV:
 
     @property
     def confidence(self) -> float:
-        """Confidence in behavioral state — ramps from 0 to 1 over bootstrap period."""
-        if self.update_count >= BOOTSTRAP_UPDATES:
+        """Confidence in behavioral state — ramps from 0 to 1 over bootstrap period.
+
+        Under the hold the ramp counts check-ins that read something, and the
+        confidence is 0 while no dimension is scored: a state with nothing
+        read, or nothing read recently, holds no evidence to be confident in,
+        so it must not take verdict authority or supply the primary EISV.
+        """
+        if self.hold_unread and len(self.unscored_dimensions) == len(DIMENSIONS):
+            return 0.0
+        count = self._evidence_count
+        if count >= BOOTSTRAP_UPDATES:
             return 1.0
-        return self.update_count / BOOTSTRAP_UPDATES
+        return count / BOOTSTRAP_UPDATES
 
     @property
     def baseline_confidence(self) -> float:
         """How stable is the behavioral baseline. 0 = no data, 1 = fully characterized."""
-        if self.update_count >= BASELINE_WARMUP_UPDATES:
+        count = self._evidence_count
+        if count >= BASELINE_WARMUP_UPDATES:
             return 1.0
-        if self.update_count < 5:
+        if count < 5:
             return 0.0
-        return (self.update_count - 5) / (BASELINE_WARMUP_UPDATES - 5)
+        return (count - 5) / (BASELINE_WARMUP_UPDATES - 5)
 
     @property
     def is_baselined(self) -> bool:
@@ -427,6 +451,7 @@ class BehavioralEISV:
             "V": round(self.V, 4),
             "confidence": round(self.confidence, 2),
             "updates": self.update_count,
+            "read_updates": self.read_update_count,
             "readings": {d: int(self.readings.get(d, 0)) for d in DIMENSIONS},
             "since_reading": {d: int(self.since_reading.get(d, 0)) for d in DIMENSIONS},
             "unread": self.unread_dimensions,
@@ -521,6 +546,10 @@ class BehavioralEISV:
         # Under the hold they are kept as placeholders and every dimension
         # starts unread, so the first real reading seeds it. With the hold off
         # every check-in is a reading, as it always was.
+        # Maturity carries over: state from before the hold counted every
+        # check-in, and resetting it would drop every restored agent back to
+        # the cold-start path at deploy.
+        state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
         if isinstance(persisted_readings, dict):
             state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
