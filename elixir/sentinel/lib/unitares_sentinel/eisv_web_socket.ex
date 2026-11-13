@@ -11,7 +11,7 @@ defmodule UnitaresSentinel.EISVWebSocket do
   use GenServer
   require Logger
 
-  alias UnitaresSentinel.FleetState
+  alias UnitaresSentinel.{BearerClient, FleetState}
 
   @default_url "ws://localhost:8767/ws/eisv"
   @default_reconnect_ms 10_000
@@ -22,6 +22,10 @@ defmodule UnitaresSentinel.EISVWebSocket do
             connect_timeout_ms: @default_connect_timeout_ms,
             fleet_state: FleetState,
             connect_on_init?: true,
+            auth_opts: [],
+            last_failed_token: nil,
+            active_token: nil,
+            reconnect_timer_ref: nil,
             conn: nil,
             websocket: nil,
             ref: nil,
@@ -50,13 +54,28 @@ defmodule UnitaresSentinel.EISVWebSocket do
       reconnect_ms: Keyword.get(opts, :reconnect_ms, @default_reconnect_ms),
       connect_timeout_ms: Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms),
       fleet_state: Keyword.get(opts, :fleet_state, FleetState),
-      connect_on_init?: Keyword.get(opts, :connect_on_init?, true)
+      connect_on_init?: Keyword.get(opts, :connect_on_init?, true),
+      auth_opts: Keyword.get(opts, :auth_opts, [])
     }
 
     if state.connect_on_init? do
       {:ok, state, {:continue, :connect}}
     else
       {:ok, state}
+    end
+  end
+
+  @doc false
+  def select_upgrade_auth(url, auth_opts \\ [], last_failed_token \\ nil) do
+    candidates = BearerClient.bearer_candidates(Keyword.put(auth_opts, :url, url))
+
+    case candidates do
+      [] ->
+        {[], nil}
+
+      list ->
+        token = Enum.find(list, &(&1 != last_failed_token)) || List.first(list)
+        {[{"authorization", "Bearer " <> token}], token}
     end
   end
 
@@ -123,9 +142,16 @@ defmodule UnitaresSentinel.EISVWebSocket do
   end
 
   defp connect(state) do
+    cancel_reconnect_timer(state.reconnect_timer_ref)
+    close_conn(state.conn)
+    state = %{state | reconnect_timer_ref: nil, conn: nil}
     uri = URI.parse(state.url)
 
-    with {:ok, schemes} <- schemes(uri),
+    {upgrade_hdrs, active_token} =
+      select_upgrade_auth(state.url, state.auth_opts, state.last_failed_token)
+
+    with :ok <- BearerClient.ensure_secure_transport(state.url, state.auth_opts),
+         {:ok, schemes} <- schemes(uri),
          {:ok, host} <- host(uri),
          {:ok, conn} <-
            Mint.HTTP.connect(schemes.http, host, port(uri, schemes.ws),
@@ -133,12 +159,13 @@ defmodule UnitaresSentinel.EISVWebSocket do
              mode: :active,
              timeout: state.connect_timeout_ms
            ),
-         {:ok, conn, ref} <- Mint.WebSocket.upgrade(schemes.ws, conn, path(uri), []) do
+         {:ok, conn, ref} <- Mint.WebSocket.upgrade(schemes.ws, conn, path(uri), upgrade_hdrs) do
       {:noreply,
        %{
          state
          | conn: conn,
            ref: ref,
+           active_token: active_token,
            websocket: nil,
            connected?: false,
            upgrade_status: nil,
@@ -176,8 +203,9 @@ defmodule UnitaresSentinel.EISVWebSocket do
   defp handle_response({:done, ref}, %{ref: ref, websocket: nil} = state) do
     case Mint.WebSocket.new(state.conn, ref, state.upgrade_status, state.upgrade_headers) do
       {:ok, conn, websocket} ->
+        BearerClient.record_winner(state.url, state.active_token, state.auth_opts)
         Logger.info("Sentinel EISV WebSocket connected to #{state.url}")
-        %{state | conn: conn, websocket: websocket, connected?: true}
+        %{state | conn: conn, websocket: websocket, connected?: true, last_failed_token: nil}
 
       {:error, conn, reason} ->
         Logger.warning("Sentinel EISV WebSocket upgrade failed: #{inspect(reason)}")
@@ -260,17 +288,40 @@ defmodule UnitaresSentinel.EISVWebSocket do
 
   defp reconnect(state) do
     close_conn(state.conn)
-    Process.send_after(self(), :connect, state.reconnect_ms)
+    cancel_reconnect_timer(state.reconnect_timer_ref)
+    timer_ref = Process.send_after(self(), :connect, state.reconnect_ms)
+
+    failed_token =
+      if state.upgrade_status in [401, 403] and is_binary(state.active_token) do
+        state.active_token
+      else
+        state.last_failed_token
+      end
 
     %{
       state
       | conn: nil,
         websocket: nil,
         ref: nil,
+        active_token: nil,
+        last_failed_token: failed_token,
+        reconnect_timer_ref: timer_ref,
         connected?: false,
         upgrade_status: nil,
         upgrade_headers: []
     }
+  end
+
+  defp cancel_reconnect_timer(nil), do: :ok
+
+  defp cancel_reconnect_timer(ref) when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      :connect -> :ok
+    after
+      0 -> :ok
+    end
   end
 
   defp close_conn(nil), do: :ok

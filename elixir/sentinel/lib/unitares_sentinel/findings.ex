@@ -10,6 +10,8 @@ defmodule UnitaresSentinel.Findings do
 
   require Logger
 
+  alias UnitaresSentinel.BearerClient
+
   @default_url "http://localhost:8767/api/findings"
   @default_timeout_ms 3_000
   @default_agent_id "sentinel"
@@ -283,11 +285,19 @@ defmodule UnitaresSentinel.Findings do
   @doc false
   @spec post_json_result(map(), keyword()) :: :accepted | :deduped | {:error, term()}
   def post_json_result(body, opts \\ []) when is_map(body) do
-    http_post = Keyword.get(opts, :http_post, &finch_post/4)
     url = Keyword.get(opts, :url, findings_url())
     timeout_ms = Keyword.get(opts, :timeout_ms, findings_timeout_ms())
+    base_headers = [{"Content-Type", "application/json"}]
 
-    case http_post.(url, body, headers(), timeout_ms) do
+    send_fn =
+      case Keyword.fetch(opts, :http_post) do
+        {:ok, http_post} -> fn req_headers -> http_post.(url, body, req_headers, timeout_ms) end
+        :error -> fn req_headers -> finch_post(url, body, req_headers, timeout_ms, opts) end
+      end
+
+    result = BearerClient.request_with_fallback(url, base_headers, opts, send_fn)
+
+    case result do
       {:ok, 200, response_body} ->
         classify_response(response_body)
 
@@ -309,16 +319,23 @@ defmodule UnitaresSentinel.Findings do
       {:error, {:exited, reason}}
   end
 
-  defp finch_post(url, body, headers, timeout_ms) do
-    json = Jason.encode!(body)
-    request = Finch.build(:post, url, headers, json)
+  defp finch_post(url, body, headers, timeout_ms, opts) do
+    with :ok <- BearerClient.ensure_secure_transport(url, opts) do
+      json = Jason.encode!(body)
+      finch_opts = BearerClient.uds_socket_opts(url, opts)
+      request = Finch.build(:post, url, headers, json, finch_opts)
+      pool_timeout = min(timeout_ms, 5_000)
 
-    case Finch.request(request, UnitaresSentinel.Finch, receive_timeout: timeout_ms) do
-      {:ok, %Finch.Response{status: status, body: response_body}} ->
-        {:ok, status, response_body}
+      case Finch.request(request, UnitaresSentinel.Finch,
+             receive_timeout: timeout_ms,
+             pool_timeout: pool_timeout
+           ) do
+        {:ok, %Finch.Response{status: status, body: response_body}} ->
+          {:ok, status, response_body}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -339,20 +356,14 @@ defmodule UnitaresSentinel.Findings do
     end
   end
 
-  defp headers do
-    base = [{"Content-Type", "application/json"}]
-
-    case System.get_env("UNITARES_HTTP_API_TOKEN") do
-      nil -> base
-      "" -> base
-      token -> [{"Authorization", "Bearer #{token}"} | base]
-    end
-  end
-
   defp findings_url do
     Application.get_env(:unitares_sentinel, :findings_url) ||
       System.get_env("UNITARES_FINDINGS_URL") ||
-      @default_url
+      case System.get_env("GOV_REST_URL") do
+        nil -> @default_url
+        "" -> @default_url
+        raw -> BearerClient.normalize_base_url(raw) <> "/api/findings"
+      end
   end
 
   defp findings_timeout_ms do
