@@ -123,8 +123,14 @@ from src.http_routes.metrics_api import (
     http_post_metric,
     http_get_metrics,
     http_get_metrics_catalog,
+    http_get_metrics_snapshot,
     http_get_progress_flat_recent,
 )
+from src.http_routes.lease_plane_telemetry import (
+    http_get_lease_alarm_events,
+    http_get_lease_phase_b,
+)
+from src.http_routes.audit_volume import http_get_audit_volume_summary
 from src.http_routes.findings import (
     _FINDING_SEVERITIES,
     _FINDING_TYPE_SUFFIX,
@@ -332,6 +338,10 @@ def register_http_routes(
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))
+    app.routes.append(Route("/v1/metrics/snapshot", http_get_metrics_snapshot, methods=["GET"]))
+    app.routes.append(Route("/v1/lease-plane/alarm-events", http_get_lease_alarm_events, methods=["GET"]))
+    app.routes.append(Route("/v1/lease-plane/phase-b/{surface_kind}", http_get_lease_phase_b, methods=["GET"]))
+    app.routes.append(Route("/v1/audit/volume-summary", http_get_audit_volume_summary, methods=["GET"]))
     app.routes.append(Route("/v1/progress_flat/recent", http_get_progress_flat_recent, methods=["GET"]))
     app.routes.append(Route("/v1/bootstrap/silent", http_bootstrap_silent, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))

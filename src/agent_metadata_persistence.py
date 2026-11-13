@@ -94,6 +94,102 @@ def _write_metadata_snapshot_json_sync() -> None:
 _LOAD_PAGE_SIZE = 5000
 
 
+def _metadata_from_agent_record(agent, now: str) -> AgentMetadata:
+    """Build the in-memory ``AgentMetadata`` for one ``AgentRecord``.
+
+    Shared by the bulk cold-start loader and the single-agent loader so the
+    two cannot disagree about which persisted fields reach the cache.
+    """
+    return AgentMetadata(
+        agent_id=agent.agent_id,
+        status=agent.status or "active",
+        created_at=agent.created_at.isoformat() if agent.created_at else now,
+        last_update=(agent.last_activity_at or agent.updated_at).isoformat() if (agent.last_activity_at or agent.updated_at) else now,
+        tags=agent.tags or [],
+        notes=agent.notes or "",
+        purpose=agent.purpose,
+        parent_agent_id=agent.parent_agent_id,
+        spawn_reason=agent.spawn_reason,
+        health_status=agent.health_status or "unknown",
+        api_key=agent.metadata.get("api_key", ""),
+        agent_uuid=agent.metadata.get("agent_uuid"),
+        public_agent_id=agent.metadata.get("public_agent_id"),
+        label=agent.metadata.get("label"),
+        auto_label=agent.metadata.get("auto_label"),
+        structured_id=agent.metadata.get("structured_id"),
+        preferences=agent.metadata.get("preferences", {}),
+        active_session_key=agent.metadata.get("active_session_key"),
+        session_bound_at=agent.metadata.get("session_bound_at"),
+        thread_id=agent.metadata.get("thread_id", None),
+        node_index=agent.metadata.get("node_index", 1),
+        dialectic_conditions=agent.metadata.get("dialectic_conditions", []),
+        lifecycle_events=agent.metadata.get("lifecycle_events", [])[-AgentMetadata.MAX_LIFECYCLE_EVENTS:],
+        recent_update_timestamps=agent.metadata.get("recent_update_timestamps", []),
+        recent_decisions=agent.metadata.get("recent_decisions", []),
+        total_updates=agent.metadata.get("total_updates", 0),
+        # Runtime state fields — see agent_storage.persist_runtime_state().
+        # Without these, the in-memory mutations in lifecycle/operations.py
+        # are clobbered on every force-reload (Watcher P011).
+        paused_at=agent.metadata.get("paused_at"),
+        last_response_at=agent.metadata.get("last_response_at"),
+        response_completed=agent.metadata.get("response_completed", False),
+        recovery_attempt_at=agent.metadata.get("recovery_attempt_at"),
+        loop_detected_at=agent.metadata.get("loop_detected_at"),
+        loop_cooldown_until=agent.metadata.get("loop_cooldown_until"),
+    )
+
+
+async def load_agent_metadata_from_postgres(agent_id: str) -> Optional[AgentMetadata]:
+    """Read one agent's metadata from PostgreSQL, or None if it is not registered.
+
+    ``agent_metadata`` is a cache of the registry, not the registry. An agent
+    can be registered and absent from it while the bulk load has not finished
+    (the first moments after a server start). A caller about to act on "not registered" asks here
+    first. One indexed read on ``core.identities`` plus the latest state row,
+    then the same label, profile and trust-tier steps the bulk loader applies.
+
+    Does not write the cache; the caller decides where the entry goes. A
+    ``deleted`` identity is reported as not registered, matching the bulk
+    loader. Database errors propagate so the caller can fail closed.
+    """
+    from src import agent_storage
+
+    agent = await agent_storage.get_agent(agent_id)
+    if agent is None or agent.status == "deleted":
+        return None
+    meta = _metadata_from_agent_record(agent, datetime.now(timezone.utc).isoformat())
+    # The display label's home is core.agents; the bulk loader merges it over
+    # the copy in identity metadata (agent_storage.list_agents), so do the same.
+    try:
+        from src.db import get_db
+        label = await get_db().get_agent_label(agent_id)
+        if label:
+            meta.label = label
+    except Exception as e:
+        logger.debug(f"Label read skipped for {agent_id[:8]}...: {e}")
+    try:
+        if agent.metadata and "profile" in agent.metadata:
+            from src.agent_profile import hydrate_profile
+            hydrate_profile(agent_id, agent.metadata["profile"])
+    except Exception as e:
+        logger.debug(f"Profile hydration skipped for {agent_id[:8]}...: {e}")
+    try:
+        if agent.metadata and "trajectory_current" in agent.metadata:
+            from src.identity.trust_tier_routing import resolve_trust_tier
+            tier_info = await resolve_trust_tier(
+                agent_id,
+                agent.metadata,
+                prefetched_tags=meta.tags,
+                prefetched_label=meta.label,
+            )
+            if tier_info:
+                meta.trust_tier = tier_info.get("name", "unknown")
+                meta.trust_tier_num = tier_info.get("tier", 0)
+    except Exception as e:
+        logger.debug(f"Trust tier load skipped for {agent_id[:8]}...: {e}")
+    return meta
+
+
 async def _load_metadata_from_postgres_async() -> dict:
     """
     Load agent metadata from PostgreSQL into AgentMetadata dict.
@@ -142,43 +238,7 @@ async def _load_metadata_from_postgres_async() -> dict:
     now = datetime.now(timezone.utc).isoformat()
 
     for agent in agents:
-        meta = AgentMetadata(
-            agent_id=agent.agent_id,
-            status=agent.status or "active",
-            created_at=agent.created_at.isoformat() if agent.created_at else now,
-            last_update=(agent.last_activity_at or agent.updated_at).isoformat() if (agent.last_activity_at or agent.updated_at) else now,
-            tags=agent.tags or [],
-            notes=agent.notes or "",
-            purpose=agent.purpose,
-            parent_agent_id=agent.parent_agent_id,
-            spawn_reason=agent.spawn_reason,
-            health_status=agent.health_status or "unknown",
-            api_key=agent.metadata.get("api_key", ""),
-            agent_uuid=agent.metadata.get("agent_uuid"),
-            public_agent_id=agent.metadata.get("public_agent_id"),
-            label=agent.metadata.get("label"),
-            auto_label=agent.metadata.get("auto_label"),
-            structured_id=agent.metadata.get("structured_id"),
-            preferences=agent.metadata.get("preferences", {}),
-            active_session_key=agent.metadata.get("active_session_key"),
-            session_bound_at=agent.metadata.get("session_bound_at"),
-            thread_id=agent.metadata.get("thread_id", None),
-            node_index=agent.metadata.get("node_index", 1),
-            dialectic_conditions=agent.metadata.get("dialectic_conditions", []),
-            lifecycle_events=agent.metadata.get("lifecycle_events", [])[-AgentMetadata.MAX_LIFECYCLE_EVENTS:],
-            recent_update_timestamps=agent.metadata.get("recent_update_timestamps", []),
-            recent_decisions=agent.metadata.get("recent_decisions", []),
-            total_updates=agent.metadata.get("total_updates", 0),
-            # Runtime state fields — see agent_storage.persist_runtime_state().
-            # Without these, the in-memory mutations in lifecycle/operations.py
-            # are clobbered on every force-reload (Watcher P011).
-            paused_at=agent.metadata.get("paused_at"),
-            last_response_at=agent.metadata.get("last_response_at"),
-            response_completed=agent.metadata.get("response_completed", False),
-            recovery_attempt_at=agent.metadata.get("recovery_attempt_at"),
-            loop_detected_at=agent.metadata.get("loop_detected_at"),
-            loop_cooldown_until=agent.metadata.get("loop_cooldown_until"),
-        )
+        meta = _metadata_from_agent_record(agent, now)
         result[agent.agent_id] = meta
 
     agent_ids = list(result.keys())
@@ -349,11 +409,27 @@ async def load_metadata_async(force: bool = False) -> None:
         return
 
     try:
+        cached_before = set(agent_metadata)
         result = await _load_metadata_from_postgres_async()
+        # An entry that appeared while the read was in flight and is absent
+        # from its result is newer than the snapshot: an identity minted
+        # meanwhile, or one a check-in read individually on a cache miss.
+        # Dropping it would make a registered agent look unregistered until
+        # the next load. Entries cached before the read and absent from the
+        # result are still dropped, which is how a deletion leaves the cache.
+        added_during_load = {
+            agent_id: meta
+            # list(): other threads insert into the cache (get_or_create_metadata
+            # runs in an executor), and iterating the live dict could raise.
+            for agent_id, meta in list(agent_metadata.items())
+            if agent_id not in cached_before and agent_id not in result
+        }
         # CRITICAL: Use .clear()/.update() to preserve the dict reference
-        # across all modules that imported agent_metadata.
+        # across all modules that imported agent_metadata. No await separates
+        # the three calls, so no reader sees a partial cache.
         agent_metadata.clear()
         agent_metadata.update(result)
+        agent_metadata.update(added_during_load)
         _metadata_cache_state["last_load_time"] = time.time()
         _metadata_cache_state["dirty"] = False
         _model._metadata_loaded = True

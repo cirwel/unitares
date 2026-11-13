@@ -375,3 +375,108 @@ async def count_lifecycle_pauses_since(conn, epoch_started_at) -> int:
         WHERE ts >= $1 AND event_type = 'lifecycle_paused'
     """
     return int((await conn.fetchval(pause_sql, epoch_started_at)) or 0)
+
+
+# Product-neutral finding counts grouped by event_type. Uses `right(..., 8)`
+# rather than `LIKE '%_finding'` because `_` is a single-character wildcard in
+# SQL LIKE patterns.
+FINDING_COUNTS_7D_SQL = (
+    "SELECT event_type, count(*) AS cnt FROM audit.events "
+    "WHERE right(event_type, 8) = '_finding' "
+    "AND ts > now() - interval '7 days' "
+    "GROUP BY event_type"
+)
+
+
+async def fetch_finding_counts_7d(conn) -> Dict[str, int]:
+    """Count `_finding` audit events over the trailing 7 days grouped by `event_type`."""
+    rows = await conn.fetch(FINDING_COUNTS_7D_SQL)
+    counts: Dict[str, int] = {}
+    for row in rows:
+        etype = row["event_type"]
+        if isinstance(etype, str) and etype:
+            counts[etype] = int(row["cnt"] or 0)
+    return counts
+
+
+async def count_service_down_events_within(conn, window_delta) -> int:
+    """Count `lease_plane_down` / `service_down` audit events within `window_delta`."""
+    n_down = await conn.fetchval(
+        """
+        SELECT count(*) AS n
+        FROM audit.events
+        WHERE event_type IN ('lease_plane_down', 'service_down')
+          AND ts > now() - $1::interval
+        """,
+        window_delta,
+    )
+    return int(n_down or 0)
+
+
+AUDIT_VOLUME_STATEMENT_TIMEOUT_SQL = "SET LOCAL statement_timeout = '6s'"
+
+# Mirrors `UnitaresSentinel.AuditVolumeWatch.volume_sql` so remote Sentinel
+# deployments can query Core over HTTP (`GET /v1/audit/volume-summary`) without
+# opening PostgreSQL port 5432 directly.
+AUDIT_VOLUME_SUMMARY_SQL = """
+WITH e AS (
+  SELECT event_type,
+         coalesce(nullif(agent_id, ''), nullif(session_id, ''), '') AS source,
+         ts,
+         coalesce(payload->>'resolution_source' = 'throttle_flush', false) AS flush,
+         CASE WHEN jsonb_typeof(payload->'suppressed_since_last') = 'number'
+              THEN greatest((payload->>'suppressed_since_last')::numeric, 0)::bigint
+              ELSE 0 END AS suppressed,
+         CASE WHEN payload->>'resolution_source' = 'throttle_flush'
+                   AND pg_input_is_valid(payload->>'suppressed_last_at', 'timestamptz')
+              THEN (payload->>'suppressed_last_at')::timestamptz
+              ELSE ts END AS suppressed_at
+  FROM audit.events
+  WHERE ts > now() - interval '24 hours'
+),
+w AS (
+  SELECT event_type,
+         source,
+         CASE WHEN flush THEN suppressed_at ELSE ts END AS at,
+         CASE WHEN flush THEN suppressed ELSE 1 + suppressed END AS weight
+  FROM e
+)
+SELECT event_type,
+       source,
+       coalesce(sum(weight) FILTER (WHERE at > now() - interval '1 hour'), 0) AS recent,
+       coalesce(sum(weight) FILTER (WHERE at > now() - interval '24 hours'
+                                      AND at <= now() - interval '1 hour'), 0) AS prior
+FROM w
+GROUP BY event_type, source
+HAVING coalesce(sum(weight) FILTER (WHERE at > now() - interval '1 hour'), 0) >= $1::bigint
+ORDER BY recent DESC, event_type, source
+"""
+
+
+async def fetch_audit_volume_summary(
+    conn: Any,
+    *,
+    floor: int = 300,
+) -> List[Dict[str, Any]]:
+    """Run the 24h audit volume summary query on an acquired connection."""
+    rows = await conn.fetch(AUDIT_VOLUME_SUMMARY_SQL, int(floor))
+    return [
+        {
+            "event_type": str(row["event_type"] or ""),
+            "source": str(row["source"] or ""),
+            "recent": int(row["recent"] or 0),
+            "prior": int(row["prior"] or 0),
+        }
+        for row in rows
+    ]
+
+
+async def query_audit_volume_summary(*, floor: int = 300) -> List[Dict[str, Any]]:
+    """Acquire a read-only pool snapshot and compute the 24h audit volume summary."""
+    from src import agent_storage
+
+    db = agent_storage.get_db()
+    async with db.acquire() as conn:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            await conn.execute(AUDIT_VOLUME_STATEMENT_TIMEOUT_SQL)
+            return await fetch_audit_volume_summary(conn, floor=floor)

@@ -10,6 +10,8 @@ defmodule UnitaresSentinel.GovernanceCheckin do
 
   require Logger
 
+  alias UnitaresSentinel.BearerClient
+
   @default_url "http://localhost:8767/v1/tools/call"
   @default_timeout_ms 45_000
 
@@ -79,12 +81,15 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   def post_json(body, opts \\ []) when is_map(body) do
     url = Keyword.get(opts, :url, governance_tools_url())
     timeout_ms = Keyword.get(opts, :timeout_ms, governance_timeout_ms())
+    base_headers = [{"Content-Type", "application/json"}]
 
-    result =
+    send_fn =
       case Keyword.fetch(opts, :http_post) do
-        {:ok, http_post} -> http_post.(url, body, headers(), timeout_ms)
-        :error -> finch_post(url, body, headers(), timeout_ms, opts)
+        {:ok, http_post} -> fn req_headers -> http_post.(url, body, req_headers, timeout_ms) end
+        :error -> fn req_headers -> finch_post(url, body, req_headers, timeout_ms, opts) end
       end
+
+    result = BearerClient.request_with_fallback(url, base_headers, opts, send_fn)
 
     case result do
       {:ok, 200, response_body} ->
@@ -110,14 +115,20 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   end
 
   defp finch_post(url, body, headers, timeout_ms, opts) do
-    request = build_request(url, body, headers, opts)
+    with :ok <- BearerClient.ensure_secure_transport(url, opts) do
+      request = build_request(url, body, headers, opts)
+      pool_timeout = min(timeout_ms, 5_000)
 
-    case Finch.request(request, UnitaresSentinel.Finch, receive_timeout: timeout_ms) do
-      {:ok, %Finch.Response{status: status, body: response_body}} ->
-        {:ok, status, response_body}
+      case Finch.request(request, UnitaresSentinel.Finch,
+             receive_timeout: timeout_ms,
+             pool_timeout: pool_timeout
+           ) do
+        {:ok, %Finch.Response{status: status, body: response_body}} ->
+          {:ok, status, response_body}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -279,20 +290,14 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     end
   end
 
-  defp headers do
-    base = [{"Content-Type", "application/json"}]
-
-    case System.get_env("UNITARES_HTTP_API_TOKEN") do
-      nil -> base
-      "" -> base
-      token -> [{"Authorization", "Bearer #{token}"} | base]
-    end
-  end
-
   defp governance_tools_url do
     Application.get_env(:unitares_sentinel, :governance_tools_url) ||
       System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") ||
-      @default_url
+      case System.get_env("GOV_REST_URL") do
+        nil -> @default_url
+        "" -> @default_url
+        raw -> BearerClient.normalize_base_url(raw) <> "/v1/tools/call"
+      end
   end
 
   defp governance_uds_socket do
