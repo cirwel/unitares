@@ -134,6 +134,19 @@ raw E-I imbalance. The sensor's history-derived V is diagnostic (and may be an
 ODE-coupling input when configured), not the raw input to behavioral V. Policy
 never reads the component record itself.
 
+`derivation.unobserved_share` states how much of each published E, I and S
+value rests on a default instead of a supplied reading. For each dimension it
+is the fraction of the final value's weight carried by terms the component
+record flags `observed: false`, with each base term's weight carried through
+the later blends; `mean` averages the three, and `defaulted_terms` names the
+terms counted. 0 means every weighted term was supplied and 1 means the value
+is entirely defaults. V is omitted because it is derived from E and I. The
+figure is a lower bound: a term flagged observed can still sit at a clip bound
+or arrive as the same constant on every check-in, which a single check-in
+cannot show. It is `null` when the sensor produced no component record. It is
+measurement-only: it changes no E/I/S/V value and policy never reads it. The
+compact summary carries the mean as `unobserved_share`.
+
 `derivation.calibration_signal` distinguishes the currently deployed,
 lifetime fleet aggregate from an additive agent-scoped candidate. New
 attributed outcome pairs carry UTC activity timestamps, and the candidate

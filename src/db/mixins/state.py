@@ -11,9 +11,35 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Set once the base-table fallback in get_all_latest_agent_states has been
-# reported, so a missing matview is visible without a log line per call.
-_LATEST_STATES_FALLBACK_WARNED = False
+# Latest measured (non-synthetic) state row of every identity, as a FROM clause
+# exposing `i` (the identity) and `s` (its latest state row). Served by
+# `idx_agent_state_synthetic_partial`, one probe per identity, so cost follows
+# the number of identities and not the number of state rows. This is the one
+# definition of "the latest state of each agent": do not sort
+# `core.agent_state`, and do not read `core.mv_latest_agent_states`, which
+# nothing refreshes.
+LATEST_MEASURED_STATE_FROM = """
+    FROM core.identities i
+    CROSS JOIN LATERAL (
+        SELECT a.*
+        FROM core.agent_state a
+        WHERE a.identity_id = i.identity_id
+          AND a.synthetic = false
+        ORDER BY a.recorded_at DESC
+        LIMIT 1
+    ) s
+"""
+
+# The same lookup for a caller whose outer relation is `scope(agent_id)`:
+# exposes each agent's latest measured state as `ls`, NULL when it has none.
+# Kept here so the SQL stays with the table's owner; callers interpolate it.
+LATEST_MEASURED_STATE_FOR_SCOPE_JOIN = f"""
+    LEFT JOIN (
+        SELECT i.agent_id, s.identity_id, s.risk_score, s.coherence,
+               s.regime, s.recorded_at
+        {LATEST_MEASURED_STATE_FROM}
+    ) ls ON ls.agent_id = scope.agent_id
+"""
 
 
 class StateMixin:
@@ -78,7 +104,6 @@ class StateMixin:
                 risk_score,
                 epistemic_class,
             )
-            # Matview refresh moved to periodic_matview_refresh() in background_tasks.py
             return state_id
 
     async def record_bootstrap_state(
@@ -316,62 +341,31 @@ class StateMixin:
     async def get_all_latest_agent_states(self) -> list[AgentStateRecord]:
         """Get latest measured state per identity in the current epoch.
 
-        Reads the `mv_latest_agent_states` matview and takes `epistemic_class`
-        and the epoch filter from the base row through its primary key. The
-        matview is measured-only by definition (`WHERE synthetic = false` is
-        baked into its SELECT), so bootstrap rows never appear here. Per
+        One index probe per identity on `(identity_id, recorded_at DESC)
+        WHERE synthetic = false`, so cost follows the number of identities and
+        not the number of state rows, and the result is current as of the
+        call. Bootstrap rows never appear here (`synthetic = false`). Per
         onboard-bootstrap-checkin §4.1.
 
-        The matview has no `epistemic_class` or `epoch` column on deployments
-        that predate migration 040, which avoided a DROP/CREATE. Selecting
-        `epistemic_class` from the matview therefore failed on every call
-        there, and every call ran the base-table fallback: a sort of all of
-        `core.agent_state` that spills to disk. The key join works on either
-        projection, so the fallback is left for a missing matview only.
-
-        Results can lag a write by the matview refresh interval
-        (`periodic_matview_refresh`).
+        This replaced a read of `core.mv_latest_agent_states`. That read
+        selected `epistemic_class`, which the matview does not carry on
+        deployments that predate migration 040, so it raised on every call and
+        fell back to `DISTINCT ON` over all of `core.agent_state`: a sort that
+        spills to disk. The matview is no longer read or refreshed by the
+        server; see `LATEST_MEASURED_STATE_FROM`.
         """
         from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
-            try:
-                rows = await conn.fetch(
-                    """
-                    SELECT m.state_id, m.identity_id, m.agent_id, m.recorded_at,
-                           m.entropy, m.integrity, m.volatility,
-                           m.regime, m.coherence, m.state_json, s.epistemic_class
-                    FROM core.mv_latest_agent_states m
-                    JOIN core.agent_state s ON s.state_id = m.state_id
-                    WHERE s.epoch = $1
-                    """,
-                    GovernanceConfig.CURRENT_EPOCH,
-                )
-            except Exception as exc:
-                # Matview missing or unreadable. The base table holds both
-                # measured and synthetic rows, so filter `synthetic = false`.
-                global _LATEST_STATES_FALLBACK_WARNED
-                if not _LATEST_STATES_FALLBACK_WARNED:
-                    _LATEST_STATES_FALLBACK_WARNED = True
-                    logger.warning(
-                        "mv_latest_agent_states unreadable (%s); reading latest "
-                        "states from core.agent_state on every call until it is "
-                        "restored. This warning is logged once per process.",
-                        exc,
-                    )
-                rows = await conn.fetch(
-                    """
-                    SELECT DISTINCT ON (s.identity_id)
-                           s.state_id, s.identity_id, i.agent_id, s.recorded_at,
-                           s.entropy, s.integrity, s.volatility,
-                           s.regime, s.coherence, s.state_json, s.epistemic_class
-                    FROM core.agent_state s
-                    JOIN core.identities i ON i.identity_id = s.identity_id
-                    WHERE s.epoch = $1
-                      AND s.synthetic = false
-                    ORDER BY s.identity_id, s.recorded_at DESC
-                    """,
-                    GovernanceConfig.CURRENT_EPOCH,
-                )
+            rows = await conn.fetch(
+                f"""
+                SELECT s.state_id, i.identity_id, i.agent_id, s.recorded_at,
+                       s.entropy, s.integrity, s.volatility,
+                       s.regime, s.coherence, s.state_json, s.epistemic_class
+                {LATEST_MEASURED_STATE_FROM}
+                WHERE s.epoch = $1
+                """,
+                GovernanceConfig.CURRENT_EPOCH,
+            )
             return [self._row_to_agent_state(r) for r in rows]
 
     async def reconstruct_eisv_series(
