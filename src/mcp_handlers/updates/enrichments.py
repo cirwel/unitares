@@ -1100,6 +1100,36 @@ def enrich_outcomes_in_e(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Could not build outcomes_in_e: {e}")
 
+
+# ─── Reading coverage ───────────────────────────────────────────────
+
+@enrichment(order=206, lite_safe=True)
+def enrich_reading_coverage(ctx: UpdateContext) -> None:
+    """Say which behavioral axes were measured and which are defaults.
+
+    Restates the observed flags of the derivation this check-in already built;
+    computes no new signal and reads nothing the policy path uses. ``changed``
+    is True when the set of defaulted axes differs from the previous behavioral
+    check-in in this process. Filtered modes show the account on every such
+    change, in either direction, so the last account shown always matches the
+    stored key. A process starts from "nothing defaulted", so a first reading
+    that is fully measured is not news and costs nothing.
+    """
+    try:
+        from src.reading_coverage import build_reading_coverage, evidence_key
+
+        coverage = build_reading_coverage(ctx.agent_state.get("_eisv_derivation"))
+        if coverage is None:
+            return
+        key = evidence_key(coverage)
+        monitor = ctx.monitor
+        coverage["changed"] = key != getattr(monitor, "_reading_coverage_key", ())
+        if monitor is not None:
+            monitor._reading_coverage_key = key
+        ctx.response_data["reading_coverage"] = coverage
+    except Exception as e:
+        logger.debug(f"Could not build reading_coverage: {e}")
+
 # ─── Learning Context ──────────────────────────────────────────────────
 
 
