@@ -297,6 +297,7 @@ def build_behavioral_derivation(
 
     from src.behavioral_sensor import (
         compute_behavioral_sensor_components,
+        compute_unobserved_share,
         filter_behavioral_outcomes,
         neutralize_sensor_self_loops_enabled,
     )
@@ -371,6 +372,9 @@ def build_behavioral_derivation(
         "substrate_canaries": dict(substrate_canaries or {}),
         "calibration_signal": _json_safe(calibration_signal or {}),
         "components": _json_safe(components),
+        # How much of each published E/I/S value rests on a default rather than
+        # a supplied reading. ``None`` when the sensor produced no components.
+        "unobserved_share": _json_safe(compute_unobserved_share(components)),
         "known_limitations": [
             "coherence_history carries legacy ODE control feedback into the behavioral E/I blend",
             "history slopes are per check-in and are not normalized to elapsed wall-clock time",
@@ -674,6 +678,11 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "behavioral_source": behavioral_source,
         "behavioral_confidence": _number(behavioral.get("confidence")),
         "missing_inputs": list(derivation.get("missing_inputs") or ()),
+        "unobserved_share": (
+            _number(derivation["unobserved_share"].get("mean"))
+            if isinstance(derivation.get("unobserved_share"), Mapping)
+            else None
+        ),
         "shadow_ablation_schema": shadow.get("schema"),
         "legacy_coherence_behavioral_shadow_recorded": bool(behavioral_shadow),
         "legacy_coherence_behavioral_shadow_eligible": (
@@ -768,6 +777,7 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "behavioral_source": behavioral_source,
         "behavioral_confidence": confidence,
         "missing_inputs": ["eisv_telemetry"],
+        "unobserved_share": None,
         "shadow_ablation_schema": None,
         "legacy_coherence_behavioral_shadow_recorded": False,
         "legacy_coherence_behavioral_shadow_eligible": None,
