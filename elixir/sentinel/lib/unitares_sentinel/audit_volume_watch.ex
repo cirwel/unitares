@@ -37,11 +37,12 @@ defmodule UnitaresSentinel.AuditVolumeWatch do
 
   require Logger
 
-  alias UnitaresSentinel.{AuditVolumeWatch.Logic, Findings, ReAlert}
+  alias UnitaresSentinel.{AuditVolumeWatch.Logic, BearerClient, Findings, ReAlert}
 
   @default_interval_ms 300_000
   @default_initial_delay_ms 60_000
   @default_tick_timeout_ms 30_000
+  @default_http_timeout_ms 8_000
   @max_pending 200
   # At the 3s findings timeout, 5 stalled POSTs cost 15s of a tick.
   @max_deliveries_per_tick 5
@@ -99,7 +100,7 @@ defmodule UnitaresSentinel.AuditVolumeWatch do
     now_ms = Keyword.get(opts, :now_ms, System.system_time(:millisecond))
     realert = opts |> Keyword.get(:realert, ReAlert.new()) |> ReAlert.prune(now_ms)
     logic_opts = Keyword.get(opts, :logic_opts, [])
-    query_fun = Keyword.get(opts, :query_fun, default_query_fun(Keyword.get(opts, :db)))
+    query_fun = Keyword.get_lazy(opts, :query_fun, fn -> resolve_query_fun(opts) end)
 
     {new_findings, realert} =
       case query_fun.(Logic.query_floor(logic_opts)) do
@@ -149,9 +150,113 @@ defmodule UnitaresSentinel.AuditVolumeWatch do
     {delivered, realert, Findings.cap_queue(undelivered, @max_pending)}
   end
 
+  defp resolve_query_fun(opts) do
+    case select_transport(opts) do
+      :http -> fn floor -> query_rows_http(floor, opts) end
+      :db -> default_query_fun(Keyword.get(opts, :db))
+    end
+  end
+
+  @doc false
+  def select_transport(opts \\ []) do
+    cond do
+      Keyword.has_key?(opts, :http_get) or Keyword.get(opts, :transport) == :http ->
+        :http
+
+      Keyword.get(opts, :db) != nil or Keyword.get(opts, :transport) == :db ->
+        :db
+
+      Application.get_env(:unitares_sentinel, :query_transport) in [:http, "http"] ->
+        :http
+
+      Application.get_env(:unitares_sentinel, :query_transport) in [:db, "db"] ->
+        :db
+
+      Application.get_env(:unitares_sentinel, :start_postgrex, true) == false and
+          Process.whereis(UnitaresSentinel.DB) == nil ->
+        :http
+
+      true ->
+        :db
+    end
+  end
+
   defp default_query_fun(db) do
     db = db || UnitaresSentinel.DB
     fn floor -> query_rows(db, floor) end
+  end
+
+  @doc "Run the volume query over Core HTTP (`GET /v1/audit/volume-summary`)."
+  @spec query_rows_http(non_neg_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def query_rows_http(floor, opts \\ []) do
+    http_opts =
+      opts
+      |> Keyword.get(:http_opts, [])
+      |> merge_top_level_http_opts(opts)
+      |> Keyword.put_new(:timeout_ms, @default_http_timeout_ms)
+
+    url =
+      BearerClient.governance_base_url(http_opts) <>
+        "/v1/audit/volume-summary?" <> URI.encode_query(%{"floor" => Integer.to_string(floor)})
+
+    case BearerClient.get(url, http_opts) do
+      {:ok, 200, body} ->
+        decode_http_rows(body)
+
+      {:ok, status, body} ->
+        {:error, {:http_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp decode_http_rows(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"success" => true, "rows" => rows}} when is_list(rows) ->
+        Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+          case parse_http_row(row) do
+            {:ok, parsed} -> {:cont, {:ok, [parsed | acc]}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+        |> case do
+          {:ok, parsed} -> {:ok, Enum.reverse(parsed)}
+          {:error, _} = err -> err
+        end
+
+      {:ok, other} ->
+        {:error, {:invalid_payload, other}}
+
+      {:error, reason} ->
+        {:error, {:invalid_json, reason}}
+    end
+  end
+
+  defp parse_http_row(%{
+         "event_type" => event_type,
+         "source" => source,
+         "recent" => recent,
+         "prior" => prior
+       })
+       when is_binary(event_type) and is_binary(source) and is_integer(recent) and
+              is_integer(prior) do
+    {:ok, %{event_type: event_type, source: source, recent: recent, prior: prior}}
+  end
+
+  defp parse_http_row(other), do: {:error, {:invalid_row, other}}
+
+  defp merge_top_level_http_opts(http_opts, opts) do
+    Enum.reduce(
+      [:http_get, :base_url, :url, :env, :bearer_token, :api_token, :timeout_ms, :uds_socket],
+      http_opts,
+      fn key, acc ->
+        case Keyword.fetch(opts, key) do
+          {:ok, val} -> Keyword.put_new(acc, key, val)
+          :error -> acc
+        end
+      end
+    )
   end
 
   @doc "Run the volume query on a Postgrex pool or connection."

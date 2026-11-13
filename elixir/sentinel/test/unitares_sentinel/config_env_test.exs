@@ -16,7 +16,7 @@ defmodule UnitaresSentinel.ConfigEnvTest do
 
   The BOOLEAN helper next to it raised for the same reason and had a worse blast
   radius. `scripts/start.sh` sources the secrets env file explicitly named by
-  `$UNITARES_SECRETS_ENV` and then exports all NINE boolean knobs from `${VAR:-default}`, so both the launchd
+  `$UNITARES_SECRETS_ENV` and then exports all TEN boolean knobs from `${VAR:-default}`, so both the launchd
   plist and secrets.env can set them — and `UNITARES_SENTINEL_EMIT_FINDINGS` is
   one an operator reaches for mid-incident, where `y` is the obvious wrong
   guess. It used to kill the resident outright instead of leaving findings on.
@@ -35,6 +35,8 @@ defmodule UnitaresSentinel.ConfigEnvTest do
   @lookback_var "UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS"
   @emit_findings_var "UNITARES_SENTINEL_EMIT_FINDINGS"
   @start_poller_var "UNITARES_SENTINEL_START_POLLER"
+  @lease_advisory_var "UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED"
+  @gov_rest_var "GOV_REST_URL"
 
   @default_alert_after_seconds 720
   @default_lookback_seconds 7 * 24 * 60 * 60
@@ -45,6 +47,8 @@ defmodule UnitaresSentinel.ConfigEnvTest do
       System.delete_env(@lookback_var)
       System.delete_env(@emit_findings_var)
       System.delete_env(@start_poller_var)
+      System.delete_env(@lease_advisory_var)
+      System.delete_env(@gov_rest_var)
     end)
 
     :ok
@@ -139,5 +143,18 @@ defmodule UnitaresSentinel.ConfigEnvTest do
     assert config[:unitares_sentinel][:start_poller] == false
     assert warning =~ @start_poller_var
     assert warning =~ "maybe"
+  end
+
+  test "UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED toggles lease_advisory_enabled and GOV_REST_URL derives remote URLs" do
+    System.put_env(@lease_advisory_var, "false")
+    System.put_env(@gov_rest_var, "https://gov.cirwel.org/")
+
+    config = read_base_config()
+
+    assert config[:unitares_sentinel][:lease_advisory_enabled] == false
+    assert config[:unitares_sentinel][:governance_base_url] == "https://gov.cirwel.org"
+    assert config[:unitares_sentinel][:websocket_url] == "wss://gov.cirwel.org/ws/eisv"
+    assert config[:unitares_sentinel][:findings_url] == "https://gov.cirwel.org/api/findings"
+    assert config[:unitares_sentinel][:governance_tools_url] == "https://gov.cirwel.org/v1/tools/call"
   end
 end
