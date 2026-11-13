@@ -87,6 +87,9 @@ class TestMigrationReseed:
             legacy.update(0.78, 0.72, 0.2)  # mild E>I imbalance
         blob = legacy.to_dict_with_history()
         blob.pop("v_formula_version", None)  # simulate a pre-v2 snapshot
+        # A real pre-v2 snapshot also predates the reading counters.
+        for key in ("readings", "since_reading", "read_updates"):
+            blob.pop(key, None)
         return blob
 
     def test_v1_load_triggers_reseed(self):

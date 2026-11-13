@@ -366,11 +366,17 @@ class BehavioralEISV:
         so it must not take verdict authority or supply the primary EISV.
         """
         # State restored from before readings were counted is the exception:
-        # it has maturity (read_update_count) but no per-axis record yet, and
+        # it has maturity (read_update_count) but no per-axis record yet.
+        # Zeroing it at load would send every restored agent, and any read of
+        # one before its next check-in, to the cold-start path at deploy. It
         # keeps its confidence until its first reading puts it on the normal
-        # rule. Zeroing it would send every restored agent, and any read of
-        # one before its next check-in, to the cold-start path at deploy.
-        carried_over = self.read_update_count > 0 and not any(self.readings.values())
+        # rule, or until STALE_AFTER_UPDATES check-ins pass with none, the
+        # same bound a real reading gets.
+        carried_over = (
+            self.read_update_count > 0
+            and not any(self.readings.values())
+            and max(self.since_reading.values(), default=0) < STALE_AFTER_UPDATES
+        )
         if (
             self.hold_unread
             and not carried_over
@@ -591,11 +597,4 @@ class BehavioralEISV:
         persisted_version = int(data.get("v_formula_version", 1))
         if persisted_version < V_FORMULA_VERSION and state.is_baselined:
             state._reseed_v_baseline()
-        if state.hold_unread and not isinstance(persisted_readings, dict):
-            # Baselines persisted before readings were counted were built on
-            # the filled-in numbers. Every dimension starts unread, so they
-            # are emptied now instead of being reported next to a placeholder
-            # until the first reading restarts them anyway.
-            for dimension in DIMENSIONS:
-                setattr(state, f"_baseline_{dimension}", WelfordStats())
         return state

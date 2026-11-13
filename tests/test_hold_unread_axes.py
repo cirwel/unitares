@@ -106,8 +106,9 @@ def test_first_reading_seeds_the_value_and_restarts_the_baseline():
     restored = BehavioralEISV.from_dict(persisted)
     assert restored.I == pytest.approx(0.68, abs=1e-3)  # kept, as a placeholder
     assert restored.unread_dimensions == ["E", "I", "S", "V"]
-    # The baseline built on filled numbers is not carried next to a placeholder.
-    assert restored._baseline_I.count == 0
+    # The old baseline is kept until a reading restarts it, but an unscored
+    # axis reports no deviation against it.
+    assert restored._baseline_I.count == 40
     assert restored.deviation("I") == 0.0
     # Maturity carries over until the first reading: no cold-start drop at deploy.
     assert restored.confidence == 1.0 and restored.is_baselined
@@ -348,3 +349,15 @@ def test_guidance_does_not_cite_a_baseline_that_did_not_score_the_axis():
     assert result.components["low_I"] > 0.0
     assert result.guidance is not None
     assert "baseline" not in result.guidance and "typical" not in result.guidance
+
+
+def test_carried_over_confidence_expires_when_nothing_is_read():
+    restored = BehavioralEISV.from_dict({"E": 0.2, "I": 0.2, "S": 0.8, "V": 0.0, "updates": 40})
+    assert restored.confidence == 1.0
+    for _ in range(STALE_AFTER_UPDATES - 1):
+        restored.update(None, None, None)
+    assert restored.confidence == 1.0
+    restored.update(None, None, None)
+    # Ten check-ins with nothing read: no authority for an unread state.
+    assert restored.confidence == 0.0
+    assert assess_behavioral_state(restored).unscored_axes == ("E", "I", "S", "V")
