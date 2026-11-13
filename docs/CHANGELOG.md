@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **host observations: `tool_outcome_rollup`.** `POST /v1/runtime/observe`
+  accepts a new `observation_kind` carrying what a host's own record says
+  happened to an agent's tool calls over one window: `tool_delta` (calls whose
+  result landed), `tool_error_delta` (results the host marked as errors),
+  `tool_not_executed_delta` (errors recognized as refused, blocked or
+  interrupted) and `repeat_failure_delta` (executed errors identical to an
+  earlier failing call), with `window_truncated` and `window_basis`. Every
+  count is required and bounded by the one it is a subset of; a missing count
+  is refused, not read as zero. The rows are identity-bound audit evidence
+  like the other host observations: they write no EISV, do not extend a
+  session, and are not part of the activity read model. Nothing scores them.
 - **`derivation.unobserved_share` on behavioral EISV telemetry.** Each
   behavioral check-in now records, for E, I and S, the share of the published
   value's weight that comes from defaults instead of supplied readings, plus
