@@ -126,6 +126,7 @@ additions merge cleanly. -->
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
+| `UNITARES_HOLD_UNREAD_AXES` | `'1'` | Return True when an axis with no supplied base term is held, not filled | src/behavioral_sensor.py |
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
