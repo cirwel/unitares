@@ -212,6 +212,26 @@ class BehavioralEISV:
         """Dimensions with no reading on record; their values are placeholders."""
         return [d for d in DIMENSIONS if not self.has_reading(d)]
 
+    def adopt_reading_record(self, data: Dict) -> None:
+        """Take the hold and its reading counters from a persisted state dict.
+
+        For code that rebuilds a state by hand from a stored row instead of
+        through ``from_dict``. A row that carries ``readings`` was written
+        under the hold and is rebuilt under it, so the same axes are scored
+        as were at the time. A row without it predates the hold and is
+        rebuilt with every check-in counted as a reading, as it was scored.
+        """
+        readings = data.get("readings") if isinstance(data, dict) else None
+        if not isinstance(readings, dict):
+            self.hold_unread = False
+            return
+        self.hold_unread = True
+        self.readings = {d: int(readings.get(d, 0) or 0) for d in DIMENSIONS}
+        since = data.get("since_reading")
+        if isinstance(since, dict):
+            self.since_reading = {d: int(since.get(d, 0) or 0) for d in DIMENSIONS}
+        self.read_update_count = int(data.get("read_updates", data.get("updates", 0)) or 0)
+
     def _step(self, dimension: str, observation: float, low: float, high: float) -> None:
         """Fold one reading into a dimension's smoothed value and baseline.
 
@@ -365,23 +385,10 @@ class BehavioralEISV:
         read, or nothing read recently, holds no evidence to be confident in,
         so it must not take verdict authority or supply the primary EISV.
         """
-        # State restored from before readings were counted is the exception:
-        # it has maturity (read_update_count) but no per-axis record yet.
-        # Zeroing it at load would send every restored agent, and any read of
-        # one before its next check-in, to the cold-start path at deploy. It
-        # keeps its confidence until its first reading puts it on the normal
-        # rule, or until STALE_AFTER_UPDATES check-ins pass with none, the
-        # same bound a real reading gets.
-        carried_over = (
-            self.read_update_count > 0
-            and not any(self.readings.values())
-            and max(self.since_reading.values(), default=0) < STALE_AFTER_UPDATES
-        )
-        if (
-            self.hold_unread
-            and not carried_over
-            and len(self.unscored_dimensions) == len(DIMENSIONS)
-        ):
+        # No exception for state restored from before readings were counted:
+        # it keeps its maturity (read_update_count) but has nothing scored
+        # until its first reading, so until then it has no authority either.
+        if self.hold_unread and len(self.unscored_dimensions) == len(DIMENSIONS):
             return 0.0
         count = self.evidence_count
         if count >= BOOTSTRAP_UPDATES:
@@ -565,8 +572,8 @@ class BehavioralEISV:
         # Under the hold they are kept as placeholders and every dimension
         # starts unread, so the first real reading seeds it. With the hold off
         # every check-in is a reading, as it always was.
-        # Maturity carries over: state from before the hold counted every
-        # check-in (see the carried-over case in ``confidence``).
+        # Maturity carries over (state from before the hold counted every
+        # check-in), but confidence does not: nothing is scored until a reading.
         state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
         if isinstance(persisted_readings, dict):

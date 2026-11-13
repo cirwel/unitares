@@ -2152,6 +2152,10 @@ class UNITARESMonitor:
         bs = self._behavioral_state
         if not bs.is_baselined:
             return decision
+        # A "safe" from a state with no scored axis is no judgment at all
+        # (same bar as verdict authority in process_update).
+        if bs.confidence < 0.3:
+            return decision
         if self._last_behavioral_verdict != 'safe':
             return decision
 

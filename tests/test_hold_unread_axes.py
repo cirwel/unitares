@@ -110,10 +110,12 @@ def test_first_reading_seeds_the_value_and_restarts_the_baseline():
     # axis reports no deviation against it.
     assert restored._baseline_I.count == 40
     assert restored.deviation("I") == 0.0
-    # Maturity carries over until the first reading: no cold-start drop at deploy.
-    assert restored.confidence == 1.0 and restored.is_baselined
+    # Maturity carries over, authority does not: nothing is scored yet.
+    assert restored.is_baselined
+    assert restored.confidence == 0.0
 
     restored.update(None, 0.45, None)
+    assert restored.confidence == 1.0
     assert restored.I == 0.45  # not smoothed into the placeholder
     assert restored._baseline_I.count == 1
     assert restored.I_history == [0.45]
@@ -351,13 +353,48 @@ def test_guidance_does_not_cite_a_baseline_that_did_not_score_the_axis():
     assert "baseline" not in result.guidance and "typical" not in result.guidance
 
 
-def test_carried_over_confidence_expires_when_nothing_is_read():
+def test_a_restored_state_in_floor_breach_takes_no_authority_while_unread():
     restored = BehavioralEISV.from_dict({"E": 0.2, "I": 0.2, "S": 0.8, "V": 0.0, "updates": 40})
-    assert restored.confidence == 1.0
-    for _ in range(STALE_AFTER_UPDATES - 1):
-        restored.update(None, None, None)
-    assert restored.confidence == 1.0
     restored.update(None, None, None)
-    # Ten check-ins with nothing read: no authority for an unread state.
+    result = assess_behavioral_state(restored)
+    # The assessment scores nothing, so its "safe" must not be authoritative.
+    assert result.unscored_axes == ("E", "I", "S", "V")
+    assert result.verdict == "safe"
     assert restored.confidence == 0.0
-    assert assess_behavioral_state(restored).unscored_axes == ("E", "I", "S", "V")
+
+
+def test_restart_pause_suppression_needs_a_scored_axis():
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor.__new__(UNITARESMonitor)
+    monitor.agent_id = "hold-unread-suppress"
+    monitor._process_local_updates = 1
+    monitor._last_behavioral_verdict = "safe"
+    monitor._behavioral_state = BehavioralEISV.from_dict(
+        {"E": 0.2, "I": 0.2, "S": 0.8, "V": 0.0, "updates": 40}
+    )
+    assert monitor._behavioral_state.is_baselined
+    sub_action = next(iter(UNITARESMonitor._WARMUP_SUPPRESSIBLE_SUBACTIONS))
+    decision = {"action": "pause", "sub_action": sub_action, "reason": "cold"}
+
+    assert monitor._maybe_warmup_structural_suppress(dict(decision))["action"] == "pause"
+
+    monitor._behavioral_state.update(None, None, 0.2)  # S read: one scored axis
+    assert monitor._maybe_warmup_structural_suppress(dict(decision))["action"] == "proceed"
+
+
+def test_a_hand_rebuilt_state_adopts_the_hold_it_was_written_under():
+    live = BehavioralEISV()
+    for _ in range(30):
+        live.update(0.8, None, 0.2)
+    stored = live.to_dict()
+
+    rebuilt = BehavioralEISV(hold_unread=False)
+    rebuilt.adopt_reading_record(stored)
+    assert rebuilt.hold_unread
+    assert rebuilt.unscored_dimensions == live.unscored_dimensions == ["I", "V"]
+    assert rebuilt.read_update_count == live.read_update_count
+
+    legacy = BehavioralEISV()
+    legacy.adopt_reading_record({"E": 0.5, "updates": 40})
+    assert not legacy.hold_unread and legacy.unscored_dimensions == []
