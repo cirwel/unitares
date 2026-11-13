@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`derivation.unobserved_share` on behavioral EISV telemetry.** Each
+  behavioral check-in now records, for E, I and S, the share of the published
+  value's weight that comes from defaults instead of supplied readings, plus
+  the mean and the names of the defaulted terms. The compact telemetry summary
+  and the recent-updates feed carry the mean. Measurement-only: no E/I/S/V
+  value, verdict or policy input changes.
+
 ---
 
 ## [4.0.0] - 2026-11-06

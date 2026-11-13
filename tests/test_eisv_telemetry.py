@@ -597,3 +597,24 @@ def test_self_report_record_keeps_reported_and_dampened_confidence_apart():
         "confidence_reported": None, "confidence_effective": None, "confidence_dampened": False}
     garbage = SimpleNamespace(arguments={"confidence": "high"}, confidence=None)
     assert _self_report_record(garbage)["confidence_reported"] is None
+
+
+def test_behavioral_derivation_records_unobserved_share():
+    trace = _derivation()
+
+    share = trace["unobserved_share"]
+    assert share["mode"] == "measurement_only"
+    assert share["policy_applied"] is False
+    assert set(share["by_dimension"]) == {"E", "I", "S"}
+    assert all(0.0 <= value <= 1.0 for value in share["by_dimension"].values())
+    assert share["mean"] == pytest.approx(sum(share["by_dimension"].values()) / 3)
+
+
+def test_summary_projects_unobserved_share_mean_and_none_without_it():
+    with_share = summarize_eisv_telemetry({
+        "derivation": {"unobserved_share": {"mean": 0.53}},
+    })
+    without = summarize_eisv_telemetry({"derivation": {"kind": "caller_published_sensor"}})
+
+    assert with_share["unobserved_share"] == 0.53
+    assert without["unobserved_share"] is None
