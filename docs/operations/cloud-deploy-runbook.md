@@ -228,6 +228,16 @@ When Core moves to a VPS while coding harnesses (`claude`, `codex`,
   `UNITARES_MCP_BEARER_TOKENS` set, strict REST remains enforced) and keep short
   connect timeouts so a sleeping workstation fails fast without affecting
   check-ins or knowledge search.
+- **Workstation operator hub (`elixir/portal` on `127.0.0.1:8791`):** today's
+  `/v1/hub/{exchange,check,revoke}` backchannel requires the macOS-only
+  `UNITARES_UDS_SOCKET` listener (`src/dashboard_auth.py`), so hub sign-in reports
+  itself unconfigured (`404`) on a Linux VPS while dashboard passkey sign-in and
+  the read-only timeline (`GET /v1/timeline` + `/ws/eisv` via
+  `UNITARES_READ_ONLY_TOKENS`) continue to work remotely. Keep `elixir/portal`
+  sign-in paused during initial Linux VPS cutover until the H2e private hub
+  listener (`UNITARES_HUB_PRIVATE_BIND`) specified in
+  [`portal-hub-v0.md`](../proposals/active/portal-hub-v0.md) (§3.2 H2e) is
+  enabled.
 
 ### Bootstrap the first dashboard passkey
 
