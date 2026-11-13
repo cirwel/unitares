@@ -279,9 +279,9 @@ class TestComputeAgentSignature:
 
 class TestCheckAgentCanOperate:
     @patch("src.mcp_handlers.shared.get_mcp_server")
-    def test_unknown_allowed(self, mock_srv):
+    def test_uncached_requires_registry_lookup(self, mock_srv):
         mock_srv.return_value = _mock_server()
-        assert check_agent_can_operate("unknown") is None
+        assert _parse_tc(check_agent_can_operate("unknown"))["error_code"] == "REGISTRY_UNAVAILABLE"
 
     @patch("src.mcp_handlers.shared.get_mcp_server")
     def test_active_allowed(self, mock_srv):

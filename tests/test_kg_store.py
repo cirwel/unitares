@@ -843,13 +843,21 @@ class TestStoreKnowledgeGraph:
         assert "list" in data["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_store_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+    @pytest.mark.parametrize("cold_cache", [False, True])
+    async def test_store_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server, cold_cache, monkeypatch):
         """Paused agents cannot store knowledge (circuit breaker)."""
         _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
         from datetime import datetime as _dt
         mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
+
+        if cold_cache:
+            persisted = mock_mcp_server.agent_metadata.pop(registered_agent)
+            monkeypatch.setattr(
+                "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+                AsyncMock(return_value=persisted),
+            )
 
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 
@@ -864,12 +872,20 @@ class TestStoreKnowledgeGraph:
         mock_graph.add_discovery.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_store_batch_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+    @pytest.mark.parametrize("cold_cache", [False, True])
+    async def test_store_batch_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server, cold_cache, monkeypatch):
         """The batch path is behind the same circuit breaker as a single store."""
         _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         from datetime import datetime as _dt
         mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
+
+        if cold_cache:
+            persisted = mock_mcp_server.agent_metadata.pop(registered_agent)
+            monkeypatch.setattr(
+                "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+                AsyncMock(return_value=persisted),
+            )
 
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 

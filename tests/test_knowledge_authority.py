@@ -275,7 +275,8 @@ async def test_promote_memory_rejects_memory_only_corroboration():
 
 
 @pytest.mark.asyncio
-async def test_promote_memory_claim_refused_while_paused():
+@pytest.mark.parametrize("cold_cache", [False, True])
+async def test_promote_memory_claim_refused_while_paused(cold_cache, monkeypatch):
     """The real circuit breaker runs here (not patched), so a paused promoter
     is refused before ownership, graph reads, or the write."""
     from datetime import datetime
@@ -287,6 +288,12 @@ async def test_promote_memory_claim_refused_while_paused():
     server = SimpleNamespace(agent_metadata={
         "agent-a": SimpleNamespace(status="paused", paused_at=datetime.now().isoformat()),
     })
+    if cold_cache:
+        persisted = server.agent_metadata.pop("agent-a")
+        monkeypatch.setattr(
+            "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+            AsyncMock(return_value=persisted),
+        )
     verify_ownership = patch(
         "src.mcp_handlers.support.agent_auth.verify_agent_ownership",
         return_value=True,
