@@ -219,6 +219,7 @@ additions merge cleanly. -->
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SENSOR_COUPLING` | `None (no reader fallback)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
+| `UNITARES_SENSOR_DRIFT_AGENT_LOCAL` | `'1'` | Return True when the sensor's drift input keeps only agent-local parts | src/behavioral_sensor.py |
 | `UNITARES_SEQUENTIAL_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/sequential_calibration.py |
 | `UNITARES_SERVER_LOCK_FILE` | `'.mcp_server.lock'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
 | `UNITARES_SERVER_PID_FILE` | `'.mcp_server.pid'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
