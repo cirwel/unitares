@@ -56,7 +56,7 @@ def input_ledger(record, dimension):
         item = (trace.get("selection") or {}).get(dimension) or {}
         value = item.get("value")
         category = item.get("dependency")
-        if _finite(value) and 0 <= value <= 1 and abs(value - observation) <= ROUNDING + 1e-12 and category in CATEGORIES:
+        if _finite(value) and _finite(observation) and 0 <= value <= 1 and abs(value - observation) <= ROUNDING + 1e-12 and category in CATEGORIES:
             return _bucket(category), "whole fallback input dependency (not fractional attribution)"
         return _bucket("unknown"), "fallback selection unavailable or inconsistent"
     if source not in ("behavioral", "behavioral_sensor") or trace.get("kind") != "behavioral_sensor" or trace.get("formula_version") != BEHAVIORAL_SENSOR_FORMULA_VERSION:

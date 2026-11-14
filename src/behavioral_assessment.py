@@ -321,7 +321,13 @@ def assess_behavioral_state(
 
     # --- Trend bonus: improving E+I reduces risk slightly ---
     trend_bonus = 0.0
-    if state.update_count >= 5 and "E" not in unscored_axes and "I" not in unscored_axes:
+    # A trend needs five points; under the hold that is five readings on
+    # each axis, not five check-ins.
+    trend_points = (
+        min(state.readings.get("E", 0), state.readings.get("I", 0))
+        if state.tracks_readings else state.update_count
+    )
+    if trend_points >= 5 and "E" not in unscored_axes and "I" not in unscored_axes:
         e_trend = state.trend("E")
         i_trend = state.trend("I")
         if e_trend > 0.005 and i_trend > 0.005:

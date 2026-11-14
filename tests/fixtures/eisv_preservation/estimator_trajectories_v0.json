@@ -4,7 +4,7 @@
   "numpy": "2.4.0",
   "platform": "Darwin",
   "python": "3.14.8",
-  "recorded_from_commit": "a1e4c97d23a3e780a0e2f03433680ed9f30853f5",
+  "recorded_from_commit": "262a42ab60980bbfcb40f6edc2d84bc3fa8662d4",
   "working_tree_dirty": true
  },
  "schema": "unitares.eisv_preservation.estimator_trajectories.v0",
