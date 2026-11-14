@@ -293,7 +293,7 @@ def assess_behavioral_state(
     # Score components based on baseline status
     if state.is_baselined:
         components = _score_self_relative(state, rho, continuity_energy, ctx)
-        if state.hold_unread:
+        if state.tracks_readings:
             # An axis seeded late (or restarted on restore) has too few
             # baseline samples for a z-score, which would read as "no
             # deviation". Until it has them, that axis is scored against the
@@ -582,7 +582,7 @@ def _generate_guidance(
     # "Below your baseline" is only true of a component the baseline scored;
     # an axis still short of baseline samples was scored on fixed thresholds.
     baseline_scored = state.is_baselined and not (
-        state.hold_unread
+        state.tracks_readings
         and dimension is not None
         and getattr(state, f"_baseline_{dimension}").count < _MIN_BASELINE_SAMPLES
     )

@@ -172,6 +172,11 @@ class BehavioralEISV:
     # Fixed when the state is created or restored, so one state never mixes
     # the two update rules.
     hold_unread: bool = field(default_factory=hold_unread_axes_enabled)
+    # True for state loaded from a record written under the hold. Such a
+    # state can hold an axis with few or no readings even when the hold has
+    # since been switched off, so per-axis seeding and the short-baseline rule
+    # still apply to it (see ``tracks_readings``).
+    written_under_hold: bool = False
     # Check-ins that supplied a reading for at least one dimension. Under the
     # hold this, not update_count, is what the state's maturity is measured
     # in: a check-in that read nothing adds no evidence.
@@ -212,6 +217,17 @@ class BehavioralEISV:
         """Dimensions with no reading on record; their values are placeholders."""
         return [d for d in DIMENSIONS if not self.has_reading(d)]
 
+    @property
+    def tracks_readings(self) -> bool:
+        """Whether per-axis reading counts describe this state.
+
+        True under the hold, and for a state written under it and loaded with
+        the hold off (a rollback): there every check-in is a reading again,
+        but an axis that was never read still has to be seeded and still has
+        no baseline to be scored against.
+        """
+        return self.hold_unread or self.written_under_hold
+
     def adopt_reading_record(self, data: Dict) -> None:
         """Take the hold and its reading counters from a persisted state dict.
 
@@ -246,8 +262,8 @@ class BehavioralEISV:
         # With the hold off every check-in is a reading, so the ramp is keyed
         # on update_count exactly as before (this also covers a state built by
         # hand with only update_count set).
-        ramp_count = count if self.hold_unread else self.update_count
-        if count == 0 and self.hold_unread:
+        ramp_count = count if self.tracks_readings else self.update_count
+        if count == 0 and self.tracks_readings:
             value = observation
             setattr(self, f"_baseline_{dimension}", WelfordStats())
             history: List[float] = []
@@ -577,6 +593,7 @@ class BehavioralEISV:
         state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
         if isinstance(persisted_readings, dict):
+            state.written_under_hold = True
             state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
             persisted_since = data.get("since_reading")
             if isinstance(persisted_since, dict):

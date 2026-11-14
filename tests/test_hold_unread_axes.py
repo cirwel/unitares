@@ -398,3 +398,35 @@ def test_a_hand_rebuilt_state_adopts_the_hold_it_was_written_under():
     legacy = BehavioralEISV()
     legacy.adopt_reading_record({"E": 0.5, "updates": 40})
     assert not legacy.hold_unread and legacy.unscored_dimensions == []
+
+
+def test_rollback_of_an_under_read_axis_seeds_it_and_scores_it_on_fixed_thresholds(monkeypatch):
+    live = BehavioralEISV()
+    for _ in range(30):
+        live.update(0.8, None, 0.2)
+    stored = live.to_dict_with_history()
+
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
+    rolled = BehavioralEISV.from_dict(stored)
+    assert not rolled.hold_unread and rolled.tracks_readings and rolled.is_baselined
+    rolled.update(0.8, 0.35, 0.2)  # filled arithmetic: every check-in reads again
+    assert rolled.I == 0.35  # seeded, not smoothed into the 0.5 placeholder
+    result = assess_behavioral_state(rolled)
+    assert result.unscored_axes == ()
+    assert result.components["low_I"] > 0.0  # fixed threshold, no baseline yet
+    assert result.guidance is None or "baseline" not in result.guidance
+
+
+def test_cold_start_fallback_record_keeps_the_fallback_arithmetic():
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor(agent_id="hold-unread-cold-start-record")
+    agent_state = {"response_text": "first check-in", "complexity": 0.4}
+    monitor.process_update(agent_state)
+    record = agent_state["_eisv_derivation"]
+    assert record["kind"] == "continuity_fallback"
+    assert record["consumed"] is False
+    for dimension in ("E", "I", "S"):
+        assert isinstance(record["computed_observation"][dimension], float)
+        assert isinstance(record["selection"][dimension]["value"], float)
+    assert monitor._behavioral_state.unread_dimensions == ["E", "I", "S", "V"]

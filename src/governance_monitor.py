@@ -1408,20 +1408,21 @@ class UNITARESMonitor:
                 # Under the hold these response-structure inputs are not
                 # readings (in the full formula they only adjust one), so all
                 # three axes are held until the sensor has history to read.
+                cont_E = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
+                cont_I = (
+                    0.5
+                    if exclude_template_div or continuity_metrics.I_input is None
+                    else continuity_metrics.I_input
+                )
+                cont_S = (
+                    0.2
+                    if exclude_template_div or continuity_metrics.S_input is None
+                    else continuity_metrics.S_input
+                )
                 if hold_unread_axes_enabled():
                     beh_E_obs = beh_I_obs = beh_S_obs = None
                 else:
-                    beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                    beh_I_obs = (
-                        0.5
-                        if exclude_template_div or continuity_metrics.I_input is None
-                        else continuity_metrics.I_input
-                    )
-                    beh_S_obs = (
-                        0.2
-                        if exclude_template_div or continuity_metrics.S_input is None
-                        else continuity_metrics.S_input
-                    )
+                    beh_E_obs, beh_I_obs, beh_S_obs = cont_E, cont_I, cont_S
                 beh_obs_source = 'continuity_fallback'
                 # Replace any upstream attempted sensor trace with the fallback
                 # actually consumed. Telemetry failure must not alter intake.
@@ -1432,8 +1433,14 @@ class UNITARESMonitor:
                     agent_state['_eisv_derivation'] = build_continuity_fallback_derivation(
                         continuity_metrics,
                         template_divergence_excluded=exclude_template_div,
-                        computed={'E': beh_E_obs, 'I': beh_I_obs, 'S': beh_S_obs},
+                        # The record keeps the fallback arithmetic so it stays
+                        # replayable, as the sensor's record does; under the
+                        # hold the state above was handed no reading.
+                        computed={'E': cont_E, 'I': cont_I, 'S': cont_S},
                     )
+                    # False under the hold: the values above were computed
+                    # and recorded but not handed to the behavioral state.
+                    agent_state['_eisv_derivation']['consumed'] = beh_E_obs is not None
                 except Exception as exc:
                     logger.debug("Continuity fallback trace unavailable: %s", type(exc).__name__)
 
