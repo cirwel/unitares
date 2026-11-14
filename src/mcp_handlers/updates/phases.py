@@ -906,6 +906,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     compute_decision_self_loop_shadow,
                     compute_legacy_coherence_dependency_shadow,
                     compute_regime_self_loop_shadow,
+                    compute_sensor_drift_input,
                     filter_behavioral_outcomes,
                     hold_unread,
                     neutralize_sensor_self_loops_enabled,
@@ -920,11 +921,10 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
 
                 cal_error = get_mean_calibration_error(ctx)
 
-                # Drift norm from previous check-in
-                drift_n = None
+                # Drift vector from previous check-in. The norm the sensor reads
+                # is built further down, once the agent's own calibration
+                # channel is known (compute_sensor_drift_input).
                 dv = getattr(monitor, '_last_drift_vector', None)
-                if dv is not None:
-                    drift_n = getattr(dv, 'norm', None)
 
                 # Continuity metrics from previous check-in
                 comp_div = None
@@ -1009,6 +1009,13 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     if isinstance(ctx._calibration_signal, dict)
                     else None
                 )
+
+                drift_input = compute_sensor_drift_input(
+                    dv,
+                    complexity_divergence_observed=comp_div is not None,
+                    agent_calibration_channel=agent_cal_channel,
+                )
+                drift_n = drift_input["value"]
 
                 decision_history = list(monitor.state.decision_history)
                 coherence_history = list(monitor.state.coherence_history)
@@ -1160,6 +1167,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     coherence_source=LEGACY_COHERENCE_SOURCE,
                     coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
                 )
+                ctx.agent_state["_eisv_derivation"]["drift_input"] = drift_input
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv
                     ctx.agent_state["sensor_eisv_source"] = "behavioral"

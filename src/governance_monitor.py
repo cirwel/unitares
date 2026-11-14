@@ -147,6 +147,7 @@ from src.behavioral_assessment import assess_behavioral_state
 from src.behavioral_sensor import (
     compute_behavioral_sensor_components,
     compute_behavioral_sensor_eisv,
+    compute_sensor_drift_input,
     hold_unread,
     hold_unread_axes_enabled,
 )
@@ -1374,7 +1375,16 @@ class UNITARESMonitor:
                 S_history=self.state.S_history,
                 V_history=self.state.V_history,
                 calibration_error=getattr(drift_vector, 'calibration_deviation', None),
-                drift_norm=getattr(drift_vector, 'norm', None),
+                # This path has no per-agent calibration channel, so with the
+                # agent-local drift flag on only supplied complexity
+                # divergence reaches the sensor's drift term.
+                drift_norm=compute_sensor_drift_input(
+                    drift_vector,
+                    complexity_divergence_observed=(
+                        not exclude_template_div
+                        and continuity_metrics.complexity_divergence is not None
+                    ),
+                )["value"],
                 complexity_divergence=(
                     None if exclude_template_div else continuity_metrics.complexity_divergence
                 ),

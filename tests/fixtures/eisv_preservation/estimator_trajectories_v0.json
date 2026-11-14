@@ -1,10 +1,10 @@
 {
  "float_digits": 8,
  "provenance": {
-  "numpy": "2.4.0",
-  "platform": "Darwin",
-  "python": "3.14.8",
-  "recorded_from_commit": "262a42ab60980bbfcb40f6edc2d84bc3fa8662d4",
+  "numpy": "2.5.4",
+  "platform": "Linux",
+  "python": "3.14.6",
+  "recorded_from_commit": "7d51a443591c576096ca38b967d7461d07910d57",
   "working_tree_dirty": true
  },
  "schema": "unitares.eisv_preservation.estimator_trajectories.v0",
@@ -1226,7 +1226,7 @@
    {
     "E": 0.55215769,
     "I": 0.5,
-    "S": 0.5123439,
+    "S": 0.48104331,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1245,7 +1245,7 @@
     },
     "phi": 0.10070654,
     "regime": "EXPLORATION",
-    "risk_score": 0.1549,
+    "risk_score": 0.15,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1261,7 +1261,7 @@
    {
     "E": 0.55215769,
     "I": 0.5,
-    "S": 0.51597086,
+    "S": 0.48104331,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1280,7 +1280,7 @@
     },
     "phi": 0.10754018,
     "regime": "EXPLORATION",
-    "risk_score": 0.0064,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1296,7 +1296,7 @@
    {
     "E": 0.55215769,
     "I": 0.5,
-    "S": 0.51740026,
+    "S": 0.48104331,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1315,7 +1315,7 @@
     },
     "phi": 0.11395185,
     "regime": "EXPLORATION",
-    "risk_score": 0.007,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1331,7 +1331,7 @@
    {
     "E": 0.55215769,
     "I": 0.5,
-    "S": 0.51795182,
+    "S": 0.48104331,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1350,7 +1350,7 @@
     },
     "phi": 0.11998353,
     "regime": "EXPLORATION",
-    "risk_score": 0.0072,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1366,7 +1366,7 @@
    {
     "E": 0.55215769,
     "I": 0.5,
-    "S": 0.51813597,
+    "S": 0.48104331,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1385,7 +1385,7 @@
     },
     "phi": 0.12567198,
     "regime": "EXPLORATION",
-    "risk_score": 0.0073,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1401,7 +1401,7 @@
    {
     "E": 0.55386517,
     "I": 0.5,
-    "S": 0.51565262,
+    "S": 0.47832521,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1420,7 +1420,7 @@
     },
     "phi": 0.1324773,
     "regime": "EXPLORATION",
-    "risk_score": 0.0063,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1436,7 +1436,7 @@
    {
     "E": 0.5548808,
     "I": 0.5,
-    "S": 0.51415262,
+    "S": 0.47673965,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1455,7 +1455,7 @@
     },
     "phi": 0.13608706,
     "regime": "EXPLORATION",
-    "risk_score": 0.0057,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1471,7 +1471,7 @@
    {
     "E": 0.55549295,
     "I": 0.5,
-    "S": 0.51321892,
+    "S": 0.47578831,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1490,7 +1490,7 @@
     },
     "phi": 0.13952822,
     "regime": "EXPLORATION",
-    "risk_score": 0.0053,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1506,7 +1506,7 @@
    {
     "E": 0.5558516,
     "I": 0.5,
-    "S": 0.51263797,
+    "S": 0.47521751,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1525,7 +1525,7 @@
     },
     "phi": 0.14281523,
     "regime": "EXPLORATION",
-    "risk_score": 0.0051,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1541,7 +1541,7 @@
    {
     "E": 0.55616721,
     "I": 0.5,
-    "S": 0.51212717,
+    "S": 0.47473233,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1560,7 +1560,7 @@
     },
     "phi": 0.14596088,
     "regime": "EXPLORATION",
-    "risk_score": 0.0049,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1576,7 +1576,7 @@
    {
     "E": 0.55644495,
     "I": 0.5,
-    "S": 0.51167907,
+    "S": 0.47431992,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1595,7 +1595,7 @@
     },
     "phi": 0.14854338,
     "regime": "EXPLORATION",
-    "risk_score": 0.0047,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1611,7 +1611,7 @@
    {
     "E": 0.55668936,
     "I": 0.5,
-    "S": 0.51128681,
+    "S": 0.47396938,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1630,7 +1630,7 @@
     },
     "phi": 0.1510326,
     "regime": "EXPLORATION",
-    "risk_score": 0.0045,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1646,7 +1646,7 @@
    {
     "E": 0.55690444,
     "I": 0.5,
-    "S": 0.51094409,
+    "S": 0.47367142,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1665,7 +1665,7 @@
     },
     "phi": 0.15343529,
     "regime": "EXPLORATION",
-    "risk_score": 0.0044,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1681,7 +1681,7 @@
    {
     "E": 0.55709371,
     "I": 0.5,
-    "S": 0.5106452,
+    "S": 0.47341815,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1700,7 +1700,7 @@
     },
     "phi": 0.15575749,
     "regime": "EXPLORATION",
-    "risk_score": 0.0043,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1716,7 +1716,7 @@
    {
     "E": 0.55726027,
     "I": 0.5,
-    "S": 0.51038498,
+    "S": 0.47320287,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1735,7 +1735,7 @@
     },
     "phi": 0.15800462,
     "regime": "EXPLORATION",
-    "risk_score": 0.0042,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1751,7 +1751,7 @@
    {
     "E": 0.55740684,
     "I": 0.5,
-    "S": 0.5101588,
+    "S": 0.47301988,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1770,7 +1770,7 @@
     },
     "phi": 0.16018157,
     "regime": "EXPLORATION",
-    "risk_score": 0.0041,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1786,7 +1786,7 @@
    {
     "E": 0.55753582,
     "I": 0.5,
-    "S": 0.50996251,
+    "S": 0.47286435,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1805,7 +1805,7 @@
     },
     "phi": 0.16229275,
     "regime": "EXPLORATION",
-    "risk_score": 0.004,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1821,7 +1821,7 @@
    {
     "E": 0.55764932,
     "I": 0.5,
-    "S": 0.50979243,
+    "S": 0.47273214,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1840,7 +1840,7 @@
     },
     "phi": 0.16434215,
     "regime": "EXPLORATION",
-    "risk_score": 0.0039,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1856,7 +1856,7 @@
    {
     "E": 0.55774921,
     "I": 0.5,
-    "S": 0.50964525,
+    "S": 0.47261976,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1875,7 +1875,7 @@
     },
     "phi": 0.16633342,
     "regime": "EXPLORATION",
-    "risk_score": 0.0039,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1891,7 +1891,7 @@
    {
     "E": 0.55783711,
     "I": 0.5,
-    "S": 0.50951809,
+    "S": 0.47252424,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1910,7 +1910,7 @@
     },
     "phi": 0.16826983,
     "regime": "EXPLORATION",
-    "risk_score": 0.0038,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1926,7 +1926,7 @@
    {
     "E": 0.55791446,
     "I": 0.5,
-    "S": 0.50940836,
+    "S": 0.47244305,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1945,7 +1945,7 @@
     },
     "phi": 0.17015446,
     "regime": "EXPLORATION",
-    "risk_score": 0.0038,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -1961,7 +1961,7 @@
    {
     "E": 0.5579,
     "I": 0.5,
-    "S": 0.5094,
+    "S": 0.4724,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -1980,7 +1980,7 @@
     },
     "phi": 0.06466705,
     "regime": "EXPLORATION",
-    "risk_score": 0.0038,
+    "risk_score": 0.0,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": null,
@@ -1989,7 +1989,7 @@
    {
     "E": 0.5579,
     "I": 0.5,
-    "S": 0.5094,
+    "S": 0.4724,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -2008,7 +2008,7 @@
     },
     "phi": 0.07296606,
     "regime": "EXPLORATION",
-    "risk_score": 0.1538,
+    "risk_score": 0.15,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2024,7 +2024,7 @@
    {
     "E": 0.5579,
     "I": 0.5,
-    "S": 0.5094,
+    "S": 0.4724,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -2043,7 +2043,7 @@
     },
     "phi": 0.08068606,
     "regime": "EXPLORATION",
-    "risk_score": 0.1538,
+    "risk_score": 0.15,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2059,7 +2059,7 @@
    {
     "E": 0.55721092,
     "I": 0.5,
-    "S": 0.51057078,
+    "S": 0.4736965,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -2078,7 +2078,7 @@
     },
     "phi": 0.08791775,
     "regime": "EXPLORATION",
-    "risk_score": 0.1542,
+    "risk_score": 0.15,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -2094,7 +2094,7 @@
    {
     "E": 0.55660453,
     "I": 0.5,
-    "S": 0.51156399,
+    "S": 0.47479852,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -2129,7 +2129,7 @@
    {
     "E": 0.55607091,
     "I": 0.5,
-    "S": 0.51240664,
+    "S": 0.47573524,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -2814,7 +2814,7 @@
    {
     "E": 0.58147519,
     "I": 0.5,
-    "S": 0.47348799,
+    "S": 0.43904036,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3019,7 +3019,7 @@
    {
     "E": 0.65768439,
     "I": 0.5,
-    "S": 0.3848584,
+    "S": 0.32985602,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3054,7 +3054,7 @@
    {
     "E": 0.65768439,
     "I": 0.5,
-    "S": 0.38937803,
+    "S": 0.32985602,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3089,7 +3089,7 @@
    {
     "E": 0.65768439,
     "I": 0.5,
-    "S": 0.39035938,
+    "S": 0.32985602,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3124,7 +3124,7 @@
    {
     "E": 0.65768439,
     "I": 0.5,
-    "S": 0.39007349,
+    "S": 0.32985602,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3159,7 +3159,7 @@
    {
     "E": 0.65768439,
     "I": 0.5,
-    "S": 0.38937566,
+    "S": 0.32985602,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3194,7 +3194,7 @@
    {
     "E": 0.6587079,
     "I": 0.5,
-    "S": 0.3872225,
+    "S": 0.3282267,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3229,7 +3229,7 @@
    {
     "E": 0.65931671,
     "I": 0.5,
-    "S": 0.38570273,
+    "S": 0.32727627,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3264,7 +3264,7 @@
    {
     "E": 0.59823287,
     "I": 0.5,
-    "S": 0.47602721,
+    "S": 0.42928605,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3299,7 +3299,7 @@
    {
     "E": 0.56244492,
     "I": 0.5,
-    "S": 0.5302219,
+    "S": 0.49049191,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3318,7 +3318,7 @@
     },
     "phi": -0.16082628,
     "regime": "EXPLORATION",
-    "risk_score": 0.162,
+    "risk_score": 0.1499,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3334,7 +3334,7 @@
    {
     "E": 0.53095153,
     "I": 0.5,
-    "S": 0.57628739,
+    "S": 0.5425169,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3353,7 +3353,7 @@
     },
     "phi": -0.14856821,
     "regime": "EXPLORATION",
-    "risk_score": 0.1805,
+    "risk_score": 0.167,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3369,7 +3369,7 @@
    {
     "E": 0.50323735,
     "I": 0.5,
-    "S": 0.61544305,
+    "S": 0.58673813,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3388,7 +3388,7 @@
     },
     "phi": -0.13859443,
     "regime": "EXPLORATION",
-    "risk_score": 0.1962,
+    "risk_score": 0.1847,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3404,7 +3404,7 @@
    {
     "E": 0.47884887,
     "I": 0.5,
-    "S": 0.64872537,
+    "S": 0.62432619,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3423,7 +3423,7 @@
     },
     "phi": -0.13045555,
     "regime": "EXPLORATION",
-    "risk_score": 0.2095,
+    "risk_score": 0.1997,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3439,7 +3439,7 @@
    {
     "E": 0.457387,
     "I": 0.5,
-    "S": 0.67701533,
+    "S": 0.65627603,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3458,7 +3458,7 @@
     },
     "phi": -0.1237972,
     "regime": "EXPLORATION",
-    "risk_score": 0.2208,
+    "risk_score": 0.2125,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3474,7 +3474,7 @@
    {
     "E": 0.43850056,
     "I": 0.5,
-    "S": 0.7010618,
+    "S": 0.6834334,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3493,7 +3493,7 @@
     },
     "phi": -0.11832559,
     "regime": "EXPLORATION",
-    "risk_score": 0.2304,
+    "risk_score": 0.2234,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3509,7 +3509,7 @@
    {
     "E": 0.42188049,
     "I": 0.5,
-    "S": 0.72150131,
+    "S": 0.70651716,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3528,7 +3528,7 @@
     },
     "phi": -0.11382384,
     "regime": "EXPLORATION",
-    "risk_score": 0.2386,
+    "risk_score": 0.2326,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3544,7 +3544,7 @@
    {
     "E": 0.40725484,
     "I": 0.5,
-    "S": 0.73887488,
+    "S": 0.72613836,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3563,7 +3563,7 @@
     },
     "phi": -0.11133538,
     "regime": "EXPLORATION",
-    "risk_score": 0.2455,
+    "risk_score": 0.2405,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3579,7 +3579,7 @@
    {
     "E": 0.39438426,
     "I": 0.5,
-    "S": 0.75364242,
+    "S": 0.74281638,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3598,7 +3598,7 @@
     },
     "phi": -0.10798682,
     "regime": "EXPLORATION",
-    "risk_score": 0.2557,
+    "risk_score": 0.2513,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3614,7 +3614,7 @@
    {
     "E": 0.38305814,
     "I": 0.5,
-    "S": 0.76619483,
+    "S": 0.75699269,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3633,7 +3633,7 @@
     },
     "phi": -0.10502437,
     "regime": "EXPLORATION",
-    "risk_score": 0.2692,
+    "risk_score": 0.2655,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3649,7 +3649,7 @@
    {
     "E": 0.37309117,
     "I": 0.5,
-    "S": 0.77686438,
+    "S": 0.76904256,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3668,7 +3668,7 @@
     },
     "phi": -0.10256338,
     "regime": "EXPLORATION",
-    "risk_score": 0.2809,
+    "risk_score": 0.2778,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3684,7 +3684,7 @@
    {
     "E": 0.36432023,
     "I": 0.5,
-    "S": 0.78593349,
+    "S": 0.77928495,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3703,7 +3703,7 @@
     },
     "phi": -0.10045265,
     "regime": "EXPLORATION",
-    "risk_score": 0.2911,
+    "risk_score": 0.2885,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3719,7 +3719,7 @@
    {
     "E": 0.3566018,
     "I": 0.5,
-    "S": 0.79364224,
+    "S": 0.78799098,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3738,7 +3738,7 @@
     },
     "phi": -0.09862551,
     "regime": "EXPLORATION",
-    "risk_score": 0.3,
+    "risk_score": 0.2977,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3754,7 +3754,7 @@
    {
     "E": 0.34980958,
     "I": 0.5,
-    "S": 0.80019468,
+    "S": 0.7953911,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3773,7 +3773,7 @@
     },
     "phi": -0.09702804,
     "regime": "EXPLORATION",
-    "risk_score": 0.3077,
+    "risk_score": 0.3058,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3789,7 +3789,7 @@
    {
     "E": 0.34383243,
     "I": 0.5,
-    "S": 0.80576425,
+    "S": 0.80168121,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3808,7 +3808,7 @@
     },
     "phi": -0.09561663,
     "regime": "EXPLORATION",
-    "risk_score": 0.2205,
+    "risk_score": 0.2178,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3824,7 +3824,7 @@
    {
     "E": 0.33857254,
     "I": 0.5,
-    "S": 0.81049838,
+    "S": 0.8070278,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3843,7 +3843,7 @@
     },
     "phi": -0.09576504,
     "regime": "EXPLORATION",
-    "risk_score": 0.2236,
+    "risk_score": 0.2213,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3859,7 +3859,7 @@
    {
     "E": 0.33394384,
     "I": 0.5,
-    "S": 0.8145224,
+    "S": 0.8115724,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3878,7 +3878,7 @@
     },
     "phi": -0.09657914,
     "regime": "EXPLORATION",
-    "risk_score": 0.2262,
+    "risk_score": 0.2242,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3894,7 +3894,7 @@
    {
     "E": 0.32987058,
     "I": 0.5,
-    "S": 0.81794281,
+    "S": 0.81543531,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3913,7 +3913,7 @@
     },
     "phi": -0.09742078,
     "regime": "EXPLORATION",
-    "risk_score": 0.0786,
+    "risk_score": 0.077,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
@@ -3929,7 +3929,7 @@
    {
     "E": 0.32628611,
     "I": 0.5,
-    "S": 0.82085016,
+    "S": 0.81871879,
     "V": 0.0,
     "action": "proceed",
     "behavioral": {
@@ -3948,7 +3948,7 @@
     },
     "phi": -0.09826959,
     "regime": "EXPLORATION",
-    "risk_score": 0.0806,
+    "risk_score": 0.0791,
     "status": "healthy",
     "sub_action": "approve",
     "trajectory_validation": {
