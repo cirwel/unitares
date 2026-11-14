@@ -23,13 +23,15 @@ def _state(**overrides: float) -> BehavioralEISV:
     values.update(overrides)
     for dimension, value in values.items():
         setattr(state, dimension, value)
+    # Hand-built values stand for readings; an unread axis is not scored.
+    state.readings = dict.fromkeys(("E", "I", "S", "V"), 1)
     return state
 
 
 def _normalize_baseline_at_current_state(state: BehavioralEISV) -> None:
     """Make self-relative deviations zero at the supplied absolute state."""
 
-    state.update_count = 30
+    state.update_count = state.read_update_count = 30
     for dimension in ("E", "I", "S", "V"):
         baseline = getattr(state, f"_baseline_{dimension}")
         baseline.count = 30

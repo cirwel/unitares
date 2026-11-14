@@ -80,7 +80,9 @@ def _static_config() -> Dict[str, Any]:
     )
     from src.behavioral_assessment import floor_breach_caution_apply_enabled
     from src.behavioral_sensor import (
+        HOLD_UNREAD_AXES_MODE,
         NEUTRALIZE_SENSOR_SELF_LOOPS_MODE,
+        hold_unread_axes_enabled,
         neutralize_sensor_self_loops_enabled,
         per_agent_i_calibration_enabled,
     )
@@ -104,6 +106,8 @@ def _static_config() -> Dict[str, Any]:
         cfg["neutralize_sensor_self_loops"] = NEUTRALIZE_SENSOR_SELF_LOOPS_MODE
     if per_agent_i_calibration_enabled():
         cfg["per_agent_i_calibration"] = True
+    if hold_unread_axes_enabled():
+        cfg["hold_unread_axes"] = HOLD_UNREAD_AXES_MODE
     return cfg
 
 

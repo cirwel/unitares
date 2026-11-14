@@ -150,13 +150,20 @@ def test_monitor_records_consumed_fallback_and_telemetry_failure_leaves_state_un
         else:
             trace = submitted["_eisv_derivation"]
             assert trace["kind"] == "continuity_fallback"
-            assert [trace["selection"][d]["value"] for d in "EIS"] == monitor._behavioral_state.obs_history[-1]
+            # Under the hold the fallback arithmetic is recorded (so the
+            # record replays) but not consumed: the state was handed no reading.
+            recorded = [trace["selection"][d]["value"] for d in "EIS"]
+            assert all(isinstance(v, float) for v in recorded)
+            assert trace["consumed"] is False
+            assert monitor._behavioral_state.obs_history[-1] == [None, None, None]
             snapshot = dict(states[-1], obs_source="continuity_fallback")
             saved = build_eisv_telemetry_envelope(
                 metrics={}, behavioral_snapshot=snapshot, submitted_sensor=None,
                 submitted_source=None, derivation=trace, policy_evaluation=None, enforcement=None,
             )
             assert saved["derivation"] == trace
+            # The ledger must read a held check-in without raising.
+            assert input_ledger(saved, "E")[0] is not None
     assert states[0] == states[1]  # Includes baseline statistics and maturity.
 
 

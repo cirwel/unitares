@@ -48,7 +48,7 @@ WARMUP_N = BASELINE_WARMUP_UPDATES + 5  # ensure is_baselined
 
 
 def _baselined_healthy() -> BehavioralEISV:
-    s = BehavioralEISV()
+    s = BehavioralEISV(hold_unread=False)
     for _ in range(WARMUP_N):
         s.update(*HEALTHY)
     return s
@@ -72,13 +72,13 @@ def probe_monotonicity() -> dict:
     obvious badness. Construct states directly and assess."""
     rows_S = []
     for s_val in [0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]:
-        st = BehavioralEISV()  # update_count 0 -> fixed-threshold path
+        st = BehavioralEISV(hold_unread=False)  # update_count 0 -> fixed-threshold path
         st.E, st.I, st.S = 0.80, 0.72, s_val
         st.V = st.E - st.I
         rows_S.append((s_val, assess_behavioral_state(st).risk))
     rows_I = []
     for i_val in [0.90, 0.75, 0.60, 0.45, 0.30, 0.15, 0.05]:
-        st = BehavioralEISV()
+        st = BehavioralEISV(hold_unread=False)
         st.E, st.I, st.S = 0.80, i_val, 0.18
         st.V = st.E - st.I
         rows_I.append((i_val, assess_behavioral_state(st).risk))

@@ -48,6 +48,10 @@ class TestSeam:
             s.update(e, i, sv)
             ae, ai, av = ref.alphas["E"], ref.alphas["I"], ref.alphas["V"]
             boost = 0.5 * (1.0 - ref.update_count / 10) if ref.update_count < 10 else 0.0
+            if ref.update_count == 0:
+                # The first reading seeds each value (hold-unread, default on).
+                ae = ai = av = 1.0
+                boost = 0.0
             ref.E = (1 - (ae + boost)) * ref.E + (ae + boost) * e
             ref.I = (1 - (ai + boost)) * ref.I + (ai + boost) * i
             ref.V = (1 - (av + boost)) * ref.V + (av + boost) * (e - i)  # v2: raw imbalance
@@ -83,6 +87,9 @@ class TestMigrationReseed:
             legacy.update(0.78, 0.72, 0.2)  # mild E>I imbalance
         blob = legacy.to_dict_with_history()
         blob.pop("v_formula_version", None)  # simulate a pre-v2 snapshot
+        # A real pre-v2 snapshot also predates the reading counters.
+        for key in ("readings", "since_reading", "read_updates"):
+            blob.pop(key, None)
         return blob
 
     def test_v1_load_triggers_reseed(self):
@@ -96,11 +103,35 @@ class TestMigrationReseed:
         assert abs(restored.V - restored._baseline_V.mean) < 0.1
         assert restored.is_baselined
 
-    def test_reseed_keeps_post_migration_z_in_budget(self):
+    def test_reseed_keeps_post_migration_z_in_budget(self, monkeypatch):
+        # With the hold off V is scored straight after the load, which is the
+        # case the reseed exists for. Without the reseed the z is far outside
+        # the budget (the control below), so this can fail.
+        monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
         blob = self._mature_v1_blob()
         restored = BehavioralEISV.from_dict(blob)
+        assert restored.is_scored("V")
         # The first post-migration deviation must not spike out of a 3-sigma budget.
         assert abs(restored.deviation("V")) <= 3.0
+
+        stale = BehavioralEISV.from_dict({**blob, "v_formula_version": 2})
+        stale.V = restored.V
+        assert abs(stale.deviation("V")) > abs(restored.deviation("V"))
+
+    def test_under_the_hold_a_v1_load_leaves_v_unscored(self):
+        # Under the hold a pre-v2 snapshot has no reading record, so V is
+        # unscored until E and I are both read, and that reading restarts the
+        # V baseline. The reseed only sets the placeholder shown meanwhile.
+        restored = BehavioralEISV.from_dict(self._mature_v1_blob())
+        assert not restored.is_scored("V")
+        assert restored.deviation("V") == 0.0
+        restored.update(0.78, 0.72, 0.2)
+        assert restored.is_scored("V") and restored._baseline_V.count == 1
+
+    def test_reseed_skips_held_rows(self):
+        blob = self._mature_v1_blob()
+        blob["obs_history"] = [[0.78, None, 0.2], [None, 0.72, 0.2]] + blob["obs_history"]
+        BehavioralEISV.from_dict(blob)  # must not raise on the held rows
 
     def test_v2_load_does_not_reseed(self):
         """A state already at the current version must load untouched."""

@@ -43,7 +43,7 @@ import psycopg2.extras  # noqa: E402
 
 
 def rebuild(beisv) -> BehavioralEISV:
-    st = BehavioralEISV()
+    st = BehavioralEISV(hold_unread=False)
     bs = beisv.get("baseline_stats") or {}
     counts = []
     for dim in ("E", "I", "S", "V"):
@@ -60,6 +60,9 @@ def rebuild(beisv) -> BehavioralEISV:
         if v is not None:
             setattr(st, dim, float(v))
     st.update_count = max(counts) if counts else 0
+    # Rows written under the hold are rebuilt under it, so the axes scored
+    # here are the ones the live assessment scored.
+    st.adopt_reading_record(beisv)
     return st
 
 
