@@ -162,6 +162,8 @@ def test_monitor_records_consumed_fallback_and_telemetry_failure_leaves_state_un
                 submitted_source=None, derivation=trace, policy_evaluation=None, enforcement=None,
             )
             assert saved["derivation"] == trace
+            # The ledger must read a held check-in without raising.
+            assert input_ledger(saved, "E")[0] is not None
     assert states[0] == states[1]  # Includes baseline statistics and maturity.
 
 

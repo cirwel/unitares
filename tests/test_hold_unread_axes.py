@@ -430,3 +430,27 @@ def test_cold_start_fallback_record_keeps_the_fallback_arithmetic():
         assert isinstance(record["computed_observation"][dimension], float)
         assert isinstance(record["selection"][dimension]["value"], float)
     assert monitor._behavioral_state.unread_dimensions == ["E", "I", "S", "V"]
+
+
+def test_a_state_written_with_the_hold_off_is_not_taken_for_one_written_under_it(monkeypatch):
+    plain = BehavioralEISV(E=0.5, update_count=30, hold_unread=False)
+    stored = plain.to_dict()
+    assert stored["hold_unread"] is False
+
+    rebuilt = BehavioralEISV(hold_unread=False)
+    rebuilt.adopt_reading_record(stored)
+    assert not rebuilt.hold_unread
+
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
+    restored = BehavioralEISV.from_dict(stored)
+    assert not restored.tracks_readings and restored.unscored_dimensions == []
+
+
+def test_trend_bonus_needs_five_readings_on_each_axis():
+    state = BehavioralEISV()
+    for _ in range(3):
+        state.update(None, None, None)
+    state.update(0.5, 0.5, 0.2)
+    state.update(0.9, 0.9, 0.2)  # two rising points are not a trend
+    result = assess_behavioral_state(state)
+    assert result.risk == pytest.approx(max(0.0, min(1.0, sum(result.components.values()))))
