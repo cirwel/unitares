@@ -118,6 +118,7 @@ additions merge cleanly. -->
 | `UNITARES_GATEWAY_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the gateway surface | src/mcp_listen_config.py |
+| `UNITARES_GITHUB_OBSERVER_STATE` | `None (no reader fallback)` | read by default_state_path() | agents/github_observer/observer.py |
 | `UNITARES_GOVERNANCE_HTTP` | `'http://localhost:8767'` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `None (no reader fallback)` | The governance MCP URL the reviewer connects to | src/dialectic_reviewer_config.py, agents/dialectic_reviewer/reviewer.py (+2 more) |
 | `UNITARES_GOVERNED_EFFECT_BINDING` | `None (no reader fallback)` | Return whether effect binding is enabled for this type; unset is off | src/http_routes/effects.py |
