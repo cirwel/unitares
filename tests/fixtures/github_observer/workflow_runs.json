@@ -1,0 +1,79 @@
+{
+  "workflow_runs": [
+    {
+      "id": 43539563127,
+      "run_attempt": 1,
+      "name": "Tests",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7d51a443591c576096ca38b967d7461d07910d57",
+      "updated_at": "2026-11-14T01:25:36Z",
+      "pull_requests": [
+        {
+          "number": 3259
+        }
+      ]
+    },
+    {
+      "id": 43539563275,
+      "run_attempt": 1,
+      "name": "Review Gate",
+      "event": "pull_request_target",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7d51a443591c576096ca38b967d7461d07910d57",
+      "updated_at": "2026-11-14T01:16:46Z",
+      "pull_requests": [
+        {
+          "number": 3259
+        }
+      ]
+    },
+    {
+      "id": 43534989292,
+      "run_attempt": 1,
+      "name": "Tests",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "262a42ab60980bbfcb40f6edc2d84bc3fa8662d4",
+      "updated_at": "2026-11-14T00:42:18Z",
+      "pull_requests": [
+        {
+          "number": 3259
+        }
+      ]
+    },
+    {
+      "id": 43534988444,
+      "run_attempt": 1,
+      "name": "Review Gate",
+      "event": "pull_request_target",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "head_sha": "262a42ab60980bbfcb40f6edc2d84bc3fa8662d4",
+      "updated_at": "2026-11-14T00:33:42Z",
+      "pull_requests": [
+        {
+          "number": 3259
+        }
+      ]
+    },
+    {
+      "id": 43528403669,
+      "run_attempt": 1,
+      "name": "Tests",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "fe9a299e23c8c77d4a98fca08042d2189c3e58a5",
+      "updated_at": "2026-11-13T23:47:03Z",
+      "pull_requests": [
+        {
+          "number": 3259
+        }
+      ]
+    }
+  ]
+}

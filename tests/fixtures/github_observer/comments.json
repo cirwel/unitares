@@ -1,0 +1,56 @@
+[
+  {
+    "id": 6854088482,
+    "created_at": "2026-11-13T13:18:01Z",
+    "author_association": "CONTRIBUTOR",
+    "user": {
+      "id": 41898282,
+      "type": "Bot",
+      "login": "github-actions[bot]"
+    },
+    "performed_via_github_app": {
+      "id": 15368
+    },
+    "body": "## ✅ Documentation Validation Passed\n\n**Tool Count:** unavailable — the runtime registry could not be read here (`No module named 'mcp'`)\n**Version:** 4.0.0\n\nPassed the CI/Python, version-consistency, and reader-facing\ndocumentation-health checks.\n\n> **The tool-inventory check was skipped, not passed.** This runner\n> installs no project dependencies, so the tool count could not be\n> taken and no number above is an in"
+  },
+  {
+    "id": 6854328344,
+    "created_at": "2026-11-13T13:28:25Z",
+    "author_association": "OWNER",
+    "user": {
+      "id": 235824010,
+      "type": "User",
+      "login": "cirwel"
+    },
+    "performed_via_github_app": null,
+    "body": "<!-- unitares-review v1 key=92aa21703d87152bf4a2dc3e32e815c87615ad6ff0762165b3c586cb20191248 verdict=FINDINGS findings=4 disposed=0 reviewer=antigravity model=gemini-4-argon-high head=a1e4c97d23a3e780a0e2f03433680ed9f30853f5 base=d95e7e959712442e489ee079badbe48bc685523c scope=full review_id=b14ad8fddb8e4851bd513c4f142e3366 -->\n### Review record — FINDINGS(4) · 10.3 min\n\nDiff key `92aa21703d87` · reviewer `antigravity"
+  },
+  {
+    "id": 6866483548,
+    "created_at": "2026-11-13T22:27:46Z",
+    "author_association": "CONTRIBUTOR",
+    "user": {
+      "id": 342195540,
+      "type": "Bot",
+      "login": "unitares-agents[bot]"
+    },
+    "performed_via_github_app": {
+      "id": 5306351
+    },
+    "body": "<!-- unitares-review v1 key=8dd0e63ecbbbbc5312f9830502e0c5d58087d6a8dbee4bf407cb887efa9fff7c verdict=FAILED findings=0 disposed=0 reviewer=codex head=3609953cd4250a264860376246628a2c6d61ab77 base=d95e7e959712442e489ee079badbe48bc685523c scope=full review_id=4d9ebf7fe01d4fdaa675092884e8ab18 -->\n### Review record — FAILED (exit 1) · 0.0 min\n\nDiff key `8dd0e63ecbbb` · reviewer `codex`\n\nReading additional input from stdi"
+  },
+  {
+    "id": 6876306245,
+    "created_at": "2026-11-14T11:02:50Z",
+    "author_association": "CONTRIBUTOR",
+    "user": {
+      "id": 342195540,
+      "type": "Bot",
+      "login": "unitares-agents[bot]"
+    },
+    "performed_via_github_app": {
+      "id": 5306351
+    },
+    "body": "<!-- unitares-review v1 key=f99fed0e15c3a3d419d785e008ab504f71565e81dfd36f71d0d536cb1672d6db verdict=FINDINGS findings=1 disposed=0 reviewer=codex:gpt-6.1-sol-independent head=7d51a443591c576096ca38b967d7461d07910d57 base=d95e7e959712442e489ee079badbe48bc685523c scope=full review_id=2bfda5cf7509733c7d20a9bc755dcff054194ce0f9b0dfb7b56fa5170cc6012b -->\n### Review record — FINDINGS(1) (recorded, reviewed by codex:gpt-6."
+  }
+]
