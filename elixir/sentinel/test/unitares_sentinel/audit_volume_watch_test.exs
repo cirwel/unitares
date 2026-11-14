@@ -281,4 +281,70 @@ defmodule UnitaresSentinel.AuditVolumeWatchTest do
     assert Decimal.to_integer(recent) == 1_875
     assert Decimal.to_integer(prior) == 5_000
   end
+
+  describe "HTTP transport mode" do
+    test "tick queries GET /v1/audit/volume-summary when http_get is provided and emits findings" do
+      parent = self()
+
+      http_get = fn url, headers, _timeout_ms ->
+        send(parent, {:volume_get, url, headers})
+
+        {:ok, 200,
+         Jason.encode!(%{
+           "success" => true,
+           "floor" => 300,
+           "rows" => [
+             %{
+               "event_type" => "session_resolve_miss_observed",
+               "source" => @storm_key,
+               "recent" => 5_850,
+               "prior" => 0
+             }
+           ]
+         })}
+      end
+
+      http_post = fn _url, body, _headers, _timeout_ms ->
+        send(parent, {:finding_post, body})
+        {:ok, 200, ~s({"success":true})}
+      end
+
+      env = fn
+        "UNITARES_MCP_BEARER_TOKEN" -> "mcp-remote-tok"
+        _ -> nil
+      end
+
+      assert {[delivered], _realert, []} =
+               AuditVolumeWatch.tick(
+                 now_ms: 0,
+                 base_url: "https://gov.example",
+                 env: env,
+                 http_get: http_get,
+                 findings_opts: [agent_id: "sentinel-http-test", http_post: http_post]
+               )
+
+      assert delivered.severity == "high"
+      assert_received {:volume_get, "https://gov.example/v1/audit/volume-summary?floor=300", hdrs}
+      assert {"Authorization", "Bearer mcp-remote-tok"} in hdrs
+      assert_received {:finding_post, %{"finding_type" => "audit_volume_anomaly", "severity" => "high"}}
+    end
+
+    test "HTTP 500 or malformed payload degrades fail-soft without crashing" do
+      assert {[], %{}, []} =
+               AuditVolumeWatch.tick(
+                 base_url: "https://gov.example",
+                 http_get: fn _url, _hdrs, _t -> {:ok, 500, ~s({"success":false})} end,
+                 findings_opts: [http_post: fn _, _, _, _ -> flunk("must not post") end]
+               )
+
+      assert {[], %{}, []} =
+               AuditVolumeWatch.tick(
+                 base_url: "https://gov.example",
+                 http_get: fn _url, _hdrs, _t ->
+                   {:ok, 200, ~s({"success":true,"rows":[{"bad":1}]})}
+                 end,
+                 findings_opts: [http_post: fn _, _, _, _ -> flunk("must not post") end]
+               )
+    end
+  end
 end

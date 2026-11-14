@@ -1041,10 +1041,28 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     try:
         embedder_ok = False
         embedder_requested = False
+        configured_embedder = ""
         try:
-            from src.embeddings import embedding_model_requested, embeddings_available
+            from src.embeddings import (
+                configured_embedding_model,
+                embedding_model_requested,
+                embeddings_available,
+            )
             embedder_ok = embeddings_available()
             embedder_requested = embedding_model_requested()
+            configured_embedder = configured_embedding_model()
+        except Exception:
+            pass
+        hybrid_on = False
+        graph_expand_on = False
+        rerank_on = False
+        try:
+            from src.reranker import reranker_enabled
+            from src.retrieval import hybrid_enabled, related_expansion_enabled
+
+            hybrid_on = bool(hybrid_enabled())
+            graph_expand_on = bool(related_expansion_enabled())
+            rerank_on = bool(reranker_enabled())
         except Exception:
             pass
         try:
@@ -1081,6 +1099,12 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
             "embedder_available": embedder_ok,
             "semantic_backend_available": semantic_backend_ok,
             "semantic_search_reachable": semantic_search_reachable,
+            "retrieval_config": {
+                "embedding_model": configured_embedder or None,
+                "hybrid": hybrid_on,
+                "graph_expand": graph_expand_on,
+                "rerank": rerank_on,
+            },
         }
         if kg_status == NOT_CONFIGURED:
             checks["knowledge_graph"]["note"] = (
@@ -1255,7 +1279,7 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
             "mode", "redis_present", "present", "source_of_truth",
             "session_binding_backend", "backend",
             "embedder_available", "semantic_backend_available",
-            "semantic_search_reachable",
+            "semantic_search_reachable", "retrieval_config",
         )
         for name, check in checks.items():
             lite_checks[name] = {"status": check.get("status", "unknown")}

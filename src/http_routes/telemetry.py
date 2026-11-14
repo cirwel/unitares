@@ -38,6 +38,7 @@ async def http_eisv_latest(request):
 _COMPACT_TELEMETRY_KEYS = (
     "measurement_source", "behavioral_source", "submitted_source",
     "primary_source", "behavioral_confidence", "missing_inputs",
+    "unobserved_share",
     "afferents_recorded", "afferent_source", "afferent_source_field",
     "afferent_count", "afferent_valid_count", "afferent_truncated",
     "afferent_keys", "afferent_policy_applied",
@@ -474,7 +475,8 @@ async def http_lifecycle_recent(request):
 
     Query params:
       - agent_id: filter to one agent (UUID or label)
-      - hours: lookback window in hours (default 24, max 168)
+      - since: exact ISO-8601 UTC/offset timestamp (overrides hours when given)
+      - hours: lookback window in hours (default 24, max 168 when since omitted)
       - limit: max events (default 100, max 500)
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
@@ -482,12 +484,33 @@ async def http_lifecycle_recent(request):
         return access._http_unauthorized()
     try:
         from src.audit_db import query_audit_events_async
+        from src.lease_plane_telemetry import parse_since_param
         from datetime import datetime, timedelta, timezone
 
         agent_id_param = request.query_params.get("agent_id")
-        hours = max(1, min(168, int(request.query_params.get("hours", 24))))
         limit = max(1, min(500, int(request.query_params.get("limit", 100))))
-        start_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        raw_since = request.query_params.get("since")
+        if raw_since is not None and raw_since.strip():
+            try:
+                since_dt = parse_since_param(raw_since)
+            except ValueError as exc:
+                return JSONResponse(
+                    {"success": False, "error": str(exc), "events": []},
+                    status_code=400,
+                )
+            assert since_dt is not None
+            start_time = since_dt.isoformat()
+            hours_out: int | float = round(
+                max(0.0, (datetime.now(timezone.utc) - since_dt).total_seconds() / 3600.0),
+                4,
+            )
+        else:
+            raw_hours = float(request.query_params.get("hours", 24))
+            hours_clamped = max(1.0 / 3600.0, min(168.0, raw_hours))
+            hours_out = int(hours_clamped) if hours_clamped.is_integer() else hours_clamped
+            start_time = (
+                datetime.now(timezone.utc) - timedelta(hours=hours_clamped)
+            ).isoformat()
 
         # Resolve label → UUID and build a UUID → label lookup for enrichment.
         from src.agent_metadata_model import agent_metadata
@@ -526,7 +549,7 @@ async def http_lifecycle_recent(request):
             "success": True,
             "events": events,
             "count": len(events),
-            "window_hours": hours,
+            "window_hours": hours_out,
         })
     except Exception as e:
         logger.error(f"Error fetching lifecycle events: {e}")

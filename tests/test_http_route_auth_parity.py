@@ -173,7 +173,12 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # 50 -> 51: /auth/hub/authorize (the hub sign-in approval page). Its GET
 # needs a fresh dashboard session (_hub_signin_gate) and answers 404 until the
 # hub handoff is configured.
-EXPECTED_GET_ROUTES = 51
+# 51 -> 54: /v1/metrics/snapshot, /v1/lease-plane/alarm-events, and
+# /v1/lease-plane/phase-b/{surface_kind} replace direct resident PostgreSQL
+# reads with _check_http_auth-gated read-only routes.
+# 54 -> 55: /v1/audit/volume-summary replaces BEAM Sentinel AuditVolumeWatch
+# direct Postgrex queries with a _check_http_auth-gated read-only route.
+EXPECTED_GET_ROUTES = 55
 
 
 def test_route_registry_is_readable():

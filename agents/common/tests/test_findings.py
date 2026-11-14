@@ -180,6 +180,75 @@ def test_post_finding_respects_env_token(monkeypatch):
     assert calls[0].get("Authorization") == "Bearer secret-token-xyz"
 
 
+def test_post_finding_result_dual_token_remote_and_401_retry(monkeypatch):
+    """Remote URLs prefer `UNITARES_MCP_BEARER_TOKEN` up front; loopback retries on 401."""
+    from agents.common.findings import DELIVERED, post_finding_result
+    from agents.common.http_client import clear_bearer_preference_cache
+
+    clear_bearer_preference_cache()
+    monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "local-http-tok")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "remote-mcp-tok")
+
+    remote_headers: list[dict] = []
+
+    def fake_remote_post(url, json, headers, timeout):  # noqa: A002
+        remote_headers.append(dict(headers))
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"success": True, "deduped": False}
+
+        return FakeResp()
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_remote_post)
+    outcome_remote = post_finding_result(
+        event_type="watcher_finding",
+        severity="high",
+        message="remote strict",
+        agent_id="watcher",
+        agent_name="Watcher",
+        fingerprint="fp-remote",
+        url="https://gov.example.test/api/findings",
+    )
+    assert outcome_remote == DELIVERED
+    assert [h.get("Authorization") for h in remote_headers] == ["Bearer remote-mcp-tok"]
+
+    clear_bearer_preference_cache()
+    loopback_headers: list[dict] = []
+
+    def fake_loopback_strict_post(url, json, headers, timeout):  # noqa: A002
+        loopback_headers.append(dict(headers))
+        accepted = headers.get("Authorization") == "Bearer remote-mcp-tok"
+
+        class FakeResp:
+            status_code = 200 if accepted else 401
+
+            def json(self):
+                return {"success": accepted}
+
+        return FakeResp()
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_loopback_strict_post)
+    outcome_loopback = post_finding_result(
+        event_type="watcher_finding",
+        severity="high",
+        message="local strict",
+        agent_id="watcher",
+        agent_name="Watcher",
+        fingerprint="fp-local",
+        url="http://localhost:8767/api/findings",
+    )
+    assert outcome_loopback == DELIVERED
+    assert [h.get("Authorization") for h in loopback_headers] == [
+        "Bearer local-http-tok",
+        "Bearer remote-mcp-tok",
+    ]
+    clear_bearer_preference_cache()
+
+
 def test_extra_cannot_overwrite_required_fields(monkeypatch):
     """`extra` must never clobber the 6 required body fields."""
     captured = {}

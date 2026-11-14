@@ -356,6 +356,106 @@ def compute_behavioral_sensor_components(
     }
 
 
+UNOBSERVED_SHARE_SCHEMA = "behavioral_sensor.unobserved_share.v1"
+_UNOBSERVED_SHARE_DIMENSIONS = ("E", "I", "S")
+
+
+def compute_unobserved_share(components: Mapping | None) -> dict | None:
+    """Share of each published E/I/S value that rests on a default, not a reading.
+
+    Reads a ``compute_behavioral_sensor_components`` record and, for each of E,
+    I and S, returns the fraction of the final value's convex weight carried by
+    terms the record itself flags ``observed: False``. A base term's final
+    weight is its own weight times every later blend's retained weight; a blend
+    adjustment's final weight is its input weight times every later blend's
+    retained weight. Additive adjustments (retained weight 1.0) are outside the
+    convex combination and are not counted.
+
+    0.0 means every weighted term was supplied; 1.0 means the value is entirely
+    defaults. ``mean`` averages the three dimensions. V is omitted: it is
+    derived from E and I and has no inputs of its own.
+
+    This is a description of the record, measurement-only. It is a lower bound
+    on emptiness: a term flagged observed can still be pinned at a clip bound or
+    arrive as the same constant on every check-in, and this function does not
+    look across check-ins to see that. It changes no E/I/S/V value and nothing
+    in policy reads it.
+    """
+    if not isinstance(components, Mapping):
+        return None
+    dimensions = components.get("dimensions")
+    if not isinstance(dimensions, Mapping):
+        return None
+
+    def _weight(value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        return number if math.isfinite(number) and number >= 0.0 else None
+
+    shares: dict[str, float] = {}
+    defaulted_terms: dict[str, list[str]] = {}
+    for dimension in _UNOBSERVED_SHARE_DIMENSIONS:
+        record = dimensions.get(dimension)
+        if not isinstance(record, Mapping):
+            return None
+        base_terms = record.get("components")
+        adjustments = record.get("adjustments")
+        if not isinstance(base_terms, list) or not isinstance(adjustments, list):
+            return None
+        blends = []
+        for adjustment in adjustments:
+            if not isinstance(adjustment, Mapping):
+                return None
+            retained = _weight(adjustment.get("retained_weight"))
+            input_weight = _weight(adjustment.get("input_weight"))
+            if retained is None or input_weight is None:
+                return None
+            if retained < 1.0:
+                blends.append((adjustment, input_weight, retained))
+
+        retained_after_base = 1.0
+        for _, _, retained in blends:
+            retained_after_base *= retained
+
+        total = 0.0
+        unobserved = 0.0
+        names: list[str] = []
+        for term in base_terms:
+            if not isinstance(term, Mapping):
+                return None
+            weight = _weight(term.get("weight"))
+            if weight is None:
+                return None
+            final_weight = weight * retained_after_base
+            total += final_weight
+            if term.get("observed") is not True:
+                unobserved += final_weight
+                names.append(str(term.get("name")))
+        for index, (adjustment, input_weight, _) in enumerate(blends):
+            final_weight = input_weight
+            for _, _, later_retained in blends[index + 1:]:
+                final_weight *= later_retained
+            total += final_weight
+            if adjustment.get("observed") is not True:
+                unobserved += final_weight
+                names.append(str(adjustment.get("name")))
+        if total <= 0.0:
+            return None
+        shares[dimension] = max(0.0, min(1.0, unobserved / total))
+        defaulted_terms[dimension] = names
+
+    return {
+        "schema": UNOBSERVED_SHARE_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "by_dimension": shares,
+        "mean": sum(shares.values()) / len(shares),
+        "defaulted_terms": defaulted_terms,
+        "basis": "observed_flags_within_one_checkin",
+    }
+
+
 def compute_legacy_coherence_dependency_shadow(
     decision_history: list,
     coherence_history: list,

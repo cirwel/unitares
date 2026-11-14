@@ -16,6 +16,7 @@ import sys
 from mcp.types import TextContent
 
 from src.governance_glossary import get_eisv_glossary as _default_get_eisv_glossary
+from src.db.mixins.state import LATEST_MEASURED_STATE_FOR_SCOPE_JOIN
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import get_mcp_server
 from src.mcp_handlers.utils import (
@@ -308,7 +309,7 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
               EXTRACT(EPOCH FROM (now() - max(ls.recorded_at)))::bigint
                   AS staleness_newest_seconds
             FROM scope
-            LEFT JOIN core.mv_latest_agent_states ls ON ls.agent_id = scope.agent_id
+            {LATEST_MEASURED_STATE_FOR_SCOPE_JOIN}
         """
         state_row = await conn.fetchrow(state_sql, *scope_args)
 

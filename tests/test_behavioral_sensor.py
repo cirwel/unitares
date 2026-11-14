@@ -1745,3 +1745,123 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
         assert i_without[0]["default_reason"] == "no_admissible_calibration_or_outcomes"
 
 
+
+
+# --- unobserved share: how much of each value rests on defaults ---
+
+def _unobserved_components(**overrides):
+    from src.behavioral_sensor import compute_behavioral_sensor_components
+
+    kwargs = dict(
+        decision_history=["approve"] * 5,
+        coherence_history=[0.5] * 5,
+        regime_history=["EXPLORATION"] * 5,
+        E_history=[0.7] * 5,
+        I_history=[0.7] * 5,
+        S_history=[0.3] * 5,
+        V_history=[0.0] * 5,
+        neutralize_self_loops=True,
+        per_agent_i_calibration=True,
+    )
+    kwargs.update(overrides)
+    return compute_behavioral_sensor_components(**kwargs)
+
+
+def test_unobserved_share_counts_defaulted_base_terms_through_later_blends():
+    from src.behavioral_sensor import UNOBSERVED_SHARE_SCHEMA, compute_unobserved_share
+
+    # No complexity divergence, no outcomes, no calibration: E and I rest on
+    # their defaults. Drift is supplied, so S's only base term is observed.
+    components = _unobserved_components(
+        drift_norm=0.3,
+        continuity_E_input=0.3,
+        tool_error_rate=0.0,
+        unique_tools_ratio=0.02,
+    )
+    share = compute_unobserved_share(components)
+
+    assert share["schema"] == UNOBSERVED_SHARE_SCHEMA
+    assert share["policy_applied"] is False
+    # E: default base (weight 1.0) retained through a 0.20 and a 0.15 blend.
+    assert share["by_dimension"]["E"] == pytest.approx(0.80 * 0.85)
+    # I: default base retained through the 0.10 tool-variety blend.
+    assert share["by_dimension"]["I"] == pytest.approx(0.90)
+    assert share["by_dimension"]["S"] == pytest.approx(0.0)
+    assert share["mean"] == pytest.approx((0.68 + 0.90 + 0.0) / 3)
+    assert share["defaulted_terms"] == {
+        "E": ["complexity_calibration"],
+        "I": ["uncalibrated_base_fallback"],
+        "S": [],
+    }
+
+
+def test_unobserved_share_falls_when_inputs_are_supplied():
+    from src.behavioral_sensor import compute_unobserved_share
+
+    components = _unobserved_components(
+        drift_norm=0.3,
+        complexity_divergence=0.13,
+        continuity_E_input=0.3,
+        continuity_I_input=0.87,
+        continuity_S_input=0.27,
+        tool_error_rate=0.0,
+        unique_tools_ratio=0.02,
+    )
+    share = compute_unobserved_share(components)
+
+    assert share["by_dimension"]["E"] == pytest.approx(0.0)
+    # I's base is still the uncalibrated fallback, now diluted by two blends.
+    assert share["by_dimension"]["I"] == pytest.approx(0.80 * 0.90)
+    assert share["by_dimension"]["S"] == pytest.approx(0.0)
+
+
+def test_unobserved_share_is_zero_when_outcomes_and_inputs_are_all_present():
+    from src.behavioral_sensor import compute_unobserved_share
+
+    outcomes = [
+        {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 0.9,
+         "verification_source": "external_signal"}
+        for _ in range(4)
+    ]
+    components = _unobserved_components(
+        drift_norm=0.3,
+        complexity_divergence=0.13,
+        outcome_history=outcomes,
+    )
+    share = compute_unobserved_share(components)
+
+    assert share["by_dimension"] == {"E": 0.0, "I": 0.0, "S": 0.0}
+    assert share["mean"] == 0.0
+
+
+def test_unobserved_share_is_fully_empty_when_s_has_no_inputs():
+    from src.behavioral_sensor import compute_unobserved_share
+
+    share = compute_unobserved_share(_unobserved_components())
+
+    assert share["by_dimension"] == {"E": 1.0, "I": 1.0, "S": 1.0}
+    assert share["mean"] == 1.0
+
+
+def test_unobserved_share_does_not_change_the_component_record():
+    import copy
+    from src.behavioral_sensor import compute_unobserved_share
+
+    components = _unobserved_components(drift_norm=0.3, tool_call_velocity=9.0)
+    before = copy.deepcopy(components)
+    compute_unobserved_share(components)
+
+    assert components == before
+
+
+@pytest.mark.parametrize("bad", [
+    None,
+    {},
+    {"dimensions": {"E": {"components": [], "adjustments": []}}},
+    {"dimensions": {d: {"components": [{"weight": "x"}], "adjustments": []} for d in "EIS"}},
+    {"dimensions": {d: {"components": [], "adjustments": []} for d in "EIS"}},
+])
+def test_unobserved_share_returns_none_for_records_it_cannot_read(bad):
+    from src.behavioral_sensor import compute_unobserved_share
+
+    assert compute_unobserved_share(bad) is None

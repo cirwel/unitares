@@ -161,3 +161,66 @@ async def test_provisional_lineage_propagates_to_trust_tier():
     # provisional source — the only invariant we assert here is that the
     # provisional gate did not apply to a non-provisional agent.
     assert regular.trust_tier != "provisional_lineage_gate"
+
+
+def _paged_list_agents(rows):
+    """A list_agents stand-in that honours limit/offset over ``rows``."""
+    calls = []
+
+    async def _list_agents(*, limit, offset=0, **kwargs):
+        calls.append({"limit": limit, "offset": offset, **kwargs})
+        return rows[offset:offset + limit]
+
+    return _list_agents, calls
+
+
+async def _load_with(rows, page_size):
+    from src import agent_metadata_persistence
+
+    fake_db = MagicMock()
+    fake_db.get_identities_batch = AsyncMock(return_value={})
+    fake_db.get_provisional_lineage_set = AsyncMock(return_value=set())
+    list_agents, calls = _paged_list_agents(rows)
+    with patch("src.agent_storage.list_agents", new=list_agents), \
+         patch("src.db.get_db", return_value=fake_db), \
+         patch.object(agent_metadata_persistence, "_LOAD_PAGE_SIZE", page_size):
+        result = await agent_metadata_persistence._load_metadata_from_postgres_async()
+    return result, calls
+
+
+@pytest.mark.asyncio
+async def test_loader_reads_past_one_page():
+    """The registry has no row ceiling (#3246): a single capped read dropped
+    the oldest identities, which sort last, once the table outgrew the cap."""
+    rows = [_fake_agent_row(f"agent-{i:04d}") for i in range(25)]
+
+    result, calls = await _load_with(rows, page_size=10)
+
+    assert set(result) == {r.agent_id for r in rows}
+    assert "agent-0024" in result, "the last-sorted (oldest) identity must load"
+    assert [c["offset"] for c in calls] == [0, 10, 20]
+
+
+@pytest.mark.asyncio
+async def test_loader_stops_after_an_exactly_full_last_page():
+    rows = [_fake_agent_row(f"agent-{i:04d}") for i in range(20)]
+
+    result, calls = await _load_with(rows, page_size=10)
+
+    assert len(result) == 20
+    assert [c["offset"] for c in calls] == [0, 10, 20]
+
+
+@pytest.mark.asyncio
+async def test_deleted_rows_do_not_end_paging_early_and_stay_out_of_the_cache():
+    """Deleted identities are filtered by the loader, not by list_agents, so
+    a page thinned by deletions is not mistaken for the last page."""
+    rows = [_fake_agent_row(f"agent-{i:04d}") for i in range(25)]
+    for row in rows[:8]:
+        row.status = "deleted"
+
+    result, calls = await _load_with(rows, page_size=10)
+
+    assert set(result) == {r.agent_id for r in rows[8:]}
+    assert all(c["include_deleted"] is True for c in calls)
+    assert all(c["include_archived"] and c["include_unparticipated"] for c in calls)

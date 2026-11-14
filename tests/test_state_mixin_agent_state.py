@@ -46,13 +46,13 @@ def _stub_with_fetch(fetch):
 
 
 @pytest.mark.asyncio
-async def test_all_latest_reads_matview_without_selecting_epistemic_class_from_it():
-    """Migration 040 avoids DROP/CREATE on the matview.
+async def test_all_latest_reads_base_table_through_the_index_not_the_matview():
+    """The read must not depend on the matview's projection or freshness.
 
-    Existing deployments keep a materialized view without epistemic_class.
-    Selecting that column from the matview failed on every call and sent every
-    call to the base-table sort. The read takes the label and the epoch filter
-    from the base row by primary key, so one query serves either projection.
+    The matview has no epistemic_class column on deployments that predate
+    migration 040. Selecting it there raised on every call and sent every call
+    to a DISTINCT ON sort of all of core.agent_state. One lateral probe per
+    identity returns the same rows from the base table.
     """
     from config.governance_config import GovernanceConfig
 
@@ -67,50 +67,37 @@ async def test_all_latest_reads_matview_without_selecting_epistemic_class_from_i
     assert len(rows) == 1
     assert rows[0].epistemic_class == "substrate_interpretation"
     assert rows[0].state_json["epistemic_class"] == "substrate_interpretation"
-    assert len(calls) == 1, "the matview read must not fall through to the base table"
+    assert len(calls) == 1
     sql, args = calls[0]
-    assert "FROM core.mv_latest_agent_states m" in sql
-    assert "JOIN core.agent_state s ON s.state_id = m.state_id" in sql
-    assert "s.epistemic_class" in sql
-    assert "m.epistemic_class" not in sql
+    assert "mv_latest_agent_states" not in sql
     assert "DISTINCT ON" not in sql
+    assert "CROSS JOIN LATERAL" in sql
+    assert "a.synthetic = false" in sql
+    assert "ORDER BY a.recorded_at DESC" in sql
+    assert "LIMIT 1" in sql
     assert "s.epoch = $1" in sql
     assert args == (GovernanceConfig.CURRENT_EPOCH,)
 
 
-@pytest.mark.asyncio
-async def test_all_latest_falls_back_and_warns_once_when_matview_is_missing(
-    monkeypatch, caplog
-):
-    import logging
+def test_server_no_longer_reads_or_refreshes_the_latest_state_matview():
+    """Nothing in src/ may read or refresh core.mv_latest_agent_states.
 
-    from src.db.mixins import state as state_module
+    The periodic refresh re-sorted and rewrote every state row once a minute.
+    A new reader would silently get data nothing keeps current.
+    """
+    from pathlib import Path
 
-    monkeypatch.setattr(state_module, "_LATEST_STATES_FALLBACK_WARNED", False)
-    calls = []
-
-    async def _fetch(sql, *args):
-        calls.append(sql)
-        if "core.mv_latest_agent_states" in sql:
-            raise Exception('relation "core.mv_latest_agent_states" does not exist')
-        return [_state_row(epistemic_class="substrate_interpretation")]
-
-    stub = _stub_with_fetch(_fetch)
-    with caplog.at_level(logging.WARNING):
-        first = await stub.get_all_latest_agent_states()
-        second = await stub.get_all_latest_agent_states()
-
-    assert [r.epistemic_class for r in first + second] == [
-        "substrate_interpretation",
-        "substrate_interpretation",
+    src = Path(__file__).resolve().parents[1] / "src"
+    offenders = [
+        str(path.relative_to(src))
+        for path in src.rglob("*.py")
+        if any(
+            "mv_latest_agent_states" in line and not line.lstrip().startswith("#")
+            and "core.mv_latest_agent_states`" not in line
+            for line in path.read_text().splitlines()
+        )
     ]
-    fallback_sql = [sql for sql in calls if "DISTINCT ON (s.identity_id)" in sql]
-    assert len(fallback_sql) == 2
-    assert all("s.synthetic = false" in sql for sql in fallback_sql)
-    warnings = [
-        r for r in caplog.records if "mv_latest_agent_states unreadable" in r.getMessage()
-    ]
-    assert len(warnings) == 1
+    assert offenders == []
 
 
 @pytest.mark.asyncio

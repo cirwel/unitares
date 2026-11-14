@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **host observations: `tool_outcome_rollup`.** `POST /v1/runtime/observe`
+  accepts a new `observation_kind` carrying what a host's own record says
+  happened to an agent's tool calls over one window: `tool_delta` (calls whose
+  result landed), `tool_error_delta` (results the host marked as errors),
+  `tool_not_executed_delta` (errors recognized as refused, blocked or
+  interrupted) and `repeat_failure_delta` (executed errors identical to an
+  earlier failing call), with `window_truncated` and `window_basis`. Every
+  count is required and bounded by the one it is a subset of; a missing count
+  is refused, not read as zero. The rows are identity-bound audit evidence
+  like the other host observations: they write no EISV, do not extend a
+  session, and are not part of the activity read model. Nothing scores them.
+- **`derivation.unobserved_share` on behavioral EISV telemetry.** Each
+  behavioral check-in now records, for E, I and S, the share of the published
+  value's weight that comes from defaults instead of supplied readings, plus
+  the mean and the names of the defaulted terms. The compact telemetry summary
+  and the recent-updates feed carry the mean. Measurement-only: no E/I/S/V
+  value, verdict or policy input changes.
+- **check-in responses: `reading_coverage`.** A behavioral check-in response
+  now says which of E, I and S were measured and which are defaults written in
+  place of a missing input, and that V is not a reading when E or I is a
+  default. Filtered response modes show it, with a `Reading coverage:` mirror
+  line, whenever the set of defaulted axes changes from the previous check-in,
+  including when a reading becomes fully measured; a process's first fully
+  measured reading is not shown. Full mode always carries it. Measurement-only: it restates
+  the component record and changes no value, verdict or policy input.
+
 ---
 
 ## [4.0.0] - 2026-11-06

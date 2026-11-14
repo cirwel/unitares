@@ -573,3 +573,129 @@ def test_runtime_activity_endpoint_rejects_invalid_query(client):
     response = client.get("/v1/runtime/activity?window_hours=forever")
     assert response.status_code == 400
     assert response.json()["success"] is False
+
+
+# --- tool outcome rollups: what the host's record says happened to tool calls ---
+
+def _outcome_payload(**overrides):
+    payload = {
+        "agent_uuid": AGENT_UUID,
+        "client_session_id": SESSION_ID,
+        "observation_kind": "tool_outcome_rollup",
+        "host_family": "claude",
+        "slot_hash": "cd" * 16,
+        "observed_at": "2026-11-13T09:00:00Z",
+        "tool_delta": 12,
+        "tool_error_delta": 5,
+        "tool_not_executed_delta": 1,
+        "repeat_failure_delta": 2,
+        "window_truncated": False,
+        "window_basis": "transcript_cursor",
+        "plugin_version": "0.4.31",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_tool_outcome_rollup_is_stored_unscored_and_is_not_liveness(client, recorder):
+    rows, db = recorder
+
+    response = client.post("/v1/runtime/observe", json=_outcome_payload())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["event_type"] == "runtime_observation.tool_outcome_rollup"
+    assert body["measurement_scope"] == "host_transcript_tool_results"
+    assert body["eisv_written"] is False
+    # Counts of what already happened never extend the session.
+    assert body["session_activity_refreshed"] is False
+    assert db.touched == []
+    details = rows[0][0]["details"]
+    assert details["host_family"] == "claude"
+    assert details["tool_delta"] == 12
+    assert details["tool_error_delta"] == 5
+    assert details["tool_not_executed_delta"] == 1
+    assert details["repeat_failure_delta"] == 2
+    assert details["window_truncated"] is False
+    assert details["window_basis"] == "transcript_cursor"
+    assert details["session_activity_evidence"] is False
+    assert details["agent_authored"] is False
+    assert details["eisv_written"] is False
+
+
+def test_a_window_with_no_tool_calls_is_a_reading_of_zero(client, recorder):
+    rows, _db = recorder
+    payload = _outcome_payload(
+        tool_delta=0, tool_error_delta=0, tool_not_executed_delta=0, repeat_failure_delta=0
+    )
+
+    response = client.post("/v1/runtime/observe", json=payload)
+
+    assert response.status_code == 201
+    assert rows[0][0]["details"]["tool_error_delta"] == 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tool_error_delta": None},  # a missing count is not zero
+        {"tool_delta": True},  # bool is an int subclass
+        {"tool_error_delta": "3"},
+        {"repeat_failure_delta": 1.0},
+        {"tool_not_executed_delta": -1},
+        {"tool_error_delta": 13},  # more errors than calls
+        {"tool_not_executed_delta": 6},  # more refusals than errors
+        {"repeat_failure_delta": 5},  # more repeats than executed errors
+        {"window_truncated": 1},  # must be a real bool
+        {"window_truncated": None},
+        {"window_basis": "interval"},
+        {"window_basis": None},
+    ],
+)
+def test_tool_outcome_counts_are_validated(client, recorder, overrides):
+    rows, _db = recorder
+
+    response = client.post("/v1/runtime/observe", json=_outcome_payload(**overrides))
+
+    assert response.status_code == 400
+    assert rows == []
+
+
+def test_a_missing_tool_outcome_field_is_refused(client, recorder):
+    rows, _db = recorder
+    payload = _outcome_payload()
+    del payload["tool_not_executed_delta"]
+
+    response = client.post("/v1/runtime/observe", json=payload)
+
+    assert response.status_code == 400
+    assert rows == []
+
+
+def test_tool_outcome_rollup_stays_out_of_the_activity_read_model():
+    from src.runtime_observations import (
+        ACTIVITY_KINDS,
+        RUNTIME_EVENT_PREFIX,
+        RUNTIME_EVENT_TYPES,
+        TOOL_OUTCOME_KIND,
+        VALID_KINDS,
+    )
+
+    assert TOOL_OUTCOME_KIND in VALID_KINDS
+    assert TOOL_OUTCOME_KIND not in ACTIVITY_KINDS
+    assert RUNTIME_EVENT_PREFIX + TOOL_OUTCOME_KIND not in RUNTIME_EVENT_TYPES
+
+
+def test_tool_outcome_fields_on_another_kind_are_not_stored(client, recorder):
+    rows, _db = recorder
+    payload = _payload("activity_rollup")
+    payload.pop("host_process_alive")
+    payload.update(tool_error_delta=3, repeat_failure_delta=1, window_truncated=True)
+
+    response = client.post("/v1/runtime/observe", json=payload)
+
+    assert response.status_code == 201
+    details = rows[0][0]["details"]
+    assert "tool_error_delta" not in details
+    assert "repeat_failure_delta" not in details
+    assert "window_truncated" not in details

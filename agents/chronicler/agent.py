@@ -23,8 +23,8 @@ which `/v1/residents` and the resident strip already surface daily.
 
 Environment:
     UNITARES_METRICS_URL        base URL (default http://127.0.0.1:8767)
-    UNITARES_HTTP_API_TOKEN     bearer token; optional if running locally
-                                (trusted-network bypass handles 127.0.0.1)
+    UNITARES_MCP_BEARER_TOKEN   bearer token for strict / hosted Core (preferred)
+    UNITARES_HTTP_API_TOKEN     fallback bearer token for non-strict local Core
     CHRONICLER_REPO_ROOT        repo to scrape (default: working directory)
     CHRONICLER_KG_DIGEST        set to 1 to also write the per-run KG digest
                                 (default off — see above for why)
@@ -61,7 +61,8 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from agents.chronicler.scrapers import SCRAPERS
+from agents.chronicler.scrapers import SCRAPERS, snapshot_scope
+from agents.common.http_client import send_with_bearer_fallback
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 
@@ -130,12 +131,26 @@ class ScrapeReport:
     failed: list[str] = field(default_factory=list)
 
 
+def _explicit_token_for_call(token: str | None, *, use_env_auth: bool) -> str | None:
+    """Map `(token, use_env_auth)` to `send_with_bearer_fallback(explicit_token=...)`.
+
+    - Explicit string `token`: use only that token.
+    - `token=None, use_env_auth=False` (unit-test default): `""` (unauthenticated).
+    - `token=None, use_env_auth=True` (`main()`): `None` (resolve from env + 401 fallback).
+    """
+    if token is not None:
+        return token
+    return None if use_env_auth else ""
+
+
 def fetch_prior(
     client: httpx.Client,
     base_url: str,
     token: str | None,
     name: str,
     budget_left: float | None = None,
+    *,
+    use_env_auth: bool = False,
 ) -> tuple[float | None, str]:
     """Most recent recorded value for `name`, as ``(value, status)``.
 
@@ -165,20 +180,26 @@ def fetch_prior(
         log.warning("prior lookup for %s skipped: read budget exhausted", name)
         return None, PRIOR_UNREADABLE
 
-    headers = {}
-    if token:
-        headers["authorization"] = f"Bearer {token}"
+    explicit_tok = _explicit_token_for_call(token, use_env_auth=use_env_auth)
     since = (
         datetime.now(timezone.utc) - timedelta(days=PRIOR_WINDOW_DAYS)
     ).isoformat()
+    req_timeout = (
+        min(PRIOR_READ_TIMEOUT_S, budget_left)
+        if budget_left is not None
+        else PRIOR_READ_TIMEOUT_S
+    )
     try:
-        resp = client.get(
-            f"{base_url}/v1/metrics/series",
-            headers=headers,
-            params={"name": name, "since": since},
-            timeout=min(PRIOR_READ_TIMEOUT_S, budget_left)
-            if budget_left is not None
-            else PRIOR_READ_TIMEOUT_S,
+        resp = send_with_bearer_fallback(
+            lambda hdrs: client.get(
+                f"{base_url}/v1/metrics/series",
+                headers=hdrs,
+                params={"name": name, "since": since},
+                timeout=req_timeout,
+            ),
+            explicit_token=explicit_tok,
+            base_url=base_url,
+            lowercase_auth_header=True,
         )
         if resp.status_code >= 400:
             # Warn, don't shrug. A wrong route answers every metric the same
@@ -203,16 +224,23 @@ def post_metric(
     token: str | None,
     name: str,
     value: float,
+    *,
+    use_env_auth: bool = False,
 ) -> None:
     """POST one `(name, value)` point. Raises on HTTP error."""
-    headers = {"content-type": "application/json"}
-    if token:
-        headers["authorization"] = f"Bearer {token}"
-    resp = client.post(
-        f"{base_url}/v1/metrics",
-        headers=headers,
-        content=json.dumps({"name": name, "value": value}),
-        timeout=10.0,
+    explicit_tok = _explicit_token_for_call(token, use_env_auth=use_env_auth)
+    body = json.dumps({"name": name, "value": value})
+    resp = send_with_bearer_fallback(
+        lambda hdrs: client.post(
+            f"{base_url}/v1/metrics",
+            headers=hdrs,
+            content=body,
+            timeout=10.0,
+        ),
+        explicit_token=explicit_tok,
+        base_url=base_url,
+        json_body=True,
+        lowercase_auth_header=True,
     )
     if resp.status_code >= 400:
         raise RuntimeError(
@@ -226,14 +254,19 @@ def run(
     token: str | None,
     repo_root: Path,
     dry_run: bool = False,
+    *,
+    use_env_auth: bool = False,
 ) -> ScrapeReport:
     """Run every registered scraper, recording counts and what moved."""
     report = ScrapeReport()
     # Time spent inside fetch_prior only. Scraper wall-clock must not count
     # against it — see fetch_prior's docstring for what that cost last time.
     read_spent = 0.0
+    scoped_tok = _explicit_token_for_call(token, use_env_auth=use_env_auth)
 
-    with httpx.Client() as client:
+    with httpx.Client() as client, snapshot_scope(
+        base_url=base_url, token=scoped_tok, client=client,
+    ):
         for name, scraper in sorted(SCRAPERS.items()):
             try:
                 value = float(scraper(repo_root))
@@ -246,7 +279,10 @@ def run(
                     # server is unreachable; swallow silently in that case,
                     # there's nothing useful to do with the inner error.
                     try:
-                        post_metric(client, base_url, token, f"{name}.error", 1.0)
+                        post_metric(
+                            client, base_url, token, f"{name}.error", 1.0,
+                            use_env_auth=use_env_auth,
+                        )
                     except Exception as inner:
                         log.warning("could not post error metric for %s: %s", name, inner)
                 continue
@@ -257,6 +293,7 @@ def run(
             prior, prior_status = fetch_prior(
                 client, base_url, token, name,
                 budget_left=PRIOR_READ_BUDGET_S - read_spent,
+                use_env_auth=use_env_auth,
             )
             read_spent += time.monotonic() - _read_started
             movement = Movement(
@@ -270,7 +307,10 @@ def run(
                 continue
 
             try:
-                post_metric(client, base_url, token, name, value)
+                post_metric(
+                    client, base_url, token, name, value,
+                    use_env_auth=use_env_auth,
+                )
                 report.successes += 1
                 report.movements.append(movement)
                 log.info("recorded %s = %s", name, value)
@@ -410,6 +450,8 @@ class ChroniclerAgent(GovernanceAgent):
         token: str | None,
         repo_root: Path,
         dry_run: bool = False,
+        *,
+        use_env_auth: bool = False,
     ):
         # Governance tools use the MCP endpoint; metrics POSTs hit the REST
         # endpoint. Derive the MCP URL from the same base so both aim at the
@@ -433,6 +475,7 @@ class ChroniclerAgent(GovernanceAgent):
         self.token = token
         self.repo_root = repo_root
         self.dry_run = dry_run
+        self.use_env_auth = use_env_auth
 
     async def run_cycle(self, client: GovernanceClient) -> CycleResult | None:
         """Run one daily scrape cycle.
@@ -457,7 +500,12 @@ class ChroniclerAgent(GovernanceAgent):
         # Scrapers are sync (subprocess + httpx.Client); push to a thread so
         # the MCP anyio task group isn't blocked by their blocking I/O.
         report = await asyncio.to_thread(
-            run, self.base_url, self.token, self.repo_root, self.dry_run,
+            run,
+            self.base_url,
+            self.token,
+            self.repo_root,
+            self.dry_run,
+            use_env_auth=self.use_env_auth,
         )
         successes, failures = report.successes, report.failures
 
@@ -544,7 +592,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     base_url = os.environ.get("UNITARES_METRICS_URL", DEFAULT_URL).rstrip("/")
-    token = os.environ.get("UNITARES_HTTP_API_TOKEN") or None
     repo_root = Path(os.environ.get("CHRONICLER_REPO_ROOT", os.getcwd())).resolve()
 
     log.info("chronicler start: url=%s repo=%s scrapers=%d", base_url, repo_root, len(SCRAPERS))
@@ -552,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
     # entirely so operators can debug scrapers without first bootstrapping
     # the Chronicler anchor (refuse_fresh_onboard would otherwise block).
     if args.dry:
-        report = run(base_url, token, repo_root, dry_run=True)
+        report = run(base_url, None, repo_root, dry_run=True, use_env_auth=True)
         # Print the digest the live path would store, so an operator can see
         # the wording without writing to the KG.
         digest_summary, digest_details = format_digest(report)
@@ -560,7 +607,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.failures == 0 else 1
 
     agent = ChroniclerAgent(
-        base_url=base_url, token=token, repo_root=repo_root, dry_run=False,
+        base_url=base_url,
+        token=None,
+        repo_root=repo_root,
+        dry_run=False,
+        use_env_auth=True,
     )
     try:
         asyncio.run(agent.run_once())

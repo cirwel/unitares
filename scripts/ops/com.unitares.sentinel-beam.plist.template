@@ -41,6 +41,15 @@
   Verify:
     launchctl list | grep com.unitares.sentinel-beam
     tail -f __HOME__/Library/Logs/unitares-sentinel-beam.log
+
+  Remote-Core cloud mode (Core on Linux Compose VPS, e.g. https://gov.cirwel.org):
+    - Set GOV_REST_URL=https://gov.cirwel.org (auto-derives GOV_WS_URL=wss://...,
+      UNITARES_FINDINGS_URL, and UNITARES_GOVERNANCE_TOOLS_URL unless overridden)
+    - Set UNITARES_MCP_BEARER_TOKEN (strict-mode bearer accepted by remote Core)
+    - Set UNITARES_SENTINEL_START_POSTGREX=false (switches ForcedReleasePoller and
+      AuditVolumeWatch to authenticated Core HTTP routes; port 5432 stays closed)
+    - Set UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED=false and omit UNITARES_UDS_SOCKET
+      when lease-plane (:8788) and governance.sock live on the remote VPS
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
