@@ -8,6 +8,7 @@ last_verified: "2026-10-29"
 freshness_days: 35
 source_files:
   - unitares/src/agent_loop_detection.py
+  - unitares/src/checkin_assessment.py
   - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
@@ -56,10 +57,17 @@ the check-in path.
 
 ## Core Model
 
-Newly accepted check-ins normally evaluate agent state with the **EISV** model;
-neutral acceptance survives assessment failure, and replaying a checkpoint
-receipt does not evaluate state again. See `governance-lifecycle` for acceptance
-and retry semantics.
+Newly accepted check-ins evaluate agent state with the **EISV** model by default.
+An operator may select `UNITARES_CHECKIN_ASSESSOR=none` in observe posture to
+accept a report without assessment. That fresh receipt reports
+`assessment.status="not_requested"` with `reason="disabled_by_operator"` and
+contains no decision, metrics, prediction or assessment-state acknowledgement.
+Neutral acceptance also survives assessment failure. A keyed replay reports
+`assessment.status="not_repeated"` without naming a historical assessor and
+never evaluates state again, even if the operator changed the selector. Both
+assessorless annotations carry `automatic_replay=false`; identity, lifecycle
+holds and cooldown remain authoritative. See `governance-lifecycle` for
+acceptance and retry semantics.
 
 - `E`: effective energy / execution drive
 - `I`: information integrity / calibration
@@ -146,7 +154,7 @@ it as cross-process selfhood. Do not pass `continuity_token` on every call; rese
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
 Use `sync_state()` after meaningful work to record progress and complexity, then
-read `action_summary` for the decision and its evidence maturity, `next_action`,
+read `action_summary` when present for the decision and its evidence maturity, `next_action`,
 `recovery_hint`, and, when you asked for them with
 `include_memory_suggestions=true`, `memory_suggestions`. Pass
 `confidence` only when it is a real forecast; if the response returns a
