@@ -1287,6 +1287,11 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                 if target_agent in mcp_server.agent_metadata
                 else await metadata_cache.get(target_agent)
             )
+            # Check again after the await: onboarding or a check-in can install
+            # a live record while the cache read is in flight, and that record
+            # is newer than the snapshot just read. Fall through to it.
+            if cached_meta and target_agent in mcp_server.agent_metadata:
+                cached_meta = None
             if cached_meta:
                 # Found in Redis cache - use it directly
                 logger.debug(f"Metadata cache hit: {target_agent[:8]}...")
@@ -1294,8 +1299,9 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                 # Convert cached dict back to AgentMetadata for consistency
                 from src.agent_state import AgentMetadata
                 meta = AgentMetadata(**cached_meta)
-                # Fill the in-memory cache; the guard above means this never
-                # replaces a live record.
+                # Fill the in-memory cache. Both membership checks above ran
+                # with no await between the second one and this write, so it
+                # never replaces a live record.
                 mcp_server.agent_metadata[agent_id] = meta
                 # Skip to response building (meta already loaded)
                 monitor = mcp_server.monitors.get(agent_id)
