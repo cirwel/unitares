@@ -137,7 +137,7 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         declared_anchor? =
           Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end) or
             Enum.any?(env, fn {key, value} ->
-              key == @client_session_id_var and is_binary(value) and value != ""
+              key == @client_session_id_var and is_binary(value) and String.trim(value) != ""
             end)
 
         effective = Map.new(child_vars)
@@ -145,7 +145,7 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         owned_anchor? =
           declared_anchor? and
             is_binary(Map.get(effective, @client_session_id_var)) and
-            Map.get(effective, @client_session_id_var) != "" and
+            String.trim(Map.get(effective, @client_session_id_var)) != "" and
             Map.get(effective, @orchestrated_var) in ["1", "true", "yes", "on"]
 
         # A daemon may itself have been launched from an anchored agent turn.

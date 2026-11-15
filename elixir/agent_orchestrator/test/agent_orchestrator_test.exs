@@ -860,6 +860,24 @@ defmodule AgentOrchestratorTest do
                AgentOrchestrator.await(id)
     end
 
+    test "an explicit whitespace-only anchor pair is removed" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}|${UNITARES_ORCHESTRATED-unset}|${UNITARES_ORCHESTRATED_OWNER_PID-unset}")
+          ],
+          env: [
+            {"UNITARES_CLIENT_SESSION_ID", "  "},
+            {"UNITARES_ORCHESTRATED", "1"}
+          ]
+        })
+
+      assert {:ok, %{output: ["unset|unset|unset"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
     test "refuses a blank anchor (no acquire, no child)" do
       assert {:error, {:invalid_client_session_id, {:client_session_id_blank, "  "}}} =
                AgentOrchestrator.run(%{

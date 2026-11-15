@@ -97,9 +97,10 @@ defmodule AgentOrchestrator.AgentRunner do
   `client_session_id:` provisions `UNITARES_CLIENT_SESSION_ID` into the child
   env under the same explicit-wins rule. A caller may also explicitly set both
   `UNITARES_CLIENT_SESSION_ID` and `UNITARES_ORCHESTRATED=1` in `env:`. Either
-  complete pair declares a process-owned continuity anchor. An explicit marker
-  that disables orchestration makes the pair invalid, so both variables are
-  removed from the child env. It is the **continuity anchor** a
+  complete pair with a nonblank anchor declares a process-owned continuity
+  anchor. An explicit marker that disables orchestration or a whitespace-only
+  anchor makes the pair invalid, so both variables are removed from the child
+  env. It is the **continuity anchor** a
   spawner passes when many short-lived children are turns of one logical
   conversation (the canonical case: the Discord BEAM bridge, where each user
   turn is a fresh `claude -p` process). Each fresh process otherwise opens a new
