@@ -122,6 +122,16 @@ def eisv_min_std_for_dimension(dimension: str, alphas: Optional[Dict[str, float]
     return MIN_MEANINGFUL_EISV_STD * (alpha / default_alpha)
 
 
+def _record_tracks_readings(data: Dict) -> bool:
+    """Whether a persisted state's reading counters were kept under the hold.
+
+    ``hold_unread`` says the record was written under the hold;
+    ``written_under_hold`` also covers a record written after a rollback,
+    when the hold is off but the counters still mean what they did under it.
+    """
+    return bool(data.get("hold_unread") or data.get("written_under_hold"))
+
+
 @dataclass
 class BehavioralEISV:
     """EMA-smoothed behavioral EISV state.
@@ -234,14 +244,18 @@ class BehavioralEISV:
         For code that rebuilds a state by hand from a stored row instead of
         through ``from_dict``. A row marked ``hold_unread`` was written
         under the hold and is rebuilt under it, so the same axes are scored
-        as were at the time. A row without it predates the hold and is
-        rebuilt with every check-in counted as a reading, as it was scored.
+        as were at the time. A row marked only ``written_under_hold`` was
+        written after a rollback from the hold and is rebuilt the same way
+        ``from_dict`` restores it: hold off, reading counters kept. A row with
+        neither predates the hold and is rebuilt with every check-in counted
+        as a reading, as it was scored.
         """
         readings = data.get("readings") if isinstance(data, dict) else None
-        if not isinstance(readings, dict) or not data.get("hold_unread"):
+        if not isinstance(readings, dict) or not _record_tracks_readings(data):
             self.hold_unread = False
             return
-        self.hold_unread = True
+        self.hold_unread = bool(data.get("hold_unread"))
+        self.written_under_hold = True
         self.readings = {d: int(readings.get(d, 0) or 0) for d in DIMENSIONS}
         since = data.get("since_reading")
         if isinstance(since, dict):
@@ -494,6 +508,11 @@ class BehavioralEISV:
             "confidence": round(self.confidence, 2),
             "updates": self.update_count,
             "hold_unread": self.hold_unread,
+            # Which rule the reading counters were kept under, separate from
+            # the rule this state updates with: True under the hold and after
+            # a rollback from it, so a later restore keeps the counters'
+            # meaning (see ``tracks_readings``).
+            "written_under_hold": self.tracks_readings,
             "read_updates": self.read_update_count,
             "readings": {d: int(self.readings.get(d, 0)) for d in DIMENSIONS},
             "since_reading": {d: int(self.since_reading.get(d, 0)) for d in DIMENSIONS},
@@ -596,7 +615,7 @@ class BehavioralEISV:
         if isinstance(persisted_readings, dict):
             # The record says which rule wrote it; counters alone do not (a
             # state written with the hold off carries them too).
-            state.written_under_hold = bool(data.get("hold_unread"))
+            state.written_under_hold = _record_tracks_readings(data)
             state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
             persisted_since = data.get("since_reading")
             if isinstance(persisted_since, dict):

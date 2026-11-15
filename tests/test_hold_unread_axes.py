@@ -454,3 +454,48 @@ def test_trend_bonus_needs_five_readings_on_each_axis():
     state.update(0.9, 0.9, 0.2)  # two rising points are not a trend
     result = assess_behavioral_state(state)
     assert result.risk == pytest.approx(max(0.0, min(1.0, sum(result.components.values()))))
+
+
+def _rolled_back_state(monkeypatch):
+    """A state written under the hold with I never read, loaded with the hold off."""
+    live = BehavioralEISV()
+    for _ in range(30):
+        live.update(0.8, None, 0.2)
+    stored = live.to_dict_with_history()
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
+    rolled = BehavioralEISV.from_dict(stored)
+    rolled.update(0.8, 0.35, 0.2)
+    return rolled
+
+
+def test_rollback_provenance_survives_a_second_restart(monkeypatch):
+    rolled = _rolled_back_state(monkeypatch)
+    first = assess_behavioral_state(rolled)
+    assert first.components["low_I"] > 0.0  # one I sample: fixed threshold
+
+    stored = rolled.to_dict_with_history()
+    assert stored["hold_unread"] is False and stored["written_under_hold"] is True
+    again = BehavioralEISV.from_dict(stored)
+    assert not again.hold_unread and again.tracks_readings
+    assert again.readings == rolled.readings
+    second = assess_behavioral_state(again)
+    assert second.components == pytest.approx(first.components)
+
+    # The short-baseline rule keeps applying on later check-ins, and through a
+    # third save/load, until I has a baseline of its own.
+    again.update(0.8, 0.35, 0.2)
+    assert assess_behavioral_state(again).components["low_I"] > 0.0
+    third = BehavioralEISV.from_dict(again.to_dict_with_history())
+    assert third.tracks_readings
+    assert assess_behavioral_state(third).components["low_I"] > 0.0
+
+
+def test_a_hand_rebuilt_rolled_back_state_keeps_its_reading_provenance(monkeypatch):
+    rolled = _rolled_back_state(monkeypatch)
+    stored = rolled.to_dict_for_persistence()
+
+    rebuilt = BehavioralEISV(hold_unread=False)
+    rebuilt.adopt_reading_record(stored)
+    assert not rebuilt.hold_unread and rebuilt.tracks_readings
+    assert rebuilt.readings == rolled.readings
+    assert rebuilt.read_update_count == rolled.read_update_count
