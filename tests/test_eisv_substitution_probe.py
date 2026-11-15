@@ -37,6 +37,59 @@ def test_templates_are_real_proceed_and_pause_results():
     assert templates["pause"]["decision"]["action"] == "pause"
 
 
+def test_pause_template_differs_from_proceed_only_in_verdict_keys():
+    templates = probe.build_templates(UNITARESMonitor.process_update, UNITARESMonitor)
+    proceed, pause = templates["proceed"], templates["pause"]
+    assert set(proceed) == set(pause)
+    differing = {key for key in proceed if proceed[key] != pause[key]}
+    assert differing and differing <= set(probe.VERDICT_KEYS)
+    assert pause["metrics"] == proceed["metrics"]
+
+
+@pytest.mark.parametrize("outer", ["freeze_proceed", "freeze_pause", "out_proceed", "out_pause"])
+def test_nested_install_builds_templates_from_the_real_method(installed, outer):
+    installed(outer)
+    templates = probe.build_templates(UNITARESMonitor.process_update, UNITARESMonitor)
+    assert templates["proceed"]["decision"]["action"] == "proceed"
+    assert templates["pause"]["decision"]["action"] == "pause"
+    inner = "freeze_pause" if outer.endswith("proceed") else "freeze_proceed"
+    installed(inner)
+    result = UNITARESMonitor("probe-nested-subject").process_update(dict(_STATE), confidence=0.7)
+    assert result["decision"]["action"] == inner.split("_", 1)[1]
+
+
+def test_undo_of_a_nested_install_restores_the_outer_substitute():
+    outer_undo = probe.install("freeze_pause")
+    try:
+        outer = UNITARESMonitor.process_update
+        probe.install("freeze_proceed")()
+        assert UNITARESMonitor.process_update is outer
+    finally:
+        outer_undo()
+
+
+def test_parse_run_rejects_a_session_that_did_not_complete(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("", encoding="utf-8")
+    with pytest.raises(probe.IncompleteRun, match="exited 3"):
+        probe.parse_run("freeze_pause", 3, "INTERNALERROR> RuntimeError", "", reach)
+
+
+def test_parse_run_rejects_a_session_where_the_plugin_did_not_report(tmp_path):
+    with pytest.raises(probe.IncompleteRun, match="did not report"):
+        probe.parse_run("count", 0, "1 passed", "", tmp_path / "missing.txt")
+
+
+def test_parse_run_reads_failures_and_reach_from_a_completed_session(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_a.py::t1\ntests/test_a.py::t2", encoding="utf-8")
+    stdout = "FAILED tests/test_a.py::t1 - AssertionError\n1 failed, 1 passed in 0.1s\n"
+    run = probe.parse_run("out_pause", 1, stdout, "", reach)
+    assert run["failed"] == ["tests/test_a.py::t1"]
+    assert run["reached"] == ["tests/test_a.py::t1", "tests/test_a.py::t2"]
+    assert run["summary"] == "1 failed, 1 passed in 0.1s"
+
+
 @pytest.mark.parametrize("kind", ["proceed", "pause"])
 def test_freeze_returns_the_template_and_state_never_advances(installed, kind):
     installed(f"freeze_{kind}")

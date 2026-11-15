@@ -8,8 +8,10 @@ the failures each substitution produces:
     The real estimator. Records which tests reach it; changes nothing.
 ``freeze_proceed`` / ``freeze_pause``
     Every call returns one frozen estimator result and the monitor's state
-    never advances. The templates are real results from a fresh monitor:
-    a moderate ``proceed`` and a first-check-in ``pause``.
+    never advances. ``proceed`` is a real moderate result from a fresh
+    monitor; ``pause`` is that same result with only its verdict keys
+    (``decision``, ``status``) taken from a real first-check-in pause, so the
+    two templates differ in the verdict and nothing else.
 ``out_proceed`` / ``out_pause``
     The real method runs, so state, side effects and gates inside it advance,
     and every output key is then replaced by the frozen result.
@@ -30,8 +32,12 @@ Usage:
     python3 scripts/diagnostics/eisv_substitution_probe.py --json
 
 Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
-only on the files whose tests reached the estimator. The pytest plugin is this
-module itself, loaded with ``-p eisv_substitution_probe`` by the runner.
+only on the files whose tests reached the estimator. The probe's own tests are
+never measured. A session that pytest did not complete (internal error,
+interruption, nothing collected) or in which the plugin did not report is an
+incomplete run: the runner says so and exits 2 rather than reporting zero
+failures. The pytest plugin is this module itself, loaded with
+``-p eisv_substitution_probe`` by the runner.
 """
 
 from __future__ import annotations
@@ -59,19 +65,40 @@ _PAUSE_INPUT = (
 )
 
 
+# Output keys that carry the verdict. The pause template differs from the
+# proceed template in these keys only, so a test that is sensitive to some
+# other field (confidence, metrics, drift) is not reported as verdict-sensitive.
+VERDICT_KEYS = ("decision", "status")
+
+_REAL_ATTR = "__eisv_probe_real__"
+
+
+def original_process_update() -> Callable[..., Dict[str, Any]]:
+    """The real ``process_update``, even while a probe substitute is installed."""
+    from src.governance_monitor import UNITARESMonitor
+
+    current = UNITARESMonitor.process_update
+    return getattr(current, _REAL_ATTR, current)
+
+
 def build_templates(real: Callable[..., Dict[str, Any]], monitor_cls: type) -> Dict[str, Dict[str, Any]]:
-    """Compute one real ``proceed`` and one real ``pause`` result from fresh monitors."""
-    templates = {}
-    for kind, (state, confidence, task_type), expected in (
-        ("proceed", _PROCEED_INPUT, "proceed"),
-        ("pause", _PAUSE_INPUT, "pause"),
-    ):
+    """Build the ``proceed`` and ``pause`` templates from real estimator results.
+
+    ``proceed`` is one real result. ``pause`` is that same result with only
+    ``VERDICT_KEYS`` replaced by those of a real first-check-in pause.
+    """
+    real = getattr(real, _REAL_ATTR, real)
+    results = {}
+    for kind, (state, confidence, task_type) in (("proceed", _PROCEED_INPUT), ("pause", _PAUSE_INPUT)):
         result = real(monitor_cls(f"eisv-probe-{kind}"), dict(state), confidence=confidence, task_type=task_type)
         action = (result.get("decision") or {}).get("action")
-        if action != expected:
-            raise RuntimeError(f"template {kind!r} produced action {action!r}, expected {expected!r}")
-        templates[kind] = result
-    return templates
+        if action != kind:
+            raise RuntimeError(f"template {kind!r} produced action {action!r}, expected {kind!r}")
+        results[kind] = result
+    pause = copy.deepcopy(results["proceed"])
+    for key in VERDICT_KEYS:
+        pause[key] = copy.deepcopy(results["pause"][key])
+    return {"proceed": results["proceed"], "pause": pause}
 
 
 def make_substitute(
@@ -97,6 +124,7 @@ def make_substitute(
         result.update(copy.deepcopy(template))
         return result
 
+    setattr(substitute, _REAL_ATTR, getattr(real, _REAL_ATTR, real))
     return substitute
 
 
@@ -104,12 +132,13 @@ def install(mode: str, on_call: Optional[Callable[[], None]] = None) -> Callable
     """Patch ``UNITARESMonitor.process_update`` for ``mode``; return an undo function."""
     from src.governance_monitor import UNITARESMonitor
 
-    real = UNITARESMonitor.process_update
+    previous = UNITARESMonitor.process_update
+    real = original_process_update()
     templates = {} if mode == "count" else build_templates(real, UNITARESMonitor)
     UNITARESMonitor.process_update = make_substitute(mode, real, templates, on_call)
 
     def undo() -> None:
-        UNITARESMonitor.process_update = real
+        UNITARESMonitor.process_update = previous
 
     return undo
 
@@ -150,6 +179,19 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised b
 
 _FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
 
+# pytest exit codes that describe a completed measurement: all passed, or
+# some tests failed. Anything else (interrupted, internal error such as a
+# template that cannot be built, usage error, nothing collected) is not one.
+_MEASURED_EXIT_CODES = (0, 1)
+
+# The probe's own tests install substitutes themselves; measuring them would
+# report the probe, not the estimator.
+SELF_TESTS = ("tests/test_eisv_substitution_probe.py",)
+
+
+class IncompleteRun(RuntimeError):
+    """A pytest session that did not produce a measurement."""
+
 
 def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
     reach_path = workdir / f"reach_{mode}.txt"
@@ -163,11 +205,22 @@ def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
         sys.executable, "-m", "pytest", *targets, "-q", "-rfE",
         "-o", "addopts=", "-p", "no:cacheprovider", "-p", "eisv_substitution_probe",
         "--continue-on-collection-errors",
+        *(f"--ignore={path}" for path in SELF_TESTS),
     ]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
-    failed = sorted({m.group(1) for line in proc.stdout.splitlines() if (m := _FAILED_RE.match(line))})
-    summary = next((line for line in reversed(proc.stdout.splitlines()) if line.strip()), "")
-    reached = reach_path.read_text(encoding="utf-8").split() if reach_path.exists() else []
+    return parse_run(mode, proc.returncode, proc.stdout, proc.stderr, reach_path)
+
+
+def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: Path) -> Dict[str, Any]:
+    """Turn one pytest session into a measurement, or raise ``IncompleteRun``."""
+    tail = "\n".join((stdout + "\n" + stderr).strip().splitlines()[-15:])
+    if returncode not in _MEASURED_EXIT_CODES:
+        raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode}, no measurement\n{tail}")
+    if not reach_path.exists():
+        raise IncompleteRun(f"mode {mode!r}: the probe plugin did not report, no measurement\n{tail}")
+    failed = sorted({m.group(1) for line in stdout.splitlines() if (m := _FAILED_RE.match(line))})
+    summary = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
+    reached = reach_path.read_text(encoding="utf-8").split()
     return {"mode": mode, "failed": failed, "reached": reached, "summary": summary}
 
 
@@ -196,16 +249,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         results: Dict[str, Dict[str, Any]] = {}
-        targets = args.files or ["tests"]
-        results["count"] = run_mode("count", targets, workdir)
-        if not args.files:
-            targets = sorted({node.split("::", 1)[0] for node in results["count"]["reached"]})
-            if not targets:
-                print("No test reached the estimator.", file=sys.stderr)
-                return 1
+        targets = [f for f in (args.files or ["tests"]) if f not in SELF_TESTS]
+        try:
             results["count"] = run_mode("count", targets, workdir)
-        for mode in modes[1:]:
-            results[mode] = run_mode(mode, targets, workdir)
+            if not args.files:
+                targets = sorted({node.split("::", 1)[0] for node in results["count"]["reached"]})
+                if not targets:
+                    print("No test reached the estimator.", file=sys.stderr)
+                    return 1
+                results["count"] = run_mode("count", targets, workdir)
+            for mode in modes[1:]:
+                results[mode] = run_mode(mode, targets, workdir)
+        except IncompleteRun as exc:
+            print(f"Incomplete run: {exc}", file=sys.stderr)
+            return 2
 
     report = compare(results)
     report["reach"] = {"tests": len(results["count"]["reached"]), "files": len(targets)}
