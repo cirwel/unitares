@@ -34,6 +34,7 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   # same hook serves) cannot trigger resume-sharing — it mints. See the
   # session-anchor moduledoc section and onboard_helper.run_onboard's `orchestrated`.
   @orchestrated_var "UNITARES_ORCHESTRATED"
+  @owner_pid_var "UNITARES_ORCHESTRATED_OWNER_PID"
   @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
@@ -131,8 +132,38 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         # escapes open_port's rescue and orphans the just-acquired lease.
         env = Map.get(spec, :env, []) || []
 
+        child_vars = child_env(env ++ OutputBuffer.secret_env(spec), candidates)
+        declared_anchor? = Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end)
+        effective = Map.new(child_vars)
+
+        owned_anchor? =
+          declared_anchor? and
+            is_binary(Map.get(effective, @client_session_id_var)) and
+            Map.get(effective, @client_session_id_var) != "" and
+            Map.get(effective, @orchestrated_var) in ["1", "true", "yes", "on"]
+
+        # A daemon may itself have been launched from an anchored agent turn.
+        # Unanchored children must not inherit that identity through Port env.
+        child_vars =
+          if owned_anchor?,
+            do: child_vars,
+            else:
+              Enum.reject(child_vars, fn {key, _} ->
+                key in [@client_session_id_var, @orchestrated_var, @owner_pid_var]
+              end) ++
+                [
+                  {@client_session_id_var, false},
+                  {@orchestrated_var, false},
+                  {@owner_pid_var, false}
+                ]
+
         {exec, exec_args} =
-          wire_stdin(Map.get(spec, :stdin) || @default_stdin, path, Map.get(spec, :args, []))
+          wire_stdin(
+            Map.get(spec, :stdin) || @default_stdin,
+            path,
+            Map.get(spec, :args, []),
+            owned_anchor?
+          )
 
         opts =
           [
@@ -147,7 +178,7 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
           ]
           |> maybe_opt(
             :env,
-            encode_env(child_env(env ++ OutputBuffer.secret_env(spec), candidates))
+            encode_env(child_vars)
           )
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
@@ -177,9 +208,22 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   #   * `"$0"` / `"$@"` keep the command and its arguments as separate argv
   #     words, so an argument containing quotes, `$(...)`, or backticks is never
   #     interpreted by the shell.
-  defp wire_stdin("pipe", path, args), do: {path, args}
+  defp wire_stdin(mode, path, args, true) do
+    # The shell execs the real CLI, keeping $$ as its PID while preserving the
+    # requested stdin mode. Plugin hooks compare this owner with their host PID
+    # before honoring a thread anchor; nested CLI children fail closed.
+    redirect = if mode == "pipe", do: "", else: " </dev/null"
 
-  defp wire_stdin(_close, path, args),
+    command =
+      ~s(UNITARES_ORCHESTRATED_OWNER_PID=$$; export UNITARES_ORCHESTRATED_OWNER_PID; exec "$0" "$@") <>
+        redirect
+
+    {@sh, ["-c", command, path | args]}
+  end
+
+  defp wire_stdin("pipe", path, args, false), do: {path, args}
+
+  defp wire_stdin(_close, path, args, false),
     do: {@sh, ["-c", ~s(exec "$0" "$@" </dev/null), path | args]}
 
   # Lineage PROVISIONING (see moduledoc): candidate declarations only — the
