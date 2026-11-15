@@ -9,9 +9,11 @@ the failures each substitution produces:
 ``freeze_proceed`` / ``freeze_pause``
     Every call returns one frozen estimator result and the monitor's state
     never advances. ``proceed`` is a real moderate result from a fresh
-    monitor; ``pause`` is that same result with only its verdict keys
-    (``decision``, ``status``) taken from a real first-check-in pause, so the
-    two templates differ in the verdict and nothing else.
+    monitor; ``pause`` is that same result carrying the verdict of a real
+    first-check-in pause, with every verdict-derived field (``status``,
+    ``policy_evaluation``, ``enforcement``, the behavioral verdict directive)
+    rebuilt to match, so the two templates differ in the verdict and nothing
+    else.
 ``out_proceed`` / ``out_pause``
     The real method runs, so state, side effects and gates inside it advance,
     and every output key is then replaced by the frozen result.
@@ -66,10 +68,19 @@ _PAUSE_INPUT = (
 )
 
 
-# Output keys that carry the verdict. The pause template differs from the
-# proceed template in these keys only, so a test that is sensitive to some
-# other field (confidence, metrics, drift) is not reported as verdict-sensitive.
-VERDICT_KEYS = ("decision", "status")
+# Decision fields that carry the verdict. Measurement-derived decision fields
+# (basin, margin, nearest_edge, ...) stay those of the proceed result.
+VERDICT_DECISION_FIELDS = (
+    "action", "sub_action", "reason", "guidance", "critical",
+    "hard_stop_provenance", "cold_start_confirmation", "cold_start_epistemic_gate",
+    "original_action", "original_sub_action", "gap_suppressed",
+    "warmup_structural_suppressed", "cold_start_epistemic_deferred", "latest_risk_fast_trip",
+)
+# Top-level output keys whose value is the verdict or is derived from it. The
+# pause template differs from the proceed template here only (plus the nested
+# behavioral verdict directive), so a test that is sensitive to some other
+# field (confidence, metrics, drift) is not reported as verdict-sensitive.
+VERDICT_KEYS = ("decision", "status", "policy_evaluation", "enforcement")
 
 _REAL_ATTR = "__eisv_probe_real__"
 
@@ -85,8 +96,12 @@ def original_process_update() -> Callable[..., Dict[str, Any]]:
 def build_templates(real: Callable[..., Dict[str, Any]], monitor_cls: type) -> Dict[str, Dict[str, Any]]:
     """Build the ``proceed`` and ``pause`` templates from real estimator results.
 
-    ``proceed`` is one real result. ``pause`` is that same result with only
-    ``VERDICT_KEYS`` replaced by those of a real first-check-in pause.
+    ``proceed`` is one real result. ``pause`` is that same result carrying the
+    verdict of a real first-check-in pause: its decision takes the pause's
+    ``VERDICT_DECISION_FIELDS`` over the proceed decision, ``status`` is the
+    pause's, and every field derived from the decision (``policy_evaluation``,
+    ``enforcement``, the behavioral verdict directive) is rebuilt with the
+    repository's own builders from that decision and the proceed measurements.
     """
     real = getattr(real, _REAL_ATTR, real)
     results = {}
@@ -96,10 +111,32 @@ def build_templates(real: Callable[..., Dict[str, Any]], monitor_cls: type) -> D
         if action != kind:
             raise RuntimeError(f"template {kind!r} produced action {action!r}, expected {kind!r}")
         results[kind] = result
-    pause = copy.deepcopy(results["proceed"])
-    for key in VERDICT_KEYS:
-        pause[key] = copy.deepcopy(results["pause"][key])
-    return {"proceed": results["proceed"], "pause": pause}
+    return {"proceed": results["proceed"], "pause": with_verdict(results["proceed"], results["pause"])}
+
+
+def with_verdict(base: Dict[str, Any], verdict_source: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``base`` carrying ``verdict_source``'s verdict and everything derived from it."""
+    from src.agent_loop_detection import _rewrap_behavioral_verdict
+    from src.monitor_result import _build_enforcement_stub, _build_policy_evaluation
+
+    result = copy.deepcopy(base)
+    decision = result["decision"]
+    source_decision = verdict_source["decision"]
+    for field in VERDICT_DECISION_FIELDS:
+        if field in source_decision:
+            decision[field] = copy.deepcopy(source_decision[field])
+        else:
+            decision.pop(field, None)
+    result["status"] = verdict_source["status"]
+    inputs = (base.get("policy_evaluation") or {}).get("inputs") or {}
+    result["policy_evaluation"] = _build_policy_evaluation(
+        decision, result["metrics"],
+        latest_risk=inputs.get("risk_score_latest"),
+        s_setpoint=inputs.get("s_setpoint"),
+    )
+    result["enforcement"] = _build_enforcement_stub(decision)
+    _rewrap_behavioral_verdict(result, decision)
+    return result
 
 
 def make_substitute(
@@ -198,6 +235,8 @@ class IncompleteRun(RuntimeError):
 
 
 def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
+    if not targets:
+        raise IncompleteRun(f"mode {mode!r}: no targets; pytest would fall back to default discovery")
     reach_path = workdir / f"reach_{mode}.txt"
     env = dict(os.environ)
     env["EISV_PROBE_MODE"] = mode
@@ -255,6 +294,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         workdir = Path(tmp)
         results: Dict[str, Dict[str, Any]] = {}
         targets = [f for f in (args.files or ["tests"]) if f not in SELF_TESTS]
+        if not targets:
+            # An empty target list would make pytest fall back to its
+            # configured default discovery, measuring something not asked for.
+            print("No target left to measure: the probe's own tests are never measured.", file=sys.stderr)
+            return 2
         try:
             results["count"] = run_mode("count", targets, workdir)
             if not args.files:

@@ -42,8 +42,38 @@ def test_pause_template_differs_from_proceed_only_in_verdict_keys():
     proceed, pause = templates["proceed"], templates["pause"]
     assert set(proceed) == set(pause)
     differing = {key for key in proceed if proceed[key] != pause[key]}
-    assert differing and differing <= set(probe.VERDICT_KEYS)
+    assert differing and differing <= set(probe.VERDICT_KEYS) | {"behavioral"}
     assert pause["metrics"] == proceed["metrics"]
+    if "behavioral" in differing:
+        rest = lambda r: {k: v for k, v in r["behavioral"].items() if k != "assessment"}
+        assert rest(pause) == rest(proceed)
+    for field in ("basin", "margin", "nearest_edge"):
+        assert pause["decision"].get(field) == proceed["decision"].get(field)
+
+
+def test_pause_template_is_consistent_in_every_verdict_field():
+    pause = probe.build_templates(UNITARESMonitor.process_update, UNITARESMonitor)["pause"]
+    assert pause["decision"]["action"] == "pause"
+    assert pause["policy_evaluation"]["action"] == "pause"
+    assert pause["enforcement"]["requested"] is True
+    verdict = ((pause.get("behavioral") or {}).get("assessment") or {}).get("verdict")
+    if isinstance(verdict, dict) and "decision_action" in verdict:
+        assert verdict["decision_action"] == "pause"
+
+
+def test_rebuilding_a_result_with_its_own_verdict_reproduces_it():
+    proceed = probe.build_templates(UNITARESMonitor.process_update, UNITARESMonitor)["proceed"]
+    assert probe.with_verdict(proceed, proceed) == proceed
+
+
+def test_an_empty_selection_is_refused_without_running_pytest(monkeypatch):
+    def no_run(*args, **kwargs):
+        raise AssertionError("pytest must not be launched for an empty selection")
+
+    monkeypatch.setattr(probe.subprocess, "run", no_run)
+    assert probe.main(["--files", *probe.SELF_TESTS]) == 2
+    with pytest.raises(probe.IncompleteRun):
+        probe.run_mode("count", [], Path("."))
 
 
 @pytest.mark.parametrize("outer", ["freeze_proceed", "freeze_pause", "out_proceed", "out_pause"])
