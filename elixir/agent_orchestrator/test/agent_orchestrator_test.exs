@@ -826,6 +826,40 @@ defmodule AgentOrchestratorTest do
       assert {:ok, %{output: ["agent:/caller-anchor"]}} = AgentOrchestrator.await(id)
     end
 
+    test "an explicit env anchor pair is process-owned without the top-level key" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "$UNITARES_CLIENT_SESSION_ID|$UNITARES_ORCHESTRATED|$UNITARES_ORCHESTRATED_OWNER_PID|$$")
+          ],
+          env: [
+            {"UNITARES_CLIENT_SESSION_ID", "agent:/explicit-thread"},
+            {"UNITARES_ORCHESTRATED", "1"}
+          ]
+        })
+
+      assert {:ok, %{output: [line], exit_status: 0}} = AgentOrchestrator.await(id)
+      assert ["agent:/explicit-thread", "1", pid, pid] = String.split(line, "|")
+    end
+
+    test "an explicit disabled marker removes the provisioned anchor" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}|${UNITARES_ORCHESTRATED-unset}|${UNITARES_ORCHESTRATED_OWNER_PID-unset}")
+          ],
+          env: [{"UNITARES_ORCHESTRATED", "0"}],
+          client_session_id: "agent:/thread-disabled"
+        })
+
+      assert {:ok, %{output: ["unset|unset|unset"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
     test "refuses a blank anchor (no acquire, no child)" do
       assert {:error, {:invalid_client_session_id, {:client_session_id_blank, "  "}}} =
                AgentOrchestrator.run(%{

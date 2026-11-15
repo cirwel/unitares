@@ -133,7 +133,13 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         env = Map.get(spec, :env, []) || []
 
         child_vars = child_env(env ++ OutputBuffer.secret_env(spec), candidates)
-        declared_anchor? = Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end)
+
+        declared_anchor? =
+          Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end) or
+            Enum.any?(env, fn {key, value} ->
+              key == @client_session_id_var and is_binary(value) and value != ""
+            end)
+
         effective = Map.new(child_vars)
 
         owned_anchor? =
