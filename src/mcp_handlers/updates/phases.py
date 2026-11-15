@@ -423,8 +423,7 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
 
     # agent_metadata caches the registry; it is not the registry. A registered
     # agent is absent from it until the background load finishes after a
-    # server start, and stays absent if it is older than the bulk loader's row
-    # cap. On a miss, read the one record from PostgreSQL before anything
+    # server start. On a miss, read the one record from PostgreSQL before anything
     # below treats absence as "new" (#3243: the strict gate refused resumed
     # agents in that window). Done ahead of the circuit breaker so a paused
     # agent's status is in the cache when that check runs.

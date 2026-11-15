@@ -127,6 +127,21 @@ def _surfaced_outcomes_in_e(response_data: dict) -> Optional[dict]:
     return None
 
 
+def _surfaced_reading_coverage(response_data: dict) -> Optional[dict]:
+    """The reading-coverage account when filtered modes should show it.
+
+    Only when the set of defaulted axes changed since the previous check-in,
+    in either direction: an unchanged account is not repeated, and a reading
+    that becomes fully measured is said once so the earlier notice does not
+    stand. A process's first fully measured reading is not a change. Full mode
+    carries the raw key regardless.
+    """
+    coverage = response_data.get("reading_coverage")
+    if isinstance(coverage, dict) and coverage.get("changed"):
+        return coverage
+    return None
+
+
 def _bounded_text(value: Any) -> Any:
     """Collapse free text to one bounded line for filtered response modes."""
     if not isinstance(value, str):
@@ -706,6 +721,9 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
     outcomes_in_e = _surfaced_outcomes_in_e(response_data)
     if outcomes_in_e is not None:
         result["outcomes_in_e"] = outcomes_in_e
+    reading_coverage = _surfaced_reading_coverage(response_data)
+    if reading_coverage is not None:
+        result["reading_coverage"] = reading_coverage
 
     policy_summary = None
     if _compact_policy_is_actionable(policy_source):
@@ -925,6 +943,13 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         from src.outcomes_in_e import mirror_line
         mirror_signals.append(mirror_line(outcomes_in_e))
 
+    # 8. Reading coverage: which axes are defaults instead of readings, said
+    # on each change so a filled-in number is not read as a measurement.
+    reading_coverage = _surfaced_reading_coverage(response_data)
+    if reading_coverage is not None:
+        from src.reading_coverage import mirror_line as coverage_line
+        mirror_signals.append(coverage_line(reading_coverage))
+
     # In-flow review nudge (#1685): render as a mirror line so the suggestion
     # is visible in the mode that actionable states resolve to.
     if response_data.get("review_suggested"):
@@ -965,6 +990,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         result["relevant_prior_work"] = relevant_prior
     if outcomes_in_e is not None:
         result["outcomes_in_e"] = outcomes_in_e
+    if reading_coverage is not None:
+        result["reading_coverage"] = reading_coverage
 
     if reflection:
         result["reflection"] = reflection
@@ -1195,6 +1222,9 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     outcomes_in_e = _surfaced_outcomes_in_e(response_data)
     if outcomes_in_e is not None:
         result["outcomes_in_e"] = outcomes_in_e
+    reading_coverage = _surfaced_reading_coverage(response_data)
+    if reading_coverage is not None:
+        result["reading_coverage"] = reading_coverage
 
     policy_source = response_data.get("policy_evaluation")
     enforcement_source = response_data.get("enforcement")

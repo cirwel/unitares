@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-11-13T04:57:59Z",
+  "verified_date": "2026-11-13",
+  "verifier": "claude-fable-5-2 (agent 6bccb016): this branch adds an optional reading_coverage key lifted into the sync_state envelope (envelope_step.py), one enrichment (enrichments.py) and its formatter surfacing (response_formatter.py); the envelope fields, lifecycle steps and E/I/S/V descriptions this skill states are unchanged, and governance-fundamentals gains a paragraph describing the new key",
+  "source_digests": {
+    "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
+    "unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql": "c74d05125d80f7b2",
+    "unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql": "62319aa203b4ae8d",
+    "unitares/docs/EISV_COMPUTATION.md": "3824f568c083f48f",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/dialectic_db.py": "95307c15e08b57d9",
+    "unitares/src/dialectic_protocol.py": "e8d17c53bd0cfcbb",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "4612264644a5a512",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "8173667bc158b2eb",
+    "unitares/src/mcp_handlers/dialectic/read_projection.py": "e28bb84176c94efc",
+    "unitares/src/mcp_handlers/dialectic/resolution.py": "fde6b8b0f16ed1c2",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "4a3e6c01255346b4",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "2670687b939fc7e4",
+    "unitares/src/mcp_handlers/identity/operator.py": "b5d86906c9800f00",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "ff2ce614afa39bb6",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "283c8ce971b1556c",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de"
+  },
+  "skill_digest": "e23a1486d3397505",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "416d9df3af0d58c9"
+    ]
+  }
+}
