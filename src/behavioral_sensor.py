@@ -140,8 +140,11 @@ _READING_DIMENSIONS = ("E", "I", "S")
 def hold_unread_axes_enabled() -> bool:
     """Return True when an axis with no supplied base term is held, not filled.
 
-    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default ON; set to
-    ``0``/``false``/``no``/``off``/``""`` to restore filling). Each of E, I and
+    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to hold). It ships off so that a routine
+    deploy does not start era ``HU1``; turning it on is the operator's
+    separate step, and that change adds the era entry and regenerates the
+    golden trajectories (``tests/eisv_preservation_driver.py``). Each of E, I and
     S is built from base terms and then adjusted by blends. When no base term
     was supplied, the formula substitutes a constant (0.85 for E, 0.75 for I,
     the drift and divergence defaults for S) and the blends adjust that
@@ -154,7 +157,7 @@ def hold_unread_axes_enabled() -> bool:
     The component record and the shadow ablations still carry the filled
     arithmetic, so what the formula would have published stays inspectable.
     """
-    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "1").strip().lower()
+    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "0").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -209,9 +212,12 @@ SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS = 10
 def sensor_drift_agent_local_enabled() -> bool:
     """Return True when the sensor's drift input keeps only agent-local parts.
 
-    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default ON; set to
-    ``0``/``false``/``no``/``off``/``""`` to pass the full drift-vector norm
-    as before). The governance drift vector has four components, and on the
+    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default OFF, which
+    passes the full drift-vector norm as before; set to ``1``/``true``/``yes``/
+    ``on`` to keep only agent-local parts). It ships off so that a routine
+    deploy does not start era ``SD1``; turning it on is the operator's separate
+    step, and that change adds the era entry and regenerates the golden
+    trajectories. The governance drift vector has four components, and on the
     behavioral sensor path two of them carry no per-agent information:
 
     - ``stability_deviation`` is ``1 - decision_consistency``. The drift
@@ -230,7 +236,7 @@ def sensor_drift_agent_local_enabled() -> bool:
     enough fresh verified pairs). With neither, the drift input is ``None``
     and S's drift term is reported unobserved instead of as a reading.
     """
-    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "1").strip().lower()
+    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "0").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 

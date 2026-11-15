@@ -21,6 +21,7 @@ from src.behavioral_sensor import (
     SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS,
     compute_behavioral_sensor_components,
     compute_sensor_drift_input,
+    sensor_drift_agent_local_enabled,
     unread_axes,
 )
 
@@ -64,6 +65,15 @@ def _s_components(drift_norm, complexity_divergence):
 def _agent_local_on(monkeypatch):
     monkeypatch.setenv(SENSOR_DRIFT_AGENT_LOCAL_ENV, "1")
     monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+
+
+def test_the_agent_local_input_ships_off(monkeypatch):
+    """A routine deploy must not start era SD1: the default passes the full norm."""
+    monkeypatch.delenv(SENSOR_DRIFT_AGENT_LOCAL_ENV, raising=False)
+    assert sensor_drift_agent_local_enabled() is False
+    record = compute_sensor_drift_input(FROZEN, complexity_divergence_observed=False)
+    assert record["mode"] == "full_norm"
+    assert record["value"] == pytest.approx(FROZEN.norm)
 
 
 def test_the_frozen_vector_reproduces_the_live_constant():

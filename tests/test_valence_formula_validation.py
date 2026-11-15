@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from src.behavioral_sensor import hold_unread_axes_enabled
 from src.behavioral_state import (
     BehavioralEISV,
     V_FORMULA_VERSION,
@@ -48,8 +49,8 @@ class TestSeam:
             s.update(e, i, sv)
             ae, ai, av = ref.alphas["E"], ref.alphas["I"], ref.alphas["V"]
             boost = 0.5 * (1.0 - ref.update_count / 10) if ref.update_count < 10 else 0.0
-            if ref.update_count == 0:
-                # The first reading seeds each value (hold-unread, default on).
+            if ref.update_count == 0 and hold_unread_axes_enabled():
+                # Under the hold the first reading seeds each value.
                 ae = ai = av = 1.0
                 boost = 0.0
             ref.E = (1 - (ae + boost)) * ref.E + (ae + boost) * e
@@ -118,7 +119,8 @@ class TestMigrationReseed:
         stale.V = restored.V
         assert abs(stale.deviation("V")) > abs(restored.deviation("V"))
 
-    def test_under_the_hold_a_v1_load_leaves_v_unscored(self):
+    def test_under_the_hold_a_v1_load_leaves_v_unscored(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "1")
         # Under the hold a pre-v2 snapshot has no reading record, so V is
         # unscored until E and I are both read, and that reading restarts the
         # V baseline. The reseed only sets the placeholder shown meanwhile.
