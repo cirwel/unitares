@@ -2400,6 +2400,47 @@ class TestGetAgentMetadataEdgeCases:
         assert mock_cache.set.await_args.args[0] == "agent-uuid-123"
 
     @pytest.mark.asyncio
+    async def test_get_metadata_live_record_installed_during_cache_read_wins(self, server):
+        """A live record that appears while the cache read is awaited must win:
+        the stale snapshot is neither returned nor written over it.
+
+        Interleaving from the #3242 review: the mapping starts empty, so the
+        cache is read; during that await a check-in installs total_updates=1,
+        and the read then returns the older total_updates=0.
+        """
+        live = make_agent_meta(label="Live", total_updates=1)
+        server.agent_metadata = {}
+        server.monitors = {}
+
+        stale = {
+            "status": "active", "label": "Live", "tags": [], "notes": "",
+            "purpose": None, "total_updates": 0,
+            "last_update": "2026-01-01T00:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+
+        async def get_while_checkin_lands(key):
+            server.agent_metadata[key] = live
+            return stale
+
+        mock_cache = AsyncMock()
+        mock_cache.get = AsyncMock(side_effect=get_while_checkin_lands)
+        stale_meta = make_agent_meta(
+            label="Live", total_updates=0, last_update=stale["last_update"]
+        )
+
+        with patch("src.agent_state.AgentMetadata", MagicMock(return_value=stale_meta)), \
+             patch_lifecycle_server(server), \
+             patch("src.cache.get_metadata_cache", return_value=mock_cache):
+            from src.mcp_handlers.lifecycle.handlers import handle_get_agent_metadata
+            result = await handle_get_agent_metadata({"target_agent": "agent-uuid-123"})
+            data = _parse(result)
+
+        mock_cache.get.assert_awaited_once()
+        assert data["total_updates"] == 1
+        assert server.agent_metadata["agent-uuid-123"] is live
+
+    @pytest.mark.asyncio
     async def test_get_metadata_label_lookup_in_memory(self, server):
         """Label lookup resolves against in-memory cache (reload path removed for anyio deadlock fix)."""
         meta = make_agent_meta(label="FoundInMemory", total_updates=10)
