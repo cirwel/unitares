@@ -1198,6 +1198,11 @@ def build_experience_envelope(
         outcomes_in_e = payload.get("outcomes_in_e")
         if isinstance(outcomes_in_e, dict) and not include_raw:
             envelope["outcomes_in_e"] = outcomes_in_e
+        # The reading-coverage account rides the same way: the formatter
+        # decided whether this turn shows it (the defaulted set changed).
+        reading_coverage = payload.get("reading_coverage")
+        if isinstance(reading_coverage, dict) and not include_raw:
+            envelope["reading_coverage"] = reading_coverage
         # This check-in's non-fatal warnings (update_response_service mints
         # them, e.g. "confidence dampened" on a weak binding or a failed
         # evidence write; the tool description says to inspect them for
