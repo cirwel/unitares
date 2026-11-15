@@ -75,6 +75,41 @@ def test_parse_run_rejects_a_session_that_did_not_complete(tmp_path):
         probe.parse_run("freeze_pause", 3, "INTERNALERROR> RuntimeError", "", reach)
 
 
+@pytest.mark.parametrize(
+    "returncode, stdout",
+    [
+        (2, "ERROR tests/test_broken.py\n!!! Interrupted: 1 error during collection !!!\n1 error in 0.2s\n"),
+        (1, "ERROR tests/test_broken.py - ImportError\n1 passed, 1 error in 0.2s\n"),
+    ],
+)
+def test_parse_run_rejects_collection_errors(tmp_path, returncode, stdout):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_ok.py::t", encoding="utf-8")
+    with pytest.raises(probe.IncompleteRun):
+        probe.parse_run("count", returncode, stdout, "", reach)
+
+
+def test_parse_run_keeps_a_test_setup_error_as_a_measured_failure(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_a.py::t1", encoding="utf-8")
+    stdout = "ERROR tests/test_a.py::t1 - fixture failed\n1 error in 0.1s\n"
+    run = probe.parse_run("freeze_pause", 1, stdout, "", reach)
+    assert run["failed"] == ["tests/test_a.py::t1"]
+
+
+def test_runner_does_not_continue_past_collection_errors(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        (tmp_path / "reach_count.txt").write_text("", encoding="utf-8")
+        return probe.subprocess.CompletedProcess(cmd, 0, "1 passed\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.run_mode("count", ["tests/test_a.py"], tmp_path)
+    assert "--continue-on-collection-errors" not in seen["cmd"]
+
+
 def test_parse_run_rejects_a_session_where_the_plugin_did_not_report(tmp_path):
     with pytest.raises(probe.IncompleteRun, match="did not report"):
         probe.parse_run("count", 0, "1 passed", "", tmp_path / "missing.txt")

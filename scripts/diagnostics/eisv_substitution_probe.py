@@ -34,7 +34,8 @@ Usage:
 Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
 only on the files whose tests reached the estimator. The probe's own tests are
 never measured. A session that pytest did not complete (internal error,
-interruption, nothing collected) or in which the plugin did not report is an
+interruption, a collection error in any target, nothing collected) or in which
+the plugin did not report is an
 incomplete run: the runner says so and exits 2 rather than reporting zero
 failures. The pytest plugin is this module itself, loaded with
 ``-p eisv_substitution_probe`` by the runner.
@@ -178,6 +179,9 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised b
 # --------------------------------------------------------------------------
 
 _FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
+# A short-summary ERROR naming a file (no "::") is a collection error, and
+# pytest's own line says so; either means some targets were never measured.
+_COLLECTION_ERROR_RE = re.compile(r"^ERROR [^\s:]+(?:\s|$)|errors? during collection", re.MULTILINE)
 
 # pytest exit codes that describe a completed measurement: all passed, or
 # some tests failed. Anything else (interrupted, internal error such as a
@@ -204,7 +208,6 @@ def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
     cmd = [
         sys.executable, "-m", "pytest", *targets, "-q", "-rfE",
         "-o", "addopts=", "-p", "no:cacheprovider", "-p", "eisv_substitution_probe",
-        "--continue-on-collection-errors",
         *(f"--ignore={path}" for path in SELF_TESTS),
     ]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
@@ -216,6 +219,8 @@ def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: 
     tail = "\n".join((stdout + "\n" + stderr).strip().splitlines()[-15:])
     if returncode not in _MEASURED_EXIT_CODES:
         raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode}, no measurement\n{tail}")
+    if _COLLECTION_ERROR_RE.search(stdout):
+        raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
     if not reach_path.exists():
         raise IncompleteRun(f"mode {mode!r}: the probe plugin did not report, no measurement\n{tail}")
     failed = sorted({m.group(1) for line in stdout.splitlines() if (m := _FAILED_RE.match(line))})
