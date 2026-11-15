@@ -732,6 +732,54 @@ defmodule AgentOrchestratorTest do
   end
 
   describe "session-anchor provisioning (thread-stable identity)" do
+    test "the anchored child owns its marker in both stdin modes" do
+      for mode <- ["close", "pipe"] do
+        {:ok, id, _} =
+          AgentOrchestrator.run(%{
+            cmd: "sh",
+            args: ["-c", ~s(echo "$UNITARES_ORCHESTRATED_OWNER_PID|$$")],
+            client_session_id: "agent:/thread-owner-test",
+            stdin: mode
+          })
+
+        assert {:ok, %{output: [line], exit_status: 0}} = AgentOrchestrator.await(id)
+        [owner, child] = String.split(line, "|")
+        assert owner == child
+        assert owner != ""
+      end
+    end
+
+    test "unanchored child cannot inherit a daemon's thread identity" do
+      keys = [
+        "UNITARES_CLIENT_SESSION_ID",
+        "UNITARES_ORCHESTRATED",
+        "UNITARES_ORCHESTRATED_OWNER_PID"
+      ]
+
+      previous = Map.new(keys, &{&1, System.get_env(&1)})
+
+      on_exit(fn ->
+        Enum.each(previous, fn {key, value} ->
+          if value, do: System.put_env(key, value), else: System.delete_env(key)
+        end)
+      end)
+
+      System.put_env("UNITARES_CLIENT_SESSION_ID", "agent:/thread-parent")
+      System.put_env("UNITARES_ORCHESTRATED", "1")
+      System.put_env("UNITARES_ORCHESTRATED_OWNER_PID", "12345")
+
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}|${UNITARES_ORCHESTRATED-unset}|${UNITARES_ORCHESTRATED_OWNER_PID-unset}")
+          ]
+        })
+
+      assert {:ok, %{output: ["unset|unset|unset"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
     test "provisions UNITARES_CLIENT_SESSION_ID into the child env" do
       {:ok, id, _} =
         AgentOrchestrator.run(%{
@@ -776,6 +824,58 @@ defmodule AgentOrchestratorTest do
         })
 
       assert {:ok, %{output: ["agent:/caller-anchor"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "an explicit env anchor pair is process-owned without the top-level key" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "$UNITARES_CLIENT_SESSION_ID|$UNITARES_ORCHESTRATED|$UNITARES_ORCHESTRATED_OWNER_PID|$$")
+          ],
+          env: [
+            {"UNITARES_CLIENT_SESSION_ID", "agent:/explicit-thread"},
+            {"UNITARES_ORCHESTRATED", "1"}
+          ]
+        })
+
+      assert {:ok, %{output: [line], exit_status: 0}} = AgentOrchestrator.await(id)
+      assert ["agent:/explicit-thread", "1", pid, pid] = String.split(line, "|")
+    end
+
+    test "an explicit disabled marker removes the provisioned anchor" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}|${UNITARES_ORCHESTRATED-unset}|${UNITARES_ORCHESTRATED_OWNER_PID-unset}")
+          ],
+          env: [{"UNITARES_ORCHESTRATED", "0"}],
+          client_session_id: "agent:/thread-disabled"
+        })
+
+      assert {:ok, %{output: ["unset|unset|unset"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "an explicit whitespace-only anchor pair is removed" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}|${UNITARES_ORCHESTRATED-unset}|${UNITARES_ORCHESTRATED_OWNER_PID-unset}")
+          ],
+          env: [
+            {"UNITARES_CLIENT_SESSION_ID", "  "},
+            {"UNITARES_ORCHESTRATED", "1"}
+          ]
+        })
+
+      assert {:ok, %{output: ["unset|unset|unset"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
     end
 
     test "refuses a blank anchor (no acquire, no child)" do

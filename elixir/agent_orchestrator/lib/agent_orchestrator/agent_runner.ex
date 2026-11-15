@@ -95,7 +95,12 @@ defmodule AgentOrchestrator.AgentRunner do
   ## Session-anchor provisioning (thread-stable identity)
 
   `client_session_id:` provisions `UNITARES_CLIENT_SESSION_ID` into the child
-  env under the same explicit-wins rule. It is the **continuity anchor** a
+  env under the same explicit-wins rule. A caller may also explicitly set both
+  `UNITARES_CLIENT_SESSION_ID` and `UNITARES_ORCHESTRATED=1` in `env:`. Either
+  complete pair with a nonblank anchor declares a process-owned continuity
+  anchor. An explicit marker that disables orchestration or a whitespace-only
+  anchor makes the pair invalid, so both variables are removed from the child
+  env. It is the **continuity anchor** a
   spawner passes when many short-lived children are turns of one logical
   conversation (the canonical case: the Discord BEAM bridge, where each user
   turn is a fresh `claude -p` process). Each fresh process otherwise opens a new
@@ -113,7 +118,7 @@ defmodule AgentOrchestrator.AgentRunner do
   _}}`) — a blank anchor would silently degrade back to fresh-mint-per-turn, the
   exact failure this provisioning exists to prevent.
 
-  ### Fail-closed marker (`UNITARES_ORCHESTRATED`)
+  ### Fail-closed markers (`UNITARES_ORCHESTRATED`, owner PID)
 
   The anchor is provisioned WITH a companion `UNITARES_ORCHESTRATED=1` marker.
   The same onboard hook serves *normal interactive* sessions, so it must not
@@ -125,7 +130,11 @@ defmodule AgentOrchestrator.AgentRunner do
   the marker explicitly declares an orchestrated headless turn-child. The
   orchestrator KNOWS its children are exactly that, so it sets the marker; an
   interactive session never carries it and therefore can never resume-share. The
-  two vars are one unit — set together or not at all.
+  two vars are one unit — set together or not at all. For a complete pair, the
+  launcher also sets `UNITARES_ORCHESTRATED_OWNER_PID` to the child CLI's PID;
+  hooks accept the anchor only in that process. Unanchored children have all
+  three variables removed, including values inherited from the spawner's
+  own environment.
 
   ## Presence
 
