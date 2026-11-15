@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Measure which tests depend on the EISV estimator, and on what about it.
+
+Wraps ``UNITARESMonitor.process_update`` for one pytest session and compares
+the failures each substitution produces:
+
+``count``
+    The real estimator. Records which tests reach it; changes nothing.
+``freeze_proceed`` / ``freeze_pause``
+    Every call returns one frozen estimator result and the monitor's state
+    never advances. The templates are real results from a fresh monitor:
+    a moderate ``proceed`` and a first-check-in ``pause``.
+``out_proceed`` / ``out_pause``
+    The real method runs, so state, side effects and gates inside it advance,
+    and every output key is then replaced by the frozen result.
+
+A test that fails under ``freeze_*`` but passes under ``out_*`` depends on the
+estimator having advanced its state, not on its values. A test whose outcome
+differs between ``*_proceed`` and ``*_pause`` depends on the verdict itself.
+
+These are test-contract findings, not runtime dependency: a test that never
+reaches the estimator says nothing, so ``count`` reports reach first. Note that
+``out_*`` also overwrites decisions made by gates that live inside
+``process_update`` (the verification floor today).
+
+Usage:
+    python3 scripts/diagnostics/eisv_substitution_probe.py
+    python3 scripts/diagnostics/eisv_substitution_probe.py --modes freeze_pause out_pause
+    python3 scripts/diagnostics/eisv_substitution_probe.py --files tests/test_governance_monitor.py
+    python3 scripts/diagnostics/eisv_substitution_probe.py --json
+
+Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
+only on the files whose tests reached the estimator. The pytest plugin is this
+module itself, loaded with ``-p eisv_substitution_probe`` by the runner.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MODES = ("count", "freeze_proceed", "freeze_pause", "out_proceed", "out_pause")
+DEFAULT_MODES = MODES
+
+_PROCEED_INPUT = ({"response_text": "probe", "complexity": 0.5}, 0.7, "mixed")
+_PAUSE_INPUT = (
+    {"response_text": "probe", "complexity": 1.0, "ethical_drift": [0.9, 0.9, 0.9]},
+    0.05,
+    "convergent",
+)
+
+
+def build_templates(real: Callable[..., Dict[str, Any]], monitor_cls: type) -> Dict[str, Dict[str, Any]]:
+    """Compute one real ``proceed`` and one real ``pause`` result from fresh monitors."""
+    templates = {}
+    for kind, (state, confidence, task_type), expected in (
+        ("proceed", _PROCEED_INPUT, "proceed"),
+        ("pause", _PAUSE_INPUT, "pause"),
+    ):
+        result = real(monitor_cls(f"eisv-probe-{kind}"), dict(state), confidence=confidence, task_type=task_type)
+        action = (result.get("decision") or {}).get("action")
+        if action != expected:
+            raise RuntimeError(f"template {kind!r} produced action {action!r}, expected {expected!r}")
+        templates[kind] = result
+    return templates
+
+
+def make_substitute(
+    mode: str,
+    real: Callable[..., Dict[str, Any]],
+    templates: Dict[str, Dict[str, Any]],
+    on_call: Optional[Callable[[], None]] = None,
+) -> Callable[..., Dict[str, Any]]:
+    """Return a ``process_update`` replacement for ``mode``."""
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r}; choose from {', '.join(MODES)}")
+
+    def substitute(self, agent_state, confidence=None, task_type="mixed"):
+        if on_call is not None:
+            on_call()
+        if mode == "count":
+            return real(self, agent_state, confidence=confidence, task_type=task_type)
+        template = templates[mode.split("_", 1)[1]]
+        if mode.startswith("freeze"):
+            return copy.deepcopy(template)
+        result = real(self, agent_state, confidence=confidence, task_type=task_type)
+        result.clear()
+        result.update(copy.deepcopy(template))
+        return result
+
+    return substitute
+
+
+def install(mode: str, on_call: Optional[Callable[[], None]] = None) -> Callable[[], None]:
+    """Patch ``UNITARESMonitor.process_update`` for ``mode``; return an undo function."""
+    from src.governance_monitor import UNITARESMonitor
+
+    real = UNITARESMonitor.process_update
+    templates = {} if mode == "count" else build_templates(real, UNITARESMonitor)
+    UNITARESMonitor.process_update = make_substitute(mode, real, templates, on_call)
+
+    def undo() -> None:
+        UNITARESMonitor.process_update = real
+
+    return undo
+
+
+# --------------------------------------------------------------------------
+# pytest plugin hooks (active only when EISV_PROBE_MODE is set)
+# --------------------------------------------------------------------------
+
+_current_test: List[Optional[str]] = [None]
+_reached: set = set()
+
+
+def _record_reach() -> None:
+    if _current_test[0]:
+        _reached.add(_current_test[0])
+
+
+def pytest_sessionstart(session):  # pragma: no cover - exercised by the runner
+    mode = os.environ.get("EISV_PROBE_MODE")
+    if mode:
+        install(mode, on_call=_record_reach)
+
+
+def pytest_runtest_protocol(item, nextitem):  # pragma: no cover - exercised by the runner
+    _current_test[0] = item.nodeid
+    return None
+
+
+def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised by the runner
+    path = os.environ.get("EISV_PROBE_REACH")
+    if os.environ.get("EISV_PROBE_MODE") and path:
+        Path(path).write_text("\n".join(sorted(_reached)), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# runner
+# --------------------------------------------------------------------------
+
+_FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
+
+
+def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
+    reach_path = workdir / f"reach_{mode}.txt"
+    env = dict(os.environ)
+    env["EISV_PROBE_MODE"] = mode
+    env["EISV_PROBE_REACH"] = str(reach_path)
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(Path(__file__).resolve().parent), env.get("PYTHONPATH")])
+    )
+    cmd = [
+        sys.executable, "-m", "pytest", *targets, "-q", "-rfE",
+        "-o", "addopts=", "-p", "no:cacheprovider", "-p", "eisv_substitution_probe",
+        "--continue-on-collection-errors",
+    ]
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+    failed = sorted({m.group(1) for line in proc.stdout.splitlines() if (m := _FAILED_RE.match(line))})
+    summary = next((line for line in reversed(proc.stdout.splitlines()) if line.strip()), "")
+    reached = reach_path.read_text(encoding="utf-8").split() if reach_path.exists() else []
+    return {"mode": mode, "failed": failed, "reached": reached, "summary": summary}
+
+
+def compare(results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    base = set(results.get("count", {}).get("failed", []))
+    new = {m: sorted(set(r["failed"]) - base) for m, r in results.items() if m != "count"}
+    report: Dict[str, Any] = {"new_failures": {m: len(v) for m, v in new.items()}}
+    if "freeze_proceed" in new and "out_proceed" in new:
+        report["state_advance_only"] = sorted(set(new["freeze_proceed"]) - set(new["out_proceed"]))
+    for family in ("freeze", "out"):
+        p, q = new.get(f"{family}_proceed"), new.get(f"{family}_pause")
+        if p is not None and q is not None:
+            report[f"{family}_verdict_sensitive"] = sorted(set(p) ^ set(q))
+    report["new_failure_ids"] = new
+    return report
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
+    parser.add_argument("--files", nargs="+", help="test files to run (default: files that reach the estimator)")
+    parser.add_argument("--json", action="store_true", help="print the full report as JSON")
+    args = parser.parse_args(argv)
+
+    modes = list(dict.fromkeys(["count", *args.modes]))
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        results: Dict[str, Dict[str, Any]] = {}
+        targets = args.files or ["tests"]
+        results["count"] = run_mode("count", targets, workdir)
+        if not args.files:
+            targets = sorted({node.split("::", 1)[0] for node in results["count"]["reached"]})
+            if not targets:
+                print("No test reached the estimator.", file=sys.stderr)
+                return 1
+            results["count"] = run_mode("count", targets, workdir)
+        for mode in modes[1:]:
+            results[mode] = run_mode(mode, targets, workdir)
+
+    report = compare(results)
+    report["reach"] = {"tests": len(results["count"]["reached"]), "files": len(targets)}
+    report["summaries"] = {m: r["summary"] for m, r in results.items()}
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    print(f"Reach: {report['reach']['tests']} tests in {report['reach']['files']} files")
+    for mode, summary in report["summaries"].items():
+        extra = "" if mode == "count" else f"  (new failures: {report['new_failures'][mode]})"
+        print(f"  {mode:15s} {summary}{extra}")
+    if "state_advance_only" in report:
+        print(f"State-advance only (fail frozen, pass with state advancing): {len(report['state_advance_only'])}")
+    for family in ("freeze", "out"):
+        key = f"{family}_verdict_sensitive"
+        if key in report:
+            print(f"Verdict-sensitive under {family}_*: {len(report[key])}")
+            for node in report[key]:
+                print(f"    {node}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
