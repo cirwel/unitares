@@ -268,6 +268,63 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     return "resumed" if last in {"pause", "reject"} else last
 
 
+async def _read_observation_summary(agent_id: str, monitor: Any) -> dict:
+    """Expose coverage of the latest durable assessment, separate from read time.
+
+    The live monitor and latest persisted row can differ after a failed write
+    or another writer's update. Keep the persisted snapshot explicitly scoped;
+    do not attach its per-axis coverage to the live vector as if they were one.
+    """
+    beh = getattr(monitor, "_behavioral_state", None)
+    updates = getattr(beh, "update_count", None)
+    result = {
+        "behavioral_updates": updates if isinstance(updates, int) else None,
+        "latest_persisted": None,
+    }
+    try:
+        from src import agent_storage
+        from src.reading_coverage import build_reading_coverage
+
+        row = await agent_storage.get_latest_agent_state(agent_id)
+        if row is None:
+            result["persistence_status"] = "no_observation"
+            return result
+        state = getattr(row, "state_json", None)
+        state = state if isinstance(state, dict) else {}
+        telemetry = state.get("eisv_telemetry")
+        telemetry = telemetry if isinstance(telemetry, dict) else {}
+        recorded = getattr(row, "recorded_at", None)
+        if isinstance(recorded, str):
+            try:
+                recorded = datetime.fromisoformat(recorded.replace("Z", "+00:00"))
+            except ValueError:
+                recorded = None
+        if isinstance(recorded, datetime):
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=timezone.utc)
+            age = max(0.0, (datetime.now(timezone.utc) - recorded).total_seconds())
+        else:
+            recorded, age = None, None
+        try:
+            coverage = build_reading_coverage(telemetry.get("derivation"))
+        except (ValueError, TypeError, OverflowError):
+            coverage = None
+        result["latest_persisted"] = {
+            "recorded_at": recorded.isoformat() if recorded else None,
+            "age_seconds": round(age, 1) if age is not None else None,
+            "epistemic_class": getattr(row, "epistemic_class", None),
+            "reading_coverage": coverage,
+            "coverage_status": "available" if coverage is not None else "unavailable",
+        }
+        result["persistence_status"] = "recorded"
+    except Exception as exc:
+        # A telemetry lookup cannot turn a state read into a failed read, or
+        # make missing evidence look like a fresh observation.
+        result["persistence_status"] = "unavailable"
+        logger.debug("Observation summary unavailable: %s", type(exc).__name__)
+    return result
+
+
 async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], server=None) -> Dict[str, Any]:
     """Build plain governance metrics data for an agent."""
     server = server or mcp_server
@@ -351,6 +408,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     if display_name:
         standardized_metrics["display_name"] = display_name
     standardized_metrics.update(_build_eisv_semantics(metrics, monitor))
+    observation_summary = await _read_observation_summary(agent_id, monitor)
+    standardized_metrics["observation_summary"] = observation_summary
 
     if meta and getattr(meta, "purpose", None):
         standardized_metrics["purpose"] = meta.purpose
@@ -525,6 +584,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 else state.get("guidance")
             ),
             "write_gate": write_gate,
+            "observation_summary": observation_summary,
         })
         # basin/mode are assessments — withheld for uninitialized agents
         # (the pending state dict has no basin/mode keys; explain_*(None)
@@ -621,6 +681,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         if unique_handle != public_agent_id:
             lite_metrics["public_handle"] = unique_handle
         lite_metrics.update({
+            "observation_summary": observation_summary,
             "status": status_display,
             "purpose": getattr(meta, "purpose", None),
             "summary": standardized_metrics.get("summary", "unknown"),
