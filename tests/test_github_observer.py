@@ -989,3 +989,17 @@ def test_code_span_closed_before_footer_line_keeps_footer_visible():
 
     body = f"See `a\nb` above\n\n---\nUNITARES agent: {_UUID_A}\n"
     assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_indented_closing_tag_inside_pre_closes_the_block():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"<pre>\nlog\n    </pre>\n\n---\nUNITARES agent: {_UUID_A}\n"
+    assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_escaped_backtick_opens_no_code_span():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"---\nUNITARES agent: {_UUID_A}\n\nan escaped \\` and <!--\nUNITARES agent: {_UUID_B}\n-->\n"
+    assert agent_uuid_from_body(body) == _UUID_A

@@ -60,7 +60,7 @@ _QUOTE_RE = re.compile(r"^ {0,3}>")
 _INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
 # Outside a comment: a comment opening, or a backtick run that may open a
 # code span (whose contents are literal, so a ``<!--`` inside one opens nothing).
-_COMMENT_OR_CODE_RE = re.compile(r"<!--|`+")
+_COMMENT_OR_CODE_RE = re.compile(r"<!--|(?<!\\)`+")  # an escaped \` opens no span
 # HTML whose contents a reader does not see as the author's own line: a
 # collapsed ``<details>`` and a ``<pre>`` block.
 _HIDING_TAGS = ("details", "pre")
@@ -237,7 +237,8 @@ def agent_uuid_from_body(body: str | None) -> str | None:
         is_quote = not was_in_comment and _QUOTE_RE.match(line) is not None
         # An indented code line or a quoted line shows a tag literally (or
         # inside the quote only), so it neither opens nor closes a hiding block.
-        if not (_INDENTED_CODE_RE.match(line) or is_quote):
+        # Inside an open HTML block indentation is not code, so a closing tag counts.
+        if not ((_INDENTED_CODE_RE.match(line) and not hidden) or is_quote):
             for tag in _HIDING_TAGS:
                 depth[tag] = _tag_depth(visible, tag, depth[tag])
         if is_quote and not hidden:
