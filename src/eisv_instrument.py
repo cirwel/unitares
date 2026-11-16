@@ -82,9 +82,11 @@ def _static_config() -> Dict[str, Any]:
     from src.behavioral_sensor import (
         HOLD_UNREAD_AXES_MODE,
         NEUTRALIZE_SENSOR_SELF_LOOPS_MODE,
+        SENSOR_DRIFT_AGENT_LOCAL_MODE,
         hold_unread_axes_enabled,
         neutralize_sensor_self_loops_enabled,
         per_agent_i_calibration_enabled,
+        sensor_drift_agent_local_enabled,
     )
     from src.grounding.class_indicator import load_resident_labels
 
@@ -108,6 +110,8 @@ def _static_config() -> Dict[str, Any]:
         cfg["per_agent_i_calibration"] = True
     if hold_unread_axes_enabled():
         cfg["hold_unread_axes"] = HOLD_UNREAD_AXES_MODE
+    if sensor_drift_agent_local_enabled():
+        cfg["sensor_drift_agent_local"] = SENSOR_DRIFT_AGENT_LOCAL_MODE
     return cfg
 
 
