@@ -216,3 +216,32 @@ def test_the_flag_is_part_of_the_instrument_config(monkeypatch):
         assert "sensor_drift_agent_local" not in eisv_instrument._static_config()
     finally:
         eisv_instrument._static_config.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("raw_cd", "expected_reason"),
+    [
+        (None, "not_supplied"),
+        (float("nan"), "complexity_divergence_invalid"),
+        (float("inf"), "complexity_divergence_invalid"),
+        (True, "complexity_divergence_invalid"),
+    ],
+)
+def test_non_finite_or_missing_complexity_divergence_is_excluded(raw_cd, expected_reason):
+    from types import SimpleNamespace
+
+    vector = SimpleNamespace(norm=0.3, complexity_divergence=raw_cd)
+    record = compute_sensor_drift_input(vector, complexity_divergence_observed=True)
+    assert record["used"] == {}
+    assert record["value"] is None
+    assert record["excluded"]["complexity_divergence"] == expected_reason
+
+
+@pytest.mark.parametrize(("raw_cd", "expected"), [(-0.2, 0.0), (1.5, 1.0)])
+def test_complexity_divergence_is_clamped_to_unit_interval(raw_cd, expected):
+    from types import SimpleNamespace
+
+    vector = SimpleNamespace(norm=0.3, complexity_divergence=raw_cd)
+    record = compute_sensor_drift_input(vector, complexity_divergence_observed=True)
+    assert record["used"] == {"complexity_divergence": pytest.approx(expected)}
+    assert record["value"] == pytest.approx(expected)
