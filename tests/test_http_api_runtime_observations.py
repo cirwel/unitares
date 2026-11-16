@@ -635,6 +635,22 @@ def test_a_window_with_no_tool_calls_is_a_reading_of_zero(client, recorder):
     assert rows[0][0]["details"]["tool_error_delta"] == 0
 
 
+def test_codex_unknown_outcomes_are_preserved_unscored(client, recorder):
+    rows, db = recorder
+    response = client.post("/v1/runtime/observe", json=_outcome_payload(
+        host_family="codex", tool_unknown_status_delta=3, window_truncated=True))
+    assert response.status_code == 201
+    assert rows[0][0]["details"]["tool_unknown_status_delta"] == 3
+    assert response.json()["eisv_written"] is False
+    assert db.touched == []
+
+
+def test_legacy_rollup_does_not_claim_zero_unknown_statuses(client, recorder):
+    rows, _ = recorder
+    assert client.post("/v1/runtime/observe", json=_outcome_payload()).status_code == 201
+    assert "tool_unknown_status_delta" not in rows[0][0]["details"]
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -650,6 +666,9 @@ def test_a_window_with_no_tool_calls_is_a_reading_of_zero(client, recorder):
         {"window_truncated": None},
         {"window_basis": "interval"},
         {"window_basis": None},
+        {"tool_unknown_status_delta": True},
+        {"tool_unknown_status_delta": -1},
+        {"tool_unknown_status_delta": 8},  # errors + unknown > total
     ],
 )
 def test_tool_outcome_counts_are_validated(client, recorder, overrides):
