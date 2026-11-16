@@ -150,6 +150,7 @@ from src.behavioral_sensor import (
     compute_sensor_drift_input,
     hold_unread,
     hold_unread_axes_enabled,
+    populate_behavioral_sensor_state,
 )
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
@@ -1339,6 +1340,9 @@ class UNITARESMonitor:
         else:
             call_outcome_history = self._cached_outcome_history
 
+        upstream_sensor_ctx = agent_state.pop("_behavioral_sensor_context", None)
+        grounded_agent_state.pop("_behavioral_sensor_context", None)
+
         sensor_eisv = agent_state.get('sensor_eisv')
         behavioral_reading = agent_state.get('_behavioral_reading')
         if sensor_eisv and isinstance(behavioral_reading, dict):
@@ -1365,51 +1369,84 @@ class UNITARESMonitor:
                 response_text=response_text,
                 epistemic_class=agent_state.get('epistemic_class'),
             )
-            # Non-embodied agents: compute from behavioral_sensor
-            sensor_inputs = dict(
-                decision_history=self.state.decision_history,
-                coherence_history=self.state.coherence_history,
-                regime_history=self.state.regime_history,
-                E_history=self.state.E_history,
-                I_history=self.state.I_history,
-                S_history=self.state.S_history,
-                V_history=self.state.V_history,
-                calibration_error=getattr(drift_vector, 'calibration_deviation', None),
-                # This path has no per-agent calibration channel, so with the
-                # agent-local drift flag on only supplied complexity
-                # divergence reaches the sensor's drift term.
-                drift_norm=compute_sensor_drift_input(
-                    drift_vector,
-                    complexity_divergence_observed=(
-                        not exclude_template_div
-                        and continuity_metrics.complexity_divergence is not None
+            used_upstream_ctx = isinstance(upstream_sensor_ctx, dict)
+            beh_sensor = None
+            if used_upstream_ctx:
+                try:
+                    beh_filled = populate_behavioral_sensor_state(
+                        agent_state,
+                        monitor_state=self.state,
+                        drift_vector=drift_vector,
+                        continuity_metrics=continuity_metrics,
+                        exclude_template_div=exclude_template_div,
+                        calibration_error=upstream_sensor_ctx.get("calibration_error"),
+                        calibration_signal=upstream_sensor_ctx.get("calibration_signal"),
+                        agent_calibration_channel=upstream_sensor_ctx.get(
+                            "agent_calibration_channel"
+                        ),
+                        outcome_history=call_outcome_history,
+                        tool_error_rate=upstream_sensor_ctx.get("tool_error_rate"),
+                        tool_call_velocity=upstream_sensor_ctx.get("tool_call_velocity"),
+                        unique_tools_ratio=upstream_sensor_ctx.get("unique_tools_ratio"),
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Post-restart behavioral sensor failed for %s: %s",
+                        self.agent_id,
+                        exc,
+                    )
+                    beh_filled = None
+                if beh_filled:
+                    grounded_agent_state["sensor_eisv"] = beh_filled
+                    grounded_agent_state["sensor_eisv_source"] = "behavioral"
+                    reading = agent_state.get("_behavioral_reading")
+                    beh_sensor = reading if isinstance(reading, dict) else beh_filled
+            else:
+                # Non-embodied agents: compute from behavioral_sensor
+                sensor_inputs = dict(
+                    decision_history=self.state.decision_history,
+                    coherence_history=self.state.coherence_history,
+                    regime_history=self.state.regime_history,
+                    E_history=self.state.E_history,
+                    I_history=self.state.I_history,
+                    S_history=self.state.S_history,
+                    V_history=self.state.V_history,
+                    calibration_error=getattr(drift_vector, 'calibration_deviation', None),
+                    # This path has no per-agent calibration channel, so with the
+                    # agent-local drift flag on only supplied complexity
+                    # divergence reaches the sensor's drift term.
+                    drift_norm=compute_sensor_drift_input(
+                        drift_vector,
+                        complexity_divergence_observed=(
+                            not exclude_template_div
+                            and continuity_metrics.complexity_divergence is not None
+                        ),
+                    )["value"],
+                    complexity_divergence=(
+                        None if exclude_template_div else continuity_metrics.complexity_divergence
                     ),
-                )["value"],
-                complexity_divergence=(
-                    None if exclude_template_div else continuity_metrics.complexity_divergence
-                ),
-                continuity_E_input=continuity_metrics.E_input,
-                continuity_I_input=(
-                    None if exclude_template_div else continuity_metrics.I_input
-                ),
-                continuity_S_input=(
-                    None if exclude_template_div else continuity_metrics.S_input
-                ),
-                outcome_history=call_outcome_history,
-                tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
-            )
-            beh_sensor = compute_behavioral_sensor_eisv(**sensor_inputs)
-            if beh_sensor:
-                # Same hold as the upstream path: None on an axis no base
-                # term was supplied for.
-                beh_sensor = hold_unread(
-                    beh_sensor, compute_behavioral_sensor_components(**sensor_inputs)
+                    continuity_E_input=continuity_metrics.E_input,
+                    continuity_I_input=(
+                        None if exclude_template_div else continuity_metrics.I_input
+                    ),
+                    continuity_S_input=(
+                        None if exclude_template_div else continuity_metrics.S_input
+                    ),
+                    outcome_history=call_outcome_history,
+                    tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
                 )
+                beh_sensor = compute_behavioral_sensor_eisv(**sensor_inputs)
+                if beh_sensor:
+                    # Same hold as the upstream path: None on an axis no base
+                    # term was supplied for.
+                    beh_sensor = hold_unread(
+                        beh_sensor, compute_behavioral_sensor_components(**sensor_inputs)
+                    )
             if beh_sensor:
                 beh_E_obs = beh_sensor['E']
                 beh_I_obs = beh_sensor['I']
                 beh_S_obs = beh_sensor['S']
-                beh_obs_source = 'behavioral_sensor'
+                beh_obs_source = 'behavioral' if used_upstream_ctx else 'behavioral_sensor'
             else:
                 # Insufficient history — use continuity layer inputs as fallback.
                 # When template divergence is excluded (#2418), I_input and

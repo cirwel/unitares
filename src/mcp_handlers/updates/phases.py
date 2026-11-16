@@ -802,78 +802,36 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
 
 
 
-async def _populate_behavioral_sensor_inputs(ctx: UpdateContext, monitor: Any) -> None:
-    """Compute behavioral sensor inputs and shadow ablations for an existing monitor."""
-    if (
-        "sensor_eisv" in ctx.agent_state
-        or monitor is None
-        or len(getattr(monitor.state, 'decision_history', [])) < 3
-    ):
+async def _prepare_behavioral_sensor_inputs(ctx: UpdateContext, mcp_server: Any) -> None:
+    """Gather unlocked sensor inputs and compute behavioral observation when warm."""
+    if "sensor_eisv" in ctx.agent_state:
         return
     try:
         from src.behavioral_sensor import (
-            CALIBRATION_FREE_I_ABLATION_SCHEMA,
-            DECISION_SELF_LOOP_ABLATION_SCHEMA,
-            LEGACY_COHERENCE_ABLATION_SCHEMA,
-            REGIME_SELF_LOOP_ABLATION_SCHEMA,
-            compute_behavioral_sensor_eisv,
-            compute_calibration_free_i_shadow,
-            compute_decision_self_loop_shadow,
-            compute_legacy_coherence_dependency_shadow,
-            compute_regime_self_loop_shadow,
-            compute_sensor_drift_input,
             filter_behavioral_outcomes,
-            hold_unread,
             neutralize_sensor_self_loops_enabled,
-        )
-        from src.coherence_provenance import (
-            LEGACY_COHERENCE_SOURCE,
-            ODE_CONTROL_FEEDBACK_ROLE,
+            populate_behavioral_sensor_state,
         )
         from src.dual_log.continuity import should_exclude_template_divergence
-        from src.eisv_telemetry import build_behavioral_derivation
         from src.mcp_handlers.updates.context import get_mean_calibration_error
 
-        cal_error = get_mean_calibration_error(ctx)
-
-        # Drift vector from previous check-in. The norm the sensor reads
-        # is built further down, once the agent's own calibration
-        # channel is known (compute_sensor_drift_input).
-        dv = getattr(monitor, '_last_drift_vector', None)
-
-        # Continuity metrics from previous check-in
-        comp_div = None
-        cont_E, cont_I, cont_S = None, None, None
-        substrate_canaries = {}
-        cm = getattr(monitor, '_last_continuity_metrics', None)
-        if cm is not None:
-            # cm is the previous check-in's ContinuityMetrics, so read
-            # the exclusion flag stamped when cm was created rather than
-            # mixing cm with the current check-in's text/epistemic_class.
-            exclude_template_div = should_exclude_template_divergence(cm)
-            cont_E = getattr(cm, 'E_input', None)
-            if not exclude_template_div:
-                comp_div = getattr(cm, 'complexity_divergence', None)
-                cont_I = getattr(cm, 'I_input', None)
-                cont_S = getattr(cm, 'S_input', None)
-            # Observe-only: were these three features measurements, or
-            # defaults/constants? getattr-with-default so a monitor
-            # carrying a pre-upgrade ContinuityMetrics stays readable.
-            substrate_canaries = {
-                "self_complexity_defaulted": bool(
-                    getattr(cm, 'self_complexity_defaulted', False)
-                ),
-                "E_input_clipped": bool(getattr(cm, 'E_input_clipped', False)),
-                "continuity_degenerate": bool(
-                    getattr(cm, 'continuity_degenerate', False)
-                ),
-                "template_divergence_excluded": bool(exclude_template_div),
-            }
+        cal_error = None
+        agent_cal_channel = None
+        try:
+            cal_error = get_mean_calibration_error(ctx)
+            agent_cal_channel = (
+                ctx._calibration_signal.get("agent_channel")
+                if isinstance(ctx._calibration_signal, dict)
+                else None
+            )
+        except Exception as e:
+            logger.debug(f"Calibration signal unavailable for {ctx.agent_id}: {e}")
 
         # Tool usage signals for behavioral sensor
         tool_err, tool_vel, tool_div = None, None, None
         try:
             from src.tool_usage_tracker import get_tool_usage_tracker
+
             tu_stats = get_tool_usage_tracker().get_usage_stats(
                 agent_id=ctx.agent_id, window_hours=1
             )
@@ -893,8 +851,9 @@ async def _populate_behavioral_sensor_inputs(ctx: UpdateContext, monitor: Any) -
         outcome_hist = None
         try:
             from src.db import get_db
+
             _db = get_db()
-            if _db and hasattr(_db, 'get_recent_outcomes'):
+            if _db and hasattr(_db, "get_recent_outcomes"):
                 if neutralize_sensor_self_loops_enabled():
                     raw_outcomes = await _db.get_recent_outcomes(
                         agent_id=ctx.agent_id,
@@ -919,186 +878,63 @@ async def _populate_behavioral_sensor_inputs(ctx: UpdateContext, monitor: Any) -
         if outcome_hist is not None:
             ctx.agent_state["_outcome_history"] = outcome_hist
 
-        agent_cal_channel = (
-            ctx._calibration_signal.get("agent_channel")
-            if isinstance(ctx._calibration_signal, dict)
-            else None
+        monitor = mcp_server.monitors.get(ctx.agent_id)
+        monitor_warm = (
+            monitor is not None
+            and getattr(monitor, "_needs_hydration", False) is not True
+            and (
+                getattr(monitor, "_last_drift_vector", None) is not None
+                or getattr(monitor, "_last_continuity_metrics", None) is not None
+            )
         )
+        if monitor_warm:
+            cm = getattr(monitor, "_last_continuity_metrics", None)
+            exclude_template_div = (
+                should_exclude_template_divergence(cm) if cm is not None else False
+            )
+            behavioral_eisv = populate_behavioral_sensor_state(
+                ctx.agent_state,
+                monitor_state=monitor.state,
+                drift_vector=getattr(monitor, "_last_drift_vector", None),
+                continuity_metrics=cm,
+                exclude_template_div=exclude_template_div,
+                calibration_error=cal_error,
+                calibration_signal=ctx._calibration_signal,
+                agent_calibration_channel=agent_cal_channel,
+                outcome_history=outcome_hist,
+                tool_error_rate=tool_err,
+                tool_call_velocity=tool_vel,
+                unique_tools_ratio=tool_div,
+            )
+            if behavioral_eisv:
+                logger.debug(
+                    f"Behavioral sensor_eisv injected for {ctx.agent_id}: {behavioral_eisv}"
+                )
+            return
 
-        drift_input = compute_sensor_drift_input(
-            dv,
-            complexity_divergence_observed=comp_div is not None,
-            agent_calibration_channel=agent_cal_channel,
-        )
-        drift_n = drift_input["value"]
-
-        decision_history = list(monitor.state.decision_history)
-        coherence_history = list(monitor.state.coherence_history)
-        regime_history = list(getattr(monitor.state, 'regime_history', []))
-        E_history = list(monitor.state.E_history)
-        I_history = list(monitor.state.I_history)
-        S_history = list(monitor.state.S_history)
-        V_history = list(monitor.state.V_history)
-        behavioral_sensor_inputs = dict(
-            decision_history=decision_history,
-            coherence_history=coherence_history,
-            regime_history=regime_history,
-            E_history=E_history,
-            I_history=I_history,
-            S_history=S_history,
-            V_history=V_history,
-            calibration_error=cal_error,
-            drift_norm=drift_n,
-            complexity_divergence=comp_div,
-            continuity_E_input=cont_E,
-            continuity_I_input=cont_I,
-            continuity_S_input=cont_S,
-            outcome_history=outcome_hist,
-            tool_error_rate=tool_err,
-            tool_call_velocity=tool_vel,
-            unique_tools_ratio=tool_div,
-            agent_calibration_channel=agent_cal_channel,
-        )
-        behavioral_eisv = compute_behavioral_sensor_eisv(
-            **behavioral_sensor_inputs
-        )
-        # A failed shadow is unavailable evidence, never a reason to
-        # skip the live sensor handoff or the other measurements.
-        try:
-            behavioral_shadow = compute_legacy_coherence_dependency_shadow(
-                **behavioral_sensor_inputs,
-                deployed_observation=behavioral_eisv,
-            )
-        except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
-            behavioral_shadow = {
-                "schema": LEGACY_COHERENCE_ABLATION_SCHEMA,
-                "mode": "measurement_only",
-                "policy_applied": False,
-                "eligible": False,
-                "eligibility_reason": f"shadow_error:{type(shadow_exc).__name__}",
-                "deployed": None,
-                "candidate": None,
-                "candidate_minus_deployed": None,
-            }
-        # Sibling ablation: decision_e is the LARGEST term in E (0.35
-        # with outcomes, 0.40 without) and reads governance_monitor's
-        # own prior verdicts, so E -> basin -> guide -> decision_e -> E
-        # is topologically present. This one-step neutralization shows
-        # whether the channel is excited on the current check-in; it
-        # cannot identify closed-loop gain, cross-checkin propagation,
-        # or a basin-boundary counterfactual (the payload says so under
-        # `cannot_measure`). Measurement-only, same contract as the
-        # sibling above.
-        # A failed shadow is unavailable evidence, never a reason to
-        # skip the live sensor handoff or the other measurements.
-        try:
-            decision_shadow = compute_decision_self_loop_shadow(
-                **behavioral_sensor_inputs,
-                deployed_observation=behavioral_eisv,
-            )
-        except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
-            decision_shadow = {
-                "schema": DECISION_SELF_LOOP_ABLATION_SCHEMA,
-                "mode": "measurement_only",
-                "policy_applied": False,
-                "eligible": False,
-                "eligibility_reason": f"shadow_error:{type(shadow_exc).__name__}",
-                "deployed": None,
-                "candidate": None,
-                "candidate_minus_deployed": None,
-            }
-        # Third sibling, for S: detect_regime labels regimes from
-        # behavioral S's own change and _regime_instability counts the
-        # flips at 35% of S (ledger row 46). Guarded separately: this
-        # block also hands the deployed observation to the monitor, and
-        # a shadow must never be able to interrupt that.
-        try:
-            regime_shadow = compute_regime_self_loop_shadow(
-                **behavioral_sensor_inputs,
-                deployed_observation=behavioral_eisv,
-            )
-        except Exception as regime_exc:  # noqa: BLE001 -- measurement only
-            regime_shadow = {
-                "schema": REGIME_SELF_LOOP_ABLATION_SCHEMA,
-                "mode": "measurement_only",
-                "policy_applied": False,
-                "eligible": False,
-                "eligibility_reason": f"shadow_error:{type(regime_exc).__name__}",
-                "deployed": None,
-                "candidate": None,
-                "candidate_minus_deployed": None,
-            }
-        try:
-            calibration_free_i_shadow = compute_calibration_free_i_shadow(
-                **behavioral_sensor_inputs,
-                deployed_observation=behavioral_eisv,
-            )
-        except Exception as cal_free_exc:  # noqa: BLE001 -- measurement only
-            calibration_free_i_shadow = {
-                "schema": CALIBRATION_FREE_I_ABLATION_SCHEMA,
-                "mode": "measurement_only",
-                "policy_applied": False,
-                "eligible": False,
-                "eligibility_reason": f"shadow_error:{type(cal_free_exc).__name__}",
-                "deployed": None,
-                "candidate": None,
-                "candidate_minus_deployed": None,
-            }
-        ctx.agent_state["_eisv_shadow_ablations"] = {
-            "legacy_coherence_neutralized": {
-                "behavioral_sensor": behavioral_shadow,
-            },
-            "decision_self_loop_neutralized": {
-                "behavioral_sensor": decision_shadow,
-            },
-            "regime_self_loop_neutralized": {
-                "behavioral_sensor": regime_shadow,
-            },
-            "calibration_free_i": {
-                "behavioral_sensor": calibration_free_i_shadow,
-            },
+        # Cold or freshly restored/unhydrated monitor: defer computing sensor_eisv
+        # until governance_monitor.process_update has computed this check-in's
+        # live continuity_metrics and drift_vector.
+        ctx.agent_state["_behavioral_sensor_context"] = {
+            "calibration_error": cal_error,
+            "calibration_signal": ctx._calibration_signal,
+            "agent_calibration_channel": agent_cal_channel,
+            "outcome_history": outcome_hist,
+            "tool_error_rate": tool_err,
+            "tool_call_velocity": tool_vel,
+            "unique_tools_ratio": tool_div,
         }
-        ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
-            decision_history=decision_history,
-            coherence_history=coherence_history,
-            regime_history=regime_history,
-            E_history=E_history,
-            I_history=I_history,
-            S_history=S_history,
-            V_history=V_history,
-            calibration_error=cal_error,
-            drift_norm=drift_n,
-            complexity_divergence=comp_div,
-            continuity_E_input=cont_E,
-            continuity_I_input=cont_I,
-            continuity_S_input=cont_S,
-            outcome_history=outcome_hist,
-            tool_error_rate=tool_err,
-            tool_call_velocity=tool_vel,
-            unique_tools_ratio=tool_div,
-            computed=behavioral_eisv,
-            substrate_canaries=substrate_canaries,
-            calibration_signal=ctx._calibration_signal,
-            coherence_source=LEGACY_COHERENCE_SOURCE,
-            coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
-        )
-        ctx.agent_state["_eisv_derivation"]["drift_input"] = drift_input
-        if behavioral_eisv:
-            ctx.agent_state["sensor_eisv"] = behavioral_eisv
-            ctx.agent_state["sensor_eisv_source"] = "behavioral"
-            # What the behavioral state consumes: the same observation
-            # with None on any axis no base term was supplied for
-            # (behavioral_sensor.hold_unread_axes_enabled). sensor_eisv
-            # above stays the filled arithmetic; it remains the legacy
-            # ODE's anchor and the submitted-sensor telemetry record.
-            ctx.agent_state["_behavioral_reading"] = hold_unread(
-                behavioral_eisv,
-                (ctx.agent_state.get("_eisv_derivation") or {}).get("components"),
-            )
-            logger.debug(f"Behavioral sensor_eisv injected for {ctx.agent_id}: {behavioral_eisv}")
+        if monitor is None or getattr(monitor, "_needs_hydration", False) is True:
+            async def _prepare_restored_monitor(restored_monitor: Any) -> None:
+                try:
+                    if restored_monitor and hasattr(restored_monitor.state, "void_active"):
+                        ctx.previous_void_active = bool(restored_monitor.state.void_active)
+                except Exception:
+                    pass
+
+            ctx.agent_state["_prepare_restored_monitor"] = _prepare_restored_monitor
     except Exception as e:
         logger.debug(f"Behavioral sensor skipped for {ctx.agent_id}: {e}")
-        pass  # Fail-safe: ODE runs open-loop if anything fails
 
 
 async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
@@ -1191,25 +1027,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             )
 
     # Behavioral sensor: compute EISV from governance observables for non-embodied agents
-    if "sensor_eisv" not in ctx.agent_state:
-        monitor = mcp_server.monitors.get(ctx.agent_id)
-        if monitor is not None:
-            await _populate_behavioral_sensor_inputs(ctx, monitor)
-        else:
-            # After a server restart, the monitor is not yet in mcp_server.monitors;
-            # it is created and hydrated inside assess_eisv after admission and
-            # checkpoint capture. Defer behavioral sensor prep to that seam so the
-            # first check-in post-restart does not fall back to the untagged
-            # in-monitor fallback.
-            async def _prepare_restored_monitor(restored_monitor: Any) -> None:
-                try:
-                    if restored_monitor and hasattr(restored_monitor.state, "void_active"):
-                        ctx.previous_void_active = bool(restored_monitor.state.void_active)
-                except Exception:
-                    pass
-                await _populate_behavioral_sensor_inputs(ctx, restored_monitor)
-
-            ctx.agent_state["_prepare_restored_monitor"] = _prepare_restored_monitor
+    await _prepare_behavioral_sensor_inputs(ctx, mcp_server)
 
     # Pre-load behavioral baseline outside the agent lock. `ensure_baseline_loaded`
     # has an in-memory cache (`_baselines` dict) — calling it here primes the
@@ -1518,6 +1336,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         raise Exception(f"Error processing update: {str(e)}") from e
     finally:
         ctx.agent_state.pop("_prepare_restored_monitor", None)
+        ctx.agent_state.pop("_behavioral_sensor_context", None)
         _perf_record_ms("phases.ode_call_ms", (time.perf_counter() - _ode_start) * 1000)
 
     # Cache monitor reference for Phase 5 and Phase 6 (guaranteed to exist post-ODE)

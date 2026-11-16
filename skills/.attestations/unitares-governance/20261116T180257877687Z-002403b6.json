@@ -1,11 +1,11 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-11-16T17:14:42Z",
+  "verified_at": "2026-11-16T18:02:57Z",
   "verified_date": "2026-11-16",
-  "verifier": "Antigravity (re-checked EISV claims against updated EISV_COMPUTATION.md, behavioral_sensor.py, adapter.py, and phases.py)",
+  "verifier": "Antigravity (re-checked EISV and lifecycle claims against updated EISV_COMPUTATION.md, behavioral_sensor.py, adapter.py, phases.py, and governance_monitor.py)",
   "source_digests": {
-    "unitares/docs/EISV_COMPUTATION.md": "c418c1a2d416be78",
+    "unitares/docs/EISV_COMPUTATION.md": "52baa90ab3dbf7a8",
     "unitares/skills/dialectic-reasoning/SKILL.md": "e23a1486d3397505",
     "unitares/skills/governance-fundamentals/SKILL.md": "d39376bef700f2ae",
     "unitares/skills/governance-lifecycle/SKILL.md": "3ec5f9172f2c7a78",
