@@ -13,6 +13,7 @@ distribution and downstream baselines first.
 from collections.abc import Mapping
 import math
 import os
+from typing import Any, Dict, List, Optional
 
 
 NEUTRALIZE_SENSOR_SELF_LOOPS_ENV = "UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS"
@@ -130,6 +131,196 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     """
     raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
+
+
+HOLD_UNREAD_AXES_ENV = "UNITARES_HOLD_UNREAD_AXES"
+HOLD_UNREAD_AXES_MODE = "hold_v1"
+_READING_DIMENSIONS = ("E", "I", "S")
+
+
+def hold_unread_axes_enabled() -> bool:
+    """Return True when an axis with no supplied base term is held, not filled.
+
+    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to hold). It ships off so that a routine
+    deploy does not start era ``HU1``; turning it on is the operator's
+    separate step, and that change adds the era entry and regenerates the
+    golden trajectories (``tests/eisv_preservation_driver.py``). Each of E, I and
+    S is built from base terms and then adjusted by blends. When no base term
+    was supplied, the formula substitutes a constant (0.85 for E, 0.75 for I,
+    the drift and divergence defaults for S) and the blends adjust that
+    constant, so the published number looks like a reading without being one.
+
+    With the hold on, such an axis reports ``None`` for the check-in: the
+    smoothed behavioral state keeps its previous value, takes no baseline
+    sample, and V steps only when both E and I were read. The blends are
+    discarded for that axis because they adjust a reading and there is none.
+    The component record and the shadow ablations still carry the filled
+    arithmetic, so what the formula would have published stays inspectable.
+    """
+    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def unread_axes(components: Mapping | None) -> tuple[str, ...]:
+    """Axes of a component record whose base terms are all unobserved.
+
+    An axis counts as read when at least one base term is flagged
+    ``observed``; this is the same rule ``src/reading_coverage.py`` reports to
+    the agent. A malformed record yields no unread axes, so a telemetry defect
+    can never withhold a reading.
+    """
+    dimensions = components.get("dimensions") if isinstance(components, Mapping) else None
+    if not isinstance(dimensions, Mapping):
+        return ()
+    unread = []
+    for dimension in _READING_DIMENSIONS:
+        record = dimensions.get(dimension)
+        base_terms = record.get("components") if isinstance(record, Mapping) else None
+        if not isinstance(base_terms, list) or not base_terms:
+            continue
+        if not any(
+            isinstance(term, Mapping) and term.get("observed") is True
+            for term in base_terms
+        ):
+            unread.append(dimension)
+    return tuple(unread)
+
+
+def hold_unread(observation: Mapping | None, components: Mapping | None) -> dict | None:
+    """The observation the behavioral state consumes: unread axes become None.
+
+    Returns the observation unchanged when the hold is off. V is the sensor's
+    diagnostic slope reading and is passed through.
+    """
+    if observation is None:
+        return None
+    result = dict(observation)
+    if hold_unread_axes_enabled():
+        for dimension in unread_axes(components):
+            result[dimension] = None
+    return result
+
+
+SENSOR_DRIFT_AGENT_LOCAL_ENV = "UNITARES_SENSOR_DRIFT_AGENT_LOCAL"
+SENSOR_DRIFT_AGENT_LOCAL_MODE = "agent_local_v1"
+SENSOR_DRIFT_INPUT_SCHEMA = "behavioral_sensor.drift_input.v1"
+# Same evidence floor the drift engine applies to a tactical bin before it
+# trusts the fleet calibration signal (src/monitor_drift._MIN_TACTICAL_SAMPLES).
+SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS = 10
+
+
+def sensor_drift_agent_local_enabled() -> bool:
+    """Return True when the sensor's drift input keeps only agent-local parts.
+
+    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default OFF, which
+    passes the full drift-vector norm as before; set to ``1``/``true``/``yes``/
+    ``on`` to keep only agent-local parts). It ships off so that a routine
+    deploy does not start era ``SD1``; turning it on is the operator's separate
+    step, and that change adds the era entry and regenerates the golden
+    trajectories. The governance drift vector has four components, and on the
+    behavioral sensor path two of them carry no per-agent information:
+
+    - ``stability_deviation`` is ``1 - decision_consistency``. The drift
+      engine is called with no decision, so ``decision_consistency`` never
+      leaves its 0.8 default and the component is 0.2 for every agent.
+      Feeding verdicts back in would recreate the decision self-loop that
+      ``neutralize_sensor_self_loops_enabled`` removes.
+    - ``calibration_deviation`` comes from the server-wide tactical bins, so
+      it is one number for the whole fleet, and it stops moving whenever no
+      hard-exogenous outcome arrives.
+
+    ``coherence_deviation`` tracks the legacy ODE control-feedback scalar,
+    the same self-loop class excluded from behavioral E and I, so it is left
+    out too. What remains is the agent's own complexity divergence (when it
+    was supplied) and the agent's own tactical calibration error (when it has
+    enough fresh verified pairs). With neither, the drift input is ``None``
+    and S's drift term is reported unobserved instead of as a reading.
+    """
+    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _agent_drift_calibration(channel: Mapping | None) -> tuple[float | None, str | None]:
+    """The agent's own tactical calibration error, or why it is not used."""
+    if not isinstance(channel, Mapping):
+        return None, "no_agent_calibration_channel"
+    if channel.get("evidence_status") != "available":
+        return None, str(channel.get("default_reason") or "agent_calibration_unavailable")
+    try:
+        pairs = int(channel.get("n_verified_pairs") or 0)
+    except (TypeError, ValueError):
+        return None, "agent_calibration_invalid"
+    if pairs < SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS:
+        return None, "agent_calibration_below_min_pairs"
+    # Same freshness rule as per-agent I calibration: only "recent" counts.
+    if channel.get("freshness_status") != "recent":
+        return None, "agent_calibration_not_recent"
+    try:
+        value = float(channel.get("calibration_error"))
+    except (TypeError, ValueError):
+        return None, "agent_calibration_invalid"
+    if not math.isfinite(value):
+        return None, "agent_calibration_invalid"
+    return max(0.0, min(1.0, value)), None
+
+
+def compute_sensor_drift_input(
+    drift_vector,
+    *,
+    complexity_divergence_observed: bool,
+    agent_calibration_channel: Mapping | None = None,
+) -> dict:
+    """The drift norm the behavioral sensor reads, with its provenance.
+
+    ``drift_vector`` is the governance ``EthicalDriftVector`` from the check-in
+    the sensor reads (or ``None``). With the agent-local flag off, ``value`` is
+    the full vector norm, exactly as before. With it on, ``value`` is the norm
+    over the agent-local components only, or ``None`` when none was observed.
+    """
+    full_norm = getattr(drift_vector, "norm", None) if drift_vector is not None else None
+    enabled = sensor_drift_agent_local_enabled()
+    record: dict = {
+        "schema": SENSOR_DRIFT_INPUT_SCHEMA,
+        "mode": SENSOR_DRIFT_AGENT_LOCAL_MODE if enabled else "full_norm",
+        "full_norm": full_norm,
+        "value": full_norm,
+        "used": {},
+        "excluded": {},
+    }
+    if not enabled or drift_vector is None:
+        return record
+
+    excluded = record["excluded"]
+    excluded["stability_deviation"] = "no_decision_supplied_constant"
+    excluded["coherence_deviation"] = "legacy_control_feedback_self_loop"
+    excluded["calibration_deviation"] = "fleet_wide_tactical_scalar"
+
+    used: dict = {}
+    if complexity_divergence_observed:
+        raw_cd = getattr(drift_vector, "complexity_divergence", None)
+        if raw_cd is None:
+            excluded["complexity_divergence"] = "not_supplied"
+        elif (
+            isinstance(raw_cd, bool)
+            or not isinstance(raw_cd, (int, float))
+            or not math.isfinite(float(raw_cd))
+        ):
+            excluded["complexity_divergence"] = "complexity_divergence_invalid"
+        else:
+            used["complexity_divergence"] = max(0.0, min(1.0, float(raw_cd)))
+    else:
+        excluded["complexity_divergence"] = "not_supplied"
+
+    agent_cal, agent_cal_reason = _agent_drift_calibration(agent_calibration_channel)
+    if agent_cal is not None:
+        used["agent_calibration_error"] = agent_cal
+    else:
+        excluded["agent_calibration_error"] = agent_cal_reason
+
+    record["used"] = used
+    record["value"] = math.sqrt(sum(v * v for v in used.values())) if used else None
+    return record
 
 
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
@@ -1785,3 +1976,186 @@ def _simple_slope(values: list) -> float:
     if den == 0:
         return 0.0
     return num / den
+
+
+def populate_behavioral_sensor_state(
+    agent_state: Dict[str, Any],
+    *,
+    monitor_state: Any,
+    drift_vector: Any,
+    continuity_metrics: Any,
+    exclude_template_div: bool = False,
+    calibration_error: Optional[float] = None,
+    calibration_signal: Any = None,
+    agent_calibration_channel: Optional[Dict[str, Any]] = None,
+    outcome_history: Optional[List[Dict[str, Any]]] = None,
+    tool_error_rate: Optional[float] = None,
+    tool_call_velocity: Optional[float] = None,
+    unique_tools_ratio: Optional[float] = None,
+) -> Optional[Dict[str, float]]:
+    """Compute behavioral sensor observation, derivation, shadows, and held reading."""
+    decision_history = list(getattr(monitor_state, "decision_history", []) or [])
+    if len(decision_history) < 3:
+        return None
+
+    from src.coherence_provenance import (
+        LEGACY_COHERENCE_SOURCE,
+        ODE_CONTROL_FEEDBACK_ROLE,
+    )
+    from src.eisv_telemetry import build_behavioral_derivation
+
+    comp_div = None
+    cont_E, cont_I, cont_S = None, None, None
+    substrate_canaries: Dict[str, bool] = {}
+    if continuity_metrics is not None:
+        cont_E = getattr(continuity_metrics, "E_input", None)
+        if not exclude_template_div:
+            comp_div = getattr(continuity_metrics, "complexity_divergence", None)
+            cont_I = getattr(continuity_metrics, "I_input", None)
+            cont_S = getattr(continuity_metrics, "S_input", None)
+        substrate_canaries = {
+            "self_complexity_defaulted": bool(
+                getattr(continuity_metrics, "self_complexity_defaulted", False)
+            ),
+            "E_input_clipped": bool(getattr(continuity_metrics, "E_input_clipped", False)),
+            "continuity_degenerate": bool(
+                getattr(continuity_metrics, "continuity_degenerate", False)
+            ),
+            "template_divergence_excluded": bool(exclude_template_div),
+        }
+
+    drift_input = compute_sensor_drift_input(
+        drift_vector,
+        complexity_divergence_observed=comp_div is not None,
+        agent_calibration_channel=agent_calibration_channel,
+    )
+    drift_n = drift_input["value"]
+
+    coherence_history = list(getattr(monitor_state, "coherence_history", []) or [])
+    regime_history = list(getattr(monitor_state, "regime_history", []) or [])
+    E_history = list(getattr(monitor_state, "E_history", []) or [])
+    I_history = list(getattr(monitor_state, "I_history", []) or [])
+    S_history = list(getattr(monitor_state, "S_history", []) or [])
+    V_history = list(getattr(monitor_state, "V_history", []) or [])
+
+    behavioral_sensor_inputs = dict(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_n,
+        complexity_divergence=comp_div,
+        continuity_E_input=cont_E,
+        continuity_I_input=cont_I,
+        continuity_S_input=cont_S,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
+    )
+    behavioral_eisv = compute_behavioral_sensor_eisv(**behavioral_sensor_inputs)
+
+    def _shadow_error(schema: str, exc: Exception) -> Dict[str, Any]:
+        return {
+            "schema": schema,
+            "mode": "measurement_only",
+            "policy_applied": False,
+            "eligible": False,
+            "eligibility_reason": f"shadow_error:{type(exc).__name__}",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    # A failed shadow is unavailable evidence, never a reason to skip the live handoff.
+    try:
+        behavioral_shadow = compute_legacy_coherence_dependency_shadow(
+            **behavioral_sensor_inputs,
+            deployed_observation=behavioral_eisv,
+        )
+    except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
+        behavioral_shadow = _shadow_error(LEGACY_COHERENCE_ABLATION_SCHEMA, shadow_exc)
+
+    try:
+        decision_shadow = compute_decision_self_loop_shadow(
+            **behavioral_sensor_inputs,
+            deployed_observation=behavioral_eisv,
+        )
+    except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
+        decision_shadow = _shadow_error(DECISION_SELF_LOOP_ABLATION_SCHEMA, shadow_exc)
+
+    try:
+        regime_shadow = compute_regime_self_loop_shadow(
+            **behavioral_sensor_inputs,
+            deployed_observation=behavioral_eisv,
+        )
+    except Exception as regime_exc:  # noqa: BLE001 -- measurement only
+        regime_shadow = _shadow_error(REGIME_SELF_LOOP_ABLATION_SCHEMA, regime_exc)
+
+    try:
+        calibration_free_i_shadow = compute_calibration_free_i_shadow(
+            **behavioral_sensor_inputs,
+            deployed_observation=behavioral_eisv,
+        )
+    except Exception as cal_free_exc:  # noqa: BLE001 -- measurement only
+        calibration_free_i_shadow = _shadow_error(
+            CALIBRATION_FREE_I_ABLATION_SCHEMA, cal_free_exc
+        )
+
+    agent_state["_eisv_shadow_ablations"] = {
+        "legacy_coherence_neutralized": {
+            "behavioral_sensor": behavioral_shadow,
+        },
+        "decision_self_loop_neutralized": {
+            "behavioral_sensor": decision_shadow,
+        },
+        "regime_self_loop_neutralized": {
+            "behavioral_sensor": regime_shadow,
+        },
+        "calibration_free_i": {
+            "behavioral_sensor": calibration_free_i_shadow,
+        },
+    }
+    agent_state["_eisv_derivation"] = build_behavioral_derivation(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_n,
+        complexity_divergence=comp_div,
+        continuity_E_input=cont_E,
+        continuity_I_input=cont_I,
+        continuity_S_input=cont_S,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+        computed=behavioral_eisv,
+        substrate_canaries=substrate_canaries,
+        calibration_signal=calibration_signal,
+        coherence_source=LEGACY_COHERENCE_SOURCE,
+        coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
+    )
+    agent_state["_eisv_derivation"]["drift_input"] = drift_input
+    if behavioral_eisv:
+        agent_state["sensor_eisv"] = behavioral_eisv
+        agent_state["sensor_eisv_source"] = "behavioral"
+        # What the behavioral state consumes: the same observation
+        # with None on any axis no base term was supplied for
+        # (behavioral_sensor.hold_unread_axes_enabled). sensor_eisv
+        # above stays the filled arithmetic; it remains the legacy
+        # ODE's anchor and the submitted-sensor telemetry record.
+        agent_state["_behavioral_reading"] = hold_unread(
+            behavioral_eisv,
+            (agent_state.get("_eisv_derivation") or {}).get("components"),
+        )
+    return behavioral_eisv

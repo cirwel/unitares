@@ -522,6 +522,9 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         monitor._cold_start_confirmation_lineage_status = "hydration_uncertain"
         logger.warning("DB hydration failed: %s", type(e).__name__)
         return False
+    finally:
+        if getattr(monitor, "_needs_hydration", False) is True:
+            monitor._needs_hydration = False
 
 
 async def ensure_hydrated(monitor: UNITARESMonitor, agent_id: str) -> bool:

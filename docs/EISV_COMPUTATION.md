@@ -26,16 +26,16 @@ not sufficient evidence of improvement or recovery by itself.
 
 ## What the signals record
 
-These are operational definitions of the current behavioral path. The formulas below specify the weights, defaults and optional inputs.
+These are operational definitions of the current behavioral path (era `SN1`, where `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1` and `UNITARES_PER_AGENT_I_CALIBRATION=1` are enabled by default). The formulas below specify the weights, defaults and optional inputs, as well as the legacy controller/fleet terms restored only when those flags are set to `0`.
 
 | Output | What contributes to it | What a change records |
 |---|---|---|
-| **E** | Prior governance decisions, legacy controller coherence level, complexity divergence, and available outcome, continuity and tool features | A change in this weighted history of observations and judgments |
-| **I** | Calibration error, legacy controller coherence trend, and available outcome-score consistency, continuity and tool-variety features | A change in this calibration/consistency blend; the deployed calibration input is fleet-scoped |
-| **S** | Drift, regime transitions, complexity divergence, and available continuity and tool features | A change in the blend of deviations and activity features |
+| **E** | Complexity divergence, non-echo outcome success, and available continuity and tool features (prior governance decisions and legacy controller coherence level are excluded by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`) | A change in this weighted blend of supplied divergence, outcomes, and tool/continuity observations (or the `0.85` default when neither base input is supplied) |
+| **I** | Eligible per-agent tactical calibration accuracy, non-echo outcome-score consistency, and available continuity and tool-variety features (shared fleet calibration and legacy controller coherence trend are excluded by default; falls back to `0.75` when neither per-agent gate is met) | A change in this per-agent calibration/consistency blend, or the uncalibrated fallback when verification/outcome supply is absent |
+| **S** | Drift norm, complexity divergence, and available continuity and tool features (controller regime instability is excluded by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`) | A change in the blend of deviations and activity features (with `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=0`, `drift_norm` still includes fleet `calibration_deviation` and constant `stability_deviation=0.2`) |
 | **V** | A separately smoothed difference between raw E and I observations | The direction and persistence of the gap between those two indices |
 
-The observations, their derived summaries, and the resulting policy actions are distinct records. A controller-derived input is still information about the running system. Because prior decisions enter E, a policy response can change later E even when supplied task and tool features are unchanged. This feedback reflects the controller's response; it does not independently confirm the condition that prompted it. Retain that provenance when explaining a later reading. A derived or correlated signal need not be a new independent observation to be retained and inspected.
+The observations, their derived summaries, and the resulting policy actions are distinct records. When legacy self-loops are re-enabled (`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`), prior decisions enter E and controller history enters E/I/S so a policy response can change later readings even when supplied task and tool features are unchanged. Under the default `SN1` posture those controller self-loops are excluded from base E, I, and S observations, though the ODE still supplies structural basin, void and coherence checks and legacy drift components when `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=0`. Retain that provenance when explaining a later reading. A derived or correlated signal need not be a new independent observation to be retained and inspected.
 
 This resolves the descriptive question: **the instrument records specified features and their evolution.** Which changes diagnose a particular problem, whether this compression helps a consumer, and which actions should follow are separate evaluation questions. An inconclusive outcome-prediction study does not erase the recorded signal; a responsive signal does not settle those other questions. The [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) holds the evidence for benefit claims.
 
@@ -49,8 +49,8 @@ This document is the owner of the EISV instrument: its inputs, smoothing, risk a
 
 ```
 observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
- calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
+(complexity,    (behavioral_         (behavioral_    (behavioral_          proceed
+ outcomes,       sensor.py)           state.py)       assessment.py)        (+guide) /
  drift, tools)                                                               pause
 ```
 
@@ -59,12 +59,13 @@ retired physics-flavoured name for it, which is not a claim about physical
 quantities) is
 **not the direct verdict owner** by default: behavioral assessment owns the
 post-warmup assessment. The final decision also uses ODE state for structural
-basin, void and coherence checks (`src/monitor_decision.py`). The behavioral sensor
-still gives the legacy ODE `C(V)` scalar 25–30% of E and 30–40% of I, and also
-uses ODE-derived regime/history inputs. The old “does NOT drive verdicts” comment
-therefore describes authority, not causal independence. This residual coupling
-is compatibility debt and must be shadow-evaluated before removal because it
-changes the E/I distribution and every downstream baseline.
+basin, void and coherence checks (`src/monitor_decision.py`). Under the default
+`SN1` posture (`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), the behavioral sensor
+no longer blends legacy ODE `C(V)` (`coh_e`/`coh_I`), `decision_history`, or
+`regime_history` into behavioral E/I/S observations; those terms enter only when
+`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`. While `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=0`
+(default), `drift_norm` still carries ODE `coherence_deviation` and the fleet
+tactical `calibration_deviation` scalar.
 
 ### One check-in, end to end
 
@@ -112,42 +113,39 @@ is tiered, with the free-energy (FEP) tier explicitly stubbed.
 
 For non-embodied agents (the common case), three observations are computed from governance observables. On the MCP check-in path the sensor actually runs in the handler (`src/mcp_handlers/updates/phases.py`), which injects the result as `sensor_eisv` with `sensor_eisv_source="behavioral"`; the monitor recomputes it internally only as a fallback. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py`, the `sensor_eisv` intake path).
 
-**Timing on the live path.** The handler computes the observation before the monitor processes the check-in (`prepare_unlocked_inputs`). It reads `drift_norm`, `complexity_divergence` and the continuity E/I/S inputs from what the monitor stored at the previous check-in, so those inputs lag by one check-in. Tool-usage statistics, recent outcomes and the calibration scalar are read at the current check-in. The monitor-internal fallback reads the current check-in's drift and continuity instead. A check-in's own complexity report and response structure therefore first reach E, I and S at the next check-in (contract ledger row 54).
+**Timing on the live path.** When a warm, hydrated monitor is already in memory, the handler computes the observation before acquiring the agent lock (`prepare_unlocked_inputs` via `src/behavioral_sensor.py:populate_behavioral_sensor_state`). It reads `drift_norm`, `complexity_divergence` and the continuity E/I/S inputs from what the monitor stored at the previous check-in (`_last_drift_vector`, `_last_continuity_metrics`), so those inputs lag by one check-in, while tool-usage statistics, recent outcomes and the calibration scalar are read at the current check-in. On the first check-in after a server restart (when `mcp_server.monitors` is empty or the monitor has not yet been hydrated / has no prior `_last_drift_vector` or `_last_continuity_metrics`), `prepare_unlocked_inputs` gathers those monitor-independent inputs unlocked into call-local context (`_behavioral_sensor_context`), `assess_eisv` drains `_needs_hydration` and restores `previous_void_active` after hydration, and `governance_monitor.process_update` pairs them with that check-in's freshly computed `continuity_metrics` and `drift_vector` so the first post-restart tick carries full `sensor_eisv_source="behavioral"` provenance and non-empty drift/continuity. Because that first post-restart check-in also stores its `drift_vector` and `continuity_metrics` onto the monitor, its values are read once more when the second check-in resumes the warm one-check-in-lag path, while unpersisted values from the final check-in before the restart are not replayed. Direct `process_update` callers without upstream context continue through the in-monitor fallback (`behavioral_sensor`). On steady-state check-ins a check-in's own complexity report and response structure still first reach E, I and S at the next check-in (contract ledger row 54).
 
-**E_obs** — decision, controller-level and complexity blend (`_compute_E`):
+**E_obs** — complexity calibration and non-echo outcomes (`_compute_E_components`; default `SN1` with `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`):
 ```
-decision_e = exp-weighted (α=0.3) mean of verdict scores over last 10 decisions
-             {proceed/approve: 1.0, guide: 0.7, revise/reflect: 0.5, pause/reject
-              and every pause sub-action (risk_/basin_/coherence_/void_pause,
-              cirs_block): 0.0; unrecognized strings: 0.5}
-coh_e      = mean legacy_tanh_v ODE control feedback remapped [0.35, 0.65] → [0.3, 0.9]
-cal_e      = clamp(1 − complexity_divergence, 0.3, 1.0)
-outcome_e  = 0.3 + 0.6·(share of recorded outcomes not flagged is_bad)
-E_obs      = 0.40·decision_e + 0.30·coh_e + 0.30·cal_e         # no outcomes
-           = 0.35·decision_e + 0.25·coh_e + 0.20·cal_e + 0.20·outcome_e   # with ≥3 outcomes
+cal_e      = clamp(1 − complexity_divergence, 0.3, 1.0)                 # default cd=0.15 => 0.85
+outcome_e  = 0.3 + 0.6·(share of ≥3 non-echo outcomes not flagged is_bad)
+E_base     = 0.50·cal_e + 0.50·outcome_e                                # both observed
+           = 1.00·outcome_e                                             # outcomes only
+           = 1.00·cal_e                                                 # complexity only, or 0.85 default when neither
 ```
+*(Legacy `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`: includes `decision_e` — exp-weighted α=0.3 over last 10 decisions `{proceed/approve: 1.0, guide: 0.7, revise/reflect: 0.5, pause/reject and every pause sub-action (risk_/basin_/coherence_/void_pause, cirs_block): 0.0; unrecognized: 0.5}` — and `coh_e`, mean `legacy_tanh_v` feedback remapped `[0.35, 0.65] → [0.3, 0.9]`, with `0.40·decision_e + 0.30·coh_e + 0.30·cal_e` or `0.35/0.25/0.20/0.20` with ≥3 outcomes.)*
 (What lands in `decision_history` is the sub-action when one exists, so the live vocabulary is the `monitor_decision.py` sub-action set, not just the coarse names.)
 
-**I_obs** — calibration, controller-trend and consistency blend (`_compute_I`):
+**I_obs** — per-agent calibration accuracy and outcome consistency (`_compute_I_components`; default `SN1` with `UNITARES_PER_AGENT_I_CALIBRATION=1` and `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`):
 ```
-cal_I         = clamp(1 − calibration_error, 0, 1)
-coh_I         = split-half trend of legacy_tanh_v ODE control feedback: second-half mean
-                minus first-half mean over last 10, mapped 0.6 + 3·diff, clamped [0.3, 0.9]
-consistency_I = max(0.3, 1 − 4·var(outcome scores))
-I_obs         = 0.6·cal_I + 0.4·coh_I                                   # no outcomes
-              = 0.50·cal_I + 0.30·coh_I + 0.20·consistency_I            # with ≥3 finite outcome scores
+cal_I         = clamp(1 − agent_calibration_error, 0, 1)                # ≥5 recent pairs or pooled with prior_error
+consistency_I = max(0.3, 1 − 4·var(non-echo outcome scores))            # ≥3 finite non-echo outcome scores
+I_base        = (5/7)·cal_I + (2/7)·consistency_I                       # both eligible
+              = 1.00·cal_I   |   1.00·consistency_I                     # one eligible
+              = 0.75 (uncalibrated_base_fallback)                       # neither eligible
 ```
-`calibration_error` has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). These are lifetime **fleet** bins; the agent-scoped candidate is collected separately as measurement-only (`src/mcp_handlers/updates/context.py`). This is not an error measurement for the current claim. The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only. Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
+*(Legacy `=0` switches: `UNITARES_PER_AGENT_I_CALIBRATION=0` restores the shared fleet `calibration_error` scalar from `get_mean_calibration_error` → `src/calibration.py` or `drift_vector.calibration_deviation` on the monitor fallback; `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` restores `coh_I`, split-half trend of `legacy_tanh_v` mapped `0.6 + 3·diff` clamped `[0.3, 0.9]` at `0.40` without outcomes or `0.30` with outcomes.)* Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
 
 The outcome-consistency term records variance: constant success scores and constant failure scores both have zero variance. The derivation marks this term `health_evidence=false`; outcome success enters E separately. Read consistency and success as separate properties. Matching reported confidence to suppressed performance can still resemble honest lower capability in the monitored trace; see the [threat model](SCOPE_AND_THREAT_MODEL.md) and the [concealment boundary fixture](../tests/test_calibrated_capability_concealment.py).
 
-**S_obs** — drift, regime-transition and complexity blend (`_compute_S`):
+**S_obs** — drift and complexity divergence (`_compute_S_components`; default `SN1` with `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`):
 ```
-drift_s  = min(1, drift_norm · 1.5)
-regime_s = regime transitions / (window − 1) over last 10   (instability)
-cd_s     = min(1, complexity_divergence)
-S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
+drift_s  = min(1, drift_norm · 1.5)                                     # default dn=0.2 => 0.30
+cd_s     = min(1, complexity_divergence)                                # default cd=0.1 => 0.10
+S_base   = clamp((8/13)·drift_s + (5/13)·cd_s, 0.05, 1)                 # both observed or both defaulted
+         = clamp(1.00·drift_s, 0.05, 1)  |  clamp(1.00·cd_s, 0.05, 1)   # single observed term
 ```
+*(Legacy `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`: adds `regime_s = transitions / (window − 1)` over the last 10 regime labels as `clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)`.)*
 
 **The drift vector** (`src/monitor_drift.py`, `compute_drift_vector`). Four observable signals define the drift vector whose norm feeds entropy (`drift_norm` above):
 
@@ -160,7 +158,18 @@ S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
 
 No human oracle is needed for runtime drift estimation. Independent exogenous outcomes still matter for calibration and research validation.
 
+**The behavioral sensor reads an agent-local drift norm** (`UNITARES_SENSOR_DRIFT_AGENT_LOCAL`, default `0`, which passes the full vector norm; set to `1`/`true`/`yes`/`on` to read the agent-local norm). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `SD1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. The reason for it: on the sensor path two of the four components above carry no per-agent information. Stability deviation is 0.2 for every agent, because the drift engine is called with no decision and `decision_consistency` never leaves its 0.8 default. Calibration deviation is the server-wide tactical worst bin, one number for the fleet that moves only when a hard-exogenous outcome arrives. Coherence deviation tracks legacy ODE control feedback, the self-loop class `SN1` excludes from E and I. The sensor's `drift_norm` is therefore the norm of the agent's supplied complexity divergence and its own tactical calibration error (at least 10 verified pairs, freshness `recent`), and `None` when neither exists, so the drift term in S is reported unobserved rather than as a reading. `derivation.drift_input` records the full norm, the components used, and why each other component was left out. The drift vector itself, and the ODE forcing it feeds, are unchanged.
+
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
+
+**Unread axes are held, not filled** (`UNITARES_HOLD_UNREAD_AXES`, default `0`; set to `1`/`true`/`yes`/`on` to hold). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `HU1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. With the flag on, the fill above still produces the arithmetic the component record and the shadow ablations report, and it is still the legacy ODE's anchor. The behavioral state no longer consumes it for an axis that had no supplied base term:
+- The sensor reports no reading for that axis, and the optional blends on it are discarded for the check-in (they adjust a reading, and there is none).
+- The smoothed value keeps its last reading, takes no baseline sample and no trend entry. `V` steps only when `E` and `I` were both read on the same check-in.
+- The first reading on an axis seeds its value and restarts its baseline. State restored from before `HU1` starts with every axis unread: it keeps the numbers it had, as placeholders, until a reading replaces them.
+- Switching the flag off does not reset a state written under it. Every check-in is a reading again, but an axis it never read is still seeded by its first reading and scored on fixed thresholds until it has a baseline. `behavioral.state.written_under_hold` records which rule the reading counters were kept under, separately from `hold_unread` (the rule the state updates with now), so that holds across later restarts and hand rebuilds.
+- The assessment scores an axis only while it has a reading from the last 10 check-ins (`STALE_AFTER_UPDATES`, a chosen bound equal to the bootstrap length). An unscored axis contributes no risk, its absolute floor does not fire, and it is listed in `behavioral.assessment.unscored_axes`; a `safe` verdict says nothing about it. `behavioral.state` carries `readings`, `since_reading`, `unread` and `unscored` per axis.
+- Inside `behavioral.state`, the smoothed `E`/`I`/`S`/`V` fields stay numbers: the last reading, or the bootstrap value (0.5, 0.5, 0.2, 0.0) for an axis never read. Read them with `unread`. However, top-level `metrics.E`/`I`/`S`/`V` (`primary_eisv`, via `UNITARESMonitor.get_primary_eisv`) reports `behavioral.state` only once `behavioral.confidence >= 0.3`; before 3 check-ins read something or when every axis goes stale (`confidence == 0.0`), `primary_eisv_source` reports `ode_fallback` and top-level `metrics.E`/`I`/`S`/`V` returns the ODE state (which continues receiving the filled `sensor_eisv` arithmetic as its spring anchor when coupling allows).
+- Before three check-ins of history the sensor cannot run; under the hold those check-ins read nothing, where the response-structure inputs used to stand in.
 
 Optional blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set engineering parameters.
 
@@ -168,12 +177,12 @@ Optional blends (when those signals exist): continuity-log inputs (≤20%), tool
 - `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS` (default `1`): excludes the endogenous controller self-loop components from the base formulas (`decision_history` and `legacy_coherence_level` in `E`, `legacy_coherence_trend` in `I`, `regime_instability` in `S`), filters out server-generated `trajectory_validated` and `cirs_resonance` outcome echoes, and **renormalizes the remaining observed base terms to sum to `1.0`** before the optional post-base blends (`E_base = 0.50·cal_e + 0.50·outcome_e` when both are observed or `1.00` on whichever single term is observed; `I_base = (5/7)·cal_I + (2/7)·consistency_I` when both are observed, `1.00` on whichever single term is observed, or `0.75` `uncalibrated_base_fallback` when neither is observed; `S_base = clamp((8/13)·drift_s + (5/13)·cd_s, 0.05, 1)` when both are observed or `1.00` on whichever single term is observed; if no non-loop base input is observed on `E` or `S`, its documented default fallback carries the base). By contrast, the one-step measurement-only shadow ablations (`compute_legacy_coherence_dependency_shadow`, `compute_decision_self_loop_shadow`, `compute_regime_self_loop_shadow`) keep the legacy weights when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` and substitute constant fleet/transfer-midpoint stand-ins so their `candidate_minus_deployed` deltas measure single-step level attribution rather than reweighting.
 - `UNITARES_PER_AGENT_I_CALIBRATION` (default `1`): replaces the shared fleet `calibration_error` scalar in `I` with the agent's own verified confidence–outcome pairs (`agent_calibration_pooled` when a reference-cohort `prior_error` is supplied, or `agent_tactical_calibration` when `n_verified_pairs >= 5` and `freshness_status == "recent"`), falling back to calibration-free `I` (`0.60·coh_I + 0.40·consistency_I` when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`; `1.00·consistency_I` with ≥3 non-echo outcomes or an explicit `0.75` `uncalibrated_base_fallback` without outcomes when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`). Under `SN1`, `1.00·consistency_I` when calibration is ineligible is accepted by design: `consistency_I` (`health_evidence=false`) measures score variance only, while outcome success/failure direction enters `E_base` at `0.50` weight, so constant failures lower `E_obs` and pull `V` (`E_obs - I_obs`) negative rather than conflating failure with dispersion.
 
-`coh_e` and `coh_I` are especially important to interpret honestly. They were
+`coh_e` and `coh_I` (active only when `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`) are especially important to interpret honestly. They were
 introduced to reduce E saturation and differentiate agents while `coherence`
 still meant `C(V_ODE)`. The later behavioral-EISV migration promoted E/I/S/V
-but left the coherence producer behind, so these terms now carry a demoted ODE
-controller signal into the behavioral vector. The derivation tags that input;
-the live weights remain as specified above.
+but left the coherence producer behind, so when legacy self-loops are enabled
+these terms carry a demoted ODE controller signal into the behavioral vector.
+The derivation tags that input; the legacy weights apply only with `=0`.
 
 There is a second compatibility dependency in `src/confidence.py`: when callers
 omit confidence, 55% of the fallback estimate's base is the same legacy
@@ -231,6 +240,26 @@ identity of EISV itself.
   against the 30-update target, enabling self-relative (Welford) z-score
   deviations from the agent's own behavioral baseline. The coordinates
   themselves remain weighted indices, not z-scores.
+- **With unread axes held (`UNITARES_HOLD_UNREAD_AXES=1`)** these stages count check-ins that
+  read something, not all check-ins. The sensor needs three decisions of
+  history, so a new agent's first three check-ins read nothing: the Φ prior
+  owns check-ins 1–2 as it does with the flag off, no verdict is drawn on 3–5
+  (next item), fixed thresholds apply on 6–27, and self-relative scoring
+  starts at check-in 28, later still if more check-ins read nothing. An axis
+  with fewer than 5 baseline samples stays on the fixed thresholds.
+- **Insufficient reading draws no verdict (hold only).** The Φ prior stands in
+  for an assessment that is on its way. An agent that keeps checking in
+  without supplying sensor inputs never reaches behavioral authority, and for
+  it the prior would decide indefinitely. So once the agent is past cold start
+  by check-in count (the 0.3 authority threshold applied to check-ins, which
+  is check-in 3) and the behavioral state still has less than 0.3 confidence,
+  no verdict is drawn: the published verdict is `safe` with risk 0, the driver
+  is `insufficient_reading`, the Φ-derived fast trip does not apply, and the
+  verdict is graded provisional. `safe` there means nothing was measured. The
+  same holds for an agent whose readings have all gone stale. The independent
+  verification floor still applies, and structural pauses are unchanged. With
+  `UNITARES_PHI_TELEMETRY_ONLY=0` the rule is off, because Φ is then a
+  configured floor and not a placeholder.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution
