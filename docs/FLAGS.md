@@ -127,6 +127,7 @@ additions merge cleanly. -->
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
+| `UNITARES_HOLD_UNREAD_AXES` | `'0'` | Return True when an axis with no supplied base term is held, not filled | src/behavioral_sensor.py |
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
@@ -219,6 +220,7 @@ additions merge cleanly. -->
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SENSOR_COUPLING` | `None (no reader fallback)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
+| `UNITARES_SENSOR_DRIFT_AGENT_LOCAL` | `'0'` | Return True when the sensor's drift input keeps only agent-local parts | src/behavioral_sensor.py |
 | `UNITARES_SEQUENTIAL_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/sequential_calibration.py |
 | `UNITARES_SERVER_LOCK_FILE` | `'.mcp_server.lock'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
 | `UNITARES_SERVER_PID_FILE` | `'.mcp_server.pid'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |

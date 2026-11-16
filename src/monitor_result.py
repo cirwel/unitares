@@ -216,6 +216,10 @@ def _build_risk_attribution(
     # than silently retaining the base Phi/behavioral label.
     if metrics.get("verdict_source") == "independent_verification_floor":
         primary_driver = "independent_verification_floor"
+    elif metrics.get("verdict_source") == "insufficient_reading":
+        # Decided in process_update, which knows the check-in count; this
+        # function sees only the confidence and would name the Phi prior.
+        primary_driver = "insufficient_reading"
 
     phi_drift: Dict = {
         "provenance": "computed",
@@ -295,6 +299,15 @@ def _build_risk_attribution(
             "This verdict is the independent behavioral assessment (EMA "
             "residuals vs this agent's own baseline + absolute floors). Φ and "
             "your reported ethical_drift are telemetry here, not the driver."
+        )
+    elif primary_driver == "insufficient_reading":
+        note = (
+            "No verdict was drawn. You are past cold start by check-in count, "
+            "but too few behavioral readings have been supplied for the "
+            "assessment to hold authority, so nothing was scored. 'safe' here means "
+            "nothing was measured, not that anything was cleared. Φ is "
+            "telemetry and did not decide. Reporting complexity and "
+            "confidence with a check-in supplies the readings."
         )
     elif primary_driver == "phi_floor":
         note = (
@@ -454,7 +467,9 @@ def build_result(
         from src.behavioral_state import BASELINE_WARMUP_UPDATES
         _baseline_status = {
             "is_baselined": _beh.is_baselined,
-            "updates_completed": getattr(_beh, 'update_count', None),
+            # The count is_baselined is measured in (check-ins that read
+            # something, under the hold), so the two cannot disagree.
+            "updates_completed": getattr(_beh, 'evidence_count', None),
             "baseline_target": BASELINE_WARMUP_UPDATES,
         }
     result['risk_attribution'] = _build_risk_attribution(
@@ -587,6 +602,11 @@ def build_result(
                 'coherence_source': BEHAVIORAL_COHERENCE_SOURCE,
                 'coherence_role': BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
                 'components': behavioral_assessment.components,
+                # Axes with no recent reading: not scored, so the verdict
+                # says nothing about them (BehavioralEISV.is_scored).
+                'unscored_axes': list(
+                    getattr(behavioral_assessment, 'unscored_axes', ()) or ()
+                ),
                 'guidance': behavioral_assessment.guidance,
                 'absolute_floor_observation': getattr(
                     monitor,

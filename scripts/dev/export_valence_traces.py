@@ -97,7 +97,9 @@ def main() -> int:
 
     rows = []
     for aid, blob in best.items():
-        oh = blob["oh"]
+        # Rows with a held (None) axis carry no E-I pair to replay, so they
+        # count toward neither --min-obs nor the health label.
+        oh = [row for row in blob["oh"] if all(x is not None for x in row[:3])]
         if len(oh) < args.min_obs:
             continue
         db_label = (label_map.get(aid) or {}).get("label", "")

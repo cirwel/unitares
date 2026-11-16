@@ -58,9 +58,22 @@ async def assess_eisv(request: EisvRequest) -> EisvAssessment:
     monitor = await loop.run_in_executor(None, get_or_create_monitor, request.agent_id)
     # Hydrate a missing file's monitor from the existing DB history before
     # advancing it, at the same await point as the legacy admitted execution.
-    from src.agent_monitor_state import hydrate_from_db_if_fresh
+    from src.agent_monitor_state import (
+        hydrate_from_db_if_fresh,
+        hydrate_resolved_authority_if_missing,
+    )
     await hydrate_from_db_if_fresh(monitor, request.agent_id)
+    if getattr(monitor, "_needs_hydration", False) is True:
+        try:
+            if getattr(monitor.state, "update_count", 0) > 0:
+                await hydrate_resolved_authority_if_missing(monitor, request.agent_id)
+        finally:
+            monitor._needs_hydration = False
     _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
+
+    prepare_restored = request.agent_state.pop("_prepare_restored_monitor", None)
+    if callable(prepare_restored):
+        await prepare_restored(monitor)
 
     task_type = request.agent_state.get("task_type", "mixed")
     # This span includes default-executor queue wait as well as numpy work.

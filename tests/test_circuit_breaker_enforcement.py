@@ -31,11 +31,11 @@ class TestCircuitBreakerEnforcement:
         mock_server.agent_metadata = {}
         return mock_server
 
-    def test_new_agent_can_operate(self, mock_mcp_server):
-        """New agent (not in metadata) can operate."""
+    def test_uncached_agent_requires_registry_lookup(self, mock_mcp_server):
+        """The synchronous gate cannot decide whether an uncached agent is paused."""
         with patch('src.mcp_handlers.shared.get_mcp_server', return_value=mock_mcp_server):
             result = check_agent_can_operate("new-agent-uuid")
-            assert result is None  # None means can operate
+            assert parse_result(result)["error_code"] == "REGISTRY_UNAVAILABLE"
 
     def test_active_agent_can_operate(self, mock_mcp_server):
         """Active agent can operate."""

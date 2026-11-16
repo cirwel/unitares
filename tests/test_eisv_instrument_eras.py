@@ -706,3 +706,10 @@ async def test_basin_read_refuses_mixed_stamped_instruments(monkeypatch, capsys)
     assert await read.run("db", start, start + timedelta(hours=1), allow_cross="A/B") == 0
     out = capsys.readouterr().out
     assert "Pooled across stamped instrument ids" in out and "`I1:b` (2 rows)" in out
+
+
+def test_sn1_is_timed_and_post_deploy_window_is_single_era():
+    sn1 = next(b for b in eisv_eras.load_boundaries() if b.id == "SN1")
+    assert sn1.effective_at == _t("2026-11-05T22:56:34")
+    assert eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16")) == []
+    assert "SN1" in [b.id for b in eisv_eras.boundaries_crossed(_t("2026-11-01"), _t("2026-11-10"))]

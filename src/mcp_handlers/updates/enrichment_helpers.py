@@ -195,20 +195,25 @@ async def _enrich_trajectory_identity_impl(
                         risk_reason = f"Trust tier 3 (verified): earned trust reduces friction"
 
                     if risk_adj != 0.0 and "metrics" in ctx.response_data:
-                        original_risk = ctx.response_data["metrics"].get("risk_score")
-                        if original_risk is not None:
-                            adjusted_risk = max(0.0, min(1.0, original_risk + risk_adj))
-                            ctx.response_data["metrics"]["risk_score"] = round(adjusted_risk, 4)
-                            ctx.response_data["metrics"]["trajectory_risk_adjustment"] = {
-                                "original": round(original_risk, 4),
-                                "adjusted": round(adjusted_risk, 4),
-                                "delta": risk_adj,
-                                "reason": risk_reason,
-                            }
-                            logger.info(
-                                f"[TRAJECTORY] Risk adjusted for {ctx.agent_uuid[:8]}...: "
-                                f"{original_risk:.3f} -> {adjusted_risk:.3f} ({risk_reason})"
-                            )
+                        from src.cold_start_risk_confirmation import INSUFFICIENT_READING_DRIVER
+
+                        metrics_data = ctx.response_data["metrics"]
+                        # Keep risk_score at 0.0 when no verdict was drawn for insufficient readings.
+                        if metrics_data.get("verdict_source") != INSUFFICIENT_READING_DRIVER:
+                            original_risk = metrics_data.get("risk_score")
+                            if original_risk is not None:
+                                adjusted_risk = max(0.0, min(1.0, original_risk + risk_adj))
+                                metrics_data["risk_score"] = round(adjusted_risk, 4)
+                                metrics_data["trajectory_risk_adjustment"] = {
+                                    "original": round(original_risk, 4),
+                                    "adjusted": round(adjusted_risk, 4),
+                                    "delta": risk_adj,
+                                    "reason": risk_reason,
+                                }
+                                logger.info(
+                                    f"[TRAJECTORY] Risk adjusted for {ctx.agent_uuid[:8]}...: "
+                                    f"{original_risk:.3f} -> {adjusted_risk:.3f} ({risk_reason})"
+                                )
             except Exception as e:
                 logger.debug(f"[TRAJECTORY] Trust tier computation failed: {e}")
 

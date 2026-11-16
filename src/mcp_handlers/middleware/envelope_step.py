@@ -1263,6 +1263,8 @@ def build_experience_envelope(
             )
 
     elif canonical_name == "get_governance_metrics":
+        if isinstance(payload.get("observation_summary"), dict):
+            envelope["observation_summary"] = payload["observation_summary"]
         # Preserve the essential EISV read at the friendly surface so compact
         # mode can omit the repeated canonical payload without making the state
         # tool useless.
