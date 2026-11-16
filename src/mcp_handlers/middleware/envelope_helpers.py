@@ -445,7 +445,7 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
         "independent_verification_floor",
         # Past cold start with too little read: the prior did not decide.
         "insufficient_reading",
-    } or (
+    } or basis == "insufficient_reading" or (
         primary_source == "behavioral"
     ):
         return False
@@ -501,8 +501,10 @@ def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
         "phi_cold_start",
     }
     non_discriminative = discriminability.get("non_discriminative") is True
-    if driver == "insufficient_reading":
+    if driver == "insufficient_reading" or evidence.get("basis") == "insufficient_reading":
         # No verdict was drawn; name that, not the placeholder vector's source.
+        # The compact formats drop risk_attribution, so the wrapped verdict's
+        # evidence basis is the other place the driver reaches this code.
         return "provisional", "insufficient_reading"
     if grade == "provisional" or cold_start or non_discriminative:
         return "provisional", str(basis or "non_discriminative_cold_start")
@@ -1157,7 +1159,7 @@ def _verdict_caveat(
             None,
         )
     pointer = f" See {evidence_path} for provenance." if evidence_path else ""
-    if primary_driver == "insufficient_reading":
+    if evidence_basis == "insufficient_reading":
         message = (
             "No verdict was drawn: too few behavioral readings were supplied "
             "to score anything. 'safe'/'proceed' means nothing was measured, "

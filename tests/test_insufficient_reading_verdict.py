@@ -258,3 +258,62 @@ def test_insufficient_reading_is_provisional_and_named():
     from src.mcp_handlers.middleware.envelope_helpers import _verdict_assurance
 
     assert _verdict_assurance(_payload()) == ("provisional", INSUFFICIENT_READING_DRIVER)
+
+
+# --- response formats that drop risk_attribution (review finding) -----------
+
+
+def _insufficient_result(monkeypatch) -> dict:
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("insufficient-reading-formats", load_state=False)
+    _silence_readings(monitor, monkeypatch)
+    result = None
+    for _ in range(4):
+        result = monitor.process_update(dict(CHECK_IN))
+    assert result["metrics"]["verdict_source"] == INSUFFICIENT_READING_DRIVER
+    return result
+
+
+def _formatted(result: dict, mode: str) -> dict:
+    from src.mcp_handlers import response_formatter as formatter
+
+    if mode == "standard":
+        return formatter._format_standard(dict(result), "mixed")
+    if mode == "minimal":
+        return formatter._format_minimal(dict(result), False, None)
+    return formatter._format_compact(dict(result), False, None)
+
+
+def _wrapped_verdict(formatted: dict) -> dict:
+    verdict = formatted.get("verdict")
+    if not isinstance(verdict, dict):
+        verdict = (formatted.get("metrics") or {}).get("verdict")
+    assert isinstance(verdict, dict), formatted.keys()
+    return verdict
+
+
+@pytest.mark.parametrize("mode", ["standard", "minimal", "compact"])
+def test_formats_without_risk_attribution_still_name_the_driver(monkeypatch, mode):
+    from src.mcp_handlers.middleware.envelope_helpers import _is_cold_start, _verdict_assurance
+
+    formatted = _formatted(_insufficient_result(monkeypatch), mode)
+    verdict = _wrapped_verdict(formatted)
+
+    assert verdict["evidence"]["basis"] == INSUFFICIENT_READING_DRIVER
+    assert "no verdict was drawn" in verdict["meaning"]
+    assert "cold-start prior" not in verdict["meaning"]
+    # The envelope reads the formatted payload, with or without attribution.
+    formatted.pop("risk_attribution", None)
+    assert _is_cold_start(formatted) is False
+    assert _verdict_assurance(formatted) == ("provisional", INSUFFICIENT_READING_DRIVER)
+
+
+def test_explain_verdict_is_unchanged_without_the_driver():
+    from src.governance_glossary import explain_verdict
+
+    assert explain_verdict("safe", evidence_source="ode_fallback") == explain_verdict(
+        "safe", evidence_source="ode_fallback", verdict_driver="phi_cold_start"
+    )
+    assert explain_verdict("safe")["value"] == "safe"
+    assert "evidence" not in explain_verdict("safe", verdict_driver="behavioral_assessment")
