@@ -1991,7 +1991,9 @@ def applicable_waiver(comments, key, changed, sensitive, families, lines, policy
     it) and the change must fit its allowance. Every waiver for the diff is
     tried, so a voided one never blocks a valid replacement."""
     for reason, allow, granted_authors in all_waiver_terms(comments, key, policy):
-        if granted_authors is not None and granted_authors != set(authors):
+        # A waiver that did not record the authorship it was granted against
+        # cannot be bound to it, so it does not count.
+        if granted_authors is None or granted_authors != set(authors):
             continue
         if waiver_refusal(changed, sensitive, families, lines, policy, set(authors), allow) is None:
             return reason
@@ -3421,11 +3423,12 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
             failed.discard("antigravity")
         candidates = second_family_candidates(
             getattr(args, "branch", "") or "", families, comments, key, failed)
+        # A reviewer of an author family is not independent (AGENTS.md). Judged
+        # with the same (cleared) model override the candidates were chosen under.
+        candidates = [c for c in candidates if provider_family(c) not in authors]
     finally:
         _AGY_MODEL_OVERRIDE = prev_agy
     have = ", ".join(sorted(families)) or "none"
-    # A reviewer of an author family is not independent (AGENTS.md).
-    candidates = [c for c in candidates if provider_family(c) not in authors]
     if candidates:
         runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
         next_step = f"run one of: {runs}"

@@ -4222,7 +4222,7 @@ _SIGNED_BODY = "Change.\n\n---\nModel: claude-opus-5-5\nUNITARES agent: 11111111
 
 def _waiver(key, reason="help string only; no auth decision changes", association="OWNER"):
     return {"author_association": association, "user": {"type": "User"},
-            "body": f"<!-- {rg.WAIVER_MARKER} key={key} -->\n### waived\n\nReason: {reason}\n"}
+            "body": f"<!-- {rg.WAIVER_MARKER} key={key} authors=anthropic -->\n### waived\n\nReason: {reason}\n"}
 
 
 def test_a_waiver_lifts_the_hold_for_a_small_change_after_one_family_passed():
@@ -6148,3 +6148,27 @@ def test_every_waiver_caller_passes_the_pr_authors():
     source = Path(rg.__file__).read_text()
     calls = re.findall(r"waiver_reason_for\(([^)]*)\)", source)
     assert calls and all(call.count(",") >= 7 for call in calls if not call.startswith("comments: list"))
+
+
+def test_a_waiver_without_recorded_authorship_does_not_count():
+    k = "c" * 64
+    legacy = _waiver_with(k, authors=None)
+    assert rg.apply_waiver(_HELD, [legacy], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY, {"anthropic"}) == _HELD
+
+
+def test_local_suggestions_skip_author_families_under_the_cleared_model_override(monkeypatch, capsys):
+    key = "c" * 64
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [_comment(_full_clean(key, reviewer="codex"))])
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: {"anthropic", "openai"})
+    monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: ["antigravity", "claude"])
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)  # agy default: Gemini once the override is cleared
+    monkeypatch.setattr(rg, "_AGY_MODEL_OVERRIDE", "claude-opus-5-5")  # a one-shot Anthropic override
+    assert rg.second_family_pass(SimpleNamespace(base="origin/master", branch="b"), "o/r", 1, key, "h", 0) \
+        == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "--reviewer antigravity" in out and "--reviewer claude" not in out
