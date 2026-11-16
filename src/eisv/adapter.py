@@ -62,6 +62,10 @@ async def assess_eisv(request: EisvRequest) -> EisvAssessment:
     await hydrate_from_db_if_fresh(monitor, request.agent_id)
     _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
 
+    prepare_restored = request.agent_state.pop("_prepare_restored_monitor", None)
+    if callable(prepare_restored):
+        await prepare_restored(monitor)
+
     task_type = request.agent_state.get("task_type", "mixed")
     # This span includes default-executor queue wait as well as numpy work.
     # Keep run_in_executor: to_thread would additionally propagate contextvars.

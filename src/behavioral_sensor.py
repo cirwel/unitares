@@ -297,9 +297,17 @@ def compute_sensor_drift_input(
 
     used: dict = {}
     if complexity_divergence_observed:
-        used["complexity_divergence"] = float(
-            getattr(drift_vector, "complexity_divergence", 0.0) or 0.0
-        )
+        raw_cd = getattr(drift_vector, "complexity_divergence", None)
+        if raw_cd is None:
+            excluded["complexity_divergence"] = "not_supplied"
+        elif (
+            isinstance(raw_cd, bool)
+            or not isinstance(raw_cd, (int, float))
+            or not math.isfinite(float(raw_cd))
+        ):
+            excluded["complexity_divergence"] = "complexity_divergence_invalid"
+        else:
+            used["complexity_divergence"] = max(0.0, min(1.0, float(raw_cd)))
     else:
         excluded["complexity_divergence"] = "not_supplied"
 

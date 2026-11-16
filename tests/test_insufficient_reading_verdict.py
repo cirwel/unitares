@@ -317,3 +317,71 @@ def test_explain_verdict_is_unchanged_without_the_driver():
     )
     assert explain_verdict("safe")["value"] == "safe"
     assert "evidence" not in explain_verdict("safe", verdict_driver="behavioral_assessment")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verdict_source", "is_anomaly", "expected_risk", "expect_adjustment"),
+    [
+        (INSUFFICIENT_READING_DRIVER, False, 0.0, False),
+        (INSUFFICIENT_READING_DRIVER, True, 0.0, False),
+        ("behavioral_assessment", True, 0.15, True),
+    ],
+)
+async def test_trajectory_enrichment_preserves_zero_risk_under_insufficient_reading(
+    monkeypatch, verdict_source, is_anomaly, expected_risk, expect_adjustment
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.mcp_handlers.updates.context import UpdateContext
+    from src.mcp_handlers.updates.enrichment_helpers import _enrich_trajectory_identity_impl
+
+    ctx = UpdateContext(
+        agent_id="agent-1",
+        agent_uuid="agent-1",
+        arguments={
+            "trajectory_signature": {
+                "identity_confidence": 0.5,
+                "stability_score": 0.8,
+                "observation_count": 10,
+            }
+        },
+        response_text="ok",
+        complexity=0.3,
+        ethical_drift=[0.0, 0.0, 0.0],
+        is_new_agent=False,
+        meta=SimpleNamespace(tags=[], label="probe", total_updates=10),
+        mcp_server=MagicMock(agent_metadata={}),
+    )
+    ctx.response_data = {
+        "metrics": {
+            "risk_score": 0.0,
+            "verdict_source": verdict_source,
+        }
+    }
+
+    fake_sig_cls = SimpleNamespace(from_dict=lambda data: data)
+    fake_update = AsyncMock(
+        return_value={
+            "stored": True,
+            "observation_count": 10,
+            "identity_confidence": 0.5,
+            "lineage_similarity": 0.45 if is_anomaly else 0.95,
+            "lineage_threshold": 0.6,
+            "is_anomaly": is_anomaly,
+            "trust_tier": "emerging",
+        }
+    )
+    monkeypatch.setattr("src.trajectory_identity.TrajectorySignature", fake_sig_cls)
+    monkeypatch.setattr("src.trajectory_identity.update_current_signature", fake_update)
+
+    await _enrich_trajectory_identity_impl(
+        ctx,
+        annotate_fn=lambda _sig: None,
+        explain_tier_fn=lambda _tier: {"tier": 1, "name": "emerging"},
+    )
+
+    assert ctx.response_data["trajectory_identity"]["trust_tier"] == {"tier": 1, "name": "emerging"}
+    assert ctx.response_data["metrics"]["risk_score"] == pytest.approx(expected_risk)
+    assert ("trajectory_risk_adjustment" in ctx.response_data["metrics"]) is expect_adjustment
