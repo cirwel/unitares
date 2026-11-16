@@ -1,14 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "dialectic-reasoning",
-  "verified_at": "2026-11-16T18:02:57Z",
+  "verified_at": "2026-11-16T18:40:54Z",
   "verified_date": "2026-11-16",
-  "verifier": "Antigravity (re-checked EISV and lifecycle claims against updated EISV_COMPUTATION.md, behavioral_sensor.py, adapter.py, phases.py, and governance_monitor.py)",
+  "verifier": "Antigravity (re-checked EISV and lifecycle claims against updated adapter.py, agent_monitor_state.py, EISV_COMPUTATION.md, behavioral_sensor.py, phases.py, and governance_monitor.py)",
   "source_digests": {
     "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
     "unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql": "c74d05125d80f7b2",
     "unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql": "62319aa203b4ae8d",
-    "unitares/docs/EISV_COMPUTATION.md": "52baa90ab3dbf7a8",
+    "unitares/docs/EISV_COMPUTATION.md": "a2141df46c2147f3",
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
     "unitares/src/dialectic_db.py": "95307c15e08b57d9",
     "unitares/src/dialectic_protocol.py": "e8d17c53bd0cfcbb",

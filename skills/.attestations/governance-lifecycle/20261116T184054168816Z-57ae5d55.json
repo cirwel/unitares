@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-11-16T18:02:57Z",
+  "verified_at": "2026-11-16T18:40:54Z",
   "verified_date": "2026-11-16",
-  "verifier": "Antigravity (re-checked EISV and lifecycle claims against updated EISV_COMPUTATION.md, behavioral_sensor.py, adapter.py, phases.py, and governance_monitor.py)",
+  "verifier": "Antigravity (re-checked EISV and lifecycle claims against updated adapter.py, agent_monitor_state.py, EISV_COMPUTATION.md, behavioral_sensor.py, phases.py, and governance_monitor.py)",
   "source_digests": {
     "unitares/commands/closeout.md": "a295890758851260",
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
@@ -12,7 +12,7 @@
     "unitares/src/db/mixins/checkpoint.py": "3fb6ab215f0f6150",
     "unitares/src/db/mixins/identity.py": "ab844fae6ab589ea",
     "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
-    "unitares/src/eisv/adapter.py": "56f49172eff25738",
+    "unitares/src/eisv/adapter.py": "4995f06c226e20f2",
     "unitares/src/governance_monitor.py": "d2577240d09b3b6f",
     "unitares/src/interface_contract.py": "ab4d1238153d05d3",
     "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
