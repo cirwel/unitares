@@ -1585,8 +1585,8 @@ class UNITARESMonitor:
             )
 
         # ── Insufficient reading: no verdict (hold only) ──
-        # Past cold start by check-in count, yet too little was read for the
-        # behavioral state to hold authority. The Phi result above is the
+        # Past the point where a fully supplying agent would hold authority,
+        # yet too little was read for this one to. The Phi result above is the
         # cold-start prior and stays telemetry here; no verdict is drawn, so
         # the agent proceeds unscored. The verification floor below still
         # applies because it does not depend on these readings.
@@ -1594,7 +1594,7 @@ class UNITARESMonitor:
         insufficient_reading = reading_insufficient(
             hold_unread=self._behavioral_state.hold_unread,
             behavioral_confidence=self._behavioral_state.confidence,
-            checkin_confidence=self._behavioral_state.checkin_confidence,
+            attainable_confidence=self._behavioral_state.attainable_confidence,
             behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
             phi_telemetry=phi_telemetry_only(),
         )

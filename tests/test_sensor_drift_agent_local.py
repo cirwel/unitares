@@ -67,9 +67,14 @@ def _agent_local_on(monkeypatch):
     monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
 
 
-def test_the_agent_local_input_ships_off(monkeypatch):
-    """A routine deploy must not start era SD1: the default passes the full norm."""
+def test_the_agent_local_input_ships_on(monkeypatch):
+    """Era SD1 is the default (operator decision 2026-11-16); 0 passes the full norm."""
     monkeypatch.delenv(SENSOR_DRIFT_AGENT_LOCAL_ENV, raising=False)
+    assert sensor_drift_agent_local_enabled() is True
+    record = compute_sensor_drift_input(FROZEN, complexity_divergence_observed=False)
+    assert record["mode"] == "agent_local_v1"
+    assert record["value"] is None
+    monkeypatch.setenv(SENSOR_DRIFT_AGENT_LOCAL_ENV, "0")
     assert sensor_drift_agent_local_enabled() is False
     record = compute_sensor_drift_input(FROZEN, complexity_divergence_observed=False)
     assert record["mode"] == "full_norm"

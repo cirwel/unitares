@@ -160,11 +160,11 @@ S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
 
 No human oracle is needed for runtime drift estimation. Independent exogenous outcomes still matter for calibration and research validation.
 
-**The behavioral sensor reads an agent-local drift norm** (`UNITARES_SENSOR_DRIFT_AGENT_LOCAL`, default `0`, which passes the full vector norm; set to `1`/`true`/`yes`/`on` to read the agent-local norm). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `SD1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. The reason for it: on the sensor path two of the four components above carry no per-agent information. Stability deviation is 0.2 for every agent, because the drift engine is called with no decision and `decision_consistency` never leaves its 0.8 default. Calibration deviation is the server-wide tactical worst bin, one number for the fleet that moves only when a hard-exogenous outcome arrives. Coherence deviation tracks legacy ODE control feedback, the self-loop class `SN1` excludes from E and I. The sensor's `drift_norm` is therefore the norm of the agent's supplied complexity divergence and its own tactical calibration error (at least 10 verified pairs, freshness `recent`), and `None` when neither exists, so the drift term in S is reported unobserved rather than as a reading. `derivation.drift_input` records the full norm, the components used, and why each other component was left out. The drift vector itself, and the ODE forcing it feeds, are unchanged.
+**The behavioral sensor reads an agent-local drift norm** (`UNITARES_SENSOR_DRIFT_AGENT_LOCAL`, default `1`, era `SD1`; set to `0`/`false`/`no`/`off` to pass the full vector norm). On the sensor path two of the four components above carry no per-agent information. Stability deviation is 0.2 for every agent, because the drift engine is called with no decision and `decision_consistency` never leaves its 0.8 default. Calibration deviation is the server-wide tactical worst bin, one number for the fleet that moves only when a hard-exogenous outcome arrives. Coherence deviation tracks legacy ODE control feedback, the self-loop class `SN1` excludes from E and I. The sensor's `drift_norm` is therefore the norm of the agent's supplied complexity divergence and its own tactical calibration error (at least 10 verified pairs, freshness `recent`), and `None` when neither exists, so the drift term in S is reported unobserved rather than as a reading. `derivation.drift_input` records the full norm, the components used, and why each other component was left out. The drift vector itself, and the ODE forcing it feeds, are unchanged.
 
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
 
-**Unread axes are held, not filled** (`UNITARES_HOLD_UNREAD_AXES`, default `0`; set to `1`/`true`/`yes`/`on` to hold). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `HU1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. With the flag on, the fill above still produces the arithmetic the component record and the shadow ablations report, and it is still the legacy ODE's anchor. The behavioral state no longer consumes it for an axis that had no supplied base term:
+**Unread axes are held, not filled** (`UNITARES_HOLD_UNREAD_AXES`, default `1`, era `HU1`; set to `0`/`false`/`no`/`off` to restore filling). The fill above still produces the arithmetic the component record and the shadow ablations report, and it is still the legacy ODE's anchor. The behavioral state no longer consumes it for an axis that had no supplied base term:
 - The sensor reports no reading for that axis, and the optional blends on it are discarded for the check-in (they adjust a reading, and there is none).
 - The smoothed value keeps its last reading, takes no baseline sample and no trend entry. `V` steps only when `E` and `I` were both read on the same check-in.
 - The first reading on an axis seeds its value and restarts its baseline. State restored from before `HU1` starts with every axis unread: it keeps the numbers it had, as placeholders, until a reading replaces them.
@@ -242,20 +242,19 @@ identity of EISV itself.
   against the 30-update target, enabling self-relative (Welford) z-score
   deviations from the agent's own behavioral baseline. The coordinates
   themselves remain weighted indices, not z-scores.
-- **With unread axes held (`UNITARES_HOLD_UNREAD_AXES=1`)** these stages count check-ins that
+- **With unread axes held (the default)** these stages count check-ins that
   read something, not all check-ins. The sensor needs three decisions of
   history, so a new agent's first three check-ins read nothing: the Φ prior
-  owns check-ins 1–2 as it does with the flag off, no verdict is drawn on 3–5
-  (next item), fixed thresholds apply on 6–27, and self-relative scoring
+  owns check-ins 1–5, fixed thresholds apply on 6–27, and self-relative scoring
   starts at check-in 28, later still if more check-ins read nothing. An axis
   with fewer than 5 baseline samples stays on the fixed thresholds.
-- **Insufficient reading draws no verdict (hold only).** The Φ prior stands in
+- **Insufficient reading draws no verdict.** The Φ prior stands in
   for an assessment that is on its way. An agent that keeps checking in
   without supplying sensor inputs never reaches behavioral authority, and for
-  it the prior would decide indefinitely. So once the agent is past cold start
-  by check-in count (the 0.3 authority threshold applied to check-ins, which
-  is check-in 3) and the behavioral state still has less than 0.3 confidence,
-  no verdict is drawn: the published verdict is `safe` with risk 0, the driver
+  it the prior would decide indefinitely. Cold start ends where an agent that
+  supplied everything would have reached authority, which is check-in 6
+  (`BehavioralEISV.attainable_confidence` at 0.3). From there, while the
+  behavioral state still has less than 0.3 confidence, no verdict is drawn: the published verdict is `safe` with risk 0, the driver
   is `insufficient_reading`, the Φ-derived fast trip does not apply, and the
   verdict is graded provisional. `safe` there means nothing was measured. The
   same holds for an agent whose readings have all gone stale. The independent

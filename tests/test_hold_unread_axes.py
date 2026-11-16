@@ -25,17 +25,19 @@ from src.behavioral_state import (
 
 @pytest.fixture(autouse=True)
 def _hold_on(monkeypatch):
-    """These tests describe era HU1, so they run with the hold switched on.
+    """These tests describe era HU1, so they pin the hold on whatever the default.
 
-    The flag ships off (see test_the_hold_ships_off); a test that needs it off
-    sets it again itself.
+    A test that needs it off sets it again itself.
     """
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "1")
 
 
-def test_the_hold_ships_off(monkeypatch):
-    """A routine deploy must not start era HU1: the default leaves filling on."""
+def test_the_hold_ships_on(monkeypatch):
+    """Era HU1 is the default (operator decision 2026-11-16); 0 restores filling."""
     monkeypatch.delenv("UNITARES_HOLD_UNREAD_AXES", raising=False)
+    assert hold_unread_axes_enabled() is True
+    assert BehavioralEISV().hold_unread is True
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
     assert hold_unread_axes_enabled() is False
     state = BehavioralEISV()
     state.update(0.7, 0.6, 0.2)
