@@ -4503,9 +4503,10 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
     assert rg.cmd_sweep(SimpleNamespace(reviewer=configured, quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
     assert len(calls) == expected
     if verdict == "CLEAN" and requested:
-        assert waiver_calls == [([], "k", ["src/oauth_provider.py"],
-                                 ["src/oauth_provider.py"], {"openai"},
-                                 "origin/master", "h")]
+        assert [c[:7] for c in waiver_calls] == [([], "k", ["src/oauth_provider.py"],
+                                                  ["src/oauth_provider.py"], {"openai"},
+                                                  "origin/master", "h")]
+        assert isinstance(waiver_calls[0][7], set)  # the PR's author families, always passed
     else:
         assert waiver_calls == []
     if expected:
@@ -6128,3 +6129,22 @@ def test_waive_records_the_allowance_and_authors_and_refuses_an_allowance_below_
     terms = rg.waiver_terms([{"author_association": "OWNER", "user": {"type": "User"}, "body": posted[0]}],
                             key, rg.waiver_policy())
     assert terms and terms[1] == 120 and terms[2] == {"openai"}
+
+
+def test_a_voided_waiver_does_not_block_its_valid_replacement():
+    k = "c" * 64
+    voided = _waiver_with(k, allow=200, authors="google")  # granted before a body edit
+    replacement = _waiver_with(k, allow=200, authors="google,openai")
+    out = rg.apply_waiver(_HELD, [voided, replacement], k, _PATHS, _PATHS, {"anthropic"}, 150, _POLICY,
+                          {"google", "openai"})
+    assert out[0] == "success"
+
+
+def test_every_waiver_caller_passes_the_pr_authors():
+    """A caller that omits authors would reject every waiver (unknown = refuse),
+    so the argument is required and every call site supplies it."""
+    import inspect
+    assert inspect.signature(rg.waiver_reason_for).parameters["authors"].default is inspect.Parameter.empty
+    source = Path(rg.__file__).read_text()
+    calls = re.findall(r"waiver_reason_for\(([^)]*)\)", source)
+    assert calls and all(call.count(",") >= 7 for call in calls if not call.startswith("comments: list"))

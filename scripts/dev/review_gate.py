@@ -1951,15 +1951,17 @@ def waiver_reason(body: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def waiver_terms(comments: list[dict], key: str, policy: dict) -> tuple[str, int | None, set[str] | None] | None:
-    """(reason, allow_lines, authors) of a valid waiver for ``key``, or None.
-    ``allow_lines`` and ``authors`` are None on a waiver that did not record
-    them. Counts every trusted waiver on the PR against the cap, so reposting
-    cannot extend it."""
+def all_waiver_terms(comments: list[dict], key: str,
+                     policy: dict) -> list[tuple[str, int | None, set[str] | None]]:
+    """(reason, allow_lines, authors) of every well-formed waiver for ``key``,
+    in posting order. ``allow_lines`` and ``authors`` are None on a waiver that
+    did not record them. Counts every trusted waiver on the PR against the cap,
+    so reposting cannot extend it: over the cap, none counts."""
     posted = [c for c in comments
               if trusted_operator_comment(c) and WAIVER_RE.search(c.get("body") or "")]
     if len(posted) > policy["max_per_pr"]:
-        return None
+        return []
+    out = []
     for c in posted:
         m = WAIVER_RE.search(c["body"])
         reason = waiver_reason(c["body"])
@@ -1967,8 +1969,14 @@ def waiver_terms(comments: list[dict], key: str, policy: dict) -> tuple[str, int
             allow = int(m.group("allow")) if m.group("allow") else None
             authors = (set(filter(None, m.group("authors").split(",")))
                        if m.group("authors") is not None else None)
-            return reason, allow, authors
-    return None
+            out.append((reason, allow, authors))
+    return out
+
+
+def waiver_terms(comments: list[dict], key: str, policy: dict) -> tuple[str, int | None, set[str] | None] | None:
+    """The first well-formed waiver's terms for ``key``, or None."""
+    terms = all_waiver_terms(comments, key, policy)
+    return terms[0] if terms else None
 
 
 def active_waiver(comments: list[dict], key: str, policy: dict) -> str | None:
@@ -1977,16 +1985,17 @@ def active_waiver(comments: list[dict], key: str, policy: dict) -> str | None:
     return terms[0] if terms else None
 
 
-def _waiver_applies(terms, changed, sensitive, families, lines, policy, authors) -> bool:
-    """A waiver applies only within its own terms: the authorship it was granted
-    against must still be the PR's (a body edit afterwards voids it), and the
-    diff must be within the operator's allowance."""
-    if terms is None:
-        return False
-    _, allow, granted_authors = terms
-    if granted_authors is not None and granted_authors != set(authors):
-        return False
-    return waiver_refusal(changed, sensitive, families, lines, policy, set(authors), allow) is None
+def applicable_waiver(comments, key, changed, sensitive, families, lines, policy, authors) -> str | None:
+    """The reason of a waiver for this diff that applies within its own terms,
+    or None. Its recorded authorship must still be the PR's (a body edit voids
+    it) and the change must fit its allowance. Every waiver for the diff is
+    tried, so a voided one never blocks a valid replacement."""
+    for reason, allow, granted_authors in all_waiver_terms(comments, key, policy):
+        if granted_authors is not None and granted_authors != set(authors):
+            continue
+        if waiver_refusal(changed, sensitive, families, lines, policy, set(authors), allow) is None:
+            return reason
+    return None
 
 
 def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, changed: list[str] | None,
@@ -1996,10 +2005,9 @@ def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, changed:
     in-bounds waiver names this diff."""
     if held[0] != "action_required":
         return held
-    terms = waiver_terms(comments, key, policy)
-    if not _waiver_applies(terms, changed, sensitive, families, lines, policy, authors):
+    reason = applicable_waiver(comments, key, changed, sensitive, families, lines, policy, authors)
+    if reason is None:
         return held
-    reason = terms[0]
     have = ", ".join(sorted(families))
     return ("success", f"second family waived by the operator ({lines} changed line(s) on "
                        f"{sensitive[0]}; have: {have}): {reason[:120]}")
@@ -2007,13 +2015,12 @@ def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, changed:
 
 def waiver_reason_for(comments: list[dict], key: str, changed: list[str] | None,
                       sensitive: list[str], families: set[str], base: str, head: str,
-                      authors: set[str] = frozenset()) -> str | None:
+                      authors: set[str]) -> str | None:
     """The reason of a valid, in-bounds waiver for this diff, or None. Local
     review.sh uses the same rule CI does, so the two never disagree."""
     policy = base_waiver_policy(base)
-    terms = waiver_terms(comments, key, policy)
     lines = sensitive_changed_lines(base, head, sensitive)
-    return terms[0] if _waiver_applies(terms, changed, sensitive, families, lines, policy, authors) else None
+    return applicable_waiver(comments, key, changed, sensitive, families, lines, policy, authors)
 
 
 def disabled_providers() -> dict[str, str]:
@@ -3260,7 +3267,8 @@ def cmd_review(args) -> int:
                 missing_required_family = bool(
                     sensitive and family and 1 <= len(families) < 2 and family not in families
                     and not already_attempted
-                    and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head)
+                    and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head,
+                                              pr_authors_or_unknown(repo, pr))
                 )
                 joining_cycle = rounds.can_join(head, key, family) or missing_required_family
                 if grant_id:
@@ -4142,7 +4150,7 @@ def cmd_sweep(args) -> int:
                 families = passing_families(comments, key, native.records)
                 if len(families) < 2:
                     waived = waiver_reason_for(comments, key, changed, sensitive, families,
-                                               f"origin/{base}", head)
+                                               f"origin/{base}", head, authored_by)
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], families, comments, key))
                     selected = next((p for p in choices if p in eligible
