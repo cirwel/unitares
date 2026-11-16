@@ -475,8 +475,17 @@ def explain_verdict(
     *,
     evidence_source: Optional[str] = None,
     decision_action: Optional[str] = None,
+    verdict_driver: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Wrap a verdict value with meaning + next_action.
+
+    ``verdict_driver`` is the source that owned the verdict
+    (``metrics.verdict_source``). When it is ``insufficient_reading`` no
+    verdict was drawn: the agent is past cold start but supplied too few
+    behavioral readings, so the wrapped verdict says nothing was measured and
+    its evidence basis is ``insufficient_reading``, not the cold-start prior.
+    The response formats that drop ``risk_attribution`` carry the driver to
+    the reader this way. Omitted → byte-identical output.
 
     ``evidence_source`` is the ``primary_eisv_source`` in force when the verdict
     was issued (``"behavioral"`` once warm, ``"ode_fallback"`` before). When it
@@ -517,6 +526,27 @@ def explain_verdict(
                 action=action
             )
     if (
+        verdict_driver == "insufficient_reading"
+        and isinstance(wrapped.get("value"), str)
+        and wrapped["value"] in _BEHAVIORAL_VERDICTS
+    ):
+        base_meaning = wrapped.get("meaning", "").rstrip()
+        wrapped["meaning"] = (
+            f"{base_meaning} Provisional — no verdict was drawn: too few "
+            "behavioral readings were supplied, so nothing was measured."
+        )
+        wrapped["evidence"] = {
+            "grade": "provisional",
+            "corroboration": "claim_only",
+            "basis": "insufficient_reading",
+            "note": (
+                "Past cold start by check-in count, but behavioral confidence "
+                "is below 0.3 because too few readings were supplied. Nothing "
+                "was scored and the cold-start prior did not decide. Reporting "
+                "complexity and confidence with a check-in supplies readings."
+            ),
+        }
+    elif (
         evidence_source == "ode_fallback"
         and isinstance(wrapped.get("value"), str)
         and wrapped["value"] in _BEHAVIORAL_VERDICTS

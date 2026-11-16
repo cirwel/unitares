@@ -426,6 +426,20 @@ class BehavioralEISV:
         return count / BOOTSTRAP_UPDATES
 
     @property
+    def checkin_confidence(self) -> float:
+        """The bootstrap ramp counted in check-ins, whether or not they read anything.
+
+        With the hold off this equals ``confidence``. Under the hold it says
+        how far past cold start the agent is by check-in count alone, which is
+        what separates "too new to assess" from "checked in often and supplied
+        too little to assess" (see
+        ``cold_start_risk_confirmation.reading_insufficient``).
+        """
+        if self.update_count >= BOOTSTRAP_UPDATES:
+            return 1.0
+        return self.update_count / BOOTSTRAP_UPDATES
+
+    @property
     def baseline_confidence(self) -> float:
         """How stable is the behavioral baseline. 0 = no data, 1 = fully characterized."""
         count = self.evidence_count

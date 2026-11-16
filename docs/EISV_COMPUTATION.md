@@ -245,9 +245,23 @@ identity of EISV itself.
 - **With unread axes held (`UNITARES_HOLD_UNREAD_AXES=1`)** these stages count check-ins that
   read something, not all check-ins. The sensor needs three decisions of
   history, so a new agent's first three check-ins read nothing: the Φ prior
-  owns check-ins 1–5, fixed thresholds apply on 6–27, and self-relative scoring
+  owns check-ins 1–2 as it does with the flag off, no verdict is drawn on 3–5
+  (next item), fixed thresholds apply on 6–27, and self-relative scoring
   starts at check-in 28, later still if more check-ins read nothing. An axis
   with fewer than 5 baseline samples stays on the fixed thresholds.
+- **Insufficient reading draws no verdict (hold only).** The Φ prior stands in
+  for an assessment that is on its way. An agent that keeps checking in
+  without supplying sensor inputs never reaches behavioral authority, and for
+  it the prior would decide indefinitely. So once the agent is past cold start
+  by check-in count (the 0.3 authority threshold applied to check-ins, which
+  is check-in 3) and the behavioral state still has less than 0.3 confidence,
+  no verdict is drawn: the published verdict is `safe` with risk 0, the driver
+  is `insufficient_reading`, the Φ-derived fast trip does not apply, and the
+  verdict is graded provisional. `safe` there means nothing was measured. The
+  same holds for an agent whose readings have all gone stale. The independent
+  verification floor still applies, and structural pauses are unchanged. With
+  `UNITARES_PHI_TELEMETRY_ONLY=0` the rule is off, because Φ is then a
+  configured floor and not a placeholder.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution
