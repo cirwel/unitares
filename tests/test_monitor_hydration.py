@@ -723,3 +723,40 @@ async def test_hydrate_without_behavioral_blob_leaves_fresh_state():
 
     assert applied is True
     assert monitor._behavioral_state.update_count == 0  # unchanged, no crash
+
+
+@pytest.mark.asyncio
+async def test_hydrate_from_db_if_fresh_drains_needs_hydration_only_when_fresh():
+    """Fresh hydration clears _needs_hydration (even on DB error), whereas an
+    already-populated legacy monitor keeps _needs_hydration so ensure_hydrated
+    can still heal resolved authority."""
+    # 1. Fresh monitor with DB history -> applied=True, flag drained
+    fresh = _make_fresh_monitor("drain-fresh-ok")
+    fresh._needs_hydration = True
+    fake_db = MagicMock()
+    fake_db.get_identity = AsyncMock(return_value=MagicMock(identity_id=11))
+    fake_db.get_agent_state_history = AsyncMock(
+        return_value=[_FakeStateRow(E=0.7, I=0.8, S=0.1, V=0.0, coherence=0.5, regime="EXPLORATION")]
+    )
+    with patch("src.db.get_db", return_value=fake_db):
+        applied = await hydrate_from_db_if_fresh(fresh, "drain-fresh-ok")
+    assert applied is True
+    assert fresh._needs_hydration is False
+
+    # 2. Fresh monitor when DB raises -> applied=False, single-shot flag still drained
+    failing = _make_fresh_monitor("drain-fresh-err")
+    failing._needs_hydration = True
+    failing_db = MagicMock()
+    failing_db.get_identity = AsyncMock(side_effect=RuntimeError("DB down"))
+    with patch("src.db.get_db", return_value=failing_db):
+        applied = await hydrate_from_db_if_fresh(failing, "drain-fresh-err")
+    assert applied is False
+    assert failing._needs_hydration is False
+
+    # 3. Legacy snapshot (update_count > 0) -> no-op preserves flag for ensure_hydrated
+    legacy = _make_fresh_monitor("preserve-legacy-flag")
+    legacy.state.update_count = 5
+    legacy._needs_hydration = True
+    applied = await hydrate_from_db_if_fresh(legacy, "preserve-legacy-flag")
+    assert applied is False
+    assert legacy._needs_hydration is True

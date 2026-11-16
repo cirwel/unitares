@@ -1,4 +1,4 @@
-"""Post-restart behavioral sensor integration with live drift and continuity."""
+"""Post-restart behavioral sensor integration with live drift, continuity, and hydration drain."""
 
 from __future__ import annotations
 
@@ -32,40 +32,47 @@ def _make_restored_monitor(
     return monitor
 
 
-def _make_ctx(agent_id: str = "restored-agent"):
+def _make_ctx(
+    agent_id: str = "restored-agent",
+    *,
+    mcp_server=None,
+    response_text: str = (
+        "Completed the EISV post-restart continuity and drift fix, updated "
+        "phases.py and governance_monitor.py, and verified regression tests."
+    ),
+    complexity: float = 0.4,
+):
     from src import agent_loop_detection as ald
     from src.mcp_handlers.updates.context import UpdateContext
 
-    mcp_server = MagicMock()
-    mcp_server.monitors = {}  # Empty cache right after server restart
-    mcp_server.agent_metadata = {
-        agent_id: SimpleNamespace(
-            status="active",
-            api_key="fake-key",
-            purpose="testing",
-            active_session_key="sess-1",
-            thread_id="thread-1",
-            node_index=1,
-            loop_cooldown_until=None,
-            loop_detected_at=None,
-            loop_incidents=[],
-            recent_update_timestamps=[],
-            recent_decisions=[],
-            total_updates=8,
-            last_update=None,
-            add_recent_update=MagicMock(),
-        )
-    }
-    mcp_server.process_update_authenticated_async = ald.process_update_authenticated_async
+    if mcp_server is None:
+        mcp_server = MagicMock()
+        mcp_server.monitors = {}  # Empty cache right after server restart
+        mcp_server.agent_metadata = {
+            agent_id: SimpleNamespace(
+                status="active",
+                api_key="fake-key",
+                purpose="testing",
+                active_session_key="sess-1",
+                thread_id="thread-1",
+                node_index=1,
+                loop_cooldown_until=None,
+                loop_detected_at=None,
+                loop_incidents=[],
+                recent_update_timestamps=[],
+                recent_decisions=[],
+                total_updates=8,
+                last_update=None,
+                add_recent_update=MagicMock(),
+            )
+        }
+        mcp_server.process_update_authenticated_async = ald.process_update_authenticated_async
     return UpdateContext(
         agent_id=agent_id,
         agent_uuid=agent_id,
         arguments={"client_session_id": "sess-1", "confidence": 0.8},
-        response_text=(
-            "Completed the EISV post-restart continuity and drift fix, updated "
-            "phases.py and governance_monitor.py, and verified regression tests."
-        ),
-        complexity=0.4,
+        response_text=response_text,
+        complexity=complexity,
         confidence=0.8,
         ethical_drift=[0.05, 0.0, 0.0],
         is_new_agent=False,
@@ -97,6 +104,21 @@ def _mock_calibration_checker():
     )
 
 
+def _make_db_history_rows(n: int = 8):
+    return [
+        SimpleNamespace(
+            energy=0.75,
+            integrity=0.70,
+            entropy=0.25,
+            void=0.05,
+            coherence=0.50,
+            regime="CONVERGENCE",
+            state_json={"action": "approve", "verdict": "safe", "risk_score": 0.05},
+        )
+        for _ in range(n)
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hold_unread", ["0", "1"])
 async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inputs(
@@ -105,7 +127,7 @@ async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inpu
     from src import (
         agent_lifecycle,
         agent_loop_detection as ald,
-        agent_monitor_state,
+        agent_storage,
         audit_log,
         drift_telemetry,
         governance_monitor as gm,
@@ -114,6 +136,8 @@ async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inpu
 
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", hold_unread)
     restored_monitor = _make_restored_monitor(n=8, void_active=True)
+    # Simulate a legacy snapshot loaded with missing resolved authority.
+    restored_monitor._needs_hydration = True
     # Real restarts never persist _last_drift_vector or _last_continuity_metrics.
     assert restored_monitor._last_drift_vector is None
     assert restored_monitor._last_continuity_metrics is None
@@ -125,10 +149,15 @@ async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inpu
     mock_db.load_agent_baseline = AsyncMock(return_value=None)
     cal_checker = _mock_calibration_checker()
 
+    def _get_or_create(agent_id: str):
+        ctx.mcp_server.monitors[agent_id] = restored_monitor
+        return restored_monitor
+
     with (
         patch("src.mcp_handlers.updates.phases.agent_storage", MagicMock(
             get_agent=AsyncMock(return_value=SimpleNamespace(api_key="fake-key"))
         )),
+        patch.object(agent_storage, "get_latest_agent_state", AsyncMock(return_value=None)),
         patch("src.calibration.calibration_checker", cal_checker),
         patch.object(gm, "calibration_checker", cal_checker),
         patch.object(audit_log.audit_logger, "log_file", tmp_path / "audit.jsonl"),
@@ -149,8 +178,7 @@ async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inpu
         patch.object(ald, "verify_agent_ownership", MagicMock(return_value=(True, None))),
         patch.object(ald, "detect_loop_pattern", MagicMock(return_value=(False, ""))),
         patch.object(ald, "save_monitor_state_async", AsyncMock()),
-        patch.object(agent_lifecycle, "get_or_create_monitor", MagicMock(return_value=restored_monitor)),
-        patch.object(agent_monitor_state, "hydrate_from_db_if_fresh", AsyncMock(return_value=True)),
+        patch.object(agent_lifecycle, "get_or_create_monitor", side_effect=_get_or_create),
     ):
         await prepare_unlocked_inputs(ctx)
         assert callable(ctx.agent_state.get("_prepare_restored_monitor"))
@@ -159,64 +187,64 @@ async def test_post_restart_first_checkin_uses_live_drift_continuity_and_db_inpu
 
         early_exit = await execute_locked_update(ctx)
 
-    assert early_exit is None
-    assert ctx.previous_void_active is True
-    assert ctx.agent_state["sensor_eisv_source"] == "behavioral"
-    assert restored_monitor._behavioral_obs_source == "behavioral"
-    assert "_prepare_restored_monitor" not in ctx.agent_state
-    assert "_behavioral_sensor_context" not in ctx.agent_state
+        assert early_exit is None
+        assert ctx.previous_void_active is True
+        assert ctx.agent_state["sensor_eisv_source"] == "behavioral"
+        assert restored_monitor._behavioral_obs_source == "behavioral"
+        assert restored_monitor._needs_hydration is False
+        assert "_prepare_restored_monitor" not in ctx.agent_state
+        assert "_behavioral_sensor_context" not in ctx.agent_state
 
-    derivation = ctx.agent_state["_eisv_derivation"]
-    assert derivation["kind"] == "behavioral_sensor"
-    features = derivation["inputs"]["features"]
-    assert features["drift_norm"] is not None
-    assert features["complexity_divergence"] is not None
-    assert len(derivation["inputs"]["outcomes"]) == 3
-    i_comps = {
-        c["name"]: c for c in derivation["components"]["dimensions"]["I"]["components"]
-    }
-    assert i_comps["calibration_accuracy"]["source"] == "agent_tactical_calibration"
-    # With live drift and continuity supplied, S must not be blanked under HU1=1.
-    assert ctx.agent_state["_behavioral_reading"]["S"] is not None
-    mock_db.get_recent_outcomes.assert_awaited_once()
+        derivation = ctx.agent_state["_eisv_derivation"]
+        assert derivation["kind"] == "behavioral_sensor"
+        features = derivation["inputs"]["features"]
+        assert features["drift_norm"] is not None
+        assert features["complexity_divergence"] is not None
+        assert len(derivation["inputs"]["outcomes"]) == 3
+        i_comps = {
+            c["name"]: c for c in derivation["components"]["dimensions"]["I"]["components"]
+        }
+        assert i_comps["calibration_accuracy"]["source"] == "agent_tactical_calibration"
+        # With live drift and continuity supplied, S must not be blanked under HU1=1.
+        assert ctx.agent_state["_behavioral_reading"]["S"] is not None
+        mock_db.get_recent_outcomes.assert_awaited_once()
+
+        # Second check-in must resume the warm pre-lock one-check-in-lag path.
+        ctx2 = _make_ctx(agent_id=ctx.agent_id, mcp_server=ctx.mcp_server)
+        await prepare_unlocked_inputs(ctx2)
+        assert "sensor_eisv" in ctx2.agent_state
+        assert ctx2.agent_state["sensor_eisv_source"] == "behavioral"
+        assert "_behavioral_sensor_context" not in ctx2.agent_state
+        assert "_prepare_restored_monitor" not in ctx2.agent_state
 
 
 @pytest.mark.asyncio
-async def test_unhydrated_cached_monitor_restores_void_and_uses_live_drift(tmp_path):
+async def test_db_hydrated_monitor_drains_flag_and_resumes_warm_lag_on_second_checkin(tmp_path):
     from src import (
         agent_lifecycle,
         agent_loop_detection as ald,
-        agent_monitor_state,
         audit_log,
         drift_telemetry,
         governance_monitor as gm,
     )
     from src.mcp_handlers.updates.phases import execute_locked_update, prepare_unlocked_inputs
 
+    # Simulate another endpoint having constructed an unhydrated fresh monitor
+    # (missing JSON snapshot, _needs_hydration=True, update_count=0).
     cached_monitor = _make_restored_monitor(n=0, void_active=False)
     cached_monitor._needs_hydration = True
+    assert cached_monitor._last_drift_vector is None
+    assert cached_monitor._last_continuity_metrics is None
 
     ctx = _make_ctx()
     ctx.mcp_server.monitors[ctx.agent_id] = cached_monitor
     outcomes = [{"outcome_type": "task_completed", "is_bad": False, "outcome_score": 0.9}] * 3
     mock_db = MagicMock()
+    mock_db.get_identity = AsyncMock(return_value=SimpleNamespace(identity_id=7))
+    mock_db.get_agent_state_history = AsyncMock(return_value=_make_db_history_rows(8))
     mock_db.get_recent_outcomes = AsyncMock(return_value=outcomes)
     mock_db.load_agent_baseline = AsyncMock(return_value=None)
     cal_checker = _mock_calibration_checker()
-
-    async def _hydrate(monitor, agent_id):
-        monitor.state.decision_history = ["proceed"] * 8
-        monitor.state.coherence_history = [0.5] * 8
-        monitor.state.regime_history = ["CONVERGENCE"] * 8
-        monitor.state.E_history = [0.75] * 8
-        monitor.state.I_history = [0.70] * 8
-        monitor.state.S_history = [0.25] * 8
-        monitor.state.V_history = [0.05] * 8
-        monitor.state.risk_history = [0.1] * 8
-        monitor.state.void_active = True
-        monitor.state.update_count = 8
-        monitor._needs_hydration = False
-        return True
 
     with (
         patch("src.mcp_handlers.updates.phases.agent_storage", MagicMock(
@@ -243,18 +271,38 @@ async def test_unhydrated_cached_monitor_restores_void_and_uses_live_drift(tmp_p
         patch.object(ald, "detect_loop_pattern", MagicMock(return_value=(False, ""))),
         patch.object(ald, "save_monitor_state_async", AsyncMock()),
         patch.object(agent_lifecycle, "get_or_create_monitor", MagicMock(return_value=cached_monitor)),
-        patch.object(agent_monitor_state, "hydrate_from_db_if_fresh", AsyncMock(side_effect=_hydrate)),
     ):
         await prepare_unlocked_inputs(ctx)
         assert callable(ctx.agent_state.get("_prepare_restored_monitor"))
         early_exit = await execute_locked_update(ctx)
 
-    assert early_exit is None
-    assert ctx.previous_void_active is True
-    assert ctx.agent_state["_eisv_derivation"]["inputs"]["features"]["drift_norm"] is not None
-    assert ctx.agent_state["_eisv_derivation"]["inputs"]["features"]["complexity_divergence"] is not None
-    assert "_prepare_restored_monitor" not in ctx.agent_state
-    assert "_behavioral_sensor_context" not in ctx.agent_state
+        assert early_exit is None
+        # Real hydrate_from_db_if_fresh populated DB history and drained _needs_hydration.
+        assert cached_monitor._needs_hydration is False
+        assert len(cached_monitor.state.decision_history) == 9
+        tick1_cm = cached_monitor._last_continuity_metrics
+        assert tick1_cm is not None
+        assert cached_monitor._last_drift_vector is not None
+        assert ctx.agent_state["sensor_eisv_source"] == "behavioral"
+        assert ctx.agent_state["_eisv_derivation"]["inputs"]["features"]["drift_norm"] is not None
+        assert "_prepare_restored_monitor" not in ctx.agent_state
+        assert "_behavioral_sensor_context" not in ctx.agent_state
+
+        # Second check-in must now take the warm pre-lock path and read tick 1's stored values.
+        ctx2 = _make_ctx(
+            agent_id=ctx.agent_id,
+            mcp_server=ctx.mcp_server,
+            response_text="ok",
+            complexity=0.85,
+        )
+        await prepare_unlocked_inputs(ctx2)
+        assert "sensor_eisv" in ctx2.agent_state
+        assert "_behavioral_sensor_context" not in ctx2.agent_state
+        assert "_prepare_restored_monitor" not in ctx2.agent_state
+        assert (
+            ctx2.agent_state["_eisv_derivation"]["inputs"]["features"]["complexity_divergence"]
+            == pytest.approx(tick1_cm.complexity_divergence)
+        )
 
 
 @pytest.mark.asyncio
