@@ -481,7 +481,15 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> dict | None:
         if self.connector_registry is None:
             return None
-        cache = _REQUEST_CONNECTOR_CACHE.get()
+        cache_entry = _REQUEST_CONNECTOR_CACHE.get()
+        current_task = asyncio.current_task()
+        cache = (
+            cache_entry[1]
+            if cache_entry is not None
+            and current_task is not None
+            and cache_entry[0] is current_task
+            else None
+        )
         if cache is not None and client_id in cache:
             cached = cache[client_id]
             if isinstance(cached, Exception):
@@ -1180,7 +1188,7 @@ _LOG_BUDGET = _LineBudget()
 _STATIC_LOG_BUDGET = _LineBudget()
 _CONNECTOR_LOG_BUDGET = _LineBudget()
 _REQUEST_CONNECTOR_CACHE: contextvars.ContextVar[
-    dict[str, dict | None | Exception] | None
+    tuple[asyncio.Task[object] | None, dict[str, dict | None | Exception]] | None
 ] = contextvars.ContextVar("_REQUEST_CONNECTOR_CACHE", default=None)
 
 

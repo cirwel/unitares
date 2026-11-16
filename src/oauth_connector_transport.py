@@ -6,6 +6,7 @@ clients never carry a plaintext secret (or a digest-as-password) in SDK objects.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 from urllib.parse import parse_qsl
 
@@ -57,7 +58,7 @@ class ConnectorCompatibility:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        token = _REQUEST_CONNECTOR_CACHE.set({})
+        token = _REQUEST_CONNECTOR_CACHE.set((asyncio.current_task(), {}))
         try:
             return await self._handle_http(scope, receive, send)
         finally:

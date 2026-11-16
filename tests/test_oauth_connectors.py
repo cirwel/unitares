@@ -1,4 +1,5 @@
 """Runtime connector enrollment through the real SDK authorization/token flow."""
+import asyncio
 import base64
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -738,3 +739,34 @@ def test_static_client_rejects_reserved_managed_connector_prefix(caplog):
         with pytest.raises(ValueError, match="unitares_connector_"):
             GovernanceOAuthProvider(static_clients=[raw_static])
     assert "reserved unitares_connector_ prefix" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_request_connector_cache_not_inherited_by_spawned_tasks():
+    from src.oauth_provider import _REQUEST_CONNECTOR_CACHE
+
+    registry = Registry()
+    calls = 0
+    real_get = registry.get
+
+    async def counting_get(client_id):
+        nonlocal calls
+        calls += 1
+        return await real_get(client_id)
+
+    registry.get = counting_get
+    p = provider(registry)
+    token = _REQUEST_CONNECTOR_CACHE.set((asyncio.current_task(), {}))
+    try:
+        assert await p.managed_connector(ID) is not None
+        assert await p.managed_connector(ID) is not None
+        assert calls == 1
+
+        registry.record = None
+        # Parent task keeps its per-request snapshot until reset; a spawned
+        # child task (which copies ContextVars) must not inherit it.
+        assert await p.managed_connector(ID) is not None
+        assert await asyncio.create_task(p.managed_connector(ID)) is None
+        assert calls == 2
+    finally:
+        _REQUEST_CONNECTOR_CACHE.reset(token)
