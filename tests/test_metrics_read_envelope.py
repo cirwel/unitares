@@ -34,7 +34,8 @@ from tests.helpers.metrics_producer import agent_signature, real_metrics_payload
 
 # A default read, provisional verdict (two check-ins), measured 1,986 B on the
 # real producer; it was 3,350 B before this budget existed.
-DEFAULT_METRICS_READ_BUDGET = 2_100
+# Allows the bounded observation provenance/coverage summary added to each read.
+DEFAULT_METRICS_READ_BUDGET = 2_800
 
 _SEE = re.compile(r" See ([a-z_.]+) for provenance\.")
 
