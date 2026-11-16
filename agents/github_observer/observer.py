@@ -36,6 +36,7 @@ from agents.github_observer.events import (
     ci_fingerprint,
     pr_state_events,
     review_events,
+    run_belongs_to_pr,
     trusted_pr_author,
 )
 from agents.github_observer.store import read_only_fingerprints
@@ -191,7 +192,11 @@ class GitHubReader:
         return run
 
     def check_runs(self, repo: str, sha: str) -> list[dict]:
-        return self._client.get_all(f"/repos/{repo}/commits/{sha}/check-runs", key="check_runs")
+        # GitHub's default (filter=latest) returns only the newest run of each
+        # check name, which would hide an earlier failure that a re-run passed.
+        return self._client.get_all(
+            f"/repos/{repo}/commits/{sha}/check-runs", {"filter": "all"}, key="check_runs"
+        )
 
     def failed_jobs(self, repo: str, run_id: int, attempt: int) -> list[str]:
         jobs = self._client.get_all(
@@ -221,7 +226,7 @@ def collect_pr_events(
     listed = reader.workflow_runs(repo, str(head.get("ref") or "")) if head.get("ref") else []
     runs: list[Mapping[str, Any]] = []
     for run in listed:
-        if run.get("head_sha") not in shas or run.get("id") is None:
+        if run.get("id") is None or not run_belongs_to_pr(run, pr, shas):
             continue
         runs.append(run)
         # The run list carries only each run's latest attempt. An earlier
@@ -230,6 +235,9 @@ def collect_pr_events(
         for earlier in range(1, int(run.get("run_attempt") or 1)):
             if not seen(ci_fingerprint(pr, run["id"], earlier)):
                 runs.append(reader.run_attempt(repo, int(run["id"]), earlier))
+    # A run kept on its association alone ran on a head the PR no longer
+    # lists; its commit was this PR's, so its earlier attempts count too.
+    shas.update(str(run["head_sha"]) for run in runs if run.get("head_sha"))
     failed: dict[tuple[int, int], list[str]] = {}
     for run in runs:
         if run.get("status") != "completed" or run.get("conclusion") != "failure":

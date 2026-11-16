@@ -199,6 +199,11 @@ def test_a_close_before_a_later_merge_is_kept(pr_open):
 # --- CI -------------------------------------------------------------------
 
 
+def other_pr(run, number=1):
+    """A run GitHub associates with another pull request on a reused branch."""
+    return dict(run, pull_requests=[{"number": number, "base": {"repo": {"id": int(RID)}}}])
+
+
 def ci(pr_open, runs=None, checks=None, **kwargs):
     return ev.ci_events(
         REPO,
@@ -284,7 +289,7 @@ def test_the_current_head_counts_even_when_the_commit_list_is_cut_short(pr_open)
     events = ev.ci_events(
         REPO,
         pr_open,
-        load("workflow_runs.json")["workflow_runs"],
+        [other_pr(run) for run in load("workflow_runs.json")["workflow_runs"]],
         [],
         AGENT,
         pr_commit_shas=[],
@@ -294,7 +299,7 @@ def test_the_current_head_counts_even_when_the_commit_list_is_cut_short(pr_open)
 
 def test_a_run_on_a_commit_outside_the_pull_request_is_left_out(pr_open):
     runs = load("workflow_runs.json")["workflow_runs"]
-    stray = dict(runs[0], id=1, head_sha="0" * 40)
+    stray = other_pr(dict(runs[0], id=1, head_sha="0" * 40))
     assert f"{RID}#3259:ci:1:1" not in {e["fingerprint"] for e in ci(pr_open, [*runs, stray])}
 
 
@@ -314,7 +319,7 @@ def test_failed_jobs_are_read_only_for_failed_runs_of_this_pull_request(pr_open)
         def workflow_runs(self, repo, branch):
             runs = super().workflow_runs(repo, branch)
             # A failed run on the same branch name but a commit of another PR.
-            return [*runs, dict(runs[2], id=7, head_sha="0" * 40)]
+            return [*runs, other_pr(dict(runs[2], id=7, head_sha="0" * 40))]
 
     reader = WithStray(pulls=[pr_open])
     cycle(reader)
@@ -833,3 +838,111 @@ def test_a_body_cut_off_mid_read_is_a_github_error():
 
     with pytest.raises(obs.GitHubError):
         obs.GitHubClient("t", "https://api.example", opener=reset).get_all("/repos/o/r/pulls")
+
+
+# --- findings of the 2026-11-16 review of #3263 ---------------------------
+
+
+class ForcePushedReader(FakeReader):
+    """The recordings after the agent force-pushed: the PR lists only its
+    current head, but GitHub still associates the earlier runs with it."""
+
+    def __init__(self):
+        super().__init__(pulls=[load("pr_open.json")])
+
+    def commit_shas(self, repo, number):
+        return [HEAD]
+
+
+def test_ci_results_from_a_head_that_was_force_pushed_away_are_kept():
+    reader = ForcePushedReader()
+    _, events = cycle(reader)
+    by_fp = {e["fingerprint"]: e for e in events}
+    replaced = by_fp[f"{RID}#3259:ci:43534989292:1"]
+    assert replaced["conclusion"] == "failure" and replaced["failed_jobs"] == ["smoke"]
+    assert replaced["head_sha"].startswith("262a42ab")
+    assert by_fp[f"{RID}#3259:ci:43528403669:1"]["head_sha"].startswith("fe9a299e")
+    assert sorted(reader.failed_job_reads) == [(43528403669, 1), (43534989292, 1)]
+
+
+def test_an_association_with_the_same_number_in_another_repository_does_not_count(pr_open):
+    runs = load("workflow_runs.json")["workflow_runs"]
+    elsewhere = dict(
+        runs[2], pull_requests=[{"number": 3259, "base": {"repo": {"id": int(RID) + 1}}}]
+    )
+    bare = dict(runs[2], id=8, pull_requests=[{"number": 3259}])
+    events = ev.ci_events(REPO, pr_open, [elsewhere, bare], [], AGENT, pr_commit_shas=[HEAD])
+    assert events == []
+
+
+def test_an_earlier_attempt_on_a_replaced_head_is_still_read():
+    class ForcePushedRerun(ForcePushedReader, RerunReader):
+        def __init__(self):
+            RerunReader.__init__(self)
+
+    reader = ForcePushedRerun()
+    _, events = cycle(reader)
+    fingerprints = {e["fingerprint"] for e in events}
+    assert {f"{RID}#3259:ci:43534989292:1", f"{RID}#3259:ci:43534989292:2"} <= fingerprints
+    assert reader.attempt_reads == [(43534989292, 1)]
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        # A second comment opened after the first one closes, never closed.
+        "<!-- note --> <!-- unclosed\nUNITARES agent: {other}",
+        "text <!-- a --> b <!-- c\n\nUNITARES agent: {other}\n",
+        # A comment that closes and reopens on its own closing line.
+        "<!--\nnote\n--> <!--\nUNITARES agent: {other}\n-->",
+        # Collapsed or preformatted HTML.
+        "<details>\n<summary>more</summary>\n\nUNITARES agent: {other}\n\n</details>",
+        "<details><summary>x</summary>\n<details>\n</details>\nUNITARES agent: {other}\n</details>",
+        "<pre>\nUNITARES agent: {other}\n</pre>",
+        "<PRE class=x>\n```\nUNITARES agent: {other}\n</pre>",
+        # A comment opened on the line that opens a hiding block.
+        "<details><!-- x -->\nUNITARES agent: {other}\n</details>",
+        # A quote whose line also holds a comment; the next line continues it.
+        "> quoted <!-- x -->\nUNITARES agent: {other}",
+        "> quoted `code`\nUNITARES agent: {other}",
+    ],
+)
+def test_a_footer_inside_a_later_comment_or_hiding_block_names_nobody(hidden):
+    other = "11111111-2222-3333-4444-555555555555"
+    body = f"UNITARES agent: {AGENT}\n\n" + hidden.format(other=other)
+    assert ev.agent_uuid_from_body(body) == AGENT
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        "Write `<!--` to open a comment.\n\n",  # inline code opens nothing
+        "Use ``a ` <!-- b`` here.\n\n",
+        "<details><summary>log</summary>\n\nlong\n\n</details>\n\n",
+        "<pre>\nout\n</pre>\n\n",
+        "<!-- a --> text <!-- b -->\n\n",
+        "A stray backtick ` and <!-- x --> on one line.\n\n",
+    ],
+)
+def test_a_footer_after_inline_code_or_a_closed_block_counts(before):
+    assert ev.agent_uuid_from_body(before + f"UNITARES agent: {AGENT}") == AGENT
+
+
+@pytest.mark.parametrize("indent", [" ", "  ", "   "])
+def test_a_footer_indented_less_than_a_code_block_counts(indent):
+    assert ev.agent_uuid_from_body(f"Body.\n\n{indent}UNITARES agent: {AGENT}") == AGENT
+
+
+def test_check_runs_are_read_with_every_run_of_each_name():
+    urls: list[str] = []
+
+    def opener(request, timeout):
+        urls.append(request.full_url)
+        return _Response({"check_runs": []})
+
+    obs.GitHubReader(obs.GitHubClient("t", "https://api.example", opener=opener)).check_runs(
+        "o/r", HEAD
+    )
+    # The default, filter=latest, would hide an earlier failed run of a check
+    # that a re-run of the same name passed.
+    assert urls == [f"https://api.example/repos/o/r/commits/{HEAD}/check-runs?per_page=100&filter=all"]

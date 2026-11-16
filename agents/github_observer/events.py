@@ -51,12 +51,18 @@ _ACTIONS_NOT_A_RESULT = frozenset({"action_required"})
 
 _RECORD_RE = re.compile(r"<!--\s*" + re.escape(REVIEW_MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->")
 _FOOTER_RE = re.compile(
-    r"^UNITARES agent:[ \t]*"
+    r"^ {0,3}UNITARES agent:[ \t]*"
     r"(?P<uuid>[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})[ \t]*$",
     re.IGNORECASE,
 )
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 _QUOTE_RE = re.compile(r"^ {0,3}>")
+# Outside a comment: a comment opening, or a backtick run that may open a
+# code span (whose contents are literal, so a ``<!--`` inside one opens nothing).
+_COMMENT_OR_CODE_RE = re.compile(r"<!--|`+")
+# HTML whose contents a reader does not see as the author's own line: a
+# collapsed ``<details>`` and a ``<pre>`` block.
+_HIDING_TAGS = ("details", "pre")
 _STATE_EVENTS = {"merged": "pr_merged", "closed": "pr_closed", "reopened": "pr_reopened"}
 
 
@@ -83,24 +89,94 @@ def ci_fingerprint(pr: Mapping[str, Any], run_id: int, attempt: int) -> str:
     return f"{repo_key(pr)}#{_number(pr)}:ci:{int(run_id)}:{int(attempt)}"
 
 
+def _scan_comments(line: str, in_comment: bool) -> tuple[str, bool, bool]:
+    """Walk one line's comment delimiters in order.
+
+    Returns the text outside comments and code spans, whether the line ends
+    inside a comment, and whether any part of the line was in a comment. Every
+    ``<!--`` and ``-->`` is taken in turn, so a second comment opened after the
+    first one closes stays open to the end of the body if nothing closes it.
+    """
+    visible: list[str] = []
+    touched = in_comment
+    pos = 0
+    while pos <= len(line):
+        if in_comment:
+            end = line.find("-->", pos)
+            if end < 0:
+                return "".join(visible), True, True
+            pos, in_comment = end + 3, False
+            continue
+        match = _COMMENT_OR_CODE_RE.search(line, pos)
+        if match is None:
+            visible.append(line[pos:])
+            break
+        visible.append(line[pos : match.start()])
+        if match.group() == "<!--":
+            pos, in_comment, touched = match.end(), True, True
+            continue
+        ticks = len(match.group())
+        close = re.compile(rf"(?<!`)`{{{ticks}}}(?!`)").search(line, match.end())
+        if close is None:  # an unmatched backtick run is literal text
+            visible.append(match.group())
+            pos = match.end()
+        else:  # a code span's contents are literal; drop them
+            pos = close.end()
+    return "".join(visible), in_comment, touched
+
+
+def _tag_depth(text: str, tag: str, depth: int) -> int:
+    opened = len(re.findall(rf"<{tag}(?=[\s>/]|$)", text, re.IGNORECASE))
+    closed = len(re.findall(rf"</{tag}\s*>", text, re.IGNORECASE))
+    return max(0, depth + opened - closed)
+
+
+def run_names_pr(run: Mapping[str, Any], pr: Mapping[str, Any]) -> bool:
+    """Whether a workflow run's own ``pull_requests`` association names this
+    pull request, by number and by the numeric id of its base repository.
+
+    A run on a head the agent later amended, rebased or force-pushed away is
+    no longer in the PR's commit list, but its association can still name the
+    PR (GitHub fills it while the PR is open). The base repository id is
+    required: GitHub also lists pull requests of other repositories (a
+    fork's) whose head is this branch.
+    """
+    number, repo_id = _number(pr), int(repo_key(pr))
+    for assoc in run.get("pull_requests") or []:
+        if not isinstance(assoc, Mapping):
+            continue
+        base_repo = (assoc.get("base") or {}).get("repo") or {}
+        if assoc.get("number") == number and base_repo.get("id") == repo_id:
+            return True
+    return False
+
+
+def run_belongs_to_pr(run: Mapping[str, Any], pr: Mapping[str, Any], shas: Iterable[str]) -> bool:
+    """A run counts for a pull request when its head commit is one of the PR's
+    commits, or when GitHub explicitly associates the run with the PR."""
+    return run.get("head_sha") in set(shas) or run_names_pr(run, pr)
+
+
 def agent_uuid_from_body(body: str | None) -> str | None:
     """The agent a pull request body's footer names, or ``None``.
 
     The footer is a ``UNITARES agent: <uuid>`` line a reader of the rendered
     body would see as the author's own: outside code fences, block quotes
-    (including a line that continues a quoted paragraph) and HTML comments.
-    The last one wins: the delivery contract keeps the opening author's
-    signature last, and a successor's above it.
+    (including a line that continues a quoted paragraph), HTML comments, and
+    ``<details>`` or ``<pre>`` blocks. The last one wins: the delivery
+    contract keeps the opening author's signature last, and a successor's
+    above it.
     """
     found: str | None = None
     fence = ""
     in_comment = False
     quoted = False
+    depth = dict.fromkeys(_HIDING_TAGS, 0)
     # Split on newlines only: ``splitlines`` also splits on characters GitHub
     # renders inside a line.
     for line in (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         run = _FENCE_RE.match(line)
-        if run and not in_comment:
+        if run and not in_comment and not depth["pre"]:
             marker = run.group(1)
             if not fence:
                 if not (marker[0] == "`" and "`" in run.group(2)):
@@ -114,14 +190,17 @@ def agent_uuid_from_body(body: str | None) -> str | None:
                 continue
         if fence:
             continue
-        if in_comment:
-            in_comment = "-->" not in line
-            continue
-        if "<!--" in line:
-            in_comment = "-->" not in line.split("<!--", 1)[1]
-            continue
-        if _QUOTE_RE.match(line):
+        was_in_comment = in_comment
+        visible, in_comment, touched = _scan_comments(line, in_comment)
+        hidden = any(depth.values())
+        for tag in _HIDING_TAGS:
+            depth[tag] = _tag_depth(visible, tag, depth[tag])
+        if not was_in_comment and not hidden and _QUOTE_RE.match(line):
             quoted = True
+            continue
+        if touched or hidden or any(depth.values()):
+            # In or touching a comment, or inside, opening or closing a
+            # hiding block: never a footer line.
             continue
         if not line.strip():
             quoted = False
@@ -294,8 +373,10 @@ def ci_events(
     only each run's latest attempt, so the caller adds the earlier ones.
 
     A run counts for this pull request when its head commit is one of the
-    PR's commits: a branch name can be reused, a commit cannot. Check runs the
-    Actions app created are left to their workflow run.
+    PR's commits (a branch name can be reused, a commit cannot), or when
+    GitHub's own ``pull_requests`` association names this PR, which keeps the
+    results of heads that were later amended or force-pushed away. Check runs
+    the Actions app created are left to their workflow run.
     """
     prefix = f"{repo_key(pr)}#{_number(pr)}"
     shas = set(pr_commit_shas)
@@ -306,7 +387,7 @@ def ci_events(
     failed_jobs = failed_jobs or {}
     events: list[dict] = []
     for run in workflow_runs:
-        if run.get("status") != "completed" or run.get("head_sha") not in shas:
+        if run.get("status") != "completed" or not run_belongs_to_pr(run, pr, shas):
             continue
         if run.get("name") in skipped or run.get("conclusion") in _ACTIONS_NOT_A_RESULT:
             continue
