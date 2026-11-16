@@ -430,9 +430,9 @@ async def handle_store_knowledge_graph(
     if error:
         return [error]
 
-    from ..utils import check_agent_can_operate
+    from ..utils import check_agent_can_operate_async
 
-    blocked = check_agent_can_operate(agent_id)
+    blocked = await check_agent_can_operate_async(agent_id)
     if blocked:
         return [blocked]
     if arguments.get("discoveries") is not None:
@@ -1452,9 +1452,9 @@ async def handle_knowledge_note(
     if error:
         return [error]
 
-    from ..utils import check_agent_can_operate
+    from ..utils import check_agent_can_operate_async
 
-    blocked = check_agent_can_operate(agent_id)
+    blocked = await check_agent_can_operate_async(agent_id)
     if blocked:
         return [blocked]
 
