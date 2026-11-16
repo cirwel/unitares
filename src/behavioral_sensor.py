@@ -132,6 +132,188 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+HOLD_UNREAD_AXES_ENV = "UNITARES_HOLD_UNREAD_AXES"
+HOLD_UNREAD_AXES_MODE = "hold_v1"
+_READING_DIMENSIONS = ("E", "I", "S")
+
+
+def hold_unread_axes_enabled() -> bool:
+    """Return True when an axis with no supplied base term is held, not filled.
+
+    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to hold). It ships off so that a routine
+    deploy does not start era ``HU1``; turning it on is the operator's
+    separate step, and that change adds the era entry and regenerates the
+    golden trajectories (``tests/eisv_preservation_driver.py``). Each of E, I and
+    S is built from base terms and then adjusted by blends. When no base term
+    was supplied, the formula substitutes a constant (0.85 for E, 0.75 for I,
+    the drift and divergence defaults for S) and the blends adjust that
+    constant, so the published number looks like a reading without being one.
+
+    With the hold on, such an axis reports ``None`` for the check-in: the
+    smoothed behavioral state keeps its previous value, takes no baseline
+    sample, and V steps only when both E and I were read. The blends are
+    discarded for that axis because they adjust a reading and there is none.
+    The component record and the shadow ablations still carry the filled
+    arithmetic, so what the formula would have published stays inspectable.
+    """
+    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def unread_axes(components: Mapping | None) -> tuple[str, ...]:
+    """Axes of a component record whose base terms are all unobserved.
+
+    An axis counts as read when at least one base term is flagged
+    ``observed``; this is the same rule ``src/reading_coverage.py`` reports to
+    the agent. A malformed record yields no unread axes, so a telemetry defect
+    can never withhold a reading.
+    """
+    dimensions = components.get("dimensions") if isinstance(components, Mapping) else None
+    if not isinstance(dimensions, Mapping):
+        return ()
+    unread = []
+    for dimension in _READING_DIMENSIONS:
+        record = dimensions.get(dimension)
+        base_terms = record.get("components") if isinstance(record, Mapping) else None
+        if not isinstance(base_terms, list) or not base_terms:
+            continue
+        if not any(
+            isinstance(term, Mapping) and term.get("observed") is True
+            for term in base_terms
+        ):
+            unread.append(dimension)
+    return tuple(unread)
+
+
+def hold_unread(observation: Mapping | None, components: Mapping | None) -> dict | None:
+    """The observation the behavioral state consumes: unread axes become None.
+
+    Returns the observation unchanged when the hold is off. V is the sensor's
+    diagnostic slope reading and is passed through.
+    """
+    if observation is None:
+        return None
+    result = dict(observation)
+    if hold_unread_axes_enabled():
+        for dimension in unread_axes(components):
+            result[dimension] = None
+    return result
+
+
+SENSOR_DRIFT_AGENT_LOCAL_ENV = "UNITARES_SENSOR_DRIFT_AGENT_LOCAL"
+SENSOR_DRIFT_AGENT_LOCAL_MODE = "agent_local_v1"
+SENSOR_DRIFT_INPUT_SCHEMA = "behavioral_sensor.drift_input.v1"
+# Same evidence floor the drift engine applies to a tactical bin before it
+# trusts the fleet calibration signal (src/monitor_drift._MIN_TACTICAL_SAMPLES).
+SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS = 10
+
+
+def sensor_drift_agent_local_enabled() -> bool:
+    """Return True when the sensor's drift input keeps only agent-local parts.
+
+    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default OFF, which
+    passes the full drift-vector norm as before; set to ``1``/``true``/``yes``/
+    ``on`` to keep only agent-local parts). It ships off so that a routine
+    deploy does not start era ``SD1``; turning it on is the operator's separate
+    step, and that change adds the era entry and regenerates the golden
+    trajectories. The governance drift vector has four components, and on the
+    behavioral sensor path two of them carry no per-agent information:
+
+    - ``stability_deviation`` is ``1 - decision_consistency``. The drift
+      engine is called with no decision, so ``decision_consistency`` never
+      leaves its 0.8 default and the component is 0.2 for every agent.
+      Feeding verdicts back in would recreate the decision self-loop that
+      ``neutralize_sensor_self_loops_enabled`` removes.
+    - ``calibration_deviation`` comes from the server-wide tactical bins, so
+      it is one number for the whole fleet, and it stops moving whenever no
+      hard-exogenous outcome arrives.
+
+    ``coherence_deviation`` tracks the legacy ODE control-feedback scalar,
+    the same self-loop class excluded from behavioral E and I, so it is left
+    out too. What remains is the agent's own complexity divergence (when it
+    was supplied) and the agent's own tactical calibration error (when it has
+    enough fresh verified pairs). With neither, the drift input is ``None``
+    and S's drift term is reported unobserved instead of as a reading.
+    """
+    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _agent_drift_calibration(channel: Mapping | None) -> tuple[float | None, str | None]:
+    """The agent's own tactical calibration error, or why it is not used."""
+    if not isinstance(channel, Mapping):
+        return None, "no_agent_calibration_channel"
+    if channel.get("evidence_status") != "available":
+        return None, str(channel.get("default_reason") or "agent_calibration_unavailable")
+    try:
+        pairs = int(channel.get("n_verified_pairs") or 0)
+    except (TypeError, ValueError):
+        return None, "agent_calibration_invalid"
+    if pairs < SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS:
+        return None, "agent_calibration_below_min_pairs"
+    # Same freshness rule as per-agent I calibration: only "recent" counts.
+    if channel.get("freshness_status") != "recent":
+        return None, "agent_calibration_not_recent"
+    try:
+        value = float(channel.get("calibration_error"))
+    except (TypeError, ValueError):
+        return None, "agent_calibration_invalid"
+    if not math.isfinite(value):
+        return None, "agent_calibration_invalid"
+    return max(0.0, min(1.0, value)), None
+
+
+def compute_sensor_drift_input(
+    drift_vector,
+    *,
+    complexity_divergence_observed: bool,
+    agent_calibration_channel: Mapping | None = None,
+) -> dict:
+    """The drift norm the behavioral sensor reads, with its provenance.
+
+    ``drift_vector`` is the governance ``EthicalDriftVector`` from the check-in
+    the sensor reads (or ``None``). With the agent-local flag off, ``value`` is
+    the full vector norm, exactly as before. With it on, ``value`` is the norm
+    over the agent-local components only, or ``None`` when none was observed.
+    """
+    full_norm = getattr(drift_vector, "norm", None) if drift_vector is not None else None
+    enabled = sensor_drift_agent_local_enabled()
+    record: dict = {
+        "schema": SENSOR_DRIFT_INPUT_SCHEMA,
+        "mode": SENSOR_DRIFT_AGENT_LOCAL_MODE if enabled else "full_norm",
+        "full_norm": full_norm,
+        "value": full_norm,
+        "used": {},
+        "excluded": {},
+    }
+    if not enabled or drift_vector is None:
+        return record
+
+    excluded = record["excluded"]
+    excluded["stability_deviation"] = "no_decision_supplied_constant"
+    excluded["coherence_deviation"] = "legacy_control_feedback_self_loop"
+    excluded["calibration_deviation"] = "fleet_wide_tactical_scalar"
+
+    used: dict = {}
+    if complexity_divergence_observed:
+        used["complexity_divergence"] = float(
+            getattr(drift_vector, "complexity_divergence", 0.0) or 0.0
+        )
+    else:
+        excluded["complexity_divergence"] = "not_supplied"
+
+    agent_cal, agent_cal_reason = _agent_drift_calibration(agent_calibration_channel)
+    if agent_cal is not None:
+        used["agent_calibration_error"] = agent_cal
+    else:
+        excluded["agent_calibration_error"] = agent_cal_reason
+
+    record["used"] = used
+    record["value"] = math.sqrt(sum(v * v for v in used.values())) if used else None
+    return record
+
+
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
 LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
 LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6

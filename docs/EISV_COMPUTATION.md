@@ -160,7 +160,18 @@ S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
 
 No human oracle is needed for runtime drift estimation. Independent exogenous outcomes still matter for calibration and research validation.
 
+**The behavioral sensor reads an agent-local drift norm** (`UNITARES_SENSOR_DRIFT_AGENT_LOCAL`, default `0`, which passes the full vector norm; set to `1`/`true`/`yes`/`on` to read the agent-local norm). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `SD1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. The reason for it: on the sensor path two of the four components above carry no per-agent information. Stability deviation is 0.2 for every agent, because the drift engine is called with no decision and `decision_consistency` never leaves its 0.8 default. Calibration deviation is the server-wide tactical worst bin, one number for the fleet that moves only when a hard-exogenous outcome arrives. Coherence deviation tracks legacy ODE control feedback, the self-loop class `SN1` excludes from E and I. The sensor's `drift_norm` is therefore the norm of the agent's supplied complexity divergence and its own tactical calibration error (at least 10 verified pairs, freshness `recent`), and `None` when neither exists, so the drift term in S is reported unobserved rather than as a reading. `derivation.drift_input` records the full norm, the components used, and why each other component was left out. The drift vector itself, and the ODE forcing it feeds, are unchanged.
+
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
+
+**Unread axes are held, not filled** (`UNITARES_HOLD_UNREAD_AXES`, default `0`; set to `1`/`true`/`yes`/`on` to hold). It ships off so that a routine deploy does not start a new instrument era. Turning it on is a separate operator decision, and that change sets the default, adds era `HU1` to `config/eisv_instrument_eras.json` and regenerates the golden trajectories. With the flag on, the fill above still produces the arithmetic the component record and the shadow ablations report, and it is still the legacy ODE's anchor. The behavioral state no longer consumes it for an axis that had no supplied base term:
+- The sensor reports no reading for that axis, and the optional blends on it are discarded for the check-in (they adjust a reading, and there is none).
+- The smoothed value keeps its last reading, takes no baseline sample and no trend entry. `V` steps only when `E` and `I` were both read on the same check-in.
+- The first reading on an axis seeds its value and restarts its baseline. State restored from before `HU1` starts with every axis unread: it keeps the numbers it had, as placeholders, until a reading replaces them.
+- Switching the flag off does not reset a state written under it. Every check-in is a reading again, but an axis it never read is still seeded by its first reading and scored on fixed thresholds until it has a baseline. `behavioral.state.written_under_hold` records which rule the reading counters were kept under, separately from `hold_unread` (the rule the state updates with now), so that holds across later restarts and hand rebuilds.
+- The assessment scores an axis only while it has a reading from the last 10 check-ins (`STALE_AFTER_UPDATES`, a chosen bound equal to the bootstrap length). An unscored axis contributes no risk, its absolute floor does not fire, and it is listed in `behavioral.assessment.unscored_axes`; a `safe` verdict says nothing about it. `behavioral.state` carries `readings`, `since_reading`, `unread` and `unscored` per axis.
+- The published `E`/`I`/`S`/`V` stay numbers: the last reading, or the bootstrap value (0.5, 0.5, 0.2, 0.0) for an axis never read. Read them with `unread`.
+- Before three check-ins of history the sensor cannot run; under the hold those check-ins read nothing, where the response-structure inputs used to stand in.
 
 Optional blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set engineering parameters.
 
@@ -231,6 +242,12 @@ identity of EISV itself.
   against the 30-update target, enabling self-relative (Welford) z-score
   deviations from the agent's own behavioral baseline. The coordinates
   themselves remain weighted indices, not z-scores.
+- **With unread axes held (`UNITARES_HOLD_UNREAD_AXES=1`)** these stages count check-ins that
+  read something, not all check-ins. The sensor needs three decisions of
+  history, so a new agent's first three check-ins read nothing: the Φ prior
+  owns check-ins 1–5, fixed thresholds apply on 6–27, and self-relative scoring
+  starts at check-in 28, later still if more check-ins read nothing. An axis
+  with fewer than 5 baseline samples stays on the fixed thresholds.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution

@@ -124,8 +124,12 @@ def test_capture_precedes_later_tool_and_roc_changes_and_excludes_text():
     assert fallback(cm)[1]["selection"]["I"]["dependency"] == "unknown"
 
 
+@pytest.mark.parametrize("hold", [False, True])
 @pytest.mark.parametrize("excluded", [False, True])
-def test_monitor_records_consumed_fallback_and_telemetry_failure_leaves_state_unchanged(excluded):
+def test_monitor_records_consumed_fallback_and_telemetry_failure_leaves_state_unchanged(
+    excluded, hold, monkeypatch,
+):
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "1" if hold else "0")
     cm = metrics()
     cm.continuity_degenerate = True
     request = {
@@ -150,13 +154,23 @@ def test_monitor_records_consumed_fallback_and_telemetry_failure_leaves_state_un
         else:
             trace = submitted["_eisv_derivation"]
             assert trace["kind"] == "continuity_fallback"
-            assert [trace["selection"][d]["value"] for d in "EIS"] == monitor._behavioral_state.obs_history[-1]
+            recorded = [trace["selection"][d]["value"] for d in "EIS"]
+            if hold:
+                # Under the hold the fallback arithmetic is recorded (so the
+                # record replays) but not consumed: the state was handed no reading.
+                assert all(isinstance(v, float) for v in recorded)
+                assert trace["consumed"] is False
+                assert monitor._behavioral_state.obs_history[-1] == [None, None, None]
+            else:
+                assert recorded == monitor._behavioral_state.obs_history[-1]
             snapshot = dict(states[-1], obs_source="continuity_fallback")
             saved = build_eisv_telemetry_envelope(
                 metrics={}, behavioral_snapshot=snapshot, submitted_sensor=None,
                 submitted_source=None, derivation=trace, policy_evaluation=None, enforcement=None,
             )
             assert saved["derivation"] == trace
+            # The ledger must read a held check-in without raising.
+            assert input_ledger(saved, "E")[0] is not None
     assert states[0] == states[1]  # Includes baseline statistics and maturity.
 
 
