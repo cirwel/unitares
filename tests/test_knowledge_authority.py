@@ -291,7 +291,7 @@ async def test_promote_memory_claim_refused_while_paused(cold_cache, monkeypatch
     if cold_cache:
         persisted = server.agent_metadata.pop("agent-a")
         monkeypatch.setattr(
-            "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+            "src.agent_metadata_persistence.load_agent_lifecycle_from_postgres",
             AsyncMock(return_value=persisted),
         )
     verify_ownership = patch(

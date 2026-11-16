@@ -855,7 +855,7 @@ class TestStoreKnowledgeGraph:
         if cold_cache:
             persisted = mock_mcp_server.agent_metadata.pop(registered_agent)
             monkeypatch.setattr(
-                "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+                "src.agent_metadata_persistence.load_agent_lifecycle_from_postgres",
                 AsyncMock(return_value=persisted),
             )
 
@@ -883,7 +883,7 @@ class TestStoreKnowledgeGraph:
         if cold_cache:
             persisted = mock_mcp_server.agent_metadata.pop(registered_agent)
             monkeypatch.setattr(
-                "src.agent_metadata_persistence.load_agent_metadata_from_postgres",
+                "src.agent_metadata_persistence.load_agent_lifecycle_from_postgres",
                 AsyncMock(return_value=persisted),
             )
 
