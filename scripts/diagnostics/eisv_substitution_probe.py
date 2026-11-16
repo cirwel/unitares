@@ -36,8 +36,9 @@ Usage:
 Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
 only on the files whose tests reached the estimator. The probe's own tests are
 never measured. A session that pytest did not complete (internal error,
-interruption, a collection error in any target, nothing collected) or in which
-the plugin did not report is an
+interruption, a collection error in any target, nothing collected), that
+failed at session level without naming a test, or in which the plugin did not
+report is an
 incomplete run: the runner says so and exits 2 rather than reporting zero
 failures. The pytest plugin is this module itself, loaded with
 ``-p eisv_substitution_probe`` by the runner.
@@ -219,6 +220,11 @@ _FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
 # A short-summary ERROR naming a file (no "::") is a collection error, and
 # pytest's own line says so; either means some targets were never measured.
 _COLLECTION_ERROR_RE = re.compile(r"^ERROR [^\s:]+(?:\s|$)|errors? during collection", re.MULTILINE)
+# A session-level failure: a hook failed the whole session rather than a test
+# (tests/conftest.py does this for unawaited AsyncMock coroutines, writing
+# "FAILED: N unawaited ..." to stderr). It names no test node, so it cannot be
+# attributed to a mode's dependency on the estimator.
+_SESSION_FAILURE_RE = re.compile(r"^\s*FAILED:", re.MULTILINE)
 
 # pytest exit codes that describe a completed measurement: all passed, or
 # some tests failed. Anything else (interrupted, internal error such as a
@@ -262,7 +268,11 @@ def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: 
         raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
     if not reach_path.exists():
         raise IncompleteRun(f"mode {mode!r}: the probe plugin did not report, no measurement\n{tail}")
+    if _SESSION_FAILURE_RE.search(stderr) or _SESSION_FAILURE_RE.search(stdout):
+        raise IncompleteRun(f"mode {mode!r}: a session-level failure names no test, no measurement\n{tail}")
     failed = sorted({m.group(1) for line in stdout.splitlines() if (m := _FAILED_RE.match(line))})
+    if returncode != 0 and not failed:
+        raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode} with no attributable test failure\n{tail}")
     summary = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
     reached = reach_path.read_text(encoding="utf-8").split()
     return {"mode": mode, "failed": failed, "reached": reached, "summary": summary}

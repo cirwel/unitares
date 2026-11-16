@@ -119,6 +119,22 @@ def test_parse_run_rejects_collection_errors(tmp_path, returncode, stdout):
         probe.parse_run("count", returncode, stdout, "", reach)
 
 
+def test_parse_run_rejects_a_nonzero_session_with_no_attributable_failure(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_a.py::t1", encoding="utf-8")
+    with pytest.raises(probe.IncompleteRun, match="no attributable test failure"):
+        probe.parse_run("freeze_pause", 1, "1 passed in 0.1s\n", "", reach)
+
+
+@pytest.mark.parametrize("failed_tests", ["", "FAILED tests/test_a.py::t1 - AssertionError\n"])
+def test_parse_run_rejects_a_session_level_failure(tmp_path, failed_tests):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_a.py::t1", encoding="utf-8")
+    stderr = "\n\nFAILED: 1 unawaited AsyncMock coroutine leak(s):\n  - tests/test_a.py::t1\n"
+    with pytest.raises(probe.IncompleteRun, match="session-level failure"):
+        probe.parse_run("out_pause", 1, failed_tests + "1 passed in 0.1s\n", stderr, reach)
+
+
 def test_parse_run_keeps_a_test_setup_error_as_a_measured_failure(tmp_path):
     reach = tmp_path / "reach.txt"
     reach.write_text("tests/test_a.py::t1", encoding="utf-8")
