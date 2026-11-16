@@ -907,6 +907,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     compute_legacy_coherence_dependency_shadow,
                     compute_regime_self_loop_shadow,
                     filter_behavioral_outcomes,
+                    hold_unread,
                     neutralize_sensor_self_loops_enabled,
                 )
                 from src.coherence_provenance import (
@@ -1162,6 +1163,15 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv
                     ctx.agent_state["sensor_eisv_source"] = "behavioral"
+                    # What the behavioral state consumes: the same observation
+                    # with None on any axis no base term was supplied for
+                    # (behavioral_sensor.hold_unread_axes_enabled). sensor_eisv
+                    # above stays the filled arithmetic; it remains the legacy
+                    # ODE's anchor and the submitted-sensor telemetry record.
+                    ctx.agent_state["_behavioral_reading"] = hold_unread(
+                        behavioral_eisv,
+                        (ctx.agent_state.get("_eisv_derivation") or {}).get("components"),
+                    )
                     logger.debug(f"Behavioral sensor_eisv injected for {ctx.agent_id}: {behavioral_eisv}")
         except Exception as e:
             logger.debug(f"Behavioral sensor skipped for {ctx.agent_id}: {e}")

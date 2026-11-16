@@ -84,7 +84,8 @@ For the formulas and producer distinctions, see the repository's
 
 An axis is a reading only when at least one of its base terms was supplied.
 When none was, the sensor writes a mid-range default in its place and the
-number looks like any other. The check-in response says which is which in
+number looks like any other. (`UNITARES_HOLD_UNREAD_AXES=1`, off by default,
+holds such an axis instead; see `docs/EISV_COMPUTATION.md`.) The check-in response says which is which in
 `reading_coverage`: `measured` lists the axes with a supplied base term,
 `defaulted` lists the rest with the terms that were missing, and
 `v_rests_on_defaults` is true when E or I is a default, since V is derived from
