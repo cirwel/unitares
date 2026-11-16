@@ -216,6 +216,10 @@ def _build_risk_attribution(
     # than silently retaining the base Phi/behavioral label.
     if metrics.get("verdict_source") == "independent_verification_floor":
         primary_driver = "independent_verification_floor"
+    elif metrics.get("verdict_source") == "insufficient_reading":
+        # Decided in process_update, which knows the check-in count; this
+        # function sees only the confidence and would name the Phi prior.
+        primary_driver = "insufficient_reading"
 
     phi_drift: Dict = {
         "provenance": "computed",
@@ -295,6 +299,15 @@ def _build_risk_attribution(
             "This verdict is the independent behavioral assessment (EMA "
             "residuals vs this agent's own baseline + absolute floors). Φ and "
             "your reported ethical_drift are telemetry here, not the driver."
+        )
+    elif primary_driver == "insufficient_reading":
+        note = (
+            "No verdict was drawn. You are past cold start by check-in count, "
+            "but too few behavioral readings have been supplied for the "
+            "assessment to hold authority, so nothing was scored. 'safe' here means "
+            "nothing was measured, not that anything was cleared. Φ is "
+            "telemetry and did not decide. Reporting complexity and "
+            "confidence with a check-in supplies the readings."
         )
     elif primary_driver == "phi_floor":
         note = (

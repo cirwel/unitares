@@ -440,7 +440,12 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     )
     driver = attribution.get("primary_driver")
     basis = _verdict_evidence(payload).get("basis")
-    if driver in {"behavioral_assessment", "independent_verification_floor"} or (
+    if driver in {
+        "behavioral_assessment",
+        "independent_verification_floor",
+        # Past cold start with too little read: the prior did not decide.
+        "insufficient_reading",
+    } or (
         primary_source == "behavioral"
     ):
         return False
@@ -496,6 +501,9 @@ def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
         "phi_cold_start",
     }
     non_discriminative = discriminability.get("non_discriminative") is True
+    if driver == "insufficient_reading":
+        # No verdict was drawn; name that, not the placeholder vector's source.
+        return "provisional", "insufficient_reading"
     if grade == "provisional" or cold_start or non_discriminative:
         return "provisional", str(basis or "non_discriminative_cold_start")
 
@@ -1149,7 +1157,14 @@ def _verdict_caveat(
             None,
         )
     pointer = f" See {evidence_path} for provenance." if evidence_path else ""
-    if cold_start:
+    if primary_driver == "insufficient_reading":
+        message = (
+            "No verdict was drawn: too few behavioral readings were supplied "
+            "to score anything. 'safe'/'proceed' means nothing was measured, "
+            "not a validated all-clear."
+        )
+        tail = ""
+    elif cold_start:
         message = (
             "Verdict is provisional: behavioral confidence is below the assessment "
             "threshold. 'safe'/'proceed' means no trouble detected under the "

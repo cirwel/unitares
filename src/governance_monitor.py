@@ -1584,6 +1584,23 @@ class UNITARESMonitor:
                 phi_telemetry=phi_telemetry_only(),
             )
 
+        # ── Insufficient reading: no verdict (hold only) ──
+        # Past cold start by check-in count, yet too little was read for the
+        # behavioral state to hold authority. The Phi result above is the
+        # cold-start prior and stays telemetry here; no verdict is drawn, so
+        # the agent proceeds unscored. The verification floor below still
+        # applies because it does not depend on these readings.
+        from src.cold_start_risk_confirmation import reading_insufficient
+        insufficient_reading = reading_insufficient(
+            hold_unread=self._behavioral_state.hold_unread,
+            behavioral_confidence=self._behavioral_state.confidence,
+            checkin_confidence=self._behavioral_state.checkin_confidence,
+            behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
+            phi_telemetry=phi_telemetry_only(),
+        )
+        if insufficient_reading:
+            unitares_verdict, risk_score = "safe", 0.0
+
         # ── Independent verification floor (escalate-only; default-off) ──
         # The verdict above is self-attested (ethical_drift/complexity/confidence).
         # A deterministic, self-report-INDEPENDENT read of *described* adverse
@@ -1673,6 +1690,7 @@ class UNITARESMonitor:
             behavioral_verdict=behavioral_assessment.verdict,
             behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
             phi_telemetry=phi_telemetry_only(),
+            insufficient_reading=insufficient_reading,
         )
         verification_override = None
         if (
@@ -1701,8 +1719,11 @@ class UNITARESMonitor:
             cirs_result=cirs_result,
             # Every risk_history entry is Φ-derived. When the behavioral
             # assessment owns the verdict, Φ is telemetry and must not move
-            # the action through the F2 fast-trip (contract row 52).
-            latest_risk_fast_trip=(verdict_source != "behavioral_assessment"),
+            # the action through the F2 fast-trip (contract row 52). The same
+            # holds when no verdict was drawn for want of readings.
+            latest_risk_fast_trip=(
+                verdict_source not in ("behavioral_assessment", "insufficient_reading")
+            ),
         )
 
         # Shadow-measure a two-sided recent behavioral-V deviation gate against
