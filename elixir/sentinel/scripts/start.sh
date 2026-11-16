@@ -19,10 +19,11 @@ if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || !
 fi
 
 # The rendered LaunchAgent bearer is synchronized with governance and rotated
-# alongside it. Preserve that authoritative value while sourcing the separate
-# lease-plane/operator secrets file; an older secrets.env entry must not
-# silently overwrite the launchd-provisioned governance bearer.
+# alongside it. Preserve authoritative launchd bearers while sourcing the
+# separate lease-plane/operator secrets file; an older secrets.env entry must
+# not silently overwrite the launchd-provisioned governance or MCP bearer.
 sentinel_launchd_http_token="${UNITARES_HTTP_API_TOKEN:-}"
+sentinel_launchd_mcp_token="${UNITARES_MCP_BEARER_TOKEN:-}"
 
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -31,7 +32,10 @@ fi
 if [[ -n "$sentinel_launchd_http_token" ]]; then
     export UNITARES_HTTP_API_TOKEN="$sentinel_launchd_http_token"
 fi
-unset sentinel_launchd_http_token
+if [[ -n "$sentinel_launchd_mcp_token" ]]; then
+    export UNITARES_MCP_BEARER_TOKEN="$sentinel_launchd_mcp_token"
+fi
+unset sentinel_launchd_http_token sentinel_launchd_mcp_token
 
 # Homebrew Elixir lives at /opt/homebrew/bin on Apple Silicon. PATH inherited
 # from launchd's user environment is sparse, so set it explicitly.
@@ -56,6 +60,7 @@ export UNITARES_SENTINEL_START_POLLER="${UNITARES_SENTINEL_START_POLLER:-true}"
 export UNITARES_SENTINEL_START_AUDIT_VOLUME_WATCH="${UNITARES_SENTINEL_START_AUDIT_VOLUME_WATCH:-true}"
 export UNITARES_SENTINEL_EMIT_FINDINGS="${UNITARES_SENTINEL_EMIT_FINDINGS:-true}"
 export UNITARES_SENTINEL_EMIT_CHECKINS="${UNITARES_SENTINEL_EMIT_CHECKINS:-true}"
+export UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED="${UNITARES_SENTINEL_LEASE_ADVISORY_ENABLED:-true}"
 
 cd "$SENTINEL_DIR"
 exec mix run --no-halt

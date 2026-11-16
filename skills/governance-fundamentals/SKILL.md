@@ -79,8 +79,20 @@ For the formulas and producer distinctions, see the repository's
 
 - **E (Energy)** blends complexity divergence and recent recorded outcomes (renormalized to 50/50 of the base weight by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which excludes prior governance decisions and the legacy `legacy_tanh_v` coherence-level self-loop; setting `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` restores those legacy controller terms), with optional continuity and tool-success inputs. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
 - **I (Integrity)** blends eligible per-agent calibration accuracy (pooled with a cohort prior when supplied, or tactical calibration once five or more recent verified confidence–outcome pairs exist) and per-agent outcome-score consistency (`consistency_score`, once three or more non-echo outcomes exist in the last 24h, excluding `outcome_event` echo duplicates). Those two evidence gates are independent: when both are active their base weights renormalize to `5/7` (`calibration_accuracy`) and `2/7` (`consistency_score`); when only one gate is met, that term carries `100%` of the base; only when neither gate is met does `I` use the neutral `0.75` `uncalibrated_base_fallback` (default under `UNITARES_PER_AGENT_I_CALIBRATION=1` and `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which exclude the legacy `legacy_tanh_v` coherence-trend self-loop and lifetime fleet-strategic bins; setting those flags to `0` restores the legacy terms), plus optional continuity and tool-variety inputs. Outcome consistency measures variance: constant success and constant failure scores both have zero variance. Outcome success enters E separately.
-- **S (Entropy / drift)** rises with drift norm and complexity divergence (with the controller's regime-instability self-loop neutralized by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), plus optional continuity and tool-error/rework features.
+- **S (Entropy / drift)** rises with drift norm and complexity divergence (with the controller's regime-instability self-loop neutralized by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), plus optional continuity and tool-error/rework features. With `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1` (off by default) the drift norm is built only from your supplied complexity divergence and your own tactical calibration error once ten or more recent verified pairs exist; the shared stability and fleet-calibration components are left out, and with neither present the drift term is unread rather than a fleet constant. `derivation.drift_input` records what was used.
 - **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
+
+An axis is a reading only when at least one of its base terms was supplied.
+When none was, the sensor writes a mid-range default in its place and the
+number looks like any other. (`UNITARES_HOLD_UNREAD_AXES=1`, off by default,
+holds such an axis instead; see `docs/EISV_COMPUTATION.md`.) The check-in response says which is which in
+`reading_coverage`: `measured` lists the axes with a supplied base term,
+`defaulted` lists the rest with the terms that were missing, and
+`v_rests_on_defaults` is true when E or I is a default, since V is derived from
+them. A defaulted axis is a placeholder, not a low or high reading. Filtered
+response modes show the account whenever the set of defaulted axes changes from
+the previous check-in, including when a reading becomes fully measured; full
+mode always carries it.
 
 The headline math is proprioceptive residuals. The live estimation stages are
 explicit: check-ins 1–2 use the mostly server-derived Φ cold-start prior;

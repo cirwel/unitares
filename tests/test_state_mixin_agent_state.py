@@ -26,45 +26,78 @@ def _state_row(**overrides):
     return row
 
 
-@pytest.mark.asyncio
-async def test_all_latest_falls_back_when_matview_lacks_epistemic_class():
-    """Migration 040 avoids DROP/CREATE on the matview.
-
-    Existing deployments may still have a materialized view without
-    epistemic_class. The read path should catch that failure and use the base
-    table projection, preserving the forward-only label from the base row.
-    """
+def _stub_with_fetch(fetch):
     from src.db.mixins.state import StateMixin
-
-    calls = []
-
-    class _Stub(StateMixin):
-        def acquire(self):
-            return _Acquire()
 
     class _Acquire:
         async def __aenter__(self):
             conn = AsyncMock()
-
-            async def _fetch(sql, *args):
-                calls.append(sql)
-                if "FROM core.mv_latest_agent_states" in sql:
-                    raise Exception('column "epistemic_class" does not exist')
-                return [_state_row(epistemic_class="substrate_interpretation")]
-
-            conn.fetch = _fetch
+            conn.fetch = fetch
             return conn
 
         async def __aexit__(self, *args):
             return None
 
-    rows = await _Stub().get_all_latest_agent_states()
+    class _Stub(StateMixin):
+        def acquire(self):
+            return _Acquire()
+
+    return _Stub()
+
+
+@pytest.mark.asyncio
+async def test_all_latest_reads_base_table_through_the_index_not_the_matview():
+    """The read must not depend on the matview's projection or freshness.
+
+    The matview has no epistemic_class column on deployments that predate
+    migration 040. Selecting it there raised on every call and sent every call
+    to a DISTINCT ON sort of all of core.agent_state. One lateral probe per
+    identity returns the same rows from the base table.
+    """
+    from config.governance_config import GovernanceConfig
+
+    calls = []
+
+    async def _fetch(sql, *args):
+        calls.append((sql, args))
+        return [_state_row(epistemic_class="substrate_interpretation")]
+
+    rows = await _stub_with_fetch(_fetch).get_all_latest_agent_states()
 
     assert len(rows) == 1
     assert rows[0].epistemic_class == "substrate_interpretation"
     assert rows[0].state_json["epistemic_class"] == "substrate_interpretation"
-    assert any("core.mv_latest_agent_states" in sql for sql in calls)
-    assert any("FROM core.agent_state s" in sql for sql in calls)
+    assert len(calls) == 1
+    sql, args = calls[0]
+    assert "mv_latest_agent_states" not in sql
+    assert "DISTINCT ON" not in sql
+    assert "CROSS JOIN LATERAL" in sql
+    assert "a.synthetic = false" in sql
+    assert "ORDER BY a.recorded_at DESC" in sql
+    assert "LIMIT 1" in sql
+    assert "s.epoch = $1" in sql
+    assert args == (GovernanceConfig.CURRENT_EPOCH,)
+
+
+def test_server_no_longer_reads_or_refreshes_the_latest_state_matview():
+    """Nothing in src/ may read or refresh core.mv_latest_agent_states.
+
+    The periodic refresh re-sorted and rewrote every state row once a minute.
+    A new reader would silently get data nothing keeps current.
+    """
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src"
+    offenders = [
+        str(path.relative_to(src))
+        for path in src.rglob("*.py")
+        if any(
+            "mv_latest_agent_states" in line and not line.lstrip().startswith("#")
+            and "core.mv_latest_agent_states`" not in line
+            for line in path.read_text().splitlines()
+        )
+    ]
+    assert offenders == []
 
 
 @pytest.mark.asyncio

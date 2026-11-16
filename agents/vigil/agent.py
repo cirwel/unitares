@@ -25,7 +25,7 @@ What it does each cycle:
 
 import asyncio
 import functools
-
+import inspect
 import json
 import os
 import subprocess
@@ -51,6 +51,7 @@ from agents.common.findings import (
 )
 from agents.vigil.checks.registry import load_plugins
 from agents.vigil.checks.runner import run_health_checks
+from agents.vigil.remote_eval import run_remote_retrieval_eval
 from agents.watcher.floor_state import load_floor, recompute_floor
 
 # Paths
@@ -79,7 +80,6 @@ CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
-RETRIEVAL_EVAL_SCRIPT = project_root / "scripts" / "eval" / "retrieval_eval.py"
 NDCG_REGRESSION_THRESHOLD = 0.05  # absolute drop in nDCG@10 that flags regression
 
 # Watcher calibration: recompute the precision floor at most once per day.
@@ -323,20 +323,48 @@ def _filter_sentinel_findings(
 # KG hygiene v1: retrieval-eval helpers
 # ---------------------------------------------------------------------------
 
-def _derive_eval_config_tag() -> str:
-    """Derive a config tag matching baseline filename suffix from env vars.
+def _derive_eval_config_tag(eval_config: Optional[Dict[str, Any]] = None) -> str:
+    """Derive a config tag matching baseline filename suffix.
+
+    Prefers Core's active ranker config reported in ``metrics["config"]``
+    (from ``/health/deep`` or observed ``search_mode_used``) so a remote Vigil
+    resident compares against Core's actual ranker rather than Vigil's local
+    shell environment. Falls back to local env vars when ``eval_config``
+    carries no Core ranker metadata (e.g. legacy/mock flat fixtures).
 
     Tag values mirror existing baselines in tests/retrieval_eval/:
     bge_m3, bge_m3_reranked, hybrid_rrf, hybrid_graph.
     """
-    embedding = os.environ.get("UNITARES_EMBEDDING_MODEL", "").strip().lower()
-    hybrid = os.environ.get("UNITARES_ENABLE_HYBRID", "").strip() == "1"
-    # Related-finding expansion; the flag's old name still counts.
-    related_flag = os.environ.get("UNITARES_ENABLE_RELATED_EXPANSION")
-    if related_flag is None:
-        related_flag = os.environ.get("UNITARES_ENABLE_GRAPH_EXPANSION", "")
-    graph = related_flag.strip().lower() in {"1", "true", "yes", "on"}
-    reranker = os.environ.get("UNITARES_ENABLE_RERANKER", "").strip() == "1"
+    source = eval_config.get("config_source") if isinstance(eval_config, dict) else None
+    has_remote_cfg = (
+        isinstance(eval_config, dict)
+        and (
+            source in {"core", "observed_search_mode"}
+            or any(
+                eval_config.get(k) is not None
+                for k in ("embedding_model", "hybrid", "graph_expand", "rerank")
+            )
+        )
+    )
+    if has_remote_cfg:
+        assert isinstance(eval_config, dict)
+        raw_model = eval_config.get("embedding_model")
+        if raw_model is None and source == "observed_search_mode":
+            embedding = os.environ.get("UNITARES_EMBEDDING_MODEL", "").strip().lower()
+        else:
+            embedding = str(raw_model or "").strip().lower()
+        hybrid = bool(eval_config.get("hybrid"))
+        graph = bool(eval_config.get("graph_expand"))
+        reranker = bool(eval_config.get("rerank"))
+    else:
+        embedding = os.environ.get("UNITARES_EMBEDDING_MODEL", "").strip().lower()
+        hybrid = os.environ.get("UNITARES_ENABLE_HYBRID", "").strip() == "1"
+        # Related-finding expansion; the flag's old name still counts.
+        related_flag = os.environ.get("UNITARES_ENABLE_RELATED_EXPANSION")
+        if related_flag is None:
+            related_flag = os.environ.get("UNITARES_ENABLE_GRAPH_EXPANSION", "")
+        graph = related_flag.strip().lower() in {"1", "true", "yes", "on"}
+        reranker = os.environ.get("UNITARES_ENABLE_RERANKER", "").strip() == "1"
 
     base = "bge_m3" if "bge-m3" in embedding else (embedding.replace("-", "_") or "default")
 
@@ -408,29 +436,22 @@ def _eval_corpus_mismatch(current: Any, baseline: Any) -> Optional[str]:
     return "; ".join(diffs) or None
 
 
-def _run_eval_subprocess() -> Dict[str, Any]:
-    """Invoke the eval harness as a subprocess; return parsed JSON metrics.
+def _run_eval_subprocess(base_url: Optional[str] = None) -> Dict[str, Any]:
+    """Run KG retrieval evaluation over Core's REST surface; return JSON metrics.
 
-    Sync function — designed to be called via ``run_in_executor`` from the
-    async cycle. Returns ``{}`` on any failure (caller handles).
+    Retains the historical ``_run_eval_subprocess`` hook name for caller/test
+    compatibility while delegating to ``run_remote_retrieval_eval`` instead of
+    spawning the server-local ``scripts/eval/retrieval_eval.py`` script.
+    Sync function — called via ``run_in_executor`` from the async cycle.
+    Returns ``{}`` on any failure (caller handles).
     """
     try:
-        proc = subprocess.run(
-            ["python3", str(RETRIEVAL_EVAL_SCRIPT), "--json"],
-            capture_output=True, text=True, timeout=300,
+        return run_remote_retrieval_eval(
+            labels_path=RETRIEVAL_EVAL_DIR / "labels.json",
+            base_url=base_url,
         )
-        if proc.returncode != 0:
-            log(f"eval subprocess returned {proc.returncode}: {proc.stderr[:200]}")
-            return {}
-        return json.loads(proc.stdout)
-    except subprocess.TimeoutExpired:
-        log("eval subprocess timed out after 300s")
-        return {}
-    except json.JSONDecodeError as e:
-        log(f"eval subprocess JSON parse failed: {e}")
-        return {}
     except Exception as e:
-        log(f"eval subprocess failed: {e}")
+        log(f"remote retrieval eval failed: {e}")
         return {}
 
 
@@ -957,10 +978,10 @@ class VigilAgent(GovernanceAgent):
         return top_stale[:top_n]
 
     async def _run_eval_step(self) -> Dict[str, Any]:
-        """KG hygiene v1: run retrieval_eval as a subprocess; diff against baseline.
+        """KG hygiene v1: run remote retrieval eval over Core REST; diff against baseline.
 
-        Subprocess runs via ``run_in_executor`` to avoid the anyio-asyncpg
-        deadlock surface (the eval script itself awaits asyncpg internally).
+        Sync HTTP evaluation runs via ``run_in_executor`` so the async heartbeat
+        loop never blocks on synchronous REST calls.
 
         Returns a dict with keys: ``ran`` (bool), ``metrics`` (dict),
         ``baseline`` (str|None), ``delta`` (dict), ``regression`` (bool),
@@ -971,8 +992,18 @@ class VigilAgent(GovernanceAgent):
             return {"ran": False, "reason": "with_eval=False"}
 
         loop = asyncio.get_event_loop()
+        base_url = getattr(self, "mcp_url", None)
         try:
-            metrics = await loop.run_in_executor(None, _run_eval_subprocess)
+            accepts_arg = bool(inspect.signature(_run_eval_subprocess).parameters)
+        except (TypeError, ValueError):
+            accepts_arg = True
+        eval_call = (
+            (lambda: _run_eval_subprocess(base_url))
+            if accepts_arg
+            else _run_eval_subprocess
+        )
+        try:
+            metrics = await loop.run_in_executor(None, eval_call)
         except Exception as e:
             log(f"eval step failed: {e}")
             return {"ran": False, "reason": f"executor error: {e}"}
@@ -980,7 +1011,8 @@ class VigilAgent(GovernanceAgent):
         if not metrics:
             return {"ran": False, "reason": "empty metrics"}
 
-        config_tag = _derive_eval_config_tag()
+        eval_cfg = metrics.get("config") if isinstance(metrics, dict) else None
+        config_tag = _derive_eval_config_tag(eval_cfg)
         baseline_path = _pick_eval_baseline(RETRIEVAL_EVAL_DIR, config_tag)
 
         result: Dict[str, Any] = {

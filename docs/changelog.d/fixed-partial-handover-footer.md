@@ -1,0 +1,1 @@
+- **Scoped PR handovers:** Keep the opening author's terminal signature stable, record committing successors above it, and require permanent manual delivery after any handover so the retained author footer cannot authorize `ship.sh --resume`.

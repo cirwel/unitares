@@ -3819,15 +3819,15 @@ def _open_agent_prs(runner: str, repo_root: Path) -> list[dict] | None:
 
 
 def check_pr_owner_footer(db_url: str, repo_root: Path) -> CheckResult:
-    """Can a later session find the owner of every open agent PR?
+    """Can a later session find the opening author attribution on every open agent PR?
 
     The contract ends every agent PR body with ``UNITARES agent: <uuid>`` so a
-    later session can find the owner and check it against the server. Local
-    sessions get it stamped by the App runner. Hosted cloud sessions type it by
-    hand, so it goes missing or names an identity the server never minted.
-    This reads open ``claude/*`` and ``codex/*`` PRs only: ownership matters
-    while a PR can still be handed over or adopted, and a merged PR has no
-    owner left to find.
+    later session can find the opening author attribution and check it against
+    the server (delivery handovers record ``Delivery mode: manual`` and grant
+    comments separately). Local sessions get it stamped by the App runner. Hosted
+    cloud sessions type it by hand, so it goes missing or names an identity the
+    server never minted. This reads open ``claude/*`` and ``codex/*`` PRs only:
+    attribution matters while a PR is open, and a merged PR is already landed.
 
     A footer uuid can resolve and still be the wrong session (one mobile-app
     identity footered cloud PRs on three days in October 2026); the detail

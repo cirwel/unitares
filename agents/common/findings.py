@@ -232,19 +232,24 @@ def post_finding_result(
             if k not in body:
                 body[k] = v
 
-    headers: dict = {"Content-Type": "application/json"}
-    token = os.environ.get("UNITARES_HTTP_API_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    from agents.common.http_client import send_with_bearer_fallback
 
-    try:
-        resp = _httpx_post(url, json=body, headers=headers, timeout=timeout)
-        if getattr(resp, "status_code", 0) == 503:
+    def _post_with_headers(headers: dict[str, str]):
+        resp_inner = _httpx_post(url, json=body, headers=headers, timeout=timeout)
+        if getattr(resp_inner, "status_code", 0) == 503:
             # §3.2 typed-unavailable from a mid-cutover transport: honor the
             # server's delay (bounded) and retry exactly once. Still never
             # raises; a second 503 falls through to the non-200 return below.
-            time.sleep(_retry_after_from_503(resp))
-            resp = _httpx_post(url, json=body, headers=headers, timeout=timeout)
+            time.sleep(_retry_after_from_503(resp_inner))
+            resp_inner = _httpx_post(url, json=body, headers=headers, timeout=timeout)
+        return resp_inner
+
+    try:
+        resp = send_with_bearer_fallback(
+            _post_with_headers,
+            base_url=url,
+            json_body=True,
+        )
     except Exception as exc:
         log.warning("post_finding failed (%s): %s — finding NOT escalated",
                     type(exc).__name__, exc)

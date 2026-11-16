@@ -22,6 +22,7 @@ procedures live in the [installation manual](manual/02-install.md) and the
 | Admin/debug overlay | The base ports plus PostgreSQL on `127.0.0.1:5432` and Redis on `127.0.0.1:6379` | Temporary local debugging. Redis still has no authentication, and PostgreSQL keeps its configured credential. |
 | Core overlay | Governance MCP only; PostgreSQL remains internal, while Redis and the lease plane are disabled | Reduced-capability evaluation. Its security posture is not a substitute for the default stack's coordination and durable session services. |
 | Full-search overlay | Same network topology as the base stack | Adds local embedding dependencies and a read-only scripts mount; it does not harden the base stack. |
+| Cloud/VPS overlay (`docker-compose.cloud.yml`) | Same host-loopback ports as the base stack; optional `--profile cloudflare` tunnel container sharing `governance-mcp` loopback | Passes OAuth 2.1 and `UNITARES_HTTP_AGENT_TOKENS` settings into `governance-mcp` and lets a bundled `cloudflared` reach container-loopback `UNITARES_OAUTH_PUBLIC_PORT` without publishing it on the Docker bridge; still requires replacing development defaults below. |
 | Shared-network or non-loopback deployment | Operator-defined | Not a hardened profile shipped by these Compose files. Follow the exposure checklist below and the hosted-deployment runbook. |
 
 The governance and lease-plane processes listen on all container interfaces so

@@ -11,6 +11,36 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Latest measured (non-synthetic) state row of every identity, as a FROM clause
+# exposing `i` (the identity) and `s` (its latest state row). Served by
+# `idx_agent_state_synthetic_partial`, one probe per identity, so cost follows
+# the number of identities and not the number of state rows. This is the one
+# definition of "the latest state of each agent": do not sort
+# `core.agent_state`, and do not read `core.mv_latest_agent_states`, which
+# nothing refreshes.
+LATEST_MEASURED_STATE_FROM = """
+    FROM core.identities i
+    CROSS JOIN LATERAL (
+        SELECT a.*
+        FROM core.agent_state a
+        WHERE a.identity_id = i.identity_id
+          AND a.synthetic = false
+        ORDER BY a.recorded_at DESC
+        LIMIT 1
+    ) s
+"""
+
+# The same lookup for a caller whose outer relation is `scope(agent_id)`:
+# exposes each agent's latest measured state as `ls`, NULL when it has none.
+# Kept here so the SQL stays with the table's owner; callers interpolate it.
+LATEST_MEASURED_STATE_FOR_SCOPE_JOIN = f"""
+    LEFT JOIN (
+        SELECT i.agent_id, s.identity_id, s.risk_score, s.coherence,
+               s.regime, s.recorded_at
+        {LATEST_MEASURED_STATE_FROM}
+    ) ls ON ls.agent_id = scope.agent_id
+"""
+
 
 class StateMixin:
     """Agent state (EISV) snapshot operations."""
@@ -74,7 +104,6 @@ class StateMixin:
                 risk_score,
                 epistemic_class,
             )
-            # Matview refresh moved to periodic_matview_refresh() in background_tasks.py
             return state_id
 
     async def record_bootstrap_state(
@@ -310,47 +339,33 @@ class StateMixin:
             return [self._row_to_agent_state(r) for r in rows]
 
     async def get_all_latest_agent_states(self) -> list[AgentStateRecord]:
-        """Get latest measured state per identity, using matview with base-table fallback.
+        """Get latest measured state per identity in the current epoch.
 
-        The matview is measured-only by definition (migration 019 bakes
-        `WHERE synthetic = false` into the matview SELECT), so the matview
-        path needs no query-time filter. The base-table fallback queries
-        agent_state directly and adds the filter explicitly. Both paths
-        agree: bootstrap rows never appear here. Per onboard-bootstrap-
-        checkin §4.1.
+        One index probe per identity on `(identity_id, recorded_at DESC)
+        WHERE synthetic = false`, so cost follows the number of identities and
+        not the number of state rows, and the result is current as of the
+        call. Bootstrap rows never appear here (`synthetic = false`). Per
+        onboard-bootstrap-checkin §4.1.
+
+        This replaced a read of `core.mv_latest_agent_states`. That read
+        selected `epistemic_class`, which the matview does not carry on
+        deployments that predate migration 040, so it raised on every call and
+        fell back to `DISTINCT ON` over all of `core.agent_state`: a sort that
+        spills to disk. The matview is no longer read or refreshed by the
+        server; see `LATEST_MEASURED_STATE_FROM`.
         """
+        from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
-            try:
-                rows = await conn.fetch(
-                    """
-                    SELECT state_id, identity_id, agent_id, recorded_at,
-                           entropy, integrity, volatility,
-                           regime, coherence, state_json, epistemic_class
-                    FROM core.mv_latest_agent_states
-                    """,
-                )
-            except Exception:
-                # Matview may not exist yet, or may still be on the pre-040
-                # projection that lacks epistemic_class. Fall back to the base
-                # table rather than requiring a DROP/CREATE matview migration.
-                # Filter `synthetic = false` here because the base table
-                # contains both measured and synthetic rows.
-                from config.governance_config import GovernanceConfig
-                logger.debug("Matview unavailable, falling back to base table")
-                rows = await conn.fetch(
-                    """
-                    SELECT DISTINCT ON (s.identity_id)
-                           s.state_id, s.identity_id, i.agent_id, s.recorded_at,
-                           s.entropy, s.integrity, s.volatility,
-                           s.regime, s.coherence, s.state_json, s.epistemic_class
-                    FROM core.agent_state s
-                    JOIN core.identities i ON i.identity_id = s.identity_id
-                    WHERE s.epoch = $1
-                      AND s.synthetic = false
-                    ORDER BY s.identity_id, s.recorded_at DESC
-                    """,
-                    GovernanceConfig.CURRENT_EPOCH,
-                )
+            rows = await conn.fetch(
+                f"""
+                SELECT s.state_id, i.identity_id, i.agent_id, s.recorded_at,
+                       s.entropy, s.integrity, s.volatility,
+                       s.regime, s.coherence, s.state_json, s.epistemic_class
+                {LATEST_MEASURED_STATE_FROM}
+                WHERE s.epoch = $1
+                """,
+                GovernanceConfig.CURRENT_EPOCH,
+            )
             return [self._row_to_agent_state(r) for r in rows]
 
     async def reconstruct_eisv_series(
@@ -1067,3 +1082,30 @@ SELECT jsonb_build_object(
 )
 FROM summary
 """
+
+
+AGENT_STATE_SNAPSHOT_SCALAR_SQL: Dict[str, str] = {
+    "agents.active.7d": (
+        "SELECT count(DISTINCT identity_id) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days'"
+    ),
+    "governance.coherence.mean.7d": (
+        "SELECT avg(coherence) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    ),
+    "governance.risk.mean.7d": (
+        "SELECT avg(risk_score) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    ),
+    "governance.guide.7d": (
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' = 'guide'"
+    ),
+    "governance.pause.7d": (
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' IS NOT NULL "
+        "AND state_json->>'action' NOT IN ('approve', 'guide')"
+    ),
+}

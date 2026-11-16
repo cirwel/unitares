@@ -685,3 +685,40 @@ async def count_knowledge_discoveries_by_agents(
         resident_uuids,
         window,
     )
+
+
+KG_DISCOVERIES_COUNT_SQL = "SELECT count(*) FROM knowledge.discoveries"
+
+
+async def fetch_symptom_discoveries_for_sessions(
+    conn,
+    *,
+    session_ids: List[str],
+    min_created_at,
+    max_created_at,
+    symptom_regex: str,
+) -> list:
+    """Fetch discoveries matching `symptom_regex` authored by `session_ids` within `[min_created_at, max_created_at]`."""
+    if not session_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT
+            id AS discovery_id,
+            created_at,
+            provenance->>'writer_session_id_at_write' AS writer_session_id
+        FROM knowledge.discoveries
+        WHERE created_at BETWEEN $1 AND $2
+          AND provenance->>'writer_session_id_at_write' = ANY($3::text[])
+          AND concat_ws(
+                E'\n',
+                summary,
+                details,
+                array_to_string(tags, ' ')
+              ) ~* $4
+        """,
+        min_created_at,
+        max_created_at,
+        session_ids,
+        symptom_regex,
+    )

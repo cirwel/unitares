@@ -177,9 +177,9 @@ Modes:
   --direct    commit and push the current branch; refuses detached HEAD
   --stage-all stage the full current worktree before classifying/committing.
                With --plan, previews that route without mutating the index.
-  --resume    resume an owned, clean, pushed docs/tests/tooling PR from live evidence;
+  --resume    resume an opening-session, clean, pushed docs/tests/tooling PR from live evidence;
                join review, check CI, run prepr, and declare readiness/queue it.
-               Requires UNITARES_AGENT_UUID matching the PR ownership footer.
+               Requires UNITARES_AGENT_UUID matching the opening author footer with no handover marker (Delivery mode: manual).
                --wait joins CI; --plan only inspects local/remote state.
 USAGE
 }

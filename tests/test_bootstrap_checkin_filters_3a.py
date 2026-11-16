@@ -97,7 +97,7 @@ async def test_get_latest_returns_measured_when_present(db):
 
 
 # ---------------------------------------------------------------------------
-# Site #2: get_all_latest_agent_states (matview + base-table fallback)
+# Site #2: get_all_latest_agent_states (index-driven read of core.agent_state)
 # ---------------------------------------------------------------------------
 
 
@@ -107,10 +107,6 @@ async def test_all_latest_excludes_bootstrap_only_agents(db):
     agent_id, identity_id = await _seed_identity(db)
     await write_bootstrap(db, identity_id=identity_id, agent_id=agent_id,
                           params=BootstrapStateParams())
-
-    # Refresh the matview so it sees the latest agent_state state.
-    async with db.acquire() as conn:
-        await conn.execute("REFRESH MATERIALIZED VIEW core.mv_latest_agent_states")
 
     rows = await db.get_all_latest_agent_states()
     assert all(r.identity_id != identity_id for r in rows)
@@ -124,9 +120,7 @@ async def test_all_latest_includes_measured_after_bootstrap(db):
                           params=BootstrapStateParams())
     measured_id = await _record_measured(db, identity_id, entropy=0.2)
 
-    async with db.acquire() as conn:
-        await conn.execute("REFRESH MATERIALIZED VIEW core.mv_latest_agent_states")
-
+    # No matview refresh: the read is current as of the call.
     rows = await db.get_all_latest_agent_states()
     matching = [r for r in rows if r.identity_id == identity_id]
     assert len(matching) == 1
@@ -145,52 +139,6 @@ async def test_matview_definition_excludes_synthetic(db):
             "SELECT COUNT(*) FROM core.mv_latest_agent_states WHERE synthetic = true"
         )
     assert synthetic_in_matview == 0
-
-
-@pytest.mark.asyncio
-async def test_all_latest_base_table_fallback_excludes_bootstrap(db, monkeypatch):
-    """When the matview query raises, the base-table fallback also excludes synthetic."""
-    agent_id, identity_id = await _seed_identity(db)
-    await write_bootstrap(db, identity_id=identity_id, agent_id=agent_id,
-                          params=BootstrapStateParams())
-    measured_id = await _record_measured(db, identity_id, entropy=0.25)
-
-    # Force the matview path to fail so the fallback is exercised.
-    original_acquire = db.acquire
-
-    class _ForceFallbackConn:
-        def __init__(self, real):
-            self._real = real
-
-        async def fetch(self, query, *args):
-            if "mv_latest_agent_states" in query:
-                raise Exception("simulated matview unavailable")
-            return await self._real.fetch(query, *args)
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    class _AcquireCM:
-        def __init__(self, inner):
-            self._inner = inner
-            self._real_conn = None
-
-        async def __aenter__(self):
-            self._real_conn = await self._inner.__aenter__()
-            return _ForceFallbackConn(self._real_conn)
-
-        async def __aexit__(self, *exc):
-            return await self._inner.__aexit__(*exc)
-
-    def _wrapped_acquire(*a, **kw):
-        return _AcquireCM(original_acquire(*a, **kw))
-
-    monkeypatch.setattr(db, "acquire", _wrapped_acquire)
-
-    rows = await db.get_all_latest_agent_states()
-    matching = [r for r in rows if r.identity_id == identity_id]
-    assert len(matching) == 1
-    assert matching[0].state_id == measured_id
 
 
 # ---------------------------------------------------------------------------

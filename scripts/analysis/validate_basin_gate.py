@@ -64,7 +64,7 @@ _SENTINEL_PAUSE_STATE = {"E": 0.6608, "I": 0.6572, "S": 0.379, "V": 0.046}
 def _build(baseline_mean_m2: Dict[str, Tuple[float, float]],
            current: Dict[str, float], count: int = 1239) -> BehavioralEISV:
     """Rebuild a baselined BehavioralEISV from (mean, m2) baseline + current EISV."""
-    st = BehavioralEISV()
+    st = BehavioralEISV(hold_unread=False)
     for dim, (mean, m2) in baseline_mean_m2.items():
         bl: WelfordStats = getattr(st, f"_baseline_{dim}")
         bl.count, bl.mean, bl.m2 = count, mean, m2
@@ -75,9 +75,14 @@ def _build(baseline_mean_m2: Dict[str, Tuple[float, float]],
 
 
 def _build_from_stats(baseline_stats: Dict[str, dict],
-                      current: Dict[str, float]) -> Optional[BehavioralEISV]:
-    """Rebuild from a persisted ``baseline_stats`` dict (to_dict() form)."""
-    st = BehavioralEISV()
+                      current: Dict[str, float],
+                      record: Optional[dict] = None) -> Optional[BehavioralEISV]:
+    """Rebuild from a persisted ``baseline_stats`` dict (to_dict() form).
+
+    ``record`` is the whole persisted state; when it carries the reading
+    counters the state is rebuilt under the hold it was written under.
+    """
+    st = BehavioralEISV(hold_unread=False)
     counts = []
     for dim in ("E", "I", "S", "V"):
         d = baseline_stats.get(dim)
@@ -92,6 +97,8 @@ def _build_from_stats(baseline_stats: Dict[str, dict],
         if dim in current and current[dim] is not None:
             setattr(st, dim, float(current[dim]))
     st.update_count = max(counts) if counts else 0
+    if record is not None:
+        st.adopt_reading_record(record)
     return st
 
 
@@ -280,7 +287,7 @@ async def run_live(dsn: Optional[str], limit: int) -> tuple[bool, int, Optional[
         if not baseline_stats:
             continue
         current = {k: beisv.get(k) for k in ("E", "I", "S", "V")}
-        st = _build_from_stats(baseline_stats, current)
+        st = _build_from_stats(baseline_stats, current, record=beisv)
         if st is None or not st.is_baselined:
             continue
         examined += 1
