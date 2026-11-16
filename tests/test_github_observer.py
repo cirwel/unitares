@@ -946,3 +946,46 @@ def test_check_runs_are_read_with_every_run_of_each_name():
     # The default, filter=latest, would hide an earlier failed run of a check
     # that a re-run of the same name passed.
     assert urls == [f"https://api.example/repos/o/r/commits/{HEAD}/check-runs?per_page=100&filter=all"]
+
+
+# Codex review of #3263 at 0ffb7ed4: literal HTML examples and multi-line code spans.
+_UUID_A = "11111111-1111-4111-8111-111111111111"
+_UUID_B = "22222222-2222-4222-8222-222222222222"
+
+
+def test_indented_code_details_example_does_not_hide_the_footer():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"Example:\n\n    <details>\n\n---\nUNITARES agent: {_UUID_A}\n"
+    assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_quoted_pre_example_does_not_hide_the_footer():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"> <pre>\n\n---\nUNITARES agent: {_UUID_A}\n"
+    assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_multiline_code_span_footer_does_not_override_the_author():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = (
+        f"---\nUNITARES agent: {_UUID_A}\n\n"
+        f"Example: `text\nUNITARES agent: {_UUID_B}\nmore`\n"
+    )
+    assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_unclosed_backtick_still_reads_a_later_paragraph_footer():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"A stray ` here\n\n---\nUNITARES agent: {_UUID_A}\n"
+    assert agent_uuid_from_body(body) == _UUID_A
+
+
+def test_code_span_closed_before_footer_line_keeps_footer_visible():
+    from agents.github_observer.events import agent_uuid_from_body
+
+    body = f"See `a\nb` above\n\n---\nUNITARES agent: {_UUID_A}\n"
+    assert agent_uuid_from_body(body) == _UUID_A

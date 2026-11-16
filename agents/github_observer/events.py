@@ -26,7 +26,7 @@ typed. The producer (this observer) is recorded separately by the writer.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 EVENT_PREFIX = "github."
@@ -57,6 +57,7 @@ _FOOTER_RE = re.compile(
 )
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 _QUOTE_RE = re.compile(r"^ {0,3}>")
+_INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
 # Outside a comment: a comment opening, or a backtick run that may open a
 # code span (whose contents are literal, so a ``<!--`` inside one opens nothing).
 _COMMENT_OR_CODE_RE = re.compile(r"<!--|`+")
@@ -89,22 +90,41 @@ def ci_fingerprint(pr: Mapping[str, Any], run_id: int, attempt: int) -> str:
     return f"{repo_key(pr)}#{_number(pr)}:ci:{int(run_id)}:{int(attempt)}"
 
 
-def _scan_comments(line: str, in_comment: bool) -> tuple[str, bool, bool]:
-    """Walk one line's comment delimiters in order.
+def _span_closer(ticks: int) -> re.Pattern[str]:
+    return re.compile(rf"(?<!`)`{{{ticks}}}(?!`)")
+
+
+def _scan_comments(
+    line: str,
+    in_comment: bool,
+    open_ticks: int = 0,
+    closes_later: Callable[[int], bool] = lambda _ticks: False,
+) -> tuple[str, bool, bool, int]:
+    """Walk one line's comment delimiters and code spans in order.
 
     Returns the text outside comments and code spans, whether the line ends
-    inside a comment, and whether any part of the line was in a comment. Every
+    inside a comment, whether any part of the line was in a comment or in a
+    code span carried over from or into another line, and the backtick count
+    of a code span still open at the end of the line (0 if none). Every
     ``<!--`` and ``-->`` is taken in turn, so a second comment opened after the
     first one closes stays open to the end of the body if nothing closes it.
+    A code span may continue onto later lines of the same paragraph, as in
+    Markdown; ``closes_later(ticks)`` says whether a matching run follows
+    before the paragraph ends, and only then does an unmatched run open one.
     """
     visible: list[str] = []
     touched = in_comment
     pos = 0
+    if open_ticks:
+        close = _span_closer(open_ticks).search(line)
+        if close is None:
+            return "", in_comment, True, open_ticks
+        pos, open_ticks, touched = close.end(), 0, True
     while pos <= len(line):
         if in_comment:
             end = line.find("-->", pos)
             if end < 0:
-                return "".join(visible), True, True
+                return "".join(visible), True, True, 0
             pos, in_comment = end + 3, False
             continue
         match = _COMMENT_OR_CODE_RE.search(line, pos)
@@ -116,13 +136,15 @@ def _scan_comments(line: str, in_comment: bool) -> tuple[str, bool, bool]:
             pos, in_comment, touched = match.end(), True, True
             continue
         ticks = len(match.group())
-        close = re.compile(rf"(?<!`)`{{{ticks}}}(?!`)").search(line, match.end())
-        if close is None:  # an unmatched backtick run is literal text
+        close = _span_closer(ticks).search(line, match.end())
+        if close is not None:  # a code span's contents are literal; drop them
+            pos = close.end()
+        elif closes_later(ticks):  # the span runs on into later lines
+            return "".join(visible), in_comment, True, ticks
+        else:  # an unmatched backtick run is literal text
             visible.append(match.group())
             pos = match.end()
-        else:  # a code span's contents are literal; drop them
-            pos = close.end()
-    return "".join(visible), in_comment, touched
+    return "".join(visible), in_comment, touched, 0
 
 
 def _tag_depth(text: str, tag: str, depth: int) -> int:
@@ -171,12 +193,29 @@ def agent_uuid_from_body(body: str | None) -> str | None:
     fence = ""
     in_comment = False
     quoted = False
+    open_ticks = 0
     depth = dict.fromkeys(_HIDING_TAGS, 0)
     # Split on newlines only: ``splitlines`` also splits on characters GitHub
     # renders inside a line.
-    for line in (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    lines = (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    def closes_later(index: int) -> Callable[[int], bool]:
+        def check(ticks: int) -> bool:
+            closer = _span_closer(ticks)
+            for later in lines[index + 1 :]:
+                if not later.strip() or _FENCE_RE.match(later):
+                    return False  # the paragraph ends first
+                if closer.search(later):
+                    return True
+            return False
+
+        return check
+
+    for index, line in enumerate(lines):
+        if open_ticks and not line.strip():
+            open_ticks = 0  # a blank line ends the paragraph, and the span
         run = _FENCE_RE.match(line)
-        if run and not in_comment and not depth["pre"]:
+        if run and not in_comment and not depth["pre"] and not open_ticks:
             marker = run.group(1)
             if not fence:
                 if not (marker[0] == "`" and "`" in run.group(2)):
@@ -191,11 +230,17 @@ def agent_uuid_from_body(body: str | None) -> str | None:
         if fence:
             continue
         was_in_comment = in_comment
-        visible, in_comment, touched = _scan_comments(line, in_comment)
+        visible, in_comment, touched, open_ticks = _scan_comments(
+            line, in_comment, open_ticks, closes_later(index)
+        )
         hidden = any(depth.values())
-        for tag in _HIDING_TAGS:
-            depth[tag] = _tag_depth(visible, tag, depth[tag])
-        if not was_in_comment and not hidden and _QUOTE_RE.match(line):
+        is_quote = not was_in_comment and _QUOTE_RE.match(line) is not None
+        # An indented code line or a quoted line shows a tag literally (or
+        # inside the quote only), so it neither opens nor closes a hiding block.
+        if not (_INDENTED_CODE_RE.match(line) or is_quote):
+            for tag in _HIDING_TAGS:
+                depth[tag] = _tag_depth(visible, tag, depth[tag])
+        if is_quote and not hidden:
             quoted = True
             continue
         if touched or hidden or any(depth.values()):
