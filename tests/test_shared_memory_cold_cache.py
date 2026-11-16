@@ -14,7 +14,7 @@ def gate(monkeypatch):
     server = SimpleNamespace(agent_metadata={})
     lookup = AsyncMock()
     monkeypatch.setattr('src.mcp_handlers.shared.get_mcp_server', lambda: server)
-    monkeypatch.setattr('src.agent_metadata_persistence.load_agent_metadata_from_postgres', lookup)
+    monkeypatch.setattr('src.agent_metadata_persistence.load_agent_lifecycle_from_postgres', lookup)
     return server, lookup
 
 
@@ -114,3 +114,36 @@ async def test_cached_active_registry_outage_is_not_permission(gate):
     lookup.side_effect = RuntimeError('offline')
     assert parse_result(await check_agent_can_operate_async('agent'))['error_code'] == 'REGISTRY_UNAVAILABLE'
     assert server.agent_metadata['agent'] is active
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,code', [('paused', 'AGENT_PAUSED'), ('active', None)])
+async def test_pause_gate_preserves_live_profile_counters(monkeypatch, status, code):
+    """A status read must not hydrate an older persisted profile over live data."""
+    from src import agent_profile, agent_storage
+
+    agent_id = 'profile-agent'
+    live = agent_profile.AgentProfile(total_updates=15)
+    monkeypatch.setitem(agent_profile.get_all_profiles(), agent_id, live)
+    server = SimpleNamespace(agent_metadata={})
+    monkeypatch.setattr('src.mcp_handlers.shared.get_mcp_server', lambda: server)
+    persisted = agent_storage.AgentRecord(
+        agent_id=agent_id,
+        api_key='',
+        api_key_hash='',
+        status=status,
+        metadata={
+            'paused_at': datetime.now(timezone.utc).isoformat(),
+            'profile': {'total_updates': 10},
+        },
+    )
+    read = AsyncMock(return_value=persisted)
+    monkeypatch.setattr(agent_storage, 'get_agent', read)
+
+    result = await check_agent_can_operate_async(agent_id)
+
+    assert (parse_result(result)['error_code'] if result else None) == code
+    assert agent_profile.get_agent_profile(agent_id) is live
+    assert live.total_updates == 15
+    assert server.agent_metadata == {}
+    read.assert_awaited_once_with(agent_id)

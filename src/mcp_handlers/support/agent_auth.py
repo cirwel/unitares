@@ -176,8 +176,8 @@ async def check_agent_can_operate_async(agent_uuid: str) -> Optional[TextContent
     from ..error_handling import error_response
     server = get_mcp_server()
     try:
-        from src.agent_metadata_persistence import load_agent_metadata_from_postgres
-        meta = await load_agent_metadata_from_postgres(agent_uuid)
+        from src.agent_metadata_persistence import load_agent_lifecycle_from_postgres
+        meta = await load_agent_lifecycle_from_postgres(agent_uuid)
     except Exception:
         logger.warning("Pause-gate registry lookup failed for %s", agent_uuid[:12])
         return error_response(
