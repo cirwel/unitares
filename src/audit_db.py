@@ -496,6 +496,7 @@ async def get_behavioral_work_tool_stats_async(
             FROM audit.tool_usage
             WHERE agent_id = $1
               AND ts >= $2
+              AND payload->>'actor_source' = 'caller_bound'
               AND tool_name NOT LIKE 'lease.%'
               AND COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) IS NOT NULL
               AND COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) <> ''

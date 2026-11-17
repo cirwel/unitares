@@ -287,6 +287,7 @@ class TestBehavioralWorkToolStatsDb:
         sql, agent_arg, cutoff_arg, excluded_tools_arg, excluded_errs_arg, exc_pattern_arg = (
             conn.fetch.call_args[0]
         )
+        assert "payload->>'actor_source' = 'caller_bound'" in sql
         assert "COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name)" in sql
         assert "tool_name NOT LIKE 'lease.%'" in sql
         assert "COALESCE(error_type, '') !~ $5" in sql
@@ -640,3 +641,137 @@ class TestToolUsageExtractionAndDownstreamConsumers:
         fetch_mock.assert_awaited_once_with(agent_id="sim-agent-1", window_hours=1.0)
         sim_state = monitor.simulate_update.call_args.args[0]
         assert sim_state["_actor_work_tool_stats"] == db_stats
+
+
+class TestCallerBoundActorAttribution:
+    @pytest.mark.asyncio
+    async def test_rest_target_agent_id_never_attributes_call_to_target(self, monkeypatch):
+        from src.mcp_handlers.context import (
+            reset_session_context,
+            set_session_context,
+            update_context_agent_id,
+        )
+        from src.services.http_tool_service import execute_http_tool
+
+        caller_a = "aaaaaaaa-1111-2222-3333-444444444444"
+        target_b = "bbbbbbbb-1111-2222-3333-444444444444"
+
+        tracker = MagicMock()
+        append = AsyncMock(return_value=True)
+
+        def _consume_coro(coro, name=None):
+            if hasattr(coro, "close"):
+                coro.close()
+            return MagicMock()
+
+        monkeypatch.setattr("src.tool_usage_tracker.get_tool_usage_tracker", lambda: tracker)
+        monkeypatch.setattr("src.audit_db.append_tool_usage_async", append)
+        monkeypatch.setattr("src.background_tasks.create_tracked_task", _consume_coro)
+        monkeypatch.setattr("src.services.http_tool_service.wave3a_get_route", lambda _n: None)
+        monkeypatch.setattr(
+            "src.services.http_tool_service.get_direct_http_tool_handler", lambda _n: None
+        )
+        monkeypatch.setattr(
+            "src.services.http_tool_service.execute_http_dispatch_fallback",
+            AsyncMock(return_value={"success": True}),
+        )
+
+        # Case 1: bound REST caller A queries knowledge with target agent_id=B
+        token = set_session_context(session_key="sk-a", client_session_id="csid-a")
+        try:
+            update_context_agent_id(caller_a)
+            await execute_http_tool(
+                "knowledge", {"action": "search", "agent_id": target_b, "query": "q"}
+            )
+        finally:
+            reset_session_context(token)
+
+        assert append.call_args.kwargs["agent_id"] == caller_a
+        assert append.call_args.kwargs["payload"]["actor_source"] == "caller_bound"
+        # Legacy JSONL path preserves request_side_agent_id untouched
+        assert tracker.log_tool_call.call_args.kwargs["agent_id"] == target_b
+
+        # Case 2: unbound REST caller with asserted target agent_id=B
+        append.reset_mock()
+        token = set_session_context(session_key=None, client_session_id="csid-anon")
+        try:
+            await execute_http_tool(
+                "knowledge", {"action": "search", "agent_id": target_b, "query": "q"}
+            )
+        finally:
+            reset_session_context(token)
+
+        assert append.call_args.kwargs["agent_id"] is None
+        assert "actor_source" not in (append.call_args.kwargs["payload"] or {})
+
+    @pytest.mark.asyncio
+    async def test_stdio_and_use_tool_attribute_bound_caller_over_target_arg(self, monkeypatch):
+        import src.mcp_handlers as mh
+        from src.mcp_handlers.context import (
+            reset_session_context,
+            set_session_context,
+            update_context_agent_id,
+        )
+        import src.mcp_server_std as std
+        from src.mcp_handlers.introspection.tool_introspection import handle_use_tool
+
+        caller_a = "aaaaaaaa-1111-2222-3333-444444444444"
+        target_b = "bbbbbbbb-1111-2222-3333-444444444444"
+
+        tracker = MagicMock()
+        append = AsyncMock(return_value=True)
+
+        def _consume_coro(coro, name=None):
+            if hasattr(coro, "close"):
+                coro.close()
+            return MagicMock()
+
+        monkeypatch.setattr("src.tool_usage_tracker.get_tool_usage_tracker", lambda: tracker)
+        monkeypatch.setattr("src.audit_db.append_tool_usage_async", append)
+        monkeypatch.setattr("src.background_tasks.create_tracked_task", _consume_coro)
+
+        async def _fake_dispatch(_name, arguments):
+            arguments["_middleware_identity_result"] = {"agent_uuid": caller_a}
+            return {"success": True}
+
+        monkeypatch.setattr(mh, "dispatch_tool", _fake_dispatch)
+
+        # Direct use_tool fallback
+        monkeypatch.setattr("src.mcp_handlers.context.get_nested_tool_invoker", lambda: None)
+        await handle_use_tool({
+            "tool_name": "knowledge",
+            "arguments": {"action": "search", "agent_id": target_b},
+        })
+        assert append.call_args.kwargs["agent_id"] == caller_a
+        assert append.call_args.kwargs["payload"]["actor_source"] == "caller_bound"
+
+        # Stdio local wrapper
+        append.reset_mock()
+        token = set_session_context(session_key="sk-std", client_session_id="csid-std")
+        try:
+            update_context_agent_id(caller_a)
+            await std._call_local_tool("knowledge", {"action": "search", "agent_id": target_b})
+        finally:
+            reset_session_context(token)
+        assert append.call_args.kwargs["agent_id"] == caller_a
+        assert append.call_args.kwargs["payload"]["actor_source"] == "caller_bound"
+
+    def test_unverified_record_tool_usage_cannot_forge_actor_source(self, monkeypatch):
+        from src.services import tool_usage_recorder as recorder
+
+        tracker = MagicMock()
+        append = AsyncMock(return_value=True)
+        monkeypatch.setattr("src.tool_usage_tracker.get_tool_usage_tracker", lambda: tracker)
+        monkeypatch.setattr("src.audit_db.append_tool_usage_async", append)
+        monkeypatch.setattr(
+            "src.background_tasks.create_tracked_task",
+            lambda coro, name=None: coro.close() if hasattr(coro, "close") else MagicMock(),
+        )
+
+        recorder.record_tool_usage(
+            tool_name="knowledge",
+            agent_id="bbbbbbbb-1111-2222-3333-444444444444",
+            success=True,
+            payload={"action": "search", "actor_source": "caller_bound"},
+        )
+        assert append.call_args.kwargs["payload"] == {"action": "search"}

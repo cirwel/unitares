@@ -247,7 +247,7 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
 _SECONDARY_SELECTOR_FIELDS: Dict[str, str] = {"cirs_protocol": "protocol"}
 
 _ALLOWED_PAYLOAD_KEYS = frozenset(
-    {"action", "canonical_tool", "action_source", "via"}
+    {"action", "canonical_tool", "action_source", "via", "actor_source"}
     | set(_SECONDARY_SELECTOR_FIELDS.values())
 )
 
@@ -526,6 +526,9 @@ def resolve_dispatch_bound_agent_id(arguments: Any) -> Optional[str]:
         return None
 
 
+_UNSET = object()
+
+
 def record_tool_usage(
     tool_name: str,
     agent_id: Optional[str],
@@ -535,6 +538,9 @@ def record_tool_usage(
     session_id: Optional[str] = None,
     payload: Optional[Dict[str, str]] = None,
     audit_only: bool = False,
+    *,
+    audit_agent_id: Any = _UNSET,
+    actor_verified: bool = False,
 ) -> None:
     """Record a tool call. Never raises — telemetry failure must not break the call.
 
@@ -556,6 +562,13 @@ def record_tool_usage(
     Both are deliberate omissions, reversible in one keyword, and each is
     pinned by a test. The default is unchanged for every pre-existing
     caller (REST + stdio).
+
+    ``audit_agent_id`` (optional keyword override) decouples DB caller
+    attribution from ``agent_id`` (the request-side JSONL/presence value) so
+    target/filter ``arguments['agent_id']`` values never attribute a call to
+    the wrong actor in ``audit.tool_usage``. When ``actor_verified=True``
+    and ``audit_agent_id`` is non-empty, ``payload['actor_source']`` is stamped
+    ``'caller_bound'`` after sanitization.
     """
     # The JSONL sink and the presence lease deliberately key on the
     # REQUEST-side agent_id. The context fallback exists to make
@@ -563,8 +576,19 @@ def record_tool_usage(
     # a behavioural-sensor input or a liveness claim, where newly-attributed
     # rows would turn a per-agent signal ON that was previously OFF.
     request_side_agent_id = agent_id
-    audit_agent_id = resolve_audit_agent_id(agent_id)
-    payload = _sanitize_payload(payload)
+    resolved_audit_id = (
+        resolve_audit_agent_id(agent_id)
+        if audit_agent_id is _UNSET
+        else audit_agent_id
+    )
+    sanitized_in = (
+        {k: v for k, v in payload.items() if k != "actor_source"}
+        if isinstance(payload, dict)
+        else payload
+    )
+    payload = _sanitize_payload(sanitized_in)
+    if actor_verified and resolved_audit_id:
+        payload = {**(payload or {}), "actor_source": "caller_bound"}
     if not audit_only:
         try:
             from src.tool_usage_tracker import get_tool_usage_tracker
@@ -580,7 +604,7 @@ def record_tool_usage(
         from src.audit_db import append_tool_usage_async
         create_tracked_task(
             append_tool_usage_async(
-                agent_id=audit_agent_id,
+                agent_id=resolved_audit_id,
                 tool_name=tool_name,
                 latency_ms=latency_ms,
                 success=success,

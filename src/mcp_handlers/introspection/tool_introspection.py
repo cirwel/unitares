@@ -825,19 +825,24 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     ):
         nested["client_session_id"] = arguments.get("client_session_id")
     from src.mcp_handlers import dispatch_tool
+    from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
     from src.services.tool_usage_recorder import (
         build_tool_usage_payload,
         classify_tool_result,
         record_tool_usage,
+        resolve_audit_agent_id,
+        resolve_dispatch_bound_agent_id,
         resolve_minted_agent_id,
     )
 
+    remove_reserved_dispatch_keys(nested)
     with entered_via("use_tool"):
         usage_payload = build_tool_usage_payload(target, nested)
     started = _time.monotonic()
     try:
         result = await dispatch_tool(target, nested)
     except Exception as exc:
+        caller_id = resolve_dispatch_bound_agent_id(nested) or resolve_audit_agent_id(None)
         record_tool_usage(
             tool_name=target,
             agent_id=nested.get("agent_id"),
@@ -846,9 +851,12 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             latency_ms=int((_time.monotonic() - started) * 1000),
             session_id=nested.get("client_session_id"),
             payload=usage_payload,
+            audit_agent_id=caller_id,
+            actor_verified=bool(caller_id),
         )
         raise
     latency_ms = int((_time.monotonic() - started) * 1000)
+    caller_id = resolve_dispatch_bound_agent_id(nested) or resolve_audit_agent_id(None)
     if result is None:
         record_tool_usage(
             tool_name=target,
@@ -858,6 +866,8 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             latency_ms=latency_ms,
             session_id=nested.get("client_session_id"),
             payload=usage_payload,
+            audit_agent_id=caller_id,
+            actor_verified=bool(caller_id),
         )
         return [error_response(
             f"Capability did not dispatch: {target}",
@@ -866,6 +876,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     success, error_type = classify_tool_result(result)
     actor = resolve_minted_agent_id(target, nested.get("agent_id"), result)
+    final_caller = resolve_minted_agent_id(target, caller_id, result)
     record_tool_usage(
         tool_name=target,
         agent_id=actor,
@@ -874,6 +885,8 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         latency_ms=latency_ms,
         session_id=nested.get("client_session_id"),
         payload=usage_payload,
+        audit_agent_id=final_caller,
+        actor_verified=bool(final_caller),
     )
     return result
 
