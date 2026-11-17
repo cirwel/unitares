@@ -100,7 +100,8 @@ omitting self-reported `complexity` on repeated authored MCP check-ins does
 rate-of-change `complexity_divergence` from derived complexity (`E` and `S`
 record readings, reaching confidence `0.3` and `behavioral_assessment` at
 check-in 6), unless `should_exclude_template_divergence` excludes it on
-automatic or degenerate check-ins or the caller bypasses continuity metrics.
+degenerate automatic/rollup check-ins (when both `continuity_degenerate` and
+`is_automatic_or_rollup_checkin` hold) or the caller bypasses continuity metrics.
 When all axes remain unread (or go stale), check-ins 1–5 are decided by the Φ
 cold-start prior; from check-in 6 onward, rather than letting the Φ prior decide
 indefinitely, `reading_insufficient` draws **no verdict** (`verdict="safe"`,
