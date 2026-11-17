@@ -631,9 +631,13 @@ class BehavioralEISV:
         # check-in), but confidence does not: nothing is scored until a reading.
         state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
-        if isinstance(persisted_readings, dict):
+        if isinstance(persisted_readings, dict) and (
+            _record_tracks_readings(data) or not state.hold_unread
+        ):
             # The record says which rule wrote it; counters alone do not (a
-            # state written with the hold off carries them too).
+            # state written with the hold off carries them too). Under the
+            # hold, a hold-off snapshot starts unread just like one from before
+            # readings were counted, so the first real reading seeds it.
             state.written_under_hold = _record_tracks_readings(data)
             state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
             persisted_since = data.get("since_reading")

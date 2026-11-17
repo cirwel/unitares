@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-11-17T10:33:58Z",
+  "verified_date": "2026-11-17",
+  "verifier": "antigravity_0fc988d6: verified HU1 hold-off snapshot migration in behavioral_state.py and merged core.py metrics_agent_is_known docstring",
+  "source_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": "95d7d8a248ee2c31",
+    "unitares/skills/dialectic-reasoning/SKILL.md": "e23a1486d3397505",
+    "unitares/skills/governance-fundamentals/SKILL.md": "dbde75d676200c15",
+    "unitares/skills/governance-lifecycle/SKILL.md": "3ec5f9172f2c7a78",
+    "unitares/skills/knowledge-graph/SKILL.md": "19ca81fc3d035b88",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/eisv/adapter.py": "8fb7c3a47b9271fa",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "b84b21d55bfc0661",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "872c839ad0be6e96",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "d368d68351380667",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/schemas/identity.py": "8f8798c5515927bc",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "789148a2dc55a729",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/core.py": [
+      "07bbdfe8030be8ab"
+    ]
+  }
+}
