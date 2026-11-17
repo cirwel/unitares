@@ -26,8 +26,10 @@ typed. The producer (this observer) is recorded separately by the writer.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
+
+from agents.github_observer.footer import visible_paragraph_lines
 
 EVENT_PREFIX = "github."
 EVENT_TYPES = frozenset(
@@ -51,19 +53,10 @@ _ACTIONS_NOT_A_RESULT = frozenset({"action_required"})
 
 _RECORD_RE = re.compile(r"<!--\s*" + re.escape(REVIEW_MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->")
 _FOOTER_RE = re.compile(
-    r"^ {0,3}UNITARES agent:[ \t]*"
-    r"(?P<uuid>[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})[ \t]*$",
+    r"UNITARES agent:[ \t]*"
+    r"(?P<uuid>[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})",
     re.IGNORECASE,
 )
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-_QUOTE_RE = re.compile(r"^ {0,3}>")
-_INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
-# Outside a comment: a comment opening, or a backtick run that may open a
-# code span (whose contents are literal, so a ``<!--`` inside one opens nothing).
-_COMMENT_OR_CODE_RE = re.compile(r"<!--|(?<!\\)`+")  # an escaped \` opens no span
-# HTML whose contents a reader does not see as the author's own line: a
-# collapsed ``<details>`` and a ``<pre>`` block.
-_HIDING_TAGS = ("details", "pre")
 _STATE_EVENTS = {"merged": "pr_merged", "closed": "pr_closed", "reopened": "pr_reopened"}
 
 
@@ -88,69 +81,6 @@ def _number(pr: Mapping[str, Any]) -> int:
 
 def ci_fingerprint(pr: Mapping[str, Any], run_id: int, attempt: int) -> str:
     return f"{repo_key(pr)}#{_number(pr)}:ci:{int(run_id)}:{int(attempt)}"
-
-
-def _span_closer(ticks: int) -> re.Pattern[str]:
-    return re.compile(rf"(?<!`)`{{{ticks}}}(?!`)")
-
-
-def _scan_comments(
-    line: str,
-    in_comment: bool,
-    open_ticks: int = 0,
-    closes_later: Callable[[int], bool] = lambda _ticks: False,
-) -> tuple[str, bool, bool, int]:
-    """Walk one line's comment delimiters and code spans in order.
-
-    Returns the text outside comments and code spans, whether the line ends
-    inside a comment, whether any part of the line was in a comment or in a
-    code span carried over from or into another line, and the backtick count
-    of a code span still open at the end of the line (0 if none). Every
-    ``<!--`` and ``-->`` is taken in turn, so a second comment opened after the
-    first one closes stays open to the end of the body if nothing closes it.
-    A code span may continue onto later lines of the same paragraph, as in
-    Markdown; ``closes_later(ticks)`` says whether a matching run follows
-    before the paragraph ends, and only then does an unmatched run open one.
-    """
-    visible: list[str] = []
-    touched = in_comment
-    pos = 0
-    if open_ticks:
-        close = _span_closer(open_ticks).search(line)
-        if close is None:
-            return "", in_comment, True, open_ticks
-        pos, open_ticks, touched = close.end(), 0, True
-    while pos <= len(line):
-        if in_comment:
-            end = line.find("-->", pos)
-            if end < 0:
-                return "".join(visible), True, True, 0
-            pos, in_comment = end + 3, False
-            continue
-        match = _COMMENT_OR_CODE_RE.search(line, pos)
-        if match is None:
-            visible.append(line[pos:])
-            break
-        visible.append(line[pos : match.start()])
-        if match.group() == "<!--":
-            pos, in_comment, touched = match.end(), True, True
-            continue
-        ticks = len(match.group())
-        close = _span_closer(ticks).search(line, match.end())
-        if close is not None:  # a code span's contents are literal; drop them
-            pos = close.end()
-        elif closes_later(ticks):  # the span runs on into later lines
-            return "".join(visible), in_comment, True, ticks
-        else:  # an unmatched backtick run is literal text
-            visible.append(match.group())
-            pos = match.end()
-    return "".join(visible), in_comment, touched, 0
-
-
-def _tag_depth(text: str, tag: str, depth: int) -> int:
-    opened = len(re.findall(rf"<{tag}(?=[\s>/]|$)", text, re.IGNORECASE))
-    closed = len(re.findall(rf"</{tag}\s*>", text, re.IGNORECASE))
-    return max(0, depth + opened - closed)
 
 
 def run_names_pr(run: Mapping[str, Any], pr: Mapping[str, Any]) -> bool:
@@ -183,77 +113,13 @@ def agent_uuid_from_body(body: str | None) -> str | None:
     """The agent a pull request body's footer names, or ``None``.
 
     The footer is a ``UNITARES agent: <uuid>`` line a reader of the rendered
-    body would see as the author's own: outside code fences, block quotes
-    (including a line that continues a quoted paragraph), HTML comments, and
-    ``<details>`` or ``<pre>`` blocks. The last one wins: the delivery
-    contract keeps the opening author's signature last, and a successor's
-    above it.
+    body would see as the author's own (see ``agents.github_observer.footer``).
+    The last one wins: the delivery contract keeps the opening author's
+    signature last, and a successor's above it.
     """
     found: str | None = None
-    fence = ""
-    in_comment = False
-    quoted = False
-    open_ticks = 0
-    depth = dict.fromkeys(_HIDING_TAGS, 0)
-    # Split on newlines only: ``splitlines`` also splits on characters GitHub
-    # renders inside a line.
-    lines = (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-
-    def closes_later(index: int) -> Callable[[int], bool]:
-        def check(ticks: int) -> bool:
-            closer = _span_closer(ticks)
-            for later in lines[index + 1 :]:
-                if not later.strip() or _FENCE_RE.match(later):
-                    return False  # the paragraph ends first
-                if closer.search(later):
-                    return True
-            return False
-
-        return check
-
-    for index, line in enumerate(lines):
-        if open_ticks and not line.strip():
-            open_ticks = 0  # a blank line ends the paragraph, and the span
-        run = _FENCE_RE.match(line)
-        if run and not in_comment and not depth["pre"] and not open_ticks:
-            marker = run.group(1)
-            if not fence:
-                if not (marker[0] == "`" and "`" in run.group(2)):
-                    fence = marker
-                    quoted = False
-                    continue
-            elif marker[0] == fence[0] and len(marker) >= len(fence) and not run.group(2).strip():
-                fence = ""
-                continue
-            else:
-                continue
-        if fence:
-            continue
-        was_in_comment = in_comment
-        visible, in_comment, touched, open_ticks = _scan_comments(
-            line, in_comment, open_ticks, closes_later(index)
-        )
-        hidden = any(depth.values())
-        is_quote = not was_in_comment and _QUOTE_RE.match(line) is not None
-        # An indented code line or a quoted line shows a tag literally (or
-        # inside the quote only), so it neither opens nor closes a hiding block.
-        # Inside an open HTML block indentation is not code, so a closing tag counts.
-        if not ((_INDENTED_CODE_RE.match(line) and not hidden) or is_quote):
-            for tag in _HIDING_TAGS:
-                depth[tag] = _tag_depth(visible, tag, depth[tag])
-        if is_quote and not hidden:
-            quoted = True
-            continue
-        if touched or hidden or any(depth.values()):
-            # In or touching a comment, or inside, opening or closing a
-            # hiding block: never a footer line.
-            continue
-        if not line.strip():
-            quoted = False
-            continue
-        if quoted:  # a lazy continuation renders inside the quote
-            continue
-        match = _FOOTER_RE.match(line)
+    for line in visible_paragraph_lines(body or ""):
+        match = _FOOTER_RE.fullmatch(line)
         if match:
             found = match.group("uuid").lower()
     return found

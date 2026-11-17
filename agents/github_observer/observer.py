@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from agents.github_observer import footer
 from agents.github_observer.events import (
     DEFAULT_SKIPPED_CHECKS,
     EVENT_TYPES,
@@ -414,6 +415,11 @@ def main(argv: list[str] | None = None) -> int:
             "(POST /v1/external/events) lands with that route.",
             file=sys.stderr,
         )
+        return 2
+    if not footer.tokenizer_available():
+        # Without the tokenizer no footer can be read; refuse rather than
+        # count every pull request as unsigned.
+        print(f"github_observer: {footer.INSTALL_HINT}", file=sys.stderr)
         return 2
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:

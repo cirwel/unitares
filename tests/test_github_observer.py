@@ -892,7 +892,6 @@ def test_an_earlier_attempt_on_a_replaced_head_is_still_read():
     [
         # A second comment opened after the first one closes, never closed.
         "<!-- note --> <!-- unclosed\nUNITARES agent: {other}",
-        "text <!-- a --> b <!-- c\n\nUNITARES agent: {other}\n",
         # A comment that closes and reopens on its own closing line.
         "<!--\nnote\n--> <!--\nUNITARES agent: {other}\n-->",
         # Collapsed or preformatted HTML.
@@ -1003,3 +1002,100 @@ def test_escaped_backtick_opens_no_code_span():
 
     body = f"---\nUNITARES agent: {_UUID_A}\n\nan escaped \\` and <!--\nUNITARES agent: {_UUID_B}\n-->\n"
     assert agent_uuid_from_body(body) == _UUID_A
+
+
+# Issue #3277: the footer is read with a CommonMark tokenizer (markdown-it-py)
+# and the stdlib HTML parser instead of a hand-written line scanner.
+
+
+def test_an_inline_comment_opener_never_closed_in_its_paragraph_is_text():
+    # The 2026-11-14 scanner held this hid the next paragraph. Under CommonMark
+    # an inline ``<!--`` must close inside its paragraph; this one does not, so
+    # it is literal text, and GitHub shows the later footer (see the
+    # rendered_bodies.json fixture).
+    body = f"UNITARES agent: {_UUID_A}\n\ntext <!-- a --> b <!-- c\n\nUNITARES agent: {_UUID_B}\n"
+    assert ev.agent_uuid_from_body(body) == _UUID_B
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Backticks are literal inside an HTML <pre> block, so `</pre>` closes it.
+        f"<pre>\nlog `</pre>` tail\n\n---\nUNITARES agent: {_UUID_A}\n",
+        f"---\nUNITARES agent: {_UUID_A}\n\n<pre>\nx ` y\nUNITARES agent: {_UUID_B}\n</pre>\n",
+        # Backslash escapes count by parity: \\ is a literal backslash, and the
+        # backtick after it opens a real code span.
+        f"Write \\\\`<!--` literally.\n\n---\nUNITARES agent: {_UUID_A}\n",
+        f"---\nUNITARES agent: {_UUID_A}\n\nWrite \\\\`x\nUNITARES agent: {_UUID_B}\nx` here\n",
+        f"---\nUNITARES agent: {_UUID_A}\n\nan escaped \\\\\\` and <!--\nUNITARES agent: {_UUID_B}\n-->\n",
+    ],
+)
+def test_pre_backticks_and_backslash_parity_follow_commonmark(body):
+    assert ev.agent_uuid_from_body(body) == _UUID_A
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        "~~UNITARES agent: {b}~~",  # struck through
+        "[link\nUNITARES agent: {b}\n](https://example.com)",  # link text
+        "<details/>\n\nUNITARES agent: {b}",  # the slash does not close it
+        "<details open>\n<summary>s</summary>\n\nUNITARES agent: {b}\n\n</details>",
+        "<textarea>\n\nUNITARES agent: {b}",  # tagfilter: literal text, not a paragraph
+    ],
+)
+def test_a_footer_that_is_not_a_plain_paragraph_line_names_nobody(hidden):
+    body = f"---\nUNITARES agent: {_UUID_A}\n\n" + hidden.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == _UUID_A
+
+
+def test_the_end_of_a_quote_closes_a_details_opened_in_it():
+    body = f"UNITARES agent: {_UUID_A}\n\n> <details>\n\nUNITARES agent: {_UUID_B}\n"
+    assert ev.agent_uuid_from_body(body) == _UUID_B
+
+
+def test_a_line_break_ends_a_footer_line():
+    body = f"UNITARES agent: {_UUID_A}  \nUNITARES agent: {_UUID_B}<br>more\n"
+    assert ev.agent_uuid_from_body(body) == _UUID_B
+
+
+def _github_pick(html: str) -> str | None:
+    from agents.github_observer import footer
+
+    parser = footer._VisibleLines()
+    parser.feed(html)
+    parser.close()
+    found = None
+    for line in parser.lines:
+        match = ev._FOOTER_RE.fullmatch(line.strip(" \t"))
+        if match:
+            found = match.group("uuid").lower()
+    return found
+
+
+_RENDERED = json.loads((FIXTURES / "rendered_bodies.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", _RENDERED, ids=[str(i) for i in range(len(_RENDERED))])
+def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
+    # The HTML is GitHub's: comments stripped, <pre> annotated, soft breaks
+    # turned into <br>. Reading the footer from it and from the Markdown
+    # source must give the same answer.
+    assert ev.agent_uuid_from_body(case["body"]) == _github_pick(case["github_html"])
+
+
+def test_the_rendered_fixture_covers_every_case_the_old_scanner_got_wrong():
+    bodies = {case["body"] for case in _RENDERED}
+    assert f"<pre>\nlog `</pre>` tail\n\n---\nUNITARES agent: {_UUID_A}\n" in bodies
+    assert f"Write \\\\`<!--` literally.\n\n---\nUNITARES agent: {_UUID_A}\n" in bodies
+
+
+def test_without_the_tokenizer_the_footer_is_refused_not_guessed(monkeypatch, capsys):
+    from agents.github_observer import footer
+
+    monkeypatch.setattr(footer, "MarkdownIt", None)
+    with pytest.raises(footer.MissingTokenizer):
+        ev.agent_uuid_from_body(f"UNITARES agent: {_UUID_A}")
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    assert obs.main(["--repo", REPO, "--dry-run"]) == 2
+    assert "markdown-it-py" in capsys.readouterr().err
