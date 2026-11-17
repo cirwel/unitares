@@ -323,6 +323,96 @@ def compute_sensor_drift_input(
     return record
 
 
+DROP_CONTINUITY_E_BLEND_ENV = "UNITARES_DROP_CONTINUITY_E_BLEND"
+DROP_CONTINUITY_E_BLEND_MODE = "drop_continuity_e_blend_v1"
+
+DROP_UNIQUE_TOOLS_I_BLEND_ENV = "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND"
+DROP_UNIQUE_TOOLS_I_BLEND_MODE = "drop_unique_tools_i_blend_v1"
+
+ACTOR_WORK_TOOL_STATS_ENV = "UNITARES_ACTOR_WORK_TOOL_STATS"
+ACTOR_WORK_TOOL_STATS_MODE = "db_actor_work_tools_v1"
+
+
+def drop_continuity_e_blend_enabled() -> bool:
+    """Return True when ``continuity_E_input`` is dropped from behavioral E.
+
+    Controlled by ``UNITARES_DROP_CONTINUITY_E_BLEND`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to omit the ``continuity_E_input`` 0.20 post-base
+    blend unconditionally across both clipped and unclipped continuity regimes,
+    avoiding clip-threshold discontinuities while keeping continuity telemetry
+    intact).
+    """
+    raw = os.environ.get("UNITARES_DROP_CONTINUITY_E_BLEND", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def drop_unique_tools_i_blend_enabled() -> bool:
+    """Return True when ``unique_tools_ratio`` is dropped from behavioral I.
+
+    Controlled by ``UNITARES_DROP_UNIQUE_TOOLS_I_BLEND`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to omit the ``unique_tools_ratio`` 0.10 post-base
+    blend unconditionally, removing volume confounding and specialist penalties
+    while keeping diagnostic tool-diversity inputs in telemetry).
+    """
+    raw = os.environ.get("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def actor_work_tool_stats_enabled() -> bool:
+    """Return True when behavioral tool stats read clean actor DB work tools.
+
+    Controlled by ``UNITARES_ACTOR_WORK_TOOL_STATS`` (default OFF; set to
+    ``1``/``true``/``yes``/``on`` to read ``audit.tool_usage`` work-tool stats
+    via ``get_behavioral_work_tool_stats_async`` instead of the REST/stdio
+    ``ToolUsageTracker`` JSONL file).
+    """
+    raw = os.environ.get("UNITARES_ACTOR_WORK_TOOL_STATS", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _safe_nonneg_int(value: Any) -> int | None:
+    """Parse a finite non-boolean non-negative integer, or return None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0, parsed)
+
+
+def extract_tool_usage_counts(stats: Mapping | None) -> tuple[int, int]:
+    """Return ``(total_calls, error_count)`` from DB or JSONL tool-stats mappings."""
+    if not isinstance(stats, Mapping):
+        return 0, 0
+    total_calls = _safe_nonneg_int(stats.get("total_calls", 0))
+    if not total_calls:
+        return 0, 0
+
+    tools = stats.get("tools")
+    failed = 0
+    parsed_any_tool = False
+    if isinstance(tools, Mapping) and tools:
+        for entry in tools.values():
+            if not isinstance(entry, Mapping):
+                continue
+            err = _safe_nonneg_int(entry.get("error_count"))
+            if err is not None:
+                failed += err
+                parsed_any_tool = True
+                continue
+            ok = _safe_nonneg_int(entry.get("success_count"))
+            entry_total = _safe_nonneg_int(entry.get("total_calls"))
+            if ok is not None and entry_total is not None:
+                failed += max(0, entry_total - ok)
+                parsed_any_tool = True
+
+    if not parsed_any_tool:
+        top_failed = _safe_nonneg_int(stats.get("error_count", 0))
+        failed = top_failed if top_failed is not None else 0
+    return total_calls, max(0, min(total_calls, failed))
+
+
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
 LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
 LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
@@ -378,6 +468,8 @@ def compute_behavioral_sensor_eisv(
     calibration_free_i: bool = False,
     per_agent_i_calibration: bool | None = None,
     agent_calibration_channel: Mapping | None = None,
+    drop_continuity_e_blend: bool | None = None,
+    drop_unique_tools_i_blend: bool | None = None,
 ) -> dict | None:
     """Compute the deployed mixed-provenance EISV observation.
 
@@ -406,6 +498,8 @@ def compute_behavioral_sensor_eisv(
         calibration_free_i=calibration_free_i,
         per_agent_i_calibration=per_agent_i_calibration,
         agent_calibration_channel=agent_calibration_channel,
+        drop_continuity_e_blend=drop_continuity_e_blend,
+        drop_unique_tools_i_blend=drop_unique_tools_i_blend,
     )
     if components is None:
         return None
@@ -439,6 +533,8 @@ def compute_behavioral_sensor_components(
     calibration_free_i: bool = False,
     per_agent_i_calibration: bool | None = None,
     agent_calibration_channel: Mapping | None = None,
+    drop_continuity_e_blend: bool | None = None,
+    drop_unique_tools_i_blend: bool | None = None,
 ) -> dict | None:
     """Explain the exact deployed behavioral observation without changing it.
 
@@ -460,6 +556,16 @@ def compute_behavioral_sensor_components(
         per_agent_i_calibration_enabled()
         if per_agent_i_calibration is None
         else bool(per_agent_i_calibration)
+    )
+    active_drop_continuity_e = (
+        drop_continuity_e_blend_enabled()
+        if drop_continuity_e_blend is None
+        else bool(drop_continuity_e_blend)
+    )
+    active_drop_unique_tools_i = (
+        drop_unique_tools_i_blend_enabled()
+        if drop_unique_tools_i_blend is None
+        else bool(drop_unique_tools_i_blend)
     )
 
     dimensions = {
@@ -514,7 +620,7 @@ def compute_behavioral_sensor_components(
         record["value"] = after
 
     # Preserve the deployed adjustment order exactly.
-    if continuity_E_input is not None:
+    if continuity_E_input is not None and not active_drop_continuity_e:
         blend("E", "continuity_E_input", "response_structure", continuity_E_input, 0.20)
     if continuity_I_input is not None:
         blend("I", "continuity_I_input", "response_structure", continuity_I_input, 0.20)
@@ -536,7 +642,7 @@ def compute_behavioral_sensor_components(
             "observed": True,
         })
         dimensions["S"]["value"] = after
-    if unique_tools_ratio is not None:
+    if unique_tools_ratio is not None and not active_drop_unique_tools_i:
         blend("I", "unique_tools_ratio", "tool_audit", unique_tools_ratio, 0.10)
 
     return {

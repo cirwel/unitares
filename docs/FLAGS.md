@@ -38,6 +38,7 @@ additions merge cleanly. -->
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD` | `''` | Which rows this deployment writes: ``all`` (default), ``firings``, ``off`` | src/verification_floor_shadow.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
+| `UNITARES_ACTOR_WORK_TOOL_STATS` | `'0'` | Return True when behavioral tool stats read clean actor DB work tools | src/behavioral_sensor.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
@@ -104,6 +105,8 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
+| `UNITARES_DROP_CONTINUITY_E_BLEND` | `'0'` | Return True when ``continuity_E_input`` is dropped from behavioral E | src/behavioral_sensor.py |
+| `UNITARES_DROP_UNIQUE_TOOLS_I_BLEND` | `'0'` | Return True when ``unique_tools_ratio`` is dropped from behavioral I | src/behavioral_sensor.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:249, agents/vigil/agent.py) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |

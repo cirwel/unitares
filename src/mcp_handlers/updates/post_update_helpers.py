@@ -473,16 +473,21 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
             baseline.update("coherence", ctx.coherence)
         # Tool usage signals
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            _tu = get_tool_usage_tracker().get_usage_stats(
-                agent_id=agent_id, window_hours=1,
+            from src.behavioral_sensor import (
+                actor_work_tool_stats_enabled,
+                extract_tool_usage_counts,
             )
-            _tu_total = _tu.get("total_calls", 0)
-            if _tu_total > 0:
-                _tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in _tu.get("tools", {}).values()
+
+            if actor_work_tool_stats_enabled():
+                _tu = (ctx.agent_state or {}).get("_actor_work_tool_stats") or {}
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
+
+                _tu = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=agent_id, window_hours=1,
                 )
+            _tu_total, _tu_failed = extract_tool_usage_counts(_tu)
+            if _tu_total > 0:
                 baseline.update("tool_error_rate", _tu_failed / _tu_total)
                 baseline.update("tool_call_velocity", _tu_total / 60.0)
         except Exception:

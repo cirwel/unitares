@@ -145,9 +145,11 @@ from src.monitor_metrics import (
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
 from src.behavioral_sensor import (
+    actor_work_tool_stats_enabled,
     compute_behavioral_sensor_components,
     compute_behavioral_sensor_eisv,
     compute_sensor_drift_input,
+    extract_tool_usage_counts,
     hold_unread,
     hold_unread_axes_enabled,
     populate_behavioral_sensor_state,
@@ -1262,16 +1264,16 @@ class UNITARESMonitor:
         # Extract tool usage stats for complexity grounding
         tu_stats = None
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            raw_stats = get_tool_usage_tracker().get_usage_stats(
-                agent_id=self.agent_id, window_hours=1,
-            )
-            tu_total = raw_stats.get("total_calls", 0)
-            if tu_total > 0:
-                tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in raw_stats.get("tools", {}).values()
+            if actor_work_tool_stats_enabled():
+                raw_stats = agent_state.get("_actor_work_tool_stats") or {}
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
+
+                raw_stats = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=self.agent_id, window_hours=1,
                 )
+            tu_total, tu_failed = extract_tool_usage_counts(raw_stats)
+            if tu_total > 0:
                 tu_stats = {
                     "unique_tools": raw_stats.get("unique_tools", 0),
                     "total_calls": tu_total,
@@ -1528,7 +1530,12 @@ class UNITARESMonitor:
         if confidence is None:
             confidence, confidence_metadata = derive_confidence(
                 self.state,
-                agent_id=self.agent_id
+                agent_id=self.agent_id,
+                tool_usage_stats=(
+                    agent_state.get("_actor_work_tool_stats")
+                    if actor_work_tool_stats_enabled()
+                    else None
+                ),
             )
         else:
             confidence = float(confidence)
