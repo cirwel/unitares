@@ -88,12 +88,21 @@ confidence-against-outcome record has enough graded samples), with the
 behavioral signal telemetry-only.
 
 **Withholding boundary under default `HU1` + `SD1`.** Because agent-local drift
-(`UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1`) emits no drift reading unless the agent
-supplies complexity divergence or has 10+ fresh verified calibration pairs, and
-unread axes are held (`UNITARES_HOLD_UNREAD_AXES=1`), an agent that repeatedly
-checks in while withholding complexity, outcomes, and verified calibration pairs
-leaves every behavioral axis unread. On check-ins 1–5 the Φ cold-start prior
-decides; from check-in 6 onward, rather than letting the Φ prior decide
+(`UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1`) emits no drift reading without an
+observed `complexity_divergence` or 10+ fresh verified calibration pairs, and
+unread axes are held (`UNITARES_HOLD_UNREAD_AXES=1`), check-ins that carry no
+sensor-observed base input leave every behavioral axis unread (`E`/`S` receive
+no `complexity_divergence`, no `>= 3` non-echo outcomes exist for `E`/`I`, and no
+recent admissible per-agent calibration exists for `I`/`S`; similarly if every
+previously read axis goes stale after 10 check-ins without a reading). Note that
+omitting self-reported `complexity` on repeated authored MCP check-ins does
+*not* by itself leave axes unread: `ContinuityLayer.process_update()` supplies
+rate-of-change `complexity_divergence` from derived complexity (`E` and `S`
+record readings, reaching confidence `0.3` and `behavioral_assessment` at
+check-in 6), unless `should_exclude_template_divergence` excludes it on
+automatic or degenerate check-ins or the caller bypasses continuity metrics.
+When all axes remain unread (or go stale), check-ins 1–5 are decided by the Φ
+cold-start prior; from check-in 6 onward, rather than letting the Φ prior decide
 indefinitely, `reading_insufficient` draws **no verdict** (`verdict="safe"`,
 `risk_score=0.0`, `driver="insufficient_reading"`, graded `provisional`), and no
 EISV safety floor fires on unscored axes. An agent cannot use omission to earn a
