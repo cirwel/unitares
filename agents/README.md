@@ -22,6 +22,7 @@ governance database directly, or receive a privileged measurement path.
 | `vigil/`    | Reference **janitorial** resident — runs on a schedule, posts health findings. |
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
 | `chronicler/` | Reference **archive** resident — daily external-source capture.            |
+| `github_observer/` | Optional **observer**, not a resident: reads CI results, review records and state changes on agent-signed pull requests from GitHub. Dry run only until its write route lands (`docs/proposals/active/github-outcome-observer-v0.md`). |
 | `watcher/`  | Reference **code-watcher** resident — wired into Claude Code's PostToolUse hook. |
 | `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin (`scripts/dev/sync-plugin-agents.sh`); see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
 

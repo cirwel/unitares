@@ -2151,12 +2151,12 @@ async def _handle_promote_memory_claim(
     attributable same-object persistence, not correctness or approval.
     """
     from ..support.agent_auth import verify_agent_ownership
-    from ..utils import check_agent_can_operate
+    from ..utils import check_agent_can_operate_async
 
     agent_id, error = require_registered_agent(arguments)
     if error:
         return [error]
-    blocked = check_agent_can_operate(agent_id)
+    blocked = await check_agent_can_operate_async(agent_id)
     if blocked:
         return [blocked]
     if not verify_agent_ownership(agent_id, arguments):
