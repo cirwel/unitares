@@ -95,13 +95,16 @@ sensor-observed base input leave every behavioral axis unread (`E`/`S` receive
 no `complexity_divergence`, no `>= 3` non-echo outcomes exist for `E`/`I`, and no
 recent admissible per-agent calibration exists for `I`/`S`; similarly if every
 previously read axis goes stale after 10 check-ins without a reading). Note that
-omitting self-reported `complexity` on repeated authored MCP check-ins does
-*not* by itself leave axes unread: `ContinuityLayer.process_update()` supplies
-rate-of-change `complexity_divergence` from derived complexity (`E` and `S`
-record readings, reaching confidence `0.3` and `behavioral_assessment` at
-check-in 6), unless `should_exclude_template_divergence` excludes it on
-degenerate automatic/rollup check-ins (when both `continuity_degenerate` and
-`is_automatic_or_rollup_checkin` hold) or the caller bypasses continuity metrics.
+omitting `complexity` on repeated authored check-ins does *not* by itself leave
+axes unread: the MCP handler coerces missing or `None` `complexity` to `0.5`
+so `ContinuityLayer.process_update()` measures `|derived_complexity - 0.5|`
+(and when `self_complexity` is `None` on a direct monitor call, it supplies
+`0.2` initially and derived rate-of-change divergence thereafter), so `E` and
+`S` still record readings and reach confidence `0.3` (`behavioral_assessment`)
+at check-in 6 unless `should_exclude_template_divergence` excludes
+`complexity_divergence` on degenerate automatic/rollup check-ins (when both
+`continuity_degenerate` and `is_automatic_or_rollup_checkin` hold) or the
+caller bypasses continuity metrics.
 When all axes remain unread (or go stale), check-ins 1–5 are decided by the Φ
 cold-start prior; from check-in 6 onward, rather than letting the Φ prior decide
 indefinitely, `reading_insufficient` draws **no verdict** (`verdict="safe"`,
