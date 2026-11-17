@@ -67,13 +67,13 @@ def _agent_local_on(monkeypatch):
     monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
 
 
-def test_the_agent_local_input_ships_off(monkeypatch):
-    """A routine deploy must not start era SD1: the default passes the full norm."""
+def test_the_agent_local_input_is_on_by_default(monkeypatch):
+    """Era SD1 is active by default: drift input keeps only agent-local parts."""
     monkeypatch.delenv(SENSOR_DRIFT_AGENT_LOCAL_ENV, raising=False)
-    assert sensor_drift_agent_local_enabled() is False
+    assert sensor_drift_agent_local_enabled() is True
     record = compute_sensor_drift_input(FROZEN, complexity_divergence_observed=False)
-    assert record["mode"] == "full_norm"
-    assert record["value"] == pytest.approx(FROZEN.norm)
+    assert record["mode"] == "agent_local_v1"
+    assert record["value"] is None
 
 
 def test_the_frozen_vector_reproduces_the_live_constant():

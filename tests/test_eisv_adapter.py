@@ -16,7 +16,7 @@ from src.eisv import adapter
 
 @pytest.fixture
 def edges(monkeypatch):
-    from src import agent_lifecycle, agent_monitor_state
+    from src import agent_lifecycle, agent_monitor_state, audit_db
 
     events = []
     result = {"decision": {"action": "pause"}, "metrics": {"E": 0.6}}
@@ -25,13 +25,15 @@ def edges(monkeypatch):
     ))
     get_monitor = Mock(side_effect=lambda *a: events.append("monitor") or monitor)
     hydrate = AsyncMock(side_effect=lambda *a: events.append("hydrate"))
+    ensure_tool_stats = AsyncMock()
     metric = Mock()
     monkeypatch.setattr(agent_lifecycle, "get_or_create_monitor", get_monitor)
     monkeypatch.setattr(agent_monitor_state, "hydrate_from_db_if_fresh", hydrate)
+    monkeypatch.setattr(audit_db, "ensure_actor_work_tool_stats_async", ensure_tool_stats)
     monkeypatch.setattr(adapter, "_perf_record_ms", metric)
     return SimpleNamespace(
         events=events, result=result, monitor=monitor, get_monitor=get_monitor,
-        hydrate=hydrate, metric=metric,
+        hydrate=hydrate, ensure_tool_stats=ensure_tool_stats, metric=metric,
     )
 
 
@@ -65,6 +67,7 @@ async def test_original_mapping_result_monitor_and_history_semantics(edges, hist
     assert edges.events == ["monitor", "hydrate", "update"]
     edges.get_monitor.assert_called_once_with("agent")
     edges.hydrate.assert_awaited_once_with(edges.monitor, "agent")
+    edges.ensure_tool_stats.assert_awaited_once_with("agent", state)
     args, kwargs = edges.monitor.process_update.call_args
     assert args[0] is state
     assert kwargs == {"confidence": 0.7, "task_type": "mixed"}

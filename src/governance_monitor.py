@@ -1629,8 +1629,8 @@ class UNITARESMonitor:
             )
 
         # ── Insufficient reading: no verdict (hold only) ──
-        # Past cold start by check-in count, yet too little was read for the
-        # behavioral state to hold authority. The Phi result above is the
+        # Past the point where a fully supplying agent would hold authority,
+        # yet too little was read for this one to. The Phi result above is the
         # cold-start prior and stays telemetry here; no verdict is drawn, so
         # the agent proceeds unscored. The verification floor below still
         # applies because it does not depend on these readings.
