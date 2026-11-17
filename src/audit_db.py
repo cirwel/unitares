@@ -10,7 +10,10 @@ PostgreSQL audit.events table provides indexed querying.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 from typing import Any, Dict, List, Optional
+
+from src.tool_call_sets import call_set
 
 
 # ``audit.tool_usage`` is one table holding two incompatible eras, and nothing
@@ -384,3 +387,232 @@ async def fetch_timeline_audit_events(
         """,
         start, agent_id, event_types, match_parent, limit,
     )
+
+
+# Tools that represent polling, discovery, session ceremony, preview, or
+# self-referential governance checks rather than an actor's external work.
+# Actor action/reporting tools (knowledge, dialectic, consult, outcome_event,
+# observe, agent) remain included. Declared via call_set() so canonical names
+# are registry-validated, and expanded with un-injected aliases + REMOVED_TOOLS
+# when querying historical rows.
+BEHAVIORAL_EXCLUDED_META_TOOL_SET = call_set(
+    "audit.behavioral_excluded_meta_tools",
+    tools={
+        "process_agent_update",
+        "get_governance_metrics",
+        "identity",
+        "onboard",
+        "list_tools",
+        "describe_tool",
+        "health_check",
+        "bind_session",
+        "mark_response_complete",
+        "simulate_update",
+        "get_workspace_health",
+    },
+)
+
+
+def _behavioral_excluded_tool_names() -> frozenset[str]:
+    """Return canonical meta-tool exclusions plus their un-injected aliases and removed tools."""
+    from src.mcp_handlers.tool_stability import list_all_aliases
+    from src.tool_usage_tracker import ToolUsageTracker
+
+    excluded = set(BEHAVIORAL_EXCLUDED_META_TOOL_SET.tools)
+    excluded.update(ToolUsageTracker.REMOVED_TOOLS)
+    for alias, target in list_all_aliases().items():
+        if (
+            target.new_name in BEHAVIORAL_EXCLUDED_META_TOOL_SET.tools
+            and target.inject_action is None
+        ):
+            excluded.add(alias)
+    return frozenset(excluded)
+
+
+# Structured error types that must not count as actor tool failures.
+# Note: live `classify_tool_result` converts `error_category="state_error"`
+# (AGENT_PAUSED / AGENT_ARCHIVED gate refusals) into `(True, None)` at write
+# time, so `audit.tool_usage` carries no read-time marker for gate refusals.
+# Uncaught exceptions raised before payload construction record
+# `error_type = type(e).__name__` on REST//mcp/ (filtered via
+# BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN) or `"execution_error"` /
+# `"handler_registry_unavailable"` on stdio (listed below).
+BEHAVIORAL_NON_AGENT_ERROR_TYPES = frozenset({
+    "system_error",
+    "governance_refusal",
+    "execution_error",
+    "handler_registry_unavailable",
+})
+BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN = r"^[A-Z][A-Za-z0-9]*(Error|Exception)$"
+
+EMPTY_ACTOR_WORK_TOOL_STATS: Dict[str, Any] = {
+    "total_calls": 0,
+    "unique_tools": 0,
+    "error_count": 0,
+    "tools": {},
+    "source": "db_actor_work_tools",
+    "available": True,
+    "status": "no_work_tool_calls",
+}
+
+
+def unavailable_actor_work_tool_stats(reason: str) -> Dict[str, Any]:
+    """Return an explicit unavailable marker distinct from a 0-call period."""
+    return {
+        "total_calls": 0,
+        "unique_tools": 0,
+        "error_count": 0,
+        "tools": {},
+        "source": "db_actor_work_tools_unavailable",
+        "available": False,
+        "status": reason,
+    }
+
+
+async def get_behavioral_work_tool_stats_async(
+    *,
+    agent_id: str,
+    window_hours: float = 1.0,
+) -> Optional[Dict[str, Any]]:
+    """Aggregate an actor's recent non-meta work-tool usage from ``audit.tool_usage``.
+
+    Reads directly from PostgreSQL (which receives both ``/mcp`` and REST calls)
+    using the indexed ``(agent_id, ts)`` lookup, excluding lease heartbeats,
+    removed legacy names, governance/discovery/ceremony meta-tools, structured
+    non-agent errors (``system_error``, ``governance_refusal``,
+    ``execution_error``, ``handler_registry_unavailable``), and uncaught
+    exception class names (``BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN``), without
+    falling back to the REST/stdio-only JSONL tracker.
+    """
+    if not agent_id or isinstance(window_hours, bool):
+        return None
+    try:
+        hours_val = float(window_hours)
+        if not math.isfinite(hours_val) or hours_val <= 0:
+            return None
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_val)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    from src.db import get_db
+
+    db = get_db()
+    if db is None:
+        return None
+    if not hasattr(db, "_pool") or db._pool is None:
+        await db.init()
+
+    excluded_tools = sorted(_behavioral_excluded_tool_names())
+    excluded_errors = sorted(BEHAVIORAL_NON_AGENT_ERROR_TYPES)
+
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) AS eff_tool,
+                COUNT(*) AS total_calls,
+                COUNT(*) FILTER (WHERE success IS TRUE) AS success_count
+            FROM audit.tool_usage
+            WHERE agent_id = $1
+              AND ts >= $2
+              AND payload->>'actor_source' = 'caller_bound'
+              AND tool_name NOT LIKE 'lease.%'
+              AND COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) IS NOT NULL
+              AND COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) <> ''
+              AND COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name) != ALL($3::text[])
+              AND (
+                  success IS TRUE
+                  OR (
+                      COALESCE(error_type, '') != ALL($4::text[])
+                      AND COALESCE(error_type, '') !~ $5
+                  )
+              )
+            GROUP BY 1
+            ORDER BY total_calls DESC, eff_tool ASC
+            """,
+            agent_id,
+            cutoff,
+            excluded_tools,
+            excluded_errors,
+            BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN,
+        )
+
+    tool_stats: Dict[str, Any] = {}
+    total_calls = 0
+    total_success = 0
+    for row in rows:
+        name = row["eff_tool"]
+        if not name:
+            continue
+        calls = int(row["total_calls"])
+        ok = int(row["success_count"])
+        if calls <= 0:
+            continue
+        total_calls += calls
+        total_success += ok
+        tool_stats[name] = {
+            "total_calls": calls,
+            "success_count": ok,
+            "error_count": calls - ok,
+            "success_rate": ok / calls,
+        }
+
+    if total_calls == 0:
+        return {
+            **EMPTY_ACTOR_WORK_TOOL_STATS,
+            "tools": {},
+            "window_hours": float(window_hours),
+        }
+
+    for entry in tool_stats.values():
+        entry["percentage_of_total"] = entry["total_calls"] / total_calls * 100.0
+
+    failed_calls = total_calls - total_success
+    return {
+        "total_calls": total_calls,
+        "unique_tools": len(tool_stats),
+        "error_count": failed_calls,
+        "error_rate": failed_calls / total_calls,
+        "calls_per_minute": total_calls / (float(window_hours) * 60.0),
+        "unique_tools_ratio": len(tool_stats) / total_calls,
+        "window_hours": float(window_hours),
+        "tools": tool_stats,
+        "source": "db_actor_work_tools",
+        "available": True,
+        "status": "ok",
+    }
+
+
+async def ensure_actor_work_tool_stats_async(
+    agent_id: Optional[str],
+    agent_state: Optional[Dict[str, Any]],
+    *,
+    window_hours: float = 1.0,
+) -> Dict[str, Any]:
+    """Populate ``agent_state['_actor_work_tool_stats']`` once when missing."""
+    if isinstance(agent_state, dict) and isinstance(
+        agent_state.get("_actor_work_tool_stats"), dict
+    ):
+        return agent_state["_actor_work_tool_stats"]
+
+    if not agent_id:
+        resolved = unavailable_actor_work_tool_stats("no_agent_id")
+    elif agent_id == "_simulation_temp_":
+        resolved = unavailable_actor_work_tool_stats("simulation_temp")
+    else:
+        try:
+            fetched = await get_behavioral_work_tool_stats_async(
+                agent_id=agent_id, window_hours=window_hours
+            )
+            if isinstance(fetched, dict):
+                resolved = fetched
+            else:
+                resolved = unavailable_actor_work_tool_stats("db_unavailable")
+        except Exception as exc:
+            resolved = unavailable_actor_work_tool_stats(
+                f"query_error:{type(exc).__name__}"
+            )
+
+    if isinstance(agent_state, dict):
+        agent_state["_actor_work_tool_stats"] = resolved
+    return resolved

@@ -137,7 +137,8 @@ def derive_confidence(
     agent_id: str = None,
     apply_calibration: bool = True,
     response_text: str = None,
-    reported_complexity: float = 0.5
+    reported_complexity: float = 0.5,
+    tool_usage_stats: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Derive confidence by OBSERVING what already happened - not asking for reports.
@@ -145,6 +146,10 @@ def derive_confidence(
     The system already tracks tool outcomes. It just needs to look instead of
     pretending it can't see. This version pulls from existing trackers.
     """
+    from src.behavioral_sensor import (
+        actor_work_tool_stats_enabled,
+        extract_tool_usage_counts,
+    )
     from src.tool_usage_tracker import get_tool_usage_tracker
     
     metadata = {
@@ -155,26 +160,26 @@ def derive_confidence(
     # === OBSERVE TOOL OUTCOMES (system already knows this) ===
     tool_confidence = 0.5  # Default neutral
     
-    if agent_id:
+    if agent_id or tool_usage_stats is not None:
         try:
-            tracker = get_tool_usage_tracker()
-            # Look at recent tool calls for this agent (last hour)
-            stats = tracker.get_usage_stats(window_hours=1, agent_id=agent_id)
-            
-            if stats.get('total_calls', 0) > 0:
-                # Calculate success rate from what we already tracked
-                tools = stats.get('tools', {})
-                total_success = sum(t.get('success_count', 0) for t in tools.values())
-                total_calls = sum(t.get('total_calls', 0) for t in tools.values())
-                
-                if total_calls > 0:
-                    tool_confidence = total_success / total_calls
-                    metadata['tool_stats'] = {
-                        'total_calls': total_calls,
-                        'success_rate': tool_confidence,
-                        'window': '1h'
-                    }
-                    metadata['reliability'] = 'high' if total_calls >= 3 else 'medium'
+            if tool_usage_stats is not None:
+                stats = tool_usage_stats
+            elif actor_work_tool_stats_enabled():
+                stats = {}
+            else:
+                tracker = get_tool_usage_tracker()
+                # Look at recent tool calls for this agent (last hour)
+                stats = tracker.get_usage_stats(window_hours=1, agent_id=agent_id)
+
+            total_calls, total_failed = extract_tool_usage_counts(stats)
+            if total_calls > 0:
+                tool_confidence = (total_calls - total_failed) / total_calls
+                metadata['tool_stats'] = {
+                    'total_calls': total_calls,
+                    'success_rate': tool_confidence,
+                    'window': '1h'
+                }
+                metadata['reliability'] = 'high' if total_calls >= 3 else 'medium'
         except Exception as e:
             # If tracker unavailable, continue with EISV only
             metadata['tracker_error'] = str(e)

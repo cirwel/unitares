@@ -144,7 +144,16 @@ from src.monitor_metrics import (
 )
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
-from src.behavioral_sensor import compute_behavioral_sensor_eisv
+from src.behavioral_sensor import (
+    actor_work_tool_stats_enabled,
+    compute_behavioral_sensor_components,
+    compute_behavioral_sensor_eisv,
+    compute_sensor_drift_input,
+    extract_tool_usage_counts,
+    hold_unread,
+    hold_unread_axes_enabled,
+    populate_behavioral_sensor_state,
+)
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
     ODE_CONTROL_FEEDBACK_ROLE,
@@ -1255,16 +1264,16 @@ class UNITARESMonitor:
         # Extract tool usage stats for complexity grounding
         tu_stats = None
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            raw_stats = get_tool_usage_tracker().get_usage_stats(
-                agent_id=self.agent_id, window_hours=1,
-            )
-            tu_total = raw_stats.get("total_calls", 0)
-            if tu_total > 0:
-                tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in raw_stats.get("tools", {}).values()
+            if actor_work_tool_stats_enabled():
+                raw_stats = agent_state.get("_actor_work_tool_stats") or {}
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
+
+                raw_stats = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=self.agent_id, window_hours=1,
                 )
+            tu_total, tu_failed = extract_tool_usage_counts(raw_stats)
+            if tu_total > 0:
                 tu_stats = {
                     "unique_tools": raw_stats.get("unique_tools", 0),
                     "total_calls": tu_total,
@@ -1333,8 +1342,22 @@ class UNITARESMonitor:
         else:
             call_outcome_history = self._cached_outcome_history
 
+        upstream_sensor_ctx = agent_state.pop("_behavioral_sensor_context", None)
+        grounded_agent_state.pop("_behavioral_sensor_context", None)
+
         sensor_eisv = agent_state.get('sensor_eisv')
-        if sensor_eisv:
+        behavioral_reading = agent_state.get('_behavioral_reading')
+        if sensor_eisv and isinstance(behavioral_reading, dict):
+            # Behavioral sensor computed upstream (updates/phases.py). The
+            # reading carries None on an axis no base term was supplied for;
+            # BehavioralEISV.update holds that axis instead of smoothing a
+            # filled-in constant into it. sensor_eisv itself keeps the filled
+            # arithmetic for the legacy ODE anchor.
+            beh_E_obs = behavioral_reading.get('E')
+            beh_I_obs = behavioral_reading.get('I')
+            beh_S_obs = behavioral_reading.get('S')
+            beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
+        elif sensor_eisv:
             # Use externally supplied sensor EISV directly when available
             beh_E_obs = float(sensor_eisv.get('E', 0.5))
             beh_I_obs = float(sensor_eisv.get('I', 0.5))
@@ -1348,51 +1371,107 @@ class UNITARESMonitor:
                 response_text=response_text,
                 epistemic_class=agent_state.get('epistemic_class'),
             )
-            # Non-embodied agents: compute from behavioral_sensor
-            beh_sensor = compute_behavioral_sensor_eisv(
-                decision_history=self.state.decision_history,
-                coherence_history=self.state.coherence_history,
-                regime_history=self.state.regime_history,
-                E_history=self.state.E_history,
-                I_history=self.state.I_history,
-                S_history=self.state.S_history,
-                V_history=self.state.V_history,
-                calibration_error=getattr(drift_vector, 'calibration_deviation', None),
-                drift_norm=getattr(drift_vector, 'norm', None),
-                complexity_divergence=(
-                    None if exclude_template_div else continuity_metrics.complexity_divergence
-                ),
-                continuity_E_input=continuity_metrics.E_input,
-                continuity_I_input=(
-                    None if exclude_template_div else continuity_metrics.I_input
-                ),
-                continuity_S_input=(
-                    None if exclude_template_div else continuity_metrics.S_input
-                ),
-                outcome_history=call_outcome_history,
-                tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
-            )
+            used_upstream_ctx = isinstance(upstream_sensor_ctx, dict)
+            beh_sensor = None
+            if used_upstream_ctx:
+                try:
+                    beh_filled = populate_behavioral_sensor_state(
+                        agent_state,
+                        monitor_state=self.state,
+                        drift_vector=drift_vector,
+                        continuity_metrics=continuity_metrics,
+                        exclude_template_div=exclude_template_div,
+                        calibration_error=upstream_sensor_ctx.get("calibration_error"),
+                        calibration_signal=upstream_sensor_ctx.get("calibration_signal"),
+                        agent_calibration_channel=upstream_sensor_ctx.get(
+                            "agent_calibration_channel"
+                        ),
+                        outcome_history=call_outcome_history,
+                        tool_error_rate=upstream_sensor_ctx.get("tool_error_rate"),
+                        tool_call_velocity=upstream_sensor_ctx.get("tool_call_velocity"),
+                        unique_tools_ratio=upstream_sensor_ctx.get("unique_tools_ratio"),
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Post-restart behavioral sensor failed for %s: %s",
+                        self.agent_id,
+                        exc,
+                    )
+                    beh_filled = None
+                if beh_filled:
+                    grounded_agent_state["sensor_eisv"] = beh_filled
+                    grounded_agent_state["sensor_eisv_source"] = "behavioral"
+                    reading = agent_state.get("_behavioral_reading")
+                    beh_sensor = reading if isinstance(reading, dict) else beh_filled
+            else:
+                # Non-embodied agents: compute from behavioral_sensor
+                sensor_inputs = dict(
+                    decision_history=self.state.decision_history,
+                    coherence_history=self.state.coherence_history,
+                    regime_history=self.state.regime_history,
+                    E_history=self.state.E_history,
+                    I_history=self.state.I_history,
+                    S_history=self.state.S_history,
+                    V_history=self.state.V_history,
+                    calibration_error=getattr(drift_vector, 'calibration_deviation', None),
+                    # This path has no per-agent calibration channel, so with the
+                    # agent-local drift flag on only supplied complexity
+                    # divergence reaches the sensor's drift term.
+                    drift_norm=compute_sensor_drift_input(
+                        drift_vector,
+                        complexity_divergence_observed=(
+                            not exclude_template_div
+                            and continuity_metrics.complexity_divergence is not None
+                        ),
+                    )["value"],
+                    complexity_divergence=(
+                        None if exclude_template_div else continuity_metrics.complexity_divergence
+                    ),
+                    continuity_E_input=continuity_metrics.E_input,
+                    continuity_I_input=(
+                        None if exclude_template_div else continuity_metrics.I_input
+                    ),
+                    continuity_S_input=(
+                        None if exclude_template_div else continuity_metrics.S_input
+                    ),
+                    outcome_history=call_outcome_history,
+                    tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
+                )
+                beh_sensor = compute_behavioral_sensor_eisv(**sensor_inputs)
+                if beh_sensor:
+                    # Same hold as the upstream path: None on an axis no base
+                    # term was supplied for.
+                    beh_sensor = hold_unread(
+                        beh_sensor, compute_behavioral_sensor_components(**sensor_inputs)
+                    )
             if beh_sensor:
                 beh_E_obs = beh_sensor['E']
                 beh_I_obs = beh_sensor['I']
                 beh_S_obs = beh_sensor['S']
-                beh_obs_source = 'behavioral_sensor'
+                beh_obs_source = 'behavioral' if used_upstream_ctx else 'behavioral_sensor'
             else:
                 # Insufficient history — use continuity layer inputs as fallback.
                 # When template divergence is excluded (#2418), I_input and
                 # S_input are treated as absent and use the same 0.5 / 0.2
                 # missing-input defaults as None.
-                beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                beh_I_obs = (
+                # Under the hold these response-structure inputs are not
+                # readings (in the full formula they only adjust one), so all
+                # three axes are held until the sensor has history to read.
+                cont_E = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
+                cont_I = (
                     0.5
                     if exclude_template_div or continuity_metrics.I_input is None
                     else continuity_metrics.I_input
                 )
-                beh_S_obs = (
+                cont_S = (
                     0.2
                     if exclude_template_div or continuity_metrics.S_input is None
                     else continuity_metrics.S_input
                 )
+                if hold_unread_axes_enabled():
+                    beh_E_obs = beh_I_obs = beh_S_obs = None
+                else:
+                    beh_E_obs, beh_I_obs, beh_S_obs = cont_E, cont_I, cont_S
                 beh_obs_source = 'continuity_fallback'
                 # Replace any upstream attempted sensor trace with the fallback
                 # actually consumed. Telemetry failure must not alter intake.
@@ -1403,8 +1482,14 @@ class UNITARESMonitor:
                     agent_state['_eisv_derivation'] = build_continuity_fallback_derivation(
                         continuity_metrics,
                         template_divergence_excluded=exclude_template_div,
-                        computed={'E': beh_E_obs, 'I': beh_I_obs, 'S': beh_S_obs},
+                        # The record keeps the fallback arithmetic so it stays
+                        # replayable, as the sensor's record does; under the
+                        # hold the state above was handed no reading.
+                        computed={'E': cont_E, 'I': cont_I, 'S': cont_S},
                     )
+                    # False under the hold: the values above were computed
+                    # and recorded but not handed to the behavioral state.
+                    agent_state['_eisv_derivation']['consumed'] = beh_E_obs is not None
                 except Exception as exc:
                     logger.debug("Continuity fallback trace unavailable: %s", type(exc).__name__)
 
@@ -1445,7 +1530,12 @@ class UNITARESMonitor:
         if confidence is None:
             confidence, confidence_metadata = derive_confidence(
                 self.state,
-                agent_id=self.agent_id
+                agent_id=self.agent_id,
+                tool_usage_stats=(
+                    agent_state.get("_actor_work_tool_stats")
+                    if actor_work_tool_stats_enabled()
+                    else None
+                ),
             )
         else:
             confidence = float(confidence)
@@ -1538,6 +1628,23 @@ class UNITARESMonitor:
                 phi_telemetry=phi_telemetry_only(),
             )
 
+        # ── Insufficient reading: no verdict (hold only) ──
+        # Past the point where a fully supplying agent would hold authority,
+        # yet too little was read for this one to. The Phi result above is the
+        # cold-start prior and stays telemetry here; no verdict is drawn, so
+        # the agent proceeds unscored. The verification floor below still
+        # applies because it does not depend on these readings.
+        from src.cold_start_risk_confirmation import reading_insufficient
+        insufficient_reading = reading_insufficient(
+            hold_unread=self._behavioral_state.hold_unread,
+            behavioral_confidence=self._behavioral_state.confidence,
+            checkin_confidence=self._behavioral_state.checkin_confidence,
+            behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
+            phi_telemetry=phi_telemetry_only(),
+        )
+        if insufficient_reading:
+            unitares_verdict, risk_score = "safe", 0.0
+
         # ── Independent verification floor (escalate-only; default-off) ──
         # The verdict above is self-attested (ethical_drift/complexity/confidence).
         # A deterministic, self-report-INDEPENDENT read of *described* adverse
@@ -1627,6 +1734,7 @@ class UNITARESMonitor:
             behavioral_verdict=behavioral_assessment.verdict,
             behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
             phi_telemetry=phi_telemetry_only(),
+            insufficient_reading=insufficient_reading,
         )
         verification_override = None
         if (
@@ -1655,8 +1763,11 @@ class UNITARESMonitor:
             cirs_result=cirs_result,
             # Every risk_history entry is Φ-derived. When the behavioral
             # assessment owns the verdict, Φ is telemetry and must not move
-            # the action through the F2 fast-trip (contract row 52).
-            latest_risk_fast_trip=(verdict_source != "behavioral_assessment"),
+            # the action through the F2 fast-trip (contract row 52). The same
+            # holds when no verdict was drawn for want of readings.
+            latest_risk_fast_trip=(
+                verdict_source not in ("behavioral_assessment", "insufficient_reading")
+            ),
         )
 
         # Shadow-measure a two-sided recent behavioral-V deviation gate against
@@ -1792,7 +1903,10 @@ class UNITARESMonitor:
                 'void_active': void_active,
                 'unitares_verdict': unitares_verdict,
                 'gap_suppressed': gap_suppression_pending,
-                'beh_obs': [round(beh_E_obs, 4), round(beh_I_obs, 4), round(beh_S_obs, 4)],
+                'beh_obs': [
+                    None if obs is None else round(obs, 4)
+                    for obs in (beh_E_obs, beh_I_obs, beh_S_obs)
+                ],
                 'drift': {
                     'emotional': round(drift_vector.calibration_deviation, 4),
                     'epistemic': round(drift_vector.coherence_deviation, 4),
@@ -2119,6 +2233,10 @@ class UNITARESMonitor:
         # (the universal-threshold regime) is exactly what NOT to trust here.
         bs = self._behavioral_state
         if not bs.is_baselined:
+            return decision
+        # A "safe" from a state with no scored axis is no judgment at all
+        # (same bar as verdict authority in process_update).
+        if bs.confidence < 0.3:
             return decision
         if self._last_behavioral_verdict != 'safe':
             return decision

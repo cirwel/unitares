@@ -50,6 +50,18 @@ class AssessmentResult:
     # result is unchanged; see floor_breach_caution_*_enabled below.
     floor_breach_caution: Optional[Dict[str, Any]] = None
 
+    # Dimensions this assessment did not score because the behavioral state
+    # holds no recent reading for them (never read, or stale). Their risk
+    # components are 0 by construction, so a "safe" verdict says nothing about
+    # them. Empty when every dimension was scored.
+    unscored_axes: tuple = ()
+
+
+# WelfordStats.z_score returns 0.0 below this many samples.
+_MIN_BASELINE_SAMPLES = 5
+
+# Risk component -> the behavioral dimension it scores.
+_COMPONENT_DIMENSION = {"low_E": "E", "low_I": "I", "high_S": "S", "high_V": "V"}
 
 # Verdict thresholds
 RISK_SAFE_THRESHOLD = 0.35
@@ -281,6 +293,15 @@ def assess_behavioral_state(
     # Score components based on baseline status
     if state.is_baselined:
         components = _score_self_relative(state, rho, continuity_energy, ctx)
+        if state.tracks_readings:
+            # An axis seeded late (or restarted on restore) has too few
+            # baseline samples for a z-score, which would read as "no
+            # deviation". Until it has them, that axis is scored against the
+            # fixed thresholds, as a state without a baseline is.
+            fixed = _score_fixed_threshold(state, rho, continuity_energy, ctx)
+            for key, dimension in _COMPONENT_DIMENSION.items():
+                if getattr(state, f"_baseline_{dimension}").count < _MIN_BASELINE_SAMPLES:
+                    components[key] = fixed[key]
     else:
         components = _score_fixed_threshold(state, rho, continuity_energy, ctx)
 
@@ -289,9 +310,24 @@ def assess_behavioral_state(
     for key, value in floor_components.items():
         components[key] = max(components.get(key, 0.0), value)
 
+    # A dimension with no recent reading is not scored: its value is a
+    # placeholder or a stale hold, so neither its deviation nor its floor is
+    # evidence about this check-in. This is the last word on those components,
+    # after the floors above. With the hold off nothing is unscored.
+    unscored_axes = tuple(state.unscored_dimensions)
+    for key, dimension in _COMPONENT_DIMENSION.items():
+        if dimension in unscored_axes and key in components:
+            components[key] = 0.0
+
     # --- Trend bonus: improving E+I reduces risk slightly ---
     trend_bonus = 0.0
-    if state.update_count >= 5:
+    # A trend needs five points; under the hold that is five readings on
+    # each axis, not five check-ins.
+    trend_points = (
+        min(state.readings.get("E", 0), state.readings.get("I", 0))
+        if state.tracks_readings else state.update_count
+    )
+    if trend_points >= 5 and "E" not in unscored_axes and "I" not in unscored_axes:
         e_trend = state.trend("E")
         i_trend = state.trend("I")
         if e_trend > 0.005 and i_trend > 0.005:
@@ -362,6 +398,7 @@ def assess_behavioral_state(
         components={k: round(v, 4) for k, v in components.items()},
         guidance=guidance,
         floor_breach_caution=floor_breach_caution,
+        unscored_axes=unscored_axes,
     )
 
 
@@ -518,7 +555,13 @@ def _score_absolute_floors(state: BehavioralEISV) -> Dict[str, float]:
     if abs(state.V) > ABSOLUTE_V_CEILING:
         components["high_V"] = 0.20 * min(1.0, (abs(state.V) - ABSOLUTE_V_CEILING) / (1.0 - ABSOLUTE_V_CEILING))
 
-    return components
+    # A floor on a dimension with no recent reading is a floor on a placeholder
+    # or a stale hold, not a breach (see BehavioralEISV.is_scored).
+    return {
+        key: value
+        for key, value in components.items()
+        if state.is_scored(_COMPONENT_DIMENSION[key])
+    }
 
 
 def _generate_guidance(
@@ -541,7 +584,15 @@ def _generate_guidance(
     if top_value < 0.01:
         return None
 
-    if state.is_baselined:
+    dimension = _COMPONENT_DIMENSION.get(top_component)
+    # "Below your baseline" is only true of a component the baseline scored;
+    # an axis still short of baseline samples was scored on fixed thresholds.
+    baseline_scored = state.is_baselined and not (
+        state.tracks_readings
+        and dimension is not None
+        and getattr(state, f"_baseline_{dimension}").count < _MIN_BASELINE_SAMPLES
+    )
+    if baseline_scored:
         guidance_map = {
             "low_E": (
                 f"Energy below your baseline (E={state.E:.2f}, typical={state._baseline_E.mean:.2f}). "

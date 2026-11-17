@@ -1038,8 +1038,9 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     ),
     (
         re.compile(r"falls back to self-reported signals", re.IGNORECASE),
-        "corrected (PR #1235 inversion): the first two check-ins use the "
-        "cold-start prior; behavioral scoring owns later warmup stages",
+        "corrected (PR #1235 inversion): the cold-start check-ins (1–5 under "
+        "default HU1, 1–2 when hold is off) use the cold-start prior; "
+        "behavioral scoring owns later warmup stages once readings arrive",
     ),
     (
         re.compile(r"verdict[^.\n]{0,40}self-report(?:ed)?-driven", re.IGNORECASE),
@@ -1050,9 +1051,10 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
             r"(?:live (?:path|verdict)|warmup) uses fixed universal thresholds",
             re.IGNORECASE,
         ),
-        "conflation: check-ins 1–2 use the cold-start prior, check-ins 3–24 "
-        "use behavioral fixed thresholds, and self-relative scoring starts at "
-        "25 with the current constants (canonical wording in the registry)",
+        "conflation: under default HU1, check-ins 1–5 use the cold-start prior, "
+        "read check-ins 6–27 use behavioral fixed thresholds (or insufficient_reading "
+        "if unread), and self-relative scoring starts at check-in 28 (1–2 / 3–24 / 25 "
+        "when UNITARES_HOLD_UNREAD_AXES=0; canonical wording in the registry)",
     ),
     (
         re.compile(
@@ -1061,9 +1063,10 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
             r"cold-start",
             re.IGNORECASE | re.DOTALL,
         ),
-        "over-broad warmup claim: the cold-start prior owns only check-ins 1–2; "
-        "fixed-threshold behavioral scoring owns 3–24 and self-relative scoring "
-        "starts at 25 with the current constants",
+        "over-broad warmup claim: the cold-start prior owns check-ins 1–5 under "
+        "default HU1 (1–2 with hold off); fixed-threshold behavioral scoring owns "
+        "read check-ins 6–27 (3–24 with hold off) and self-relative scoring "
+        "starts at check-in 28 (25 with hold off)",
     ),
     (
         re.compile(

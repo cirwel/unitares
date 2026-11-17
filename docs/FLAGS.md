@@ -38,6 +38,7 @@ additions merge cleanly. -->
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD` | `''` | Which rows this deployment writes: ``all`` (default), ``firings``, ``off`` | src/verification_floor_shadow.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
+| `UNITARES_ACTOR_WORK_TOOL_STATS` | `'1'` | Return True when behavioral tool stats read clean actor DB work tools | src/behavioral_sensor.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
@@ -104,6 +105,8 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
+| `UNITARES_DROP_CONTINUITY_E_BLEND` | `'1'` | Return True when ``continuity_E_input`` is dropped from behavioral E | src/behavioral_sensor.py |
+| `UNITARES_DROP_UNIQUE_TOOLS_I_BLEND` | `'1'` | Return True when ``unique_tools_ratio`` is dropped from behavioral I | src/behavioral_sensor.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:249, agents/vigil/agent.py) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
@@ -118,6 +121,7 @@ additions merge cleanly. -->
 | `UNITARES_GATEWAY_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the gateway surface | src/mcp_listen_config.py |
+| `UNITARES_GITHUB_OBSERVER_STATE` | `None (no reader fallback)` | read by default_state_path() | agents/github_observer/observer.py |
 | `UNITARES_GOVERNANCE_HTTP` | `'http://localhost:8767'` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `None (no reader fallback)` | The governance MCP URL the reviewer connects to | src/dialectic_reviewer_config.py, agents/dialectic_reviewer/reviewer.py (+2 more) |
 | `UNITARES_GOVERNED_EFFECT_BINDING` | `None (no reader fallback)` | Return whether effect binding is enabled for this type; unset is off | src/http_routes/effects.py |
@@ -126,6 +130,7 @@ additions merge cleanly. -->
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
+| `UNITARES_HOLD_UNREAD_AXES` | `'1'` | Return True when an axis with no supplied base term is held, not filled | src/behavioral_sensor.py |
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
@@ -218,6 +223,7 @@ additions merge cleanly. -->
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SENSOR_COUPLING` | `None (no reader fallback)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
+| `UNITARES_SENSOR_DRIFT_AGENT_LOCAL` | `'1'` | Return True when the sensor's drift input keeps only agent-local parts | src/behavioral_sensor.py |
 | `UNITARES_SEQUENTIAL_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/sequential_calibration.py |
 | `UNITARES_SERVER_LOCK_FILE` | `'.mcp_server.lock'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
 | `UNITARES_SERVER_PID_FILE` | `'.mcp_server.pid'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |

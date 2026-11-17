@@ -428,7 +428,8 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     """True only while the verdict is owned by the cold-start prior.
 
     Narrower than a "provisional" verdict: that grade also covers a
-    behavioral reading that is not yet baselined (check-ins 3-24), which is a
+    behavioral reading that is not yet baselined (read check-ins 6–27 under default
+    `HU1`, or check-ins 3–24 when `UNITARES_HOLD_UNREAD_AXES=0`), which is a
     measurement of the agent, not the prior.
     """
     attribution = payload.get("risk_attribution")
@@ -440,7 +441,12 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     )
     driver = attribution.get("primary_driver")
     basis = _verdict_evidence(payload).get("basis")
-    if driver in {"behavioral_assessment", "independent_verification_floor"} or (
+    if driver in {
+        "behavioral_assessment",
+        "independent_verification_floor",
+        # Past cold start with too little read: the prior did not decide.
+        "insufficient_reading",
+    } or basis == "insufficient_reading" or (
         primary_source == "behavioral"
     ):
         return False
@@ -496,6 +502,11 @@ def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
         "phi_cold_start",
     }
     non_discriminative = discriminability.get("non_discriminative") is True
+    if driver == "insufficient_reading" or evidence.get("basis") == "insufficient_reading":
+        # No verdict was drawn; name that, not the placeholder vector's source.
+        # The compact formats drop risk_attribution, so the wrapped verdict's
+        # evidence basis is the other place the driver reaches this code.
+        return "provisional", "insufficient_reading"
     if grade == "provisional" or cold_start or non_discriminative:
         return "provisional", str(basis or "non_discriminative_cold_start")
 
@@ -1149,7 +1160,14 @@ def _verdict_caveat(
             None,
         )
     pointer = f" See {evidence_path} for provenance." if evidence_path else ""
-    if cold_start:
+    if evidence_basis == "insufficient_reading":
+        message = (
+            "No verdict was drawn: too few behavioral readings were supplied "
+            "to score anything. 'safe'/'proceed' means nothing was measured, "
+            "not a validated all-clear."
+        )
+        tail = ""
+    elif cold_start:
         message = (
             "Verdict is provisional: behavioral confidence is below the assessment "
             "threshold. 'safe'/'proceed' means no trouble detected under the "

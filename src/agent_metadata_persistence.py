@@ -139,6 +139,21 @@ def _metadata_from_agent_record(agent, now: str) -> AgentMetadata:
     )
 
 
+async def load_agent_lifecycle_from_postgres(agent_id: str) -> Optional[AgentMetadata]:
+    """Read detached lifecycle metadata without hydrating live process state.
+
+    The shared-memory pause gate needs durable status and pause details, not
+    display labels, trust tier, or a replacement of the live agent profile.
+    Registry errors propagate so that gate can refuse a write.
+    """
+    from src import agent_storage
+
+    agent = await agent_storage.get_agent(agent_id)
+    if agent is None or agent.status == "deleted":
+        return None
+    return _metadata_from_agent_record(agent, datetime.now(timezone.utc).isoformat())
+
+
 async def load_agent_metadata_from_postgres(agent_id: str) -> Optional[AgentMetadata]:
     """Read one agent's metadata from PostgreSQL, or None if it is not registered.
 
