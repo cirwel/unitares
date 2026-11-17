@@ -1092,6 +1092,9 @@ def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
         "<blockquote><table></blockquote>\n\nUNITARES agent: {b}",
         # &#10; is a newline character, not a line break: one rendered line.
         "example&#10;UNITARES agent: {b}&#10;suffix",
+        # HTML ends CDATA at the first >, so "suffix]]>" shows on the line.
+        "UNITARES agent: {b}<![CDATA[>suffix]]>",
+        "UNITARES agent: {b}\u2028x",  # a separator inside the line
     ],
 )
 def test_a_paragraph_inside_formatting_or_a_split_line_names_nobody(hidden):
@@ -1105,6 +1108,12 @@ def test_a_paragraph_inside_formatting_or_a_split_line_names_nobody(hidden):
         "UNITARES agent: {b}<!-- note -->",  # GitHub strips the comment
         "note <?pi?>\nUNITARES agent: {b}",
         "<div>\n\nUNITARES agent: {b}\n\n</div>",  # a plain container
+        "text <del>struck\n\nUNITARES agent: {b}",  # the paragraph end closes <del>
+        "<div><table>\n\nUNITARES agent: {b}\n\n</table></div>",  # moved out of the table
+        "<blockquote><td></blockquote>\n\nUNITARES agent: {b}",  # a stray <td> is ignored
+        # </table> closes the table with its cell, and then the quote can close.
+        "<blockquote><table><tr><td>x</table></blockquote>\n\nUNITARES agent: {b}",
+        "UNITARES agent: {b}\u2028",  # edge whitespace hides nothing
     ],
 )
 def test_a_comment_or_a_plain_container_does_not_hide_a_footer(visible):

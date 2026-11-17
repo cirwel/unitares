@@ -21,7 +21,13 @@ inside the line, where it stops a footer from matching.
 
 The paragraph itself counts only when every element around it is a plain
 container (``<div>`` or a list). Inside a quote, ``<details>``, ``<pre>``,
-code, a link, struck-through or other formatted text, it does not.
+code, a link, struck-through or other formatted text, it does not. Where
+GitHub's HTML differs from a naive reading of the tags, the walker follows
+GitHub: an inline element left open closes with its paragraph, a paragraph
+inside a table but outside its cells moves in front of the table, a table
+part outside any table is ignored, and an end tag does not reach past a
+table to close an element opened outside it. Every case is pinned against
+GitHub's own rendering in ``tests/fixtures/github_observer/rendered_bodies.json``.
 
 ``markdown-it-py`` is pure Python and ships in the ``observer`` extra, so the
 core install does not need it. Without it this module refuses to read a body
@@ -55,6 +61,18 @@ _SCOPE_BARRIERS = frozenset(
     {"applet", "caption", "html", "marquee", "object", "table", "td", "template", "th"}
 )
 _TABLE_PARTS = frozenset({"table", "caption", "tbody", "thead", "tfoot", "tr", "td", "th"})
+# Text and a paragraph may sit in these parts of a table; elsewhere in a table
+# a paragraph is moved out in front of it (HTML's foster parenting).
+_TABLE_CELLS = frozenset({"td", "th", "caption"})
+# Inline elements GitHub's output closes at the end of the paragraph that
+# opened them, so an unclosed ``<del>`` does not strike the next paragraph.
+_PHRASING = frozenset(
+    {
+        "a", "abbr", "b", "big", "cite", "code", "del", "dfn", "em", "font", "i", "ins",
+        "kbd", "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup",
+        "time", "tt", "u", "var",
+    }
+)
 # GFM's tagfilter extension (https://github.github.com/gfm/#disallowed-raw-html-extension-).
 _TAGFILTER_RE = re.compile(
     r"<(?=/?(?:title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext)(?:[\s/>]|$))",
@@ -91,7 +109,8 @@ class _VisibleLines(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.lines: list[str] = []
         self._stack: list[str] = []  # open non-void elements other than ``p``
-        self._in_p = False
+        self._in_p = False  # inside a paragraph that can hold a footer
+        self._p_open = False  # inside any paragraph
         self._p_base = 0  # stack depth when the current paragraph opened
         self._line: list[str] = []
         self._tainted = False
@@ -103,7 +122,24 @@ class _VisibleLines(HTMLParser):
 
     def _end_paragraph(self) -> None:
         self._end_line()
-        self._in_p = False
+        self._in_p = self._p_open = False
+
+    def _close_paragraph(self) -> None:
+        """``</p>``: the paragraph ends, and inline elements opened in it close.
+        A block element opened in it (``<details>``) stays open."""
+        was_open = self._p_open
+        self._end_paragraph()
+        if was_open and all(tag in _PHRASING for tag in self._stack[self._p_base :]):
+            del self._stack[self._p_base :]
+
+    def _placement(self) -> list[str]:
+        """The open elements a paragraph opened now would sit inside: inside a
+        table but outside its cells, the paragraph goes in front of the table."""
+        if "table" in self._stack:
+            index = len(self._stack) - 1 - self._stack[::-1].index("table")
+            if not any(tag in _TABLE_CELLS for tag in self._stack[index + 1 :]):
+                return self._stack[:index]
+        return self._stack
 
     def _taint(self) -> None:
         if self._in_p:
@@ -111,13 +147,16 @@ class _VisibleLines(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if tag == "p":
-            self._end_paragraph()
-            self._in_p = all(open_tag in _CONTAINERS for open_tag in self._stack)
+            self._close_paragraph()
+            self._in_p = all(open_tag in _CONTAINERS for open_tag in self._placement())
+            self._p_open = True
             self._p_base = len(self._stack)
         elif tag == "br":
             self._end_line()
         elif tag in _VOID:
             self._taint()
+        elif tag in _TABLE_PARTS and tag != "table" and "table" not in self._stack:
+            self._taint()  # a table part outside any table is ignored
         else:
             self._stack.append(tag)
             self._taint()
@@ -129,7 +168,7 @@ class _VisibleLines(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "p":
-            self._end_paragraph()
+            self._close_paragraph()
             return
         if tag == "br":  # a browser reads ``</br>`` as ``<br>``
             self._end_line()
@@ -152,8 +191,8 @@ class _VisibleLines(HTMLParser):
         else:
             self._line.append(data)
 
-    # GitHub strips comments, processing instructions and declarations from
-    # the rendered body; they hide what they enclose and add nothing visible.
+    # GitHub strips comments, processing instructions and doctype-style
+    # declarations; they hide what they enclose and add nothing visible.
     def handle_comment(self, data: str) -> None:
         pass
 
@@ -164,7 +203,9 @@ class _VisibleLines(HTMLParser):
         pass
 
     def unknown_decl(self, data: str) -> None:
-        pass
+        # ``<![CDATA[...]]>``: this parser reads it to ``]]>``, but HTML ends
+        # it at the first ``>`` and shows the rest as text. Not a plain line.
+        self._taint()
 
     def close(self) -> None:
         super().close()
@@ -182,6 +223,7 @@ def lines_of_html(html: str) -> list[str]:
     parser = _VisibleLines()
     parser.feed(html)
     parser.close()
-    # ASCII whitespace only: HTML collapses it at a line's edges, but U+2028
-    # and its kind are text, not whitespace, to a browser.
-    return [line.strip(" \t\n\r\f") for line in parser.lines]
+    # Whitespace at a line's edges hides nothing, so any kind is stripped
+    # there (markdown-it trims a paragraph's trailing U+2028; GitHub keeps
+    # it). Inside a line it stays and stops a footer from matching.
+    return [line.strip() for line in parser.lines]
