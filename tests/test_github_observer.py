@@ -1059,15 +1059,10 @@ def test_a_line_break_ends_a_footer_line():
     assert ev.agent_uuid_from_body(body) == _UUID_B
 
 
-def _github_pick(html: str) -> str | None:
-    from agents.github_observer import footer
-
-    parser = footer._VisibleLines()
-    parser.feed(html)
-    parser.close()
+def _pick(lines: list[str]) -> str | None:
     found = None
-    for line in parser.lines:
-        match = ev._FOOTER_RE.fullmatch(line.strip(" \t"))
+    for line in lines:
+        match = ev._FOOTER_RE.fullmatch(line)
         if match:
             found = match.group("uuid").lower()
     return found
@@ -1078,10 +1073,43 @@ _RENDERED = json.loads((FIXTURES / "rendered_bodies.json").read_text())["cases"]
 
 @pytest.mark.parametrize("case", _RENDERED, ids=[str(i) for i in range(len(_RENDERED))])
 def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
-    # The HTML is GitHub's: comments stripped, <pre> annotated, soft breaks
-    # turned into <br>. Reading the footer from it and from the Markdown
-    # source must give the same answer.
-    assert ev.agent_uuid_from_body(case["body"]) == _github_pick(case["github_html"])
+    # ``expected`` was read by hand from GitHub's HTML when it was recorded
+    # (comments stripped, <pre> annotated, soft breaks turned into <br>), so a
+    # change to the walker cannot move both sides of this comparison at once.
+    from agents.github_observer import footer
+
+    assert ev.agent_uuid_from_body(case["body"]) == case["expected"]
+    assert _pick(footer.lines_of_html(case["github_html"])) == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        "<del>\n\nUNITARES agent: {b}\n\n</del>",  # a struck-through paragraph
+        "<b>\n\nUNITARES agent: {b}\n\n</b>",  # formatted, not a plain line
+        # A table is a scope barrier: GitHub keeps the quote open past this
+        # </blockquote>, so the paragraph renders inside the quote.
+        "<blockquote><table></blockquote>\n\nUNITARES agent: {b}",
+        # &#10; is a newline character, not a line break: one rendered line.
+        "example&#10;UNITARES agent: {b}&#10;suffix",
+    ],
+)
+def test_a_paragraph_inside_formatting_or_a_split_line_names_nobody(hidden):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + hidden.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == _UUID_A
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        "UNITARES agent: {b}<!-- note -->",  # GitHub strips the comment
+        "note <?pi?>\nUNITARES agent: {b}",
+        "<div>\n\nUNITARES agent: {b}\n\n</div>",  # a plain container
+    ],
+)
+def test_a_comment_or_a_plain_container_does_not_hide_a_footer(visible):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + visible.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == _UUID_B
 
 
 def test_the_rendered_fixture_covers_every_case_the_old_scanner_got_wrong():

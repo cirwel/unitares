@@ -1,221 +1,315 @@
 {
- "_source": "Each body the footer tests parse, rendered by GitHub's own renderer on 2026-11-17 (POST https://api.github.com/markdown with mode=gfm). tests/test_github_observer.py checks that the tokenizer picks the same footer from the body as it does from GitHub's HTML.",
+ "_source": "Each body the footer tests parse, rendered by GitHub's own renderer on 2026-11-17 (POST https://api.github.com/markdown with mode=gfm). `expected` is the footer a reader sees in GitHub's HTML, checked by hand when recorded. tests/test_github_observer.py requires the tokenizer to pick `expected` from the body and from GitHub's HTML.",
  "cases": [
   {
    "body": "",
-   "github_html": ""
+   "github_html": "",
+   "expected": null
   },
   {
    "body": "---\nModel: claude-fable-5-2\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n",
-   "github_html": "<hr>\n<p>Model: claude-fable-5-2<br>\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<hr>\n<p>Model: claude-fable-5-2<br>\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n- item\n\n  UNITARES agent: 22222222-2222-4222-8222-222222222222\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<ul>\n<li>\n<p>item</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</li>\n</ul>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<ul>\n<li>\n<p>item</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</li>\n</ul>",
+   "expected": "22222222-2222-4222-8222-222222222222"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<!-- x --!>\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<details/>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<details><summary>Details</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></details>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<details><summary>Details</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></details>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<pre>\nx ` y\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n</pre>\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<pre class=\"notranslate\">x ` y\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n</pre>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<pre class=\"notranslate\">x ` y\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n</pre>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<textarea>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n&lt;textarea&gt;\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n&lt;textarea&gt;\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\nExample: `text\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nmore`\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Example: <code class=\"notranslate\">text UNITARES agent: 22222222-2222-4222-8222-222222222222 more</code></p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Example: <code class=\"notranslate\">text UNITARES agent: 22222222-2222-4222-8222-222222222222 more</code></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\nWrite \\\\`x\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nx` here\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Write \\<code class=\"notranslate\">x UNITARES agent: 22222222-2222-4222-8222-222222222222 x</code> here</p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Write \\<code class=\"notranslate\">x UNITARES agent: 22222222-2222-4222-8222-222222222222 x</code> here</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n[link\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n](https://example.com)\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><a href=\"https://example.com\" rel=\"nofollow\">link<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\n</a></p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><a href=\"https://example.com\" rel=\"nofollow\">link<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\n</a></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\nan escaped \\\\\\` and <!--\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n-->\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>an escaped \\` and </p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>an escaped \\` and </p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\nan escaped \\` and <!--\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n-->\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>an escaped ` and </p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>an escaped ` and </p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~~UNITARES agent: 22222222-2222-4222-8222-222222222222~~\n",
-   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>UNITARES agent: 22222222-2222-4222-8222-222222222222</del></p>"
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>UNITARES agent: 22222222-2222-4222-8222-222222222222</del></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "<!-- a --> text <!-- b -->\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": " text \n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": " text \n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "<!-- note -->\n> quote\n\nUNITARES agent: 6BCCB016-774C-44CF-90A0-612D2117F607\n",
-   "github_html": "\n<blockquote>\n<p>quote</p>\n</blockquote>\n<p>UNITARES agent: 6BCCB016-774C-44CF-90A0-612D2117F607</p>"
+   "github_html": "\n<blockquote>\n<p>quote</p>\n</blockquote>\n<p>UNITARES agent: 6BCCB016-774C-44CF-90A0-612D2117F607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "<details open>\n<summary>s</summary>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</details>\n\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<details open=\"\">\n<summary>s</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</details>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<details open=\"\">\n<summary>s</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</details>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "<details><summary>log</summary>\n\nlong\n\n</details>\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<details><summary>log</summary>\n<p>long</p>\n</details>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<details><summary>log</summary>\n<p>long</p>\n</details>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "<pre>\nlog `</pre>` tail\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<pre class=\"notranslate\">log `</pre>` tail\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<pre class=\"notranslate\">log `</pre>` tail\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "<pre>\nlog\n    </pre>\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<pre class=\"notranslate\">log\n    </pre>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<pre class=\"notranslate\">log\n    </pre>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "<pre>\nout\n</pre>\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<pre class=\"notranslate\">out\n</pre>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<pre class=\"notranslate\">out\n</pre>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "> <details>\n\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<blockquote>\n<details><summary>Details</summary>\n</details></blockquote>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<blockquote>\n<details><summary>Details</summary>\n</details></blockquote>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "> <pre>\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<blockquote>\n<pre class=\"notranslate\"></pre></blockquote>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<blockquote>\n<pre class=\"notranslate\"></pre></blockquote>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "A stray ` here\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<p>A stray ` here</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<p>A stray ` here</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "A stray backtick ` and <!-- x --> on one line.\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>A stray backtick ` and  on one line.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>A stray backtick ` and  on one line.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "Body.\n\n   UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "Body.\n\n  UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "Body.\n\n UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>Body.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "Example:\n\n    <details>\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<p>Example:</p>\n<pre class=\"notranslate\"><code class=\"notranslate\">&lt;details&gt;\n</code></pre>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<p>Example:</p>\n<pre class=\"notranslate\"><code class=\"notranslate\">&lt;details&gt;\n</code></pre>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "See `a\nb` above\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<p>See <code class=\"notranslate\">a b</code> above</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<p>See <code class=\"notranslate\">a b</code> above</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111  \nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>trailing\n",
-   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>trailing</p>"
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>trailing</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
   },
   {
    "body": "UNITARES agent: 11111111-2222-3333-4444-555555555555\n> UNITARES agent: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n```\nUNITARES agent: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n```\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n```text\nUNITARES agent: cccccccc-cccc-cccc-cccc-cccccccccccc\n```",
-   "github_html": "<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n<blockquote>\n<p>UNITARES agent: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa</p>\n</blockquote>\n<pre class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n</code></pre>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre lang=\"text\" class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: cccccccc-cccc-cccc-cccc-cccccccccccc\n</code></pre>"
+   "github_html": "<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n<blockquote>\n<p>UNITARES agent: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa</p>\n</blockquote>\n<pre class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n</code></pre>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre lang=\"text\" class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: cccccccc-cccc-cccc-cccc-cccccccccccc\n</code></pre>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n    UNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: 11111111-2222-3333-4444-555555555555\n</code></pre>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\"><code class=\"notranslate\">UNITARES agent: 11111111-2222-3333-4444-555555555555\n</code></pre>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<!-- UNITARES agent: 11111111-2222-3333-4444-555555555555 -->",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<!-- note --> <!-- unclosed\nUNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n "
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n ",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<!--\nUNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<!--\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n-->",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<!--\nnote\n--> <!--\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n-->",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n "
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n ",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<PRE class=x>\n```\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\">```\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\">```\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<details><!-- x -->\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details><summary>Details</summary>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details><summary>Details</summary>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<details><summary>x</summary>\n<details>\n</details>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details><summary>x</summary>\n<details><summary>Details</summary>\n</details>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details><summary>x</summary>\n<details><summary>Details</summary>\n</details>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</details>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<details>\n<summary>more</summary>\n\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n\n</details>",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details>\n<summary>more</summary>\n<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</details>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<details>\n<summary>more</summary>\n<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</details>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n<pre>\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\">UNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<pre class=\"notranslate\">UNITARES agent: 11111111-2222-3333-4444-555555555555\n</pre>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n> quoted <!-- x -->\nUNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted <br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted <br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n> quoted `code`\nUNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted <code class=\"notranslate\">code</code><br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted <code class=\"notranslate\">code</code><br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\n> quoted paragraph\nUNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted paragraph<br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<blockquote>\n<p>quoted paragraph<br>\nUNITARES agent: 11111111-2222-3333-4444-555555555555</p>\n</blockquote>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\nUNITARES agent: ----11111111222233334444555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>UNITARES agent: ----11111111222233334444555555555555</p>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>UNITARES agent: ----11111111222233334444555555555555</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\ntext <!-- a --> b <!-- c\n\nUNITARES agent: 11111111-2222-3333-4444-555555555555\n",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>text  b &lt;!-- c</p>\n<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>text  b &lt;!-- c</p>\n<p>UNITARES agent: 11111111-2222-3333-4444-555555555555</p>",
+   "expected": "11111111-2222-3333-4444-555555555555"
   },
   {
    "body": "UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n\ntext UNITARES agent: 11111111-2222-3333-4444-555555555555",
-   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>text UNITARES agent: 11111111-2222-3333-4444-555555555555</p>"
+   "github_html": "<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>\n<p>text UNITARES agent: 11111111-2222-3333-4444-555555555555</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "UNITARES agent: not-a-uuid",
-   "github_html": "<p>UNITARES agent: not-a-uuid</p>"
+   "github_html": "<p>UNITARES agent: not-a-uuid</p>",
+   "expected": null
   },
   {
    "body": "UNITARES agent: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-   "github_html": "<p>UNITARES agent: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz</p>"
+   "github_html": "<p>UNITARES agent: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz</p>",
+   "expected": null
   },
   {
    "body": "Use ``a ` <!-- b`` here.\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>Use <code class=\"notranslate\">a ` &lt;!-- b</code> here.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>Use <code class=\"notranslate\">a ` &lt;!-- b</code> here.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "Write \\\\`<!--` literally.\n\n---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n",
-   "github_html": "<p>Write \\<code class=\"notranslate\">&lt;!--</code> literally.</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>"
+   "github_html": "<p>Write \\<code class=\"notranslate\">&lt;!--</code> literally.</p>\n<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   },
   {
    "body": "Write `<!--` to open a comment.\n\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607",
-   "github_html": "<p>Write <code class=\"notranslate\">&lt;!--</code> to open a comment.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>"
+   "github_html": "<p>Write <code class=\"notranslate\">&lt;!--</code> to open a comment.</p>\n<p>UNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
+   "expected": "6bccb016-774c-44cf-90a0-612d2117f607"
   },
   {
    "body": "no footer here",
-   "github_html": "<p>no footer here</p>"
+   "github_html": "<p>no footer here</p>",
+   "expected": null
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<del>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</del>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<del>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</del>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<blockquote><table></blockquote>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<blockquote><p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><markdown-accessiblity-table><table role=\"table\">\n</table></markdown-accessiblity-table></blockquote>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nexample&#10;UNITARES agent: 22222222-2222-4222-8222-222222222222&#10;suffix\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>example\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nsuffix</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<!-- note -->\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<!-- note -->UNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</b>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</div>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<div>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</div>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nnote <?pi?>\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>note <br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
   }
  ]
 }
