@@ -22,6 +22,17 @@ from src.db.age_queries import create_supersedes_edge
 logger = get_logger("src.storage.knowledge_graph_age")
 
 _DISCOVERIES_TABLE = "knowledge.discoveries"
+# Each Python process owns its own asyncpg pool, so this semaphore is a
+# pre-acquisition, process-local ceiling rather than a deployment-wide claim.
+# One traversal stays below the documented minimum pool size of two and leaves
+# capacity for ordinary requests. Worker count does not multiply expensive AGE
+# traversals against one database: the transaction-scoped PostgreSQL advisory
+# lock in get_response_chain admits one query across all sharing workers.
+_RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES = 1
+_response_chain_query_slots = asyncio.BoundedSemaphore(
+    _RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES
+)
+_RESPONSE_CHAIN_ADVISORY_LOCK_KEY = "knowledge-response-chain-query"
 
 _BACKFILL_MISSING_HINT = (
     "semantic search will not find it until it is re-embedded "
@@ -339,10 +350,29 @@ class KnowledgeGraphAGESearchMixin:
             "offset": offset,
             "limit": query_limit,
         }
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SET LOCAL statement_timeout = '2000ms'")
-                rows = await db.graph_query(cypher, params, conn=conn)
+        # Fail fast before pool acquisition. The middleware meters public
+        # calls; this gate also protects direct callers in this process.
+        if _response_chain_query_slots.locked():
+            raise RuntimeError(
+                "Response-chain query concurrency limit reached; retry later"
+            )
+        await _response_chain_query_slots.acquire()
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    deployment_slot = await conn.fetchval(
+                        "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
+                        _RESPONSE_CHAIN_ADVISORY_LOCK_KEY,
+                    )
+                    if deployment_slot is False:
+                        raise RuntimeError(
+                            "Response-chain deployment concurrency limit reached; "
+                            "retry later"
+                        )
+                    await conn.execute("SET LOCAL statement_timeout = '2000ms'")
+                    rows = await db.graph_query(cypher, params, conn=conn)
+        finally:
+            _response_chain_query_slots.release()
 
         # Deduplicate by id using smallest depth
         best: Dict[str, tuple[int, DiscoveryNode]] = {}

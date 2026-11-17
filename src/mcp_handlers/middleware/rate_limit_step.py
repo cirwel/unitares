@@ -35,6 +35,31 @@ _READ_ONLY_TOOLS = call_set(
 
 # Expensive-read loop detection keys: (canonical name, resolved action).
 _EXPENSIVE_READ_CALLS = {("agent", "list")}
+_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET = "response-chain:unbound"
+
+
+def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
+    """Return whether this call requests the bounded AGE response traversal."""
+    action = arguments.get("action") or arguments.get("op")
+    action = str(action).lower() if action else None
+    return (
+        (name, action) == ("knowledge", "details")
+        and bool(arguments.get("include_response_chain"))
+    )
+
+
+def _response_chain_rate_bucket(ctx) -> str:
+    """Return a server-owned budget key for response-chain expansion.
+
+    A bound identity was resolved by the identity middleware and is safe to
+    partition on. An unbound details read has no trusted caller key, so every
+    such expansion shares one aggregate bucket. Caller-supplied ``agent_id``
+    and transport fingerprints never select this expensive-read budget.
+    """
+    bound = getattr(ctx, "bound_agent_id", None)
+    if bound:
+        return f"response-chain:bound:{bound}"
+    return _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET
 
 
 def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
@@ -139,6 +164,7 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
     # Loop detection for expensive read-only tools
     loop_key = _loop_detection_key(name, arguments)
+    response_chain_read = _is_response_chain_read(name, arguments)
     if loop_key is not None:
         now = time.time()
         tool_history = _tool_call_history[loop_key]
@@ -176,11 +202,25 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     if name == "use_tool" and _use_tool_delegates_to_public_target(arguments):
         return name, arguments, ctx
 
-    # General rate limiting (skip for read-only tools and pre-onboard reads)
-    if _READ_ONLY_TOOLS.matches(name, arguments) or _is_pre_onboard_read_call(name, arguments):
+    # General rate limiting skips ordinary reads. Response-chain expansion is
+    # deliberately charged even though knowledge/details is pre-onboarding:
+    # it enters a variable-length AGE traversal, unlike the base details read.
+    if (
+        _READ_ONLY_TOOLS.matches(name, arguments)
+        or _is_pre_onboard_read_call(name, arguments)
+    ) and not response_chain_read:
         return name, arguments, ctx
 
-    bucket = _rate_bucket_key(arguments, ctx)
+    # Response-chain expansion uses only server-resolved identity. Unbound
+    # callers share a fixed aggregate bucket, so rotating target agent_id or a
+    # spoofable transport fingerprint cannot mint fresh expansion budgets.
+    # Ordinary details reads and onboarding retain their existing exemptions
+    # and per-caller buckets above.
+    bucket = (
+        _response_chain_rate_bucket(ctx)
+        if response_chain_read
+        else _rate_bucket_key(arguments, ctx)
+    )
     rate_limiter = get_rate_limiter()
     allowed, error_msg = rate_limiter.check_rate_limit(bucket)
 

@@ -688,6 +688,40 @@ class TestGetDiscoveryDetails:
         assert "error" in data["response_chain"]
 
     @pytest.mark.asyncio
+    async def test_get_details_survives_response_chain_concurrency_refusal(
+        self,
+        patch_common,
+    ):
+        """Base discovery details remain available when expansion is refused."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        disc = make_discovery(
+            id="2026-01-01T00:00:00.000000",
+            details="Details remain readable",
+        )
+        mock_graph.get_discovery = AsyncMock(return_value=disc)
+        mock_graph.get_response_chain = AsyncMock(
+            side_effect=RuntimeError(
+                "Response-chain query concurrency limit reached; retry later"
+            )
+        )
+
+        result = await handle_get_discovery_details({
+            "discovery_id": disc.id,
+            "include_response_chain": True,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["discovery"]["id"] == disc.id
+        assert data["discovery"]["details"] == "Details remain readable"
+        assert "concurrency limit" in data["response_chain"]["error"]
+        assert data["response_chain"]["note"] == (
+            "Discovery details still returned successfully"
+        )
+
+    @pytest.mark.asyncio
     async def test_get_details_exception_handling(self, patch_common):
         """Exception from graph backend returns error."""
         mock_mcp_server, mock_graph = patch_common
