@@ -75,6 +75,16 @@ async def assess_eisv(request: EisvRequest) -> EisvAssessment:
     if callable(prepare_restored):
         await prepare_restored(monitor)
 
+    from src.behavioral_sensor import actor_work_tool_stats_enabled
+
+    if (
+        actor_work_tool_stats_enabled()
+        and "_actor_work_tool_stats" not in request.agent_state
+    ):
+        from src.audit_db import ensure_actor_work_tool_stats_async
+
+        await ensure_actor_work_tool_stats_async(request.agent_id, request.agent_state)
+
     task_type = request.agent_state.get("task_type", "mixed")
     # This span includes default-executor queue wait as well as numpy work.
     # Keep run_in_executor: to_thread would additionally propagate contextvars.
