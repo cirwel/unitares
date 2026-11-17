@@ -1,6 +1,7 @@
 """Tests for behavioral sensor signal-hygiene and clean actor work-tool switches."""
 
 from datetime import datetime, timezone
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -8,7 +9,10 @@ from src import eisv_instrument
 from src.audit_db import (
     BEHAVIORAL_EXCLUDED_META_TOOL_SET,
     BEHAVIORAL_NON_AGENT_ERROR_TYPES,
+    BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN,
+    EMPTY_ACTOR_WORK_TOOL_STATS,
     _behavioral_excluded_tool_names,
+    ensure_actor_work_tool_stats_async,
     get_behavioral_work_tool_stats_async,
 )
 from src.behavioral_sensor import (
@@ -246,9 +250,12 @@ class TestBehavioralWorkToolStatsDb:
             "start_session",
         }.issubset(expanded)
         assert ToolUsageTracker.REMOVED_TOOLS.issubset(expanded)
-        assert {"system_error", "governance_refusal", "state_error"}.issubset(
-            BEHAVIORAL_NON_AGENT_ERROR_TYPES
-        )
+        assert BEHAVIORAL_NON_AGENT_ERROR_TYPES == frozenset({"system_error", "governance_refusal"})
+        pat = re.compile(BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN)
+        for exc_name in ("TimeoutError", "PostgresError", "ConnectionError", "InterfaceError"):
+            assert pat.match(exc_name)
+        for actor_err in ("validation_error", "auth_error", "tool_error", "identity_required"):
+            assert not pat.match(actor_err)
 
     @pytest.mark.asyncio
     async def test_get_behavioral_work_tool_stats_async_aggregates_cleanly(self):
@@ -277,14 +284,18 @@ class TestBehavioralWorkToolStatsDb:
         assert stats["unique_tools_ratio"] == pytest.approx(2 / 12)
         assert stats["tools"]["knowledge"]["error_count"] == 2
 
-        sql, agent_arg, cutoff_arg, excluded_tools_arg, excluded_errs_arg = conn.fetch.call_args[0]
+        sql, agent_arg, cutoff_arg, excluded_tools_arg, excluded_errs_arg, exc_pattern_arg = (
+            conn.fetch.call_args[0]
+        )
         assert "COALESCE(NULLIF(payload->>'canonical_tool', ''), tool_name)" in sql
         assert "tool_name NOT LIKE 'lease.%'" in sql
+        assert "COALESCE(error_type, '') !~ $5" in sql
         assert agent_arg == "actor-agent-1"
         assert isinstance(cutoff_arg, datetime) and cutoff_arg.tzinfo == timezone.utc
         assert _behavioral_excluded_tool_names().issubset(set(excluded_tools_arg))
         assert ToolUsageTracker.REMOVED_TOOLS.issubset(set(excluded_tools_arg))
         assert BEHAVIORAL_NON_AGENT_ERROR_TYPES.issubset(set(excluded_errs_arg))
+        assert exc_pattern_arg == BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN
 
     @pytest.mark.asyncio
     async def test_get_behavioral_work_tool_stats_async_empty_or_invalid(self):
@@ -537,3 +548,95 @@ class TestToolUsageExtractionAndDownstreamConsumers:
         calls = [(c.args[0], c.args[1]) for c in baseline_mock.update.call_args_list]
         assert ("tool_error_rate", pytest.approx(0.20)) in calls
         assert ("tool_call_velocity", pytest.approx(0.25)) in calls
+
+    @pytest.mark.asyncio
+    async def test_ensure_actor_work_tool_stats_idempotent_temp_and_fail_open(self):
+        existing = {"total_calls": 9, "error_count": 1, "tools": {}}
+        state = {"_actor_work_tool_stats": existing}
+        fetch_mock = AsyncMock()
+        with patch("src.audit_db.get_behavioral_work_tool_stats_async", fetch_mock):
+            res = await ensure_actor_work_tool_stats_async("actor-1", state)
+        assert res is existing
+        fetch_mock.assert_not_awaited()
+
+        temp_state = {}
+        with patch("src.audit_db.get_behavioral_work_tool_stats_async", fetch_mock):
+            temp_res = await ensure_actor_work_tool_stats_async("_simulation_temp_", temp_state)
+        assert temp_res == EMPTY_ACTOR_WORK_TOOL_STATS
+        assert temp_state["_actor_work_tool_stats"] == EMPTY_ACTOR_WORK_TOOL_STATS
+        fetch_mock.assert_not_awaited()
+
+        err_state = {}
+        with patch(
+            "src.audit_db.get_behavioral_work_tool_stats_async",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            err_res = await ensure_actor_work_tool_stats_async("actor-1", err_state)
+        assert err_res == EMPTY_ACTOR_WORK_TOOL_STATS
+        assert err_state["_actor_work_tool_stats"] == EMPTY_ACTOR_WORK_TOOL_STATS
+
+    @pytest.mark.asyncio
+    async def test_assess_eisv_populates_actor_work_tool_stats_for_direct_callers(self, monkeypatch):
+        from src.eisv.adapter import EisvRequest, assess_eisv
+
+        monkeypatch.setenv("UNITARES_ACTOR_WORK_TOOL_STATS", "1")
+        db_stats = {
+            "total_calls": 14,
+            "unique_tools": 3,
+            "error_count": 2,
+            "tools": {"knowledge": {"total_calls": 14, "error_count": 2}},
+            "source": "db_actor_work_tools",
+        }
+        monitor = MagicMock()
+        monitor._needs_hydration = False
+        monitor.process_update.return_value = {"status": "ok"}
+
+        agent_state = {"response_text": "direct caller"}
+        with patch("src.agent_lifecycle.get_or_create_monitor", return_value=monitor), \
+             patch("src.agent_monitor_state.hydrate_from_db_if_fresh", AsyncMock()), \
+             patch(
+                 "src.audit_db.get_behavioral_work_tool_stats_async",
+                 AsyncMock(return_value=db_stats),
+             ) as fetch_mock:
+            await assess_eisv(EisvRequest(agent_id="direct-agent-1", agent_state=agent_state))
+
+        fetch_mock.assert_awaited_once_with(agent_id="direct-agent-1", window_hours=1.0)
+        assert agent_state["_actor_work_tool_stats"] == db_stats
+        passed_state = monitor.process_update.call_args.args[0]
+        assert passed_state["_actor_work_tool_stats"] == db_stats
+
+    @pytest.mark.asyncio
+    async def test_simulate_update_populates_actor_work_tool_stats_when_enabled(self, monkeypatch):
+        from src.mcp_handlers.core import handle_simulate_update
+
+        monkeypatch.setenv("UNITARES_ACTOR_WORK_TOOL_STATS", "1")
+        db_stats = {
+            "total_calls": 8,
+            "unique_tools": 2,
+            "error_count": 1,
+            "tools": {"knowledge": {"total_calls": 8, "error_count": 1}},
+            "source": "db_actor_work_tools",
+        }
+        monitor = MagicMock()
+        monitor.simulate_update.return_value = {
+            "decision": {"action": "proceed"},
+            "metrics": {"E": 0.8, "I": 0.7, "S": 0.2, "V": 0.1},
+        }
+        meta = MagicMock(dialectic_conditions=None)
+
+        with patch("src.agent_loop_detection.policy_actuation_posture", return_value="observe"), \
+             patch("src.agent_loop_detection.apply_policy_actuation_posture", return_value=False), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=("sim-agent-1", None)), \
+             patch("src.mcp_handlers.core.mcp_server") as mock_srv, \
+             patch("src.agent_monitor_state.ensure_hydrated", AsyncMock()), \
+             patch(
+                 "src.audit_db.get_behavioral_work_tool_stats_async",
+                 AsyncMock(return_value=db_stats),
+             ) as fetch_mock:
+            mock_srv.agent_metadata = {"sim-agent-1": meta}
+            mock_srv.get_or_create_monitor.return_value = monitor
+            await handle_simulate_update({"complexity": 0.5, "response_text": "sim"})
+
+        fetch_mock.assert_awaited_once_with(agent_id="sim-agent-1", window_hours=1.0)
+        sim_state = monitor.simulate_update.call_args.args[0]
+        assert sim_state["_actor_work_tool_stats"] == db_stats

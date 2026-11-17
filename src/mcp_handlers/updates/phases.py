@@ -813,23 +813,9 @@ async def _prepare_behavioral_sensor_inputs(ctx: UpdateContext, mcp_server: Any)
     )
 
     if actor_work_tool_stats_enabled():
-        empty_actor_stats = {
-            "total_calls": 0,
-            "unique_tools": 0,
-            "error_count": 0,
-            "tools": {},
-            "source": "db_actor_work_tools",
-        }
-        try:
-            from src.audit_db import get_behavioral_work_tool_stats_async
+        from src.audit_db import ensure_actor_work_tool_stats_async
 
-            fetched_stats = await get_behavioral_work_tool_stats_async(
-                agent_id=ctx.agent_id, window_hours=1.0
-            )
-            ctx.agent_state["_actor_work_tool_stats"] = fetched_stats or empty_actor_stats
-        except Exception as e:
-            logger.debug(f"Actor work tool stats unavailable for {ctx.agent_id}: {e}")
-            ctx.agent_state["_actor_work_tool_stats"] = empty_actor_stats
+        await ensure_actor_work_tool_stats_async(ctx.agent_id, ctx.agent_state)
 
     if "sensor_eisv" in ctx.agent_state:
         return

@@ -577,6 +577,13 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
         "complexity": complexity  # Use validated value
     }
 
+    from src.behavioral_sensor import actor_work_tool_stats_enabled
+
+    if actor_work_tool_stats_enabled():
+        from src.audit_db import ensure_actor_work_tool_stats_async
+
+        await ensure_actor_work_tool_stats_async(agent_id, agent_state)
+
     # Run simulation (doesn't persist state) with confidence
     result = monitor.simulate_update(agent_state, confidence=confidence)
 
