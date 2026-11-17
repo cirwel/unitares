@@ -37,6 +37,16 @@ _READ_ONLY_TOOLS = call_set(
 _EXPENSIVE_READ_CALLS = {("agent", "list")}
 
 
+def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
+    """Return whether this call requests the bounded AGE response traversal."""
+    action = arguments.get("action") or arguments.get("op")
+    action = str(action).lower() if action else None
+    return (
+        (name, action) == ("knowledge", "details")
+        and bool(arguments.get("include_response_chain"))
+    )
+
+
 def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
     """Return the loop-detection history key for expensive read calls."""
     action = arguments.get("action") or arguments.get("op")
@@ -46,18 +56,25 @@ def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _rate_bucket_key(arguments: Dict[str, Any], ctx) -> str:
+def _rate_bucket_key(
+    arguments: Dict[str, Any],
+    ctx,
+    *,
+    trust_agent_argument: bool = True,
+) -> str:
     """Resolve the rate-limit bucket for this call.
 
     Bound callers are bucketed by agent id. Unbound callers are bucketed
     per transport fingerprint (IP + UA hash) so one anonymous flood — a
     polling dashboard tab, an un-onboarded service — cannot exhaust a
     shared global bucket and lock every other caller out of onboard()
-    (the 2026-06-12 bootstrap-lockout incident). The fingerprint is
-    caller-supplied and spoofable; this is runaway protection, not an
-    auth boundary — identity enforcement lives in the #425 gates.
+    (the 2026-06-12 bootstrap-lockout incident). Set trust_agent_argument
+    false when agent_id is target metadata rather than caller identity.
+    The fingerprint is caller-supplied and spoofable; this is runaway
+    protection, not an auth boundary — identity enforcement lives in the
+    #425 gates.
     """
-    agent_id = arguments.get('agent_id')
+    agent_id = arguments.get('agent_id') if trust_agent_argument else None
     if agent_id:
         return str(agent_id)
     bound = getattr(ctx, 'bound_agent_id', None)
@@ -139,6 +156,7 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
     # Loop detection for expensive read-only tools
     loop_key = _loop_detection_key(name, arguments)
+    response_chain_read = _is_response_chain_read(name, arguments)
     if loop_key is not None:
         now = time.time()
         tool_history = _tool_call_history[loop_key]
@@ -176,11 +194,22 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     if name == "use_tool" and _use_tool_delegates_to_public_target(arguments):
         return name, arguments, ctx
 
-    # General rate limiting (skip for read-only tools and pre-onboard reads)
-    if _READ_ONLY_TOOLS.matches(name, arguments) or _is_pre_onboard_read_call(name, arguments):
+    # General rate limiting skips ordinary reads. Response-chain expansion is
+    # deliberately charged even though knowledge/details is pre-onboarding:
+    # it enters a variable-length AGE traversal, unlike the base details read.
+    if (
+        _READ_ONLY_TOOLS.matches(name, arguments)
+        or _is_pre_onboard_read_call(name, arguments)
+    ) and not response_chain_read:
         return name, arguments, ctx
 
-    bucket = _rate_bucket_key(arguments, ctx)
+    # On a pre-onboarding read, agent_id is caller-supplied target metadata,
+    # not authenticated caller identity. It must not select a fresh bucket.
+    bucket = _rate_bucket_key(
+        arguments,
+        ctx,
+        trust_agent_argument=not response_chain_read,
+    )
     rate_limiter = get_rate_limiter()
     allowed, error_msg = rate_limiter.check_rate_limit(bucket)
 

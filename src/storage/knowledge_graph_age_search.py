@@ -22,6 +22,10 @@ from src.db.age_queries import create_supersedes_edge
 logger = get_logger("src.storage.knowledge_graph_age")
 
 _DISCOVERIES_TABLE = "knowledge.discoveries"
+_RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES = 4
+_response_chain_query_slots = asyncio.BoundedSemaphore(
+    _RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES
+)
 
 _BACKFILL_MISSING_HINT = (
     "semantic search will not find it until it is re-embedded "
@@ -339,10 +343,21 @@ class KnowledgeGraphAGESearchMixin:
             "offset": offset,
             "limit": query_limit,
         }
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SET LOCAL statement_timeout = '2000ms'")
-                rows = await db.graph_query(cypher, params, conn=conn)
+        # Fail fast instead of queueing enough traversals to occupy the whole
+        # PostgreSQL pool. The middleware also meters public calls; this gate
+        # protects direct callers and limits an admitted parallel burst.
+        if _response_chain_query_slots.locked():
+            raise RuntimeError(
+                "Response-chain query concurrency limit reached; retry later"
+            )
+        await _response_chain_query_slots.acquire()
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL statement_timeout = '2000ms'")
+                    rows = await db.graph_query(cypher, params, conn=conn)
+        finally:
+            _response_chain_query_slots.release()
 
         # Deduplicate by id using smallest depth
         best: Dict[str, tuple[int, DiscoveryNode]] = {}
