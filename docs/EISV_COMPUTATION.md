@@ -239,33 +239,12 @@ identity of EISV itself.
 *"No sigmoid/phi black box. Each risk component has a clear source and weight. Assessment is auditable — you can trace exactly why a verdict was issued."* (module docstring.)
 
 - Total risk = sum of named components, each with an explicit weight — `low_E` (0.30), `low_I` (0.30), `high_S` (0.20), `high_V` on |V| (0.20), `adversarial_rho` (0.15), `high_CE` (0.10) — plus a small improving-trend bonus (−0.05 when both E and I trend up); clamped to [0, 1].
-- **Check-ins 1–2**: behavioral confidence is below 0.3, so the live verdict is
-  owned by the Φ cold-start prior. The behavioral assessment is telemetry-only.
-- **Check-ins 3–24**: the behavioral assessment is authoritative, using fixed
-  universal thresholds because the agent-specific baseline is not ready.
-- **From check-in 25 with the current constants**: `baseline_confidence >= 0.8`
-  against the 30-update target, enabling self-relative (Welford) z-score
-  deviations from the agent's own behavioral baseline. The coordinates
-  themselves remain weighted indices, not z-scores.
-- **With unread axes held (default ON, `UNITARES_HOLD_UNREAD_AXES=1`)** these stages count check-ins that
-  read something, not all check-ins. The sensor needs three decisions of
-  history, so a new agent's first three check-ins read nothing: the Φ prior
-  owns check-ins 1–5, fixed thresholds apply on 6–27, and self-relative scoring
-  starts at check-in 28, later still if more check-ins read nothing. An axis
-  with fewer than 5 baseline samples stays on the fixed thresholds.
-- **Insufficient reading draws no verdict (hold only).** The Φ prior stands in
-  for an assessment that is on its way. An agent that keeps checking in
-  without supplying sensor inputs never reaches behavioral authority, and for
-  it the prior would decide indefinitely. Cold start ends where an agent that
-  supplied everything would have reached authority, which is check-in 6
-  (`BehavioralEISV.checkin_confidence` at 0.3). From there, while the
-  behavioral state still has less than 0.3 confidence, no verdict is drawn:
-  the published verdict is `safe` with risk 0, the driver is `insufficient_reading`,
-  the Φ-derived fast trip does not apply, and the verdict is graded provisional.
-  `safe` there means nothing was measured. The same holds for an agent whose
-  readings have all gone stale. The independent verification floor still applies,
-  and structural pauses are unchanged. With `UNITARES_PHI_TELEMETRY_ONLY=0` the
-  rule is off, because Φ is then a configured floor and not a placeholder.
+- **With unread axes held (default ON, `UNITARES_HOLD_UNREAD_AXES=1`, era `HU1`)**, the scoring stages count check-ins that read something, not raw check-ins:
+  - **Check-ins 1–5**: the sensor needs three decisions of history (`SENSOR_MIN_HISTORY = 3`), so check-ins 1–3 carry no reading and behavioral confidence remains below `0.3` through check-in 5. The live verdict is owned by the Φ cold-start prior while behavioral assessment is telemetry-only.
+  - **Check-ins 6–27** (when ≥3 check-ins have read something, `behavioral.confidence >= 0.3`): the behavioral assessment is authoritative, using fixed universal thresholds because the agent-specific baseline is not ready.
+  - **Insufficient reading (`check-in 6+` while `behavioral.confidence < 0.3`)**: the Φ prior stands in for an assessment that is on its way. An agent that keeps checking in without supplying sensor inputs never reaches behavioral authority, and for it the prior would decide indefinitely. Cold start ends where an agent that supplied everything would have reached authority, which is check-in 6 (`BehavioralEISV.checkin_confidence` at `0.3`). From there, while behavioral confidence stays below `0.3`, no verdict is drawn: the published verdict is `safe` with risk `0`, the driver is `insufficient_reading`, the Φ-derived fast trip does not apply, and the verdict is graded provisional (`safe` there means nothing was measured). The same holds for an agent whose readings have all gone stale (`>= 10` check-ins without a reading). The independent verification floor still applies, and structural pauses are unchanged. With `UNITARES_PHI_TELEMETRY_ONLY=0` the rule is off, because Φ is then a configured floor and not a placeholder.
+  - **From check-in 28** (25 read check-ins, `baseline_confidence >= 0.8` against the 30-update target; later if more check-ins read nothing): enables self-relative (Welford) z-score deviations from the agent's own behavioral baseline (coordinates remain weighted indices, not z-scores). An axis with fewer than 5 baseline samples stays on the fixed thresholds.
+- **When legacy filling is restored (`UNITARES_HOLD_UNREAD_AXES=0`)**, every check-in counts as a reading, restoring the unheld schedule: check-ins **1–2** Φ cold-start prior (`confidence < 0.3`), check-ins **3–24** fixed universal thresholds, and check-in **25** onward self-relative z-score deviations, with `insufficient_reading` disabled.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution

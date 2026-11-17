@@ -153,8 +153,11 @@ acceptance and retry guidance.
 
 Separately, `metrics.verdict` may carry an internal UNITARES verdict such as
 `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as
-moral judgment. The behavioral assessment owns the main risk/verdict path after
-the two-check-in prior window. Coherence, CIRS, basin, and adaptive-governor
+moral judgment. Under the default hold (`UNITARES_HOLD_UNREAD_AXES=1`), the Φ
+cold-start prior owns check-ins 1–5; from check-in 6 onward, the behavioral
+assessment owns the main risk/verdict path once `behavioral.confidence >= 0.3`
+(otherwise, an unread state draws `insufficient_reading` with `safe` / risk `0`;
+with `UNITARES_HOLD_UNREAD_AXES=0`, behavioral authority starts at check-in 3). Coherence, CIRS, basin, and adaptive-governor
 compatibility backstops remain part of that inference, but they actuate only
 when the operator sets `UNITARES_POLICY_ACTUATION=enforce` (see *Coherence*).
 
