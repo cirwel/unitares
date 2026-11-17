@@ -63,8 +63,10 @@ basin, void and coherence checks (`src/monitor_decision.py`). Under the default
 `SN1` posture (`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), the behavioral sensor
 no longer blends legacy ODE `C(V)` (`coh_e`/`coh_I`), `decision_history`, or
 `regime_history` into behavioral E/I/S observations; those terms enter only when
-`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`. While `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=0`
-(default), `drift_norm` still carries ODE `coherence_deviation` and the fleet
+`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`. Under the default `SD1` posture
+(`UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1`), `drift_norm` keeps only the agent's own
+complexity divergence and tactical calibration error; setting `UNITARES_SENSOR_DRIFT_AGENT_LOCAL=0`
+restores ODE `coherence_deviation`, constant `stability_deviation=0.2`, and the fleet
 tactical `calibration_deviation` scalar.
 
 ### One check-in, end to end
