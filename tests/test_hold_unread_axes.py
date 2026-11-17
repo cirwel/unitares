@@ -25,21 +25,17 @@ from src.behavioral_state import (
 
 @pytest.fixture(autouse=True)
 def _hold_on(monkeypatch):
-    """These tests describe era HU1, so they run with the hold switched on.
-
-    The flag ships off (see test_the_hold_ships_off); a test that needs it off
-    sets it again itself.
-    """
+    """Ensure UNITARES_HOLD_UNREAD_AXES stays on even if inherited env overrides it."""
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "1")
 
 
-def test_the_hold_ships_off(monkeypatch):
-    """A routine deploy must not start era HU1: the default leaves filling on."""
+def test_the_hold_is_on_by_default(monkeypatch):
+    """Era HU1 is active by default: unread axes are held rather than filled."""
     monkeypatch.delenv("UNITARES_HOLD_UNREAD_AXES", raising=False)
-    assert hold_unread_axes_enabled() is False
+    assert hold_unread_axes_enabled() is True
     state = BehavioralEISV()
     state.update(0.7, 0.6, 0.2)
-    assert state.hold_unread is False
+    assert state.hold_unread is True
 
 
 def _sensor_inputs(**overrides) -> dict:

@@ -73,15 +73,48 @@ def test_the_rule_is_off_outside_its_scope(overrides):
     assert _insufficient(**overrides) is False
 
 
-def test_checkin_confidence_counts_every_checkin():
+def test_checkin_confidence_skips_the_checkins_the_sensor_cannot_read():
+    from src.behavioral_sensor import SENSOR_MIN_HISTORY
+
     state = BehavioralEISV()
-    for _ in range(3):
+    for _ in range(SENSOR_MIN_HISTORY):
         state.update(None, None, None)
     assert state.confidence == 0.0
-    assert state.checkin_confidence == pytest.approx(3 / BOOTSTRAP_UPDATES)
+    assert state.checkin_confidence == 0.0
+    for _ in range(3):
+        state.update(None, None, None)
+    # Check-in 6: where an agent that supplied everything reaches authority.
+    assert state.update_count == 6
+    assert state.checkin_confidence == pytest.approx(BEHAVIORAL_AUTHORITY_THRESHOLD)
     for _ in range(BOOTSTRAP_UPDATES):
         state.update(None, None, None)
     assert state.checkin_confidence == 1.0
+
+
+def test_the_sensor_reads_nothing_before_its_minimum_history():
+    from src.behavioral_sensor import SENSOR_MIN_HISTORY
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("insufficient-reading-min-history", load_state=False)
+    for index in range(SENSOR_MIN_HISTORY):
+        result = monitor.process_update(dict(CHECK_IN))
+        assert monitor._behavioral_state.read_update_count == 0
+        assert result["risk_attribution"]["primary_driver"] == "phi_cold_start", index
+
+
+def test_a_supplying_agent_has_authority_exactly_where_cold_start_ends():
+    from src.behavioral_sensor import SENSOR_MIN_HISTORY
+
+    state = BehavioralEISV()
+    for index in range(8):
+        if index < SENSOR_MIN_HISTORY:
+            state.update(None, None, None)
+        else:
+            state.update(0.7, 0.7, 0.2)
+        assert not _insufficient(
+            behavioral_confidence=state.confidence,
+            checkin_confidence=state.checkin_confidence,
+        ), index
 
 
 def test_checkin_confidence_equals_confidence_with_the_hold_off(monkeypatch):
@@ -163,10 +196,10 @@ def test_the_prior_owns_cold_start_and_no_verdict_is_drawn_after(monkeypatch):
 
     results = [monitor.process_update(dict(CHECK_IN)) for _ in range(12)]
 
-    for result in results[:2]:
+    for result in results[:5]:
         assert result["risk_attribution"]["primary_driver"] == "phi_cold_start"
         assert result["metrics"]["verdict"] == "high-risk"
-    for result in results[2:]:
+    for result in results[5:]:
         assert result["risk_attribution"]["primary_driver"] == INSUFFICIENT_READING_DRIVER
         assert result["metrics"]["verdict_source"] == INSUFFICIENT_READING_DRIVER
         assert result["metrics"]["verdict"] == "safe"
@@ -185,11 +218,10 @@ def test_readings_hand_the_verdict_to_the_behavioral_assessment():
         monitor.process_update(dict(CHECK_IN))["risk_attribution"]["primary_driver"]
         for _ in range(8)
     ]
-    assert drivers[:2] == ["phi_cold_start"] * 2
-    assert drivers[2] == INSUFFICIENT_READING_DRIVER
-    assert drivers[-1] == "behavioral_assessment"
+    assert drivers[:5] == ["phi_cold_start"] * 5
+    assert drivers[5:] == ["behavioral_assessment"] * 3
     # Once readings carry authority the label never returns to the prior.
-    assert "phi_cold_start" not in drivers[2:]
+    assert "phi_cold_start" not in drivers[5:]
 
 
 def test_phi_configured_as_a_floor_keeps_its_authority(monkeypatch):
@@ -201,7 +233,7 @@ def test_phi_configured_as_a_floor_keeps_its_authority(monkeypatch):
     _silence_readings(monitor, monkeypatch)
 
     result = None
-    for _ in range(5):
+    for _ in range(7):
         result = monitor.process_update(dict(CHECK_IN))
     assert result["risk_attribution"]["primary_driver"] == "phi_cold_start"
     assert result["metrics"]["verdict"] == "high-risk"
@@ -232,7 +264,7 @@ def test_the_verification_floor_still_raises_the_verdict(monkeypatch):
     monitor = UNITARESMonitor("insufficient-reading-floor", load_state=False)
     _silence_readings(monitor, monkeypatch)
     result = None
-    for _ in range(4):
+    for _ in range(7):
         result = monitor.process_update(dict(CHECK_IN))
     assert result["metrics"]["verdict"] == "high-risk"
     assert result["risk_attribution"]["primary_driver"] == "independent_verification_floor"
@@ -269,7 +301,7 @@ def _insufficient_result(monkeypatch) -> dict:
     monitor = UNITARESMonitor("insufficient-reading-formats", load_state=False)
     _silence_readings(monitor, monkeypatch)
     result = None
-    for _ in range(4):
+    for _ in range(7):
         result = monitor.process_update(dict(CHECK_IN))
     assert result["metrics"]["verdict_source"] == INSUFFICIENT_READING_DRIVER
     return result

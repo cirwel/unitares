@@ -88,18 +88,18 @@ class _AcquireCtx:
 
 
 class TestDefaultFlagsPreservation:
-    def test_new_flags_default_off(self, monkeypatch):
+    def test_new_flags_default_on(self, monkeypatch):
         for var in (
             "UNITARES_DROP_CONTINUITY_E_BLEND",
             "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND",
             "UNITARES_ACTOR_WORK_TOOL_STATS",
         ):
             monkeypatch.delenv(var, raising=False)
-        assert drop_continuity_e_blend_enabled() is False
-        assert drop_unique_tools_i_blend_enabled() is False
-        assert actor_work_tool_stats_enabled() is False
+        assert drop_continuity_e_blend_enabled() is True
+        assert drop_unique_tools_i_blend_enabled() is True
+        assert actor_work_tool_stats_enabled() is True
 
-    def test_defaults_preserve_existing_blends(self, monkeypatch):
+    def test_defaults_omit_dropped_blends_and_zero_restores_them(self, monkeypatch):
         for var in (
             "UNITARES_DROP_CONTINUITY_E_BLEND",
             "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND",
@@ -118,9 +118,34 @@ class TestDefaultFlagsPreservation:
         )
         e_adj_names = [a["name"] for a in comp["dimensions"]["E"]["adjustments"]]
         i_adj_names = [a["name"] for a in comp["dimensions"]["I"]["adjustments"]]
-        assert "continuity_E_input" in e_adj_names
+        s_adj_names = [a["name"] for a in comp["dimensions"]["S"]["adjustments"]]
+        assert "continuity_E_input" not in e_adj_names
         assert "tool_success_rate" in e_adj_names
-        assert "unique_tools_ratio" in i_adj_names
+        assert "continuity_I_input" in i_adj_names
+        assert "unique_tools_ratio" not in i_adj_names
+        assert "continuity_S_input" in s_adj_names
+        assert "tool_velocity_pressure" in s_adj_names
+
+        for var in (
+            "UNITARES_DROP_CONTINUITY_E_BLEND",
+            "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND",
+            "UNITARES_ACTOR_WORK_TOOL_STATS",
+        ):
+            monkeypatch.setenv(var, "0")
+        restored = compute_behavioral_sensor_components(
+            **_histories(),
+            continuity_E_input=0.30,
+            continuity_I_input=0.60,
+            continuity_S_input=0.20,
+            tool_error_rate=0.20,
+            tool_call_velocity=7.0,
+            unique_tools_ratio=0.05,
+        )
+        restored_e_names = [a["name"] for a in restored["dimensions"]["E"]["adjustments"]]
+        restored_i_names = [a["name"] for a in restored["dimensions"]["I"]["adjustments"]]
+        assert "continuity_E_input" in restored_e_names
+        assert "tool_success_rate" in restored_e_names
+        assert "unique_tools_ratio" in restored_i_names
 
 
 class TestDropContinuityEBlend:
@@ -473,7 +498,7 @@ class TestInstrumentConfigHashIsolation:
             "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND",
             "UNITARES_ACTOR_WORK_TOOL_STATS",
         ):
-            monkeypatch.setenv(var, "1")
+            monkeypatch.setenv(var, "0")
             eisv_instrument.reset_caches()
             hashes.add(eisv_instrument.config_hash())
             monkeypatch.delenv(var, raising=False)

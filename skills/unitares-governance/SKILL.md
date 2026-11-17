@@ -63,9 +63,9 @@ and policy. Neutral acceptance survives assessment failure, and replaying a
 checkpoint receipt does not evaluate state again. See `governance-lifecycle`
 for acceptance and retry semantics.
 
-- `E`: weighted complexity, outcome, continuity, and tool observations
-- `I`: calibration and consistency features
-- `S`: deviations and activity features
+- `E`: weighted complexity, outcome, and actor work-tool error observations
+- `I`: calibration, consistency, and continuity features
+- `S`: agent-local deviations, continuity, and actor work-tool velocity features
 - `V`: separately smoothed raw E/I observation gap
 
 These describe the behavioral producer; other producers share the field names.

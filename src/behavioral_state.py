@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.agent_behavioral_baseline import WelfordStats
-from src.behavioral_sensor import hold_unread_axes_enabled
+from src.behavioral_sensor import SENSOR_MIN_HISTORY, hold_unread_axes_enabled
 
 
 # Per-dimension EMA alphas.
@@ -427,17 +427,22 @@ class BehavioralEISV:
 
     @property
     def checkin_confidence(self) -> float:
-        """The bootstrap ramp counted in check-ins, whether or not they read anything.
+        """The confidence ramp over check-ins the sensor could have read.
 
-        With the hold off this equals ``confidence``. Under the hold it says
-        how far past cold start the agent is by check-in count alone, which is
-        what separates "too new to assess" from "checked in often and supplied
-        too little to assess" (see
+        With the hold off every check-in is a reading and this equals
+        ``confidence``. Under the hold the sensor's first ``SENSOR_MIN_HISTORY``
+        check-ins cannot carry a reading, so they are not counted: an agent
+        that supplies everything reaches authority (0.3) on check-in 6, and
+        that is where this reaches 0.3 too. Separates "too new to have been
+        assessed" from "could have been assessed and supplied too little" (see
         ``cold_start_risk_confirmation.reading_insufficient``).
         """
-        if self.update_count >= BOOTSTRAP_UPDATES:
+        count = self.update_count
+        if self.hold_unread:
+            count = max(0, count - SENSOR_MIN_HISTORY)
+        if count >= BOOTSTRAP_UPDATES:
             return 1.0
-        return self.update_count / BOOTSTRAP_UPDATES
+        return count / BOOTSTRAP_UPDATES
 
     @property
     def baseline_confidence(self) -> float:
