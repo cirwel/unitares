@@ -250,7 +250,12 @@ class TestBehavioralWorkToolStatsDb:
             "start_session",
         }.issubset(expanded)
         assert ToolUsageTracker.REMOVED_TOOLS.issubset(expanded)
-        assert BEHAVIORAL_NON_AGENT_ERROR_TYPES == frozenset({"system_error", "governance_refusal"})
+        assert BEHAVIORAL_NON_AGENT_ERROR_TYPES == frozenset({
+            "system_error",
+            "governance_refusal",
+            "execution_error",
+            "handler_registry_unavailable",
+        })
         pat = re.compile(BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN)
         for exc_name in ("TimeoutError", "PostgresError", "ConnectionError", "InterfaceError"):
             assert pat.match(exc_name)
@@ -563,9 +568,18 @@ class TestToolUsageExtractionAndDownstreamConsumers:
         temp_state = {}
         with patch("src.audit_db.get_behavioral_work_tool_stats_async", fetch_mock):
             temp_res = await ensure_actor_work_tool_stats_async("_simulation_temp_", temp_state)
-        assert temp_res == EMPTY_ACTOR_WORK_TOOL_STATS
-        assert temp_state["_actor_work_tool_stats"] == EMPTY_ACTOR_WORK_TOOL_STATS
+        assert temp_res["available"] is False
+        assert temp_res["source"] == "db_actor_work_tools_unavailable"
+        assert temp_res["status"] == "simulation_temp"
+        assert temp_state["_actor_work_tool_stats"] == temp_res
         fetch_mock.assert_not_awaited()
+
+        none_state = {}
+        with patch("src.audit_db.get_behavioral_work_tool_stats_async", AsyncMock(return_value=None)):
+            none_res = await ensure_actor_work_tool_stats_async("actor-1", none_state)
+        assert none_res["available"] is False
+        assert none_res["source"] == "db_actor_work_tools_unavailable"
+        assert none_res["status"] == "db_unavailable"
 
         err_state = {}
         with patch(
@@ -573,8 +587,22 @@ class TestToolUsageExtractionAndDownstreamConsumers:
             AsyncMock(side_effect=RuntimeError("db down")),
         ):
             err_res = await ensure_actor_work_tool_stats_async("actor-1", err_state)
-        assert err_res == EMPTY_ACTOR_WORK_TOOL_STATS
-        assert err_state["_actor_work_tool_stats"] == EMPTY_ACTOR_WORK_TOOL_STATS
+        assert err_res["available"] is False
+        assert err_res["source"] == "db_actor_work_tools_unavailable"
+        assert err_res["status"] == "query_error:RuntimeError"
+        assert err_state["_actor_work_tool_stats"] == err_res
+
+        # Distinguishable from a genuinely quiet actor whose DB query ran and found 0 calls.
+        quiet_state = {}
+        with patch(
+            "src.audit_db.get_behavioral_work_tool_stats_async",
+            AsyncMock(return_value={**EMPTY_ACTOR_WORK_TOOL_STATS, "window_hours": 1.0}),
+        ):
+            quiet_res = await ensure_actor_work_tool_stats_async("actor-1", quiet_state)
+        assert quiet_res["available"] is True
+        assert quiet_res["source"] == "db_actor_work_tools"
+        assert quiet_res["status"] == "no_work_tool_calls"
+        assert quiet_res["total_calls"] == 0
 
     @pytest.mark.asyncio
     async def test_assess_eisv_populates_actor_work_tool_stats_for_direct_callers(self, monkeypatch):

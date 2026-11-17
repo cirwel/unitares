@@ -433,12 +433,15 @@ def _behavioral_excluded_tool_names() -> frozenset[str]:
 # Note: live `classify_tool_result` converts `error_category="state_error"`
 # (AGENT_PAUSED / AGENT_ARCHIVED gate refusals) into `(True, None)` at write
 # time, so `audit.tool_usage` carries no read-time marker for gate refusals.
-# Uncaught transport/server exceptions raised before payload construction
-# record `error_type = type(e).__name__` (e.g. TimeoutError, PostgresError)
-# and are filtered via BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN below.
+# Uncaught exceptions raised before payload construction record
+# `error_type = type(e).__name__` on REST//mcp/ (filtered via
+# BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN) or `"execution_error"` /
+# `"handler_registry_unavailable"` on stdio (listed below).
 BEHAVIORAL_NON_AGENT_ERROR_TYPES = frozenset({
     "system_error",
     "governance_refusal",
+    "execution_error",
+    "handler_registry_unavailable",
 })
 BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN = r"^[A-Z][A-Za-z0-9]*(Error|Exception)$"
 
@@ -448,7 +451,22 @@ EMPTY_ACTOR_WORK_TOOL_STATS: Dict[str, Any] = {
     "error_count": 0,
     "tools": {},
     "source": "db_actor_work_tools",
+    "available": True,
+    "status": "no_work_tool_calls",
 }
+
+
+def unavailable_actor_work_tool_stats(reason: str) -> Dict[str, Any]:
+    """Return an explicit unavailable marker distinct from a 0-call period."""
+    return {
+        "total_calls": 0,
+        "unique_tools": 0,
+        "error_count": 0,
+        "tools": {},
+        "source": "db_actor_work_tools_unavailable",
+        "available": False,
+        "status": reason,
+    }
 
 
 async def get_behavioral_work_tool_stats_async(
@@ -461,7 +479,8 @@ async def get_behavioral_work_tool_stats_async(
     Reads directly from PostgreSQL (which receives both ``/mcp`` and REST calls)
     using the indexed ``(agent_id, ts)`` lookup, excluding lease heartbeats,
     removed legacy names, governance/discovery/ceremony meta-tools, structured
-    non-agent errors (``system_error``, ``governance_refusal``), and uncaught
+    non-agent errors (``system_error``, ``governance_refusal``,
+    ``execution_error``, ``handler_registry_unavailable``), and uncaught
     exception class names (``BEHAVIORAL_UNCAUGHT_EXCEPTION_PATTERN``), without
     falling back to the REST/stdio-only JSONL tracker.
     """
@@ -559,6 +578,8 @@ async def get_behavioral_work_tool_stats_async(
         "window_hours": float(window_hours),
         "tools": tool_stats,
         "source": "db_actor_work_tools",
+        "available": True,
+        "status": "ok",
     }
 
 
@@ -574,17 +595,23 @@ async def ensure_actor_work_tool_stats_async(
     ):
         return agent_state["_actor_work_tool_stats"]
 
-    resolved = dict(EMPTY_ACTOR_WORK_TOOL_STATS)
-    resolved["tools"] = {}
-    if agent_id and agent_id != "_simulation_temp_":
+    if not agent_id:
+        resolved = unavailable_actor_work_tool_stats("no_agent_id")
+    elif agent_id == "_simulation_temp_":
+        resolved = unavailable_actor_work_tool_stats("simulation_temp")
+    else:
         try:
             fetched = await get_behavioral_work_tool_stats_async(
                 agent_id=agent_id, window_hours=window_hours
             )
             if isinstance(fetched, dict):
                 resolved = fetched
-        except Exception:
-            pass
+            else:
+                resolved = unavailable_actor_work_tool_stats("db_unavailable")
+        except Exception as exc:
+            resolved = unavailable_actor_work_tool_stats(
+                f"query_error:{type(exc).__name__}"
+            )
 
     if isinstance(agent_state, dict):
         agent_state["_actor_work_tool_stats"] = resolved
