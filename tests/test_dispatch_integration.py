@@ -375,6 +375,45 @@ class TestCheckRateLimit:
         assert "loop detected" in text.lower() or "rate limit" in text.lower()
 
     @pytest.mark.asyncio
+    async def test_response_chain_read_uses_expensive_read_budget(self):
+        """Response expansion is metered despite details being pre-onboarding."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (False, "Too many requests")
+        limiter.get_stats.return_value = {"calls": 60}
+        arguments = {
+            "action": "details",
+            "discovery_id": "discovery-1",
+            "include_response_chain": True,
+            "agent_id": "caller-selected-bucket",
+        }
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit("knowledge", arguments, ctx)
+
+        assert _is_short_circuit(result)
+        limiter.check_rate_limit.assert_called_once_with("anonymous")
+
+    @pytest.mark.asyncio
+    async def test_plain_details_read_remains_rate_exempt(self):
+        """Opening one discovery without graph expansion stays browsable."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        arguments = {"action": "details", "discovery_id": "discovery-1"}
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit("knowledge", arguments, ctx)
+
+        assert result == ("knowledge", arguments, ctx)
+        limiter.check_rate_limit.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_loop_detection_old_calls_expire(self):
         """Old calls outside the 60-second window are cleaned up."""
         ctx = _make_ctx()
