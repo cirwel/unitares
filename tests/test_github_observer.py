@@ -1136,3 +1136,22 @@ def test_without_the_tokenizer_the_footer_is_refused_not_guessed(monkeypatch, ca
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     assert obs.main(["--repo", REPO, "--dry-run"]) == 2
     assert "markdown-it-py" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("tildes", "expected"),
+    [
+        # GFM strikes a run of one or two tildes, paired by equal length; a
+        # run of three or more is literal (GitHub POST /markdown, 2026-11-17).
+        ("text ~~~example\nUNITARES agent: {b}\nexample~~~", _UUID_B),
+        ("a ~~~~x\nUNITARES agent: {b}\ny~~~~", _UUID_B),
+        ("~~x\nUNITARES agent: {b}\ny~", _UUID_B),  # unequal runs do not pair
+        ("~UNITARES agent: {b}~", _UUID_A),
+        ("~~UNITARES agent: {b}~~", _UUID_A),
+        ("x~y\nUNITARES agent: {b}\nz~w", _UUID_A),  # intraword, across lines
+    ],
+)
+def test_strikethrough_follows_gfm_tilde_rules(tildes, expected):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + tildes.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == expected
+

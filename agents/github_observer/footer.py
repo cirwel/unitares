@@ -3,7 +3,8 @@
 Two parsers do the work, and neither is hand-written Markdown:
 
 1. ``markdown-it-py`` tokenises the body as CommonMark, with GitHub's table
-   and strikethrough extensions, and renders it to HTML. As on GitHub, a
+   and strikethrough extensions (strikethrough by GFM's own tilde rules,
+   which markdown-it-py's default rule does not follow), and renders it to HTML. As on GitHub, a
    newline inside a paragraph renders as a line break (``<br>``), and raw HTML
    passes through unchanged. GFM's tagfilter is then applied: GitHub shows
    ``<script>``, ``<textarea>`` and the other filtered tags as literal text,
@@ -41,6 +42,7 @@ from html.parser import HTMLParser
 
 try:
     from markdown_it import MarkdownIt
+    from markdown_it.rules_inline.state_inline import Delimiter, StateInline
 except ImportError:  # pragma: no cover - exercised by the missing-extra test
     MarkdownIt = None  # type: ignore[assignment,misc]
 
@@ -88,12 +90,66 @@ def tokenizer_available() -> bool:
     return MarkdownIt is not None
 
 
+# GFM strikethrough pairs a run of one tilde only with a run of one, and two
+# only with two; a run of three or more is literal text. markdown-it-py's own
+# rule splits any run into pairs of two and ignores single tildes, so it is
+# replaced. The pairing algorithm matches delimiters by marker, so the two run
+# lengths get distinct markers (the second outside Unicode).
+_TILDE_TWO = 0x7E
+_TILDE_ONE = 0x7E + 0x110000
+
+
+def _gfm_strikethrough(state: StateInline, silent: bool) -> bool:
+    if silent or state.src[state.pos] != "~":
+        return False
+    scanned = state.scanDelims(state.pos, True)
+    token = state.push("text", "", 0)
+    token.content = "~" * scanned.length
+    if scanned.length <= 2:
+        state.delimiters.append(
+            Delimiter(
+                marker=_TILDE_TWO if scanned.length == 2 else _TILDE_ONE,
+                length=0,  # no emphasis "rule of 3"
+                token=len(state.tokens) - 1,
+                end=-1,
+                open=scanned.can_open,
+                close=scanned.can_close,
+            )
+        )
+    state.pos += scanned.length
+    return True
+
+
+def _strike_pairs(state: StateInline, delimiters: list[Delimiter]) -> None:
+    for delim in delimiters:
+        if delim.marker not in (_TILDE_TWO, _TILDE_ONE) or delim.end == -1:
+            continue
+        markup = "~~" if delim.marker == _TILDE_TWO else "~"
+        for index, kind, nesting in (
+            (delim.token, "s_open", 1),
+            (delimiters[delim.end].token, "s_close", -1),
+        ):
+            token = state.tokens[index]
+            token.type, token.tag, token.nesting = kind, "s", nesting
+            token.markup, token.content = markup, ""
+
+
+def _gfm_strikethrough_pairs(state: StateInline) -> None:
+    _strike_pairs(state, state.delimiters)
+    for meta in state.tokens_meta:
+        if meta and "delimiters" in meta:
+            _strike_pairs(state, meta["delimiters"])
+
+
 def _renderer() -> MarkdownIt:
     if MarkdownIt is None:
         raise MissingTokenizer(INSTALL_HINT)
-    return MarkdownIt("commonmark", {"html": True, "breaks": True}).enable(
+    md = MarkdownIt("commonmark", {"html": True, "breaks": True}).enable(
         ["table", "strikethrough"]
     )
+    md.inline.ruler.at("strikethrough", _gfm_strikethrough)
+    md.inline.ruler2.at("strikethrough", _gfm_strikethrough_pairs)
+    return md
 
 
 class _VisibleLines(HTMLParser):
