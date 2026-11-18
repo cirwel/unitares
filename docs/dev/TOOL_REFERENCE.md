@@ -1310,7 +1310,7 @@ Export governance history and system data
 - **Timeout:** 45s for the router; some actions stop sooner (table below)
 - **Related:** `get_governance_metrics`, `observe`
 
-Exports one agent's check-in trajectory: the monitor's retained rolling history, not the append-only audit record. action='file' writes under the server's data directory, overwrites any existing file when filename is given, refuses unless the target agent is registered, and rejects complete_package in csv. For current state use check_working_state; for cross-agent comparison use observe.
+Exports one agent's check-in trajectory: the monitor's retained rolling history, not the append-only audit record. action='file' writes under the server's data directory, overwrites any existing file when filename is given, refuses unless the target agent is registered, and rejects complete_package in csv. complete_package adds the agent's record (checkpoints, findings it authored, outcomes) read without the estimator, so it is written even when the history is not. For current state use check_working_state; for cross-agent comparison use observe.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|

@@ -638,19 +638,36 @@ the changed paths cannot be read, it requires the second family.
 
 **Operator waiver of the second family.** For a small change to a sensitive
 path (a help string, a renamed symbol), the operator can run
-`review.sh waive --reason "<why>" --operator-approved`. It is bounded: one
-family must already have passed this exact diff, so a waiver never replaces the
-first review; it is tied to the diff key, so any push that changes the diff
-voids it; the gate counts the changed lines on the sensitive paths from git and
-refuses past 20 (`waiver.max_changed_lines` in the policy file, read from the
-base ref); a PR carries at most 2 (`waiver.max_per_pr`); and the gate's own
-files (`review_gate.py`, `review_policy.json`, `review.sh`,
-`review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
-behavioural change on a sensitive path can be waived too, so read the hunks
-before you waive. The comment shows the waived hunks and
-the reason. Bot comments are excluded; cloud agents using the operator's
-account remain indistinguishable from the operator, so an agent runs `waive`
-only when the operator says to and never through the App runner.
+`review.sh waive --reason "<why>" --operator-approved`. It is bounded:
+
+- **One independent review stays.** A family that is *not* one of the PR's
+  author families (read from its provenance signatures, or its branch prefix)
+  must already have passed this exact diff. A self-review does not count, and
+  a PR whose authorship cannot be read cannot be waived at all.
+- **It is tied to the diff and the authorship.** Any push that changes the
+  diff voids it, and so does an edit to the PR body that changes the author
+  families recorded in the waiver.
+- **Size.** The gate counts the changed lines on the sensitive paths from git
+  and refuses past 20 (`waiver.max_changed_lines` in the policy file, read from
+  the base ref). For a larger change the operator can raise the cap for that
+  one diff with `--allow-lines N` (N at least the changed lines). That is for
+  the case two families cannot cover, typically a PR co-written by two
+  families, where only one family is left to review independently; it is a
+  deliberate operator act, recorded in the waiver, never a rule the gate
+  applies by itself.
+- A PR carries at most 2 waivers (`waiver.max_per_pr`), and the gate's own
+  files (`review_gate.py`, `review_policy.json`, `review.sh`,
+  `review-gate.yml`) can never be waived, whatever the allowance.
+
+The gate bounds the size of the change, not its meaning: a small behavioural
+change on a sensitive path can be waived too, so read the hunks before you
+waive. The comment shows the waived hunks, the author families, the
+independent family that passed, any raised allowance and the reason. When a
+sensitive diff is held, the `review` check names who passed, who wrote it and
+which families could still review, and says when none is left. It does not
+print a waive command. Bot comments are excluded; cloud agents using the
+operator's account remain indistinguishable from the operator, so an agent
+runs `waive` only when the operator says to and never through the App runner.
 
 `review.sh` never starts the second review itself. When a sensitive diff has
 only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)
