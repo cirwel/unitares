@@ -426,6 +426,24 @@ def test_a_fix_prs_detection_record_lands_above_the_signature(tmp_path: Path) ->
     ))]
 
 
+def test_a_fenced_or_quoted_example_after_the_record_does_not_replace_it(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [_commit("fix: only")])
+    body = ("Classification: fix\n\nDefect-in: #2831\nDetected-by: operator\n"
+            "Detection-trigger: unprompted\nDetected-at: 2026-11-04\nDetection-record: none\n\n"
+            "```text\nDetected-by: check:example\n```\n> Detected-at: 2020-01-01\n"
+            "~~~~\nDefect-in: #1\n~~~\n~~~~\n\n"
+            f"Model: gpt-5\nUNITARES agent: {AGENT}\n")
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1, model="gpt-5", body=(
+        "* fix: only\n\n"
+        "---------\n\n"
+        "Defect-in: #2831\nDetected-by: operator\nDetection-trigger: unprompted\n"
+        "Detected-at: 2026-11-04\nDetection-record: none\n"
+        f"Model: gpt-5\nUNITARES agent: {AGENT}\n\n"
+        "Co-authored-by: Kenny Wang <k@example.org>"
+    ))]
+
+
 def test_the_co_author_credits_stay_a_trailer_block_git_can_parse(tmp_path: Path) -> None:
     _commits(tmp_path, 1, [_commit("fix: only")])
     script = SCRIPT.read_text()

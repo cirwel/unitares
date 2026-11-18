@@ -88,6 +88,13 @@ def test_prompted_by_needs_a_prompted_trigger():
     assert cdr.problems(body.replace("unprompted", "prompted")) == []
 
 
+def test_a_prompted_detection_names_who_prompted_it():
+    body = "Classification: fix\n" + BLOCK.replace("unprompted", "prompted")
+    found = cdr.problems(body)
+    assert len(found) == 1 and "Prompted-by" in found[0]
+    assert cdr.problems(body + "Prompted-by: unknown\n") == []
+
+
 def test_the_last_line_of_a_field_wins():
     body = "Classification: fix\nDetected-by: me\n" + BLOCK
     assert cdr.problems(body) == []

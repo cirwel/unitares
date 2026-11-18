@@ -305,10 +305,23 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
 squash_signature() {  # <pr-json> -> trailer lines, or empty
   jq -r '
     [(.body // "") | splits("\\r?\\n")] as $lines
+    # Detection lines count only outside fenced code and block quotes, by the
+    # same rules as scripts/dev/check_detection_record.py, so a quoted example
+    # cannot replace the record the check accepted.
+    | (reduce $lines[] as $l ({fence: "", out: []};
+        ([$l | capture("^ {0,3}(?<m>`{3,}|~{3,})(?<rest>.*)$")] | first) as $run
+        | if $run != null then
+            if .fence == "" then
+              (if ($run.m[0:1] == "`" and ($run.rest | contains("`"))) then . else .fence = $run.m end)
+            elif ($run.m[0:1] == .fence[0:1] and ($run.m | length) >= (.fence | length)
+                  and ($run.rest | test("^\\s*$"))) then .fence = ""
+            else . end
+          elif .fence != "" or ($l | test("^\\s*>")) then .
+          else .out += [$l] end) | .out) as $plain
     | [ "Defect-in", "Detected-by", "Detection-trigger", "Prompted-by", "Detected-at", "Detection-record" ]
       as $fields
     | [ $fields[] as $f
-        | ([$lines[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
+        | ([$plain[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
             | select(test("^[^`<>]{1,200}$"))] | last) as $v
         | select($v != null) | "\($f): \($v)" ] as $detection
     | ([$lines[] | capture("^Model:[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v] | last // "") as $model

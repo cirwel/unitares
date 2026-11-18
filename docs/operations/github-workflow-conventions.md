@@ -90,7 +90,8 @@ veto by removing the label.
   Detection-record: <shared-memory discovery id> | none
   ```
 
-  Add `Prompted-by: operator | agent:<uuid>` when the trigger is `prompted`.
+  When the trigger is `prompted`, `Prompted-by: operator | agent:<uuid> | unknown`
+  is required as well.
   `unknown` is accepted in every field: the record asks for honesty, not for
   knowledge the author lacks, and a fixer who did not notice the defect writes
   what they know. When you notice a defect yourself, also write a
