@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.agent_behavioral_baseline import WelfordStats
-from src.behavioral_sensor import hold_unread_axes_enabled
+from src.behavioral_sensor import SENSOR_MIN_HISTORY, hold_unread_axes_enabled
 
 
 # Per-dimension EMA alphas.
@@ -426,6 +426,25 @@ class BehavioralEISV:
         return count / BOOTSTRAP_UPDATES
 
     @property
+    def checkin_confidence(self) -> float:
+        """The confidence ramp over check-ins the sensor could have read.
+
+        With the hold off every check-in is a reading and this equals
+        ``confidence``. Under the hold the sensor's first ``SENSOR_MIN_HISTORY``
+        check-ins cannot carry a reading, so they are not counted: an agent
+        that supplies everything reaches authority (0.3) on check-in 6, and
+        that is where this reaches 0.3 too. Separates "too new to have been
+        assessed" from "could have been assessed and supplied too little" (see
+        ``cold_start_risk_confirmation.reading_insufficient``).
+        """
+        count = self.update_count
+        if self.hold_unread:
+            count = max(0, count - SENSOR_MIN_HISTORY)
+        if count >= BOOTSTRAP_UPDATES:
+            return 1.0
+        return count / BOOTSTRAP_UPDATES
+
+    @property
     def baseline_confidence(self) -> float:
         """How stable is the behavioral baseline. 0 = no data, 1 = fully characterized."""
         count = self.evidence_count
@@ -612,9 +631,13 @@ class BehavioralEISV:
         # check-in), but confidence does not: nothing is scored until a reading.
         state.read_update_count = int(data.get("read_updates", state.update_count) or 0)
         persisted_readings = data.get("readings")
-        if isinstance(persisted_readings, dict):
+        if isinstance(persisted_readings, dict) and (
+            _record_tracks_readings(data) or not state.hold_unread
+        ):
             # The record says which rule wrote it; counters alone do not (a
-            # state written with the hold off carries them too).
+            # state written with the hold off carries them too). Under the
+            # hold, a hold-off snapshot starts unread just like one from before
+            # readings were counted, so the first real reading seeds it.
             state.written_under_hold = _record_tracks_readings(data)
             state.readings = {d: int(persisted_readings.get(d, 0) or 0) for d in DIMENSIONS}
             persisted_since = data.get("since_reading")

@@ -1,0 +1,43 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-fundamentals",
+  "verified_at": "2026-11-17T05:47:52Z",
+  "verified_date": "2026-11-17",
+  "verifier": "gemini-antigravity (UNITARES agent 0fc988d6): re-checked all 4 skills after P2/P3 review fixes (core.py simulate_update, eisv/adapter.py assess_eisv, audit_db error filter + docs/EISV_COMPUTATION); default behavior unchanged (flags default 0)",
+  "source_digests": {
+    "unitares/config/governance_config.py": "6112deea9bd0c7e9",
+    "unitares/docs/EISV_COMPUTATION.md": "ddcc60bbbffc16c7",
+    "unitares/governance_core/coherence.py": "ef819003ee72b388",
+    "unitares/governance_core/parameters.py": "e02c333c8772f9b0",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
+    "unitares/src/behavioral_assessment.py": "c1da9970c7fd36d2",
+    "unitares/src/behavioral_sensor.py": "d33d3c219b424bd1",
+    "unitares/src/behavioral_state.py": "668e589b0d7966ba",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/cold_start_risk_confirmation.py": "555a665ba5333cd8",
+    "unitares/src/confidence.py": "dbdcb394613325fd",
+    "unitares/src/eisv_telemetry.py": "4c86d7dfbb76fe86",
+    "unitares/src/governance_glossary.py": "9cf70dff34b9b593",
+    "unitares/src/governance_monitor.py": "e38e2cebb80c7657",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "d368d68351380667",
+    "unitares/src/mcp_handlers/observability/outcome_events.py": "5d9d685a82328cd3",
+    "unitares/src/mcp_handlers/response_formatter.py": "19578fd700ce2737",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/mcp_handlers/updates/context.py": "bfae0beb8ed92df6",
+    "unitares/src/monitor_calibration.py": "5fc4932dd6e3f598",
+    "unitares/src/monitor_decision.py": "059d229f8f3a3f90",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/monitor_result.py": "a081e8047caff81f",
+    "unitares/src/outcomes.py": "613cee0335dd6249",
+    "unitares/src/services/runtime_queries.py": "deea3a8596ad0382"
+  },
+  "skill_digest": "d39376bef700f2ae",
+  "superseded_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": [
+      "a909586147460faf"
+    ]
+  }
+}

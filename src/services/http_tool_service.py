@@ -41,6 +41,7 @@ from src.services.tool_usage_recorder import (
     build_tool_usage_payload,
     classify_tool_result,
     record_tool_usage,
+    resolve_audit_agent_id,
     resolve_minted_agent_id,
 )
 from src.wave3a_beam_proxy import proxy_to_beam
@@ -180,6 +181,7 @@ async def execute_nested_http_tool(
             )
             if isinstance(rate_result, list):
                 success, error_type = classify_tool_result(rate_result)
+                caller_id = resolve_audit_agent_id(None)
                 record_tool_usage(
                     tool_name=tool_name,
                     agent_id=nested.get("agent_id") or get_context_agent_id(),
@@ -188,6 +190,8 @@ async def execute_nested_http_tool(
                     latency_ms=int((time.monotonic() - rate_started) * 1000),
                     session_id=nested.get("client_session_id"),
                     payload=build_tool_usage_payload(tool_name, nested),
+                    audit_agent_id=caller_id,
+                    actor_verified=bool(caller_id),
                 )
                 return rate_result
         return await execute_http_tool(tool_name, nested)
@@ -462,7 +466,8 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             record_tool_usage(tool_name=tool_name, agent_id=None,
                               success=False, error_type="identity_required",
                               latency_ms=latency_ms, session_id=session_id,
-                              payload=usage_payload)
+                              payload=usage_payload,
+                              audit_agent_id=None, actor_verified=False)
             return refusal
 
         # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
@@ -480,9 +485,12 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             )
             if proxy_result.ok:
                 latency_ms = int((time.monotonic() - t0) * 1000)
+                caller_id = resolve_audit_agent_id(None)
                 record_tool_usage(tool_name=tool_name, agent_id=agent_id,
                                   success=True, latency_ms=latency_ms,
-                                  session_id=session_id, payload=usage_payload)
+                                  session_id=session_id, payload=usage_payload,
+                                  audit_agent_id=caller_id,
+                                  actor_verified=bool(caller_id))
                 # The proxy already wrote the success-row measurement
                 # (FIND-A5 fold in ``wave3a_beam_proxy.py``); do not
                 # duplicate the write here.
@@ -510,11 +518,16 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
             if not nested_delegated:
+                caller_id = resolve_minted_agent_id(
+                    tool_name, resolve_audit_agent_id(None), result
+                )
                 record_tool_usage(tool_name=tool_name,
                                   agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                                   success=success, error_type=error_type,
                                   latency_ms=latency_ms, session_id=session_id,
-                                  payload=usage_payload)
+                                  payload=usage_payload,
+                                  audit_agent_id=caller_id,
+                                  actor_verified=bool(caller_id))
             return _normalize_direct_http_result(result)
         try:
             result = await execute_http_dispatch_fallback(tool_name, arguments)
@@ -523,17 +536,25 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
         if not nested_delegated:
+            caller_id = resolve_minted_agent_id(
+                tool_name, resolve_audit_agent_id(None), result
+            )
             record_tool_usage(tool_name=tool_name,
                               agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                               success=success, error_type=error_type,
                               latency_ms=latency_ms, session_id=session_id,
-                              payload=usage_payload)
+                              payload=usage_payload,
+                              audit_agent_id=caller_id,
+                              actor_verified=bool(caller_id))
         return result
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
         if not nested_delegated:
+            caller_id = resolve_audit_agent_id(None)
             record_tool_usage(tool_name=tool_name, agent_id=agent_id,
                               success=False, error_type=type(e).__name__,
                               latency_ms=latency_ms, session_id=session_id,
-                              payload=usage_payload)
+                              payload=usage_payload,
+                              audit_agent_id=caller_id,
+                              actor_verified=bool(caller_id))
         raise

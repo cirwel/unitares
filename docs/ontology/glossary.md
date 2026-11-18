@@ -649,7 +649,7 @@ verdicts", and built a "two independent loops" reading on it. That source was
 corrected on 2026-08-29: the old line "describes authority, not causal
 independence." The behavioral sensor still blends the legacy ODE `C(V)`
 coherence term into 25–30% of `E` and 30–40% of `I`, and uses ODE-derived
-regime inputs. Two more channels exist: for check-ins 1–2 the verdict is owned
+regime inputs. Two more channels exist (at that snapshot): before behavioral authority (check-ins 1–2 under legacy filling, or 1–5 under current `HU1` defaults; see `docs/EISV_COMPUTATION.md`), the verdict is owned
 by the Φ cold-start prior, and Φ is evaluated on the ODE state
 (`src/monitor_phi.py`); and when a caller omits confidence, 55% of the fallback
 estimate's base is the same legacy `C(V_ODE)` scalar, which feeds calibration

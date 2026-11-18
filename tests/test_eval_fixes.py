@@ -151,9 +151,24 @@ class TestConfidenceVariance:
         assert min(offsets) < -0.5 * AGENT_OFFSET_HALF_WIDTH
 
     @patch('src.tool_usage_tracker.get_tool_usage_tracker')
-    def test_tool_gap_penalty(self, mock_tracker):
+    def test_tool_gap_penalty(self, mock_tracker, monkeypatch):
         """Agent with low tool success should get lower confidence than one with high success."""
         from src.confidence import derive_confidence
+
+        state = self._make_state()
+        agent_id = "agent-test-gap"
+
+        # Default SH1 path uses actor work-tool stats rather than JSONL ToolUsageTracker
+        actor_high = {'total_calls': 10, 'error_count': 1, 'tools': {'read': {'success_count': 9, 'total_calls': 10}}}
+        actor_low = {'total_calls': 10, 'error_count': 8, 'tools': {'read': {'success_count': 2, 'total_calls': 10}}}
+        conf_high_sh1, meta_high_sh1 = derive_confidence(state, agent_id=agent_id, tool_usage_stats=actor_high)
+        conf_low_sh1, meta_low_sh1 = derive_confidence(state, agent_id=agent_id, tool_usage_stats=actor_low)
+        assert conf_low_sh1 < conf_high_sh1
+        assert meta_low_sh1['gap_penalty'] > meta_high_sh1['gap_penalty']
+        mock_tracker.assert_not_called()
+
+        # Legacy UNITARES_ACTOR_WORK_TOOL_STATS=0 falls back to ToolUsageTracker
+        monkeypatch.setenv("UNITARES_ACTOR_WORK_TOOL_STATS", "0")
 
         # High tool success
         tracker_high = MagicMock()
@@ -172,9 +187,6 @@ class TestConfidenceVariance:
                 'read': {'success_count': 2, 'total_calls': 10}
             }
         }
-
-        state = self._make_state()
-        agent_id = "agent-test-gap"
 
         mock_tracker.return_value = tracker_high
         conf_high, meta_high = derive_confidence(state, agent_id=agent_id)

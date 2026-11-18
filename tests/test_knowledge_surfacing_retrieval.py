@@ -145,7 +145,7 @@ class TestEnrichKnowledgeSurfacing:
             include_memory_suggestions=False,
         )
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=[{"discovery_id": "d1"}]),
         ) as search:
             await enrich_knowledge_surfacing(ctx)
@@ -158,7 +158,7 @@ class TestEnrichKnowledgeSurfacing:
         ctx = self._ctx(response_text="the coherence gate soak read", tags=["governance"])
         found = [{"discovery_id": "d1", "summary": "coherence gate soak", "relevance": 0.4}]
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=found),
         ) as search:
             await enrich_knowledge_surfacing(ctx)
@@ -176,7 +176,7 @@ class TestEnrichKnowledgeSurfacing:
             return_value=[_discovery("d1", "tagged", tags=["governance"])]
         )
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=[]),
         ):
             with patch.dict(
@@ -196,7 +196,7 @@ class TestEnrichKnowledgeSurfacing:
         ctx = self._ctx(response_text="coherence gate", tags=["ephemeral"])
         get_graph = AsyncMock()
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=[]),
         ):
             with patch.dict(
@@ -213,7 +213,7 @@ class TestEnrichKnowledgeSurfacing:
         ctx = self._ctx(response_text="coherence gate soak")
         found = [{"discovery_id": f"d{i}", "summary": f"s{i}"} for i in range(9)]
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=found),
         ):
             await enrich_knowledge_surfacing(ctx)
@@ -226,7 +226,7 @@ class TestEnrichKnowledgeSurfacing:
         graph = AsyncMock()
         graph.query = AsyncMock(side_effect=asyncio.TimeoutError())
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=[]),
         ):
             with patch.dict(
@@ -246,7 +246,7 @@ class TestEnrichKnowledgeSurfacing:
     async def test_no_text_and_no_tags_is_a_quiet_no_op(self):
         ctx = self._ctx()
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=[]),
         ):
             await enrich_knowledge_surfacing(ctx)
@@ -308,7 +308,7 @@ class TestFullTextRecall:
             "src.knowledge_graph.get_knowledge_graph",
             AsyncMock(return_value=Graph()),
         ), patch(
-            "src.mcp_handlers.updates.enrichments._KG_SEARCH_TIMEOUT", 0.05
+            "src.mcp_handlers.updates.enrichment_helpers._KG_SEARCH_TIMEOUT", 0.05
         ):
             started = asyncio.get_running_loop().time()
             result = await _search_kg_by_checkin_text(ctx)
@@ -325,7 +325,7 @@ class TestCheckinSearchCache:
         ctx = SimpleNamespace(_kg_search_ready=False, _kg_search_results=[])
         found = [{"discovery_id": "d1", "relevance": 0.4}]
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=found),
         ) as search:
             first = await _cached_kg_search_by_checkin_text(ctx)
@@ -343,7 +343,7 @@ class TestCheckinSearchCache:
             {"discovery_id": "strong", "relevance": 0.5},
         ]
         with patch(
-            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            "src.mcp_handlers.updates.enrichment_helpers._search_kg_by_checkin_text",
             AsyncMock(return_value=found),
         ) as search:
             result = await _cached_kg_search_by_checkin_text(ctx, floor=0.35)

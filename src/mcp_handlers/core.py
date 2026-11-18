@@ -357,13 +357,15 @@ def _unbound_next_action(caller_sent_session_id: bool) -> dict:
 async def metrics_agent_is_known(agent_id: str) -> bool:
     """True when ``agent_id`` names an onboarded identity.
 
-    ``agent_metadata`` is the cold-start loader's complete view of every
-    onboarded identity — ``_load_metadata_from_postgres_async`` passes
-    ``include_unparticipated=True`` precisely so never-participated agents
-    stay visible — so absence from it means "no such agent", not "not
-    loaded yet". ``load_metadata_async`` fast-paths on a bool once the
-    registry is warm; it is here only so a cold-start read cannot refuse a
-    real agent.
+    Once the cold-start load has finished, ``agent_metadata`` holds every
+    identity that is not deleted, so absence from it means "no such agent".
+    It is complete for two reasons: ``_load_metadata_from_postgres_async``
+    pages until a short page, so no row count truncates it (#3246), and it
+    passes ``include_unparticipated=True``, so never-participated agents are
+    not filtered out. Completeness holds only after the load finishes, so a
+    cache miss awaits ``load_metadata_async`` before answering. That call
+    fast-paths on a bool once the registry is warm; it is here so a read
+    during the start-up load cannot refuse a real agent.
     """
     from src.agent_state import load_metadata_async
 
@@ -576,6 +578,13 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
         "response_text": arguments.get("response_text", ""),
         "complexity": complexity  # Use validated value
     }
+
+    from src.behavioral_sensor import actor_work_tool_stats_enabled
+
+    if actor_work_tool_stats_enabled():
+        from src.audit_db import ensure_actor_work_tool_stats_async
+
+        await ensure_actor_work_tool_stats_async(agent_id, agent_state)
 
     # Run simulation (doesn't persist state) with confidence
     result = monitor.simulate_update(agent_state, confidence=confidence)

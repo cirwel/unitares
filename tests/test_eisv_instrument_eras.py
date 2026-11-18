@@ -388,6 +388,11 @@ def test_a_threshold_override_changes_the_instrument_id():
     ("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1"),
     ("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0"),
     ("UNITARES_PER_AGENT_I_CALIBRATION", "0"),
+    ("UNITARES_HOLD_UNREAD_AXES", "0"),
+    ("UNITARES_SENSOR_DRIFT_AGENT_LOCAL", "0"),
+    ("UNITARES_DROP_CONTINUITY_E_BLEND", "0"),
+    ("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0"),
+    ("UNITARES_ACTOR_WORK_TOOL_STATS", "0"),
     ("UNITARES_I_DYNAMICS", "logistic"),
     ("UNITARES_INTEGRATOR", "euler"),
     ("UNITARES_PARAMS_PROFILE", "v41"),
@@ -465,7 +470,9 @@ _COVERED = {
     "UNITARES_CLASS_CALIBRATION", "UNITARES_PARAMS_PROFILE", "UNITARES_PARAMS_JSON",
     "UNITARES_INTEGRATOR", "UNITARES_I_DYNAMICS", "UNITARES_SENSOR_COUPLING",
     "UNITARES_FLOOR_BREACH_CAUTION_APPLY", "UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS",
-    "UNITARES_PER_AGENT_I_CALIBRATION",
+    "UNITARES_PER_AGENT_I_CALIBRATION", "UNITARES_HOLD_UNREAD_AXES",
+    "UNITARES_SENSOR_DRIFT_AGENT_LOCAL", "UNITARES_DROP_CONTINUITY_E_BLEND",
+    "UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "UNITARES_ACTOR_WORK_TOOL_STATS",
 }
 _NOT_VALUE_AFFECTING = {
     "UNITARES_GROUNDING_SHADOW": "shadow record only",
@@ -706,3 +713,12 @@ async def test_basin_read_refuses_mixed_stamped_instruments(monkeypatch, capsys)
     assert await read.run("db", start, start + timedelta(hours=1), allow_cross="A/B") == 0
     out = capsys.readouterr().out
     assert "Pooled across stamped instrument ids" in out and "`I1:b` (2 rows)" in out
+
+
+def test_sn1_is_timed_and_post_deploy_window_is_single_era():
+    sn1 = next(b for b in eisv_eras.load_boundaries() if b.id == "SN1")
+    assert sn1.effective_at == _t("2026-11-05T22:56:34")
+    assert eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16"), stamp_filtered=True) == []
+    assert [b.id for b in eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16"))] == ["HU1", "SD1", "SH1"]
+    assert "SN1" in [b.id for b in eisv_eras.boundaries_crossed(_t("2026-11-01"), _t("2026-11-10"))]
+    assert eisv_eras.current_era_id() == "SH1"

@@ -650,19 +650,23 @@ async def _drive_synthesis_to_terminal_write(pg_mock, beam_mock):
     async def _quiet_save(session, *, defer_terminal=False):
         return None
 
+    PHASE = "src.mcp_handlers.dialectic.phase_submission"
+    RES = "src.mcp_handlers.dialectic.resolution_helpers"
     try:
-        with patch(f"{DIALECTIC}.mcp_server", server), \
+        with patch(f"{PHASE}.mcp_server", server), \
+             patch(f"{RES}.mcp_server", server), \
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
-             patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
-             patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
+             patch(f"{PHASE}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch(f"{PHASE}.save_session", new=_quiet_save), \
+             patch(f"{RES}.save_session", new=_quiet_save), \
              patch(
-                 f"{DIALECTIC}.pg_add_message",
+                 f"{RES}.pg_add_message",
                  new=AsyncMock(side_effect=successful_dialectic_message_append),
              ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.pg_resolve_session", pg_mock), \
-             patch(f"{DIALECTIC}.beam_resolve", beam_mock), \
-             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock, return_value={"success": True}), \
+             patch(f"{RES}.pg_resolve_session", pg_mock), \
+             patch(f"{RES}.beam_resolve", beam_mock), \
+             patch(f"{RES}.execute_resolution", new_callable=AsyncMock, return_value={"success": True}), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-paused"):
             await handle_submit_synthesis({
                 "session_id": session.session_id,

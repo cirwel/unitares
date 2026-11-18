@@ -1,0 +1,26 @@
+{
+  "number": 3259,
+  "state": "open",
+  "draft": true,
+  "merged_at": null,
+  "created_at": "2026-11-13T13:17:38Z",
+  "updated_at": "2026-11-14T11:02:50Z",
+  "author_association": "CONTRIBUTOR",
+  "body": "---\nModel: claude-fable-5-2\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n",
+  "head": {
+    "sha": "7d51a443591c576096ca38b967d7461d07910d57",
+    "ref": "claude/missing-axes-6bccb016"
+  },
+  "base": {
+    "ref": "master",
+    "repo": {
+      "id": 1110227889,
+      "full_name": "cirwel/unitares"
+    }
+  },
+  "user": {
+    "id": 342195540,
+    "login": "unitares-agents[bot]",
+    "type": "Bot"
+  }
+}

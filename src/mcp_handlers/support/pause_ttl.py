@@ -155,6 +155,25 @@ def _emit_audit(agent_uuid: str, original_paused_at: Optional[str]) -> None:
         logger.debug("[pause-ttl] audit emit failed: %r", exc)
 
 
+def record_paused_refusal(agent_uuid: str, meta: Any, surface: str) -> None:
+    """Audit one write refused by a pause. Fire-and-forget; never raises.
+
+    Both pause gates (the check-in circuit breaker in updates/phases.py and
+    ``_check_agent_status`` in support/agent_auth.py) call this immediately
+    before returning ``AGENT_PAUSED``, so the refusal is countable without
+    changing what is refused.
+    """
+    try:
+        from src.audit_log import audit_logger
+        audit_logger.log_paused_write_refused(
+            agent_id=agent_uuid,
+            surface=surface,
+            paused_at=getattr(meta, "paused_at", None),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask
+        logger.debug("[pause-ttl] paused-refusal audit emit failed: %r", exc)
+
+
 # ─── Async entry point (process_agent_update path) ─────────────────────
 
 
@@ -424,7 +443,7 @@ def describe_write_gate(meta: Any) -> dict:
     """Whether this agent's governed writes would be refused right now.
 
     Read from the predicates the write gates apply:
-    check_agent_can_operate (support/agent_auth.py) for new shared-memory
+    check_agent_can_operate_async (support/agent_auth.py) for new shared-memory
     entries, and the check-in phases in updates/phases.py. Both refuse while
     ``status == "paused"`` until the token-fenced durable expiry transition
     commits. Passing PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``) makes the
@@ -433,8 +452,10 @@ def describe_write_gate(meta: Any) -> dict:
     start_session(resume=true), which unarchives the same UUID
     (require_registered_agent routes there); self_recovery rejects archived
     identities. The check-in phase refuses a deleted identity too, which
-    check_agent_can_operate does not check. Any other status, and an
-    identity the server holds no record for yet, passes both gates.
+    the shared-memory gate does not check. This description reflects only
+    the supplied metadata, not registry availability or identity admission.
+    Shared-memory writes also read durable status and refuse lookup failures;
+    a missing metadata record here is not proof that a write will be admitted.
 
     Read-only: unlike the gates it never expires a pause, so a stale pause is
     still reported as held. ``expiry_eligible`` says a gated operation may

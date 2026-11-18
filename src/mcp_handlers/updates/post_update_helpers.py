@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from typing import Any, Dict, Optional
 
-from src import agent_storage as _default_agent_storage
+from src import agent_storage
 from src.auto_outcome_labels import (
     COMPLETION_SIGNAL_RE,
     FAILURE_SIGNAL_RE,
@@ -18,31 +17,6 @@ logger = get_logger("src.mcp_handlers.updates.phases")
 # Compatibility re-exports for phases; the shared classifier owns the patterns.
 _COMPLETION_SIGNAL_RE = COMPLETION_SIGNAL_RE
 _FAILURE_SIGNAL_RE = FAILURE_SIGNAL_RE
-
-
-def _p_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.updates.phases")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
-
-
-class _AgentStorageProxy:
-    def __getattr__(self, name: str) -> Any:
-        return getattr(_p_attr("agent_storage", _default_agent_storage), name)
-
-
-agent_storage = _AgentStorageProxy()
-
-
-def _proxy(name: str):
-    def _call(*args: Any, **kwargs: Any) -> Any:
-        return _p_attr(name)(*args, **kwargs)
-    return _call
-
-
-_persist_agent_state_row = _proxy("_persist_agent_state_row")
-_record_auto_outcome_event = _proxy("_record_auto_outcome_event")
 
 # ─── Purpose Inference ─────────────────────────────────────────────────
 
@@ -473,16 +447,21 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
             baseline.update("coherence", ctx.coherence)
         # Tool usage signals
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            _tu = get_tool_usage_tracker().get_usage_stats(
-                agent_id=agent_id, window_hours=1,
+            from src.behavioral_sensor import (
+                actor_work_tool_stats_enabled,
+                extract_tool_usage_counts,
             )
-            _tu_total = _tu.get("total_calls", 0)
-            if _tu_total > 0:
-                _tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in _tu.get("tools", {}).values()
+
+            if actor_work_tool_stats_enabled():
+                _tu = (ctx.agent_state or {}).get("_actor_work_tool_stats") or {}
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
+
+                _tu = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=agent_id, window_hours=1,
                 )
+            _tu_total, _tu_failed = extract_tool_usage_counts(_tu)
+            if _tu_total > 0:
                 baseline.update("tool_error_rate", _tu_failed / _tu_total)
                 baseline.update("tool_call_velocity", _tu_total / 60.0)
         except Exception:
@@ -678,6 +657,8 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
         )
 
 
+    from .phases import _persist_agent_state_row
+
     return await _persist_agent_state_row(ctx, behavioral_snapshot, eisv_telemetry)
 
 
@@ -754,6 +735,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     # rollups ("N tool calls completed: ...") are not task-completion claims (#2418).
     from src.dual_log.continuity import is_automatic_or_rollup_checkin
     from src.auto_outcome_labels import AUTO_OUTCOME_RULE_VERSION, infer_outcome_label
+    from .phases import _record_auto_outcome_event
 
     ctx.outcome_event_id = None
     if is_automatic_or_rollup_checkin(

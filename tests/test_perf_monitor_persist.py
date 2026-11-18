@@ -51,7 +51,7 @@ def test_targets_use_only_supported_percentile_fields():
 @pytest.mark.asyncio
 async def test_persist_iteration_writes_present_keys_only(monkeypatch):
     """Given a partial snapshot, the task records what it can and skips the rest."""
-    import src.background_tasks as bg
+    import src.background_maintenance_tasks as bg_maint
 
     fake_snapshot = {
         "ode.numpy_step_ms": {
@@ -70,7 +70,7 @@ async def test_persist_iteration_writes_present_keys_only(monkeypatch):
     async def fake_record(name: str, value: float):
         written.append((name, value))
 
-    monkeypatch.setattr(bg, "_PERF_PERSIST_TARGETS", _PERF_PERSIST_TARGETS)
+    monkeypatch.setattr(bg_maint, "_PERF_PERSIST_TARGETS", _PERF_PERSIST_TARGETS)
     # Manually run one iteration of the loop body. Cleaner than awaiting the
     # while True loop — we are testing the dispatch, not the cadence.
     for op_key, pct_field, metric_name in _PERF_PERSIST_TARGETS:

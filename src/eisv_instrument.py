@@ -80,9 +80,15 @@ def _static_config() -> Dict[str, Any]:
     )
     from src.behavioral_assessment import floor_breach_caution_apply_enabled
     from src.behavioral_sensor import (
+        ACTOR_WORK_TOOL_STATS_MODE,
+        DROP_CONTINUITY_E_BLEND_MODE,
+        DROP_UNIQUE_TOOLS_I_BLEND_MODE,
         HOLD_UNREAD_AXES_MODE,
         NEUTRALIZE_SENSOR_SELF_LOOPS_MODE,
         SENSOR_DRIFT_AGENT_LOCAL_MODE,
+        actor_work_tool_stats_enabled,
+        drop_continuity_e_blend_enabled,
+        drop_unique_tools_i_blend_enabled,
         hold_unread_axes_enabled,
         neutralize_sensor_self_loops_enabled,
         per_agent_i_calibration_enabled,
@@ -112,6 +118,12 @@ def _static_config() -> Dict[str, Any]:
         cfg["hold_unread_axes"] = HOLD_UNREAD_AXES_MODE
     if sensor_drift_agent_local_enabled():
         cfg["sensor_drift_agent_local"] = SENSOR_DRIFT_AGENT_LOCAL_MODE
+    if drop_continuity_e_blend_enabled():
+        cfg["drop_continuity_e_blend"] = DROP_CONTINUITY_E_BLEND_MODE
+    if drop_unique_tools_i_blend_enabled():
+        cfg["drop_unique_tools_i_blend"] = DROP_UNIQUE_TOOLS_I_BLEND_MODE
+    if actor_work_tool_stats_enabled():
+        cfg["actor_work_tool_stats"] = ACTOR_WORK_TOOL_STATS_MODE
     return cfg
 
 

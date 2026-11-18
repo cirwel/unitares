@@ -303,9 +303,11 @@ async def test_default_get_uses_persisted_reviewer_provenance(
         "reviewer_backend": {"reviewer_kind": reviewer_kind}
     }
 
+    from src.mcp_handlers.dialectic import phase_submission
+
     with (
         patch.object(
-            handlers,
+            phase_submission,
             "load_session_as_dict",
             new=AsyncMock(return_value=data),
         ) as fast_load,

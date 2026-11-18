@@ -84,7 +84,7 @@ async def test_persist_thread_identity_schedulable_as_task():
 async def test_persist_inferred_purpose_calls_storage_with_correct_args():
     """Helper passes through to agent_storage.update_agent with purpose kwarg."""
     with patch(
-        "src.mcp_handlers.updates.phases.agent_storage.update_agent",
+        "src.mcp_handlers.updates.post_update_helpers.agent_storage.update_agent",
         new_callable=AsyncMock,
     ) as mock_update:
         await _persist_inferred_purpose_async("agent-id-abc", "refactoring")
@@ -96,7 +96,7 @@ async def test_persist_inferred_purpose_calls_storage_with_correct_args():
 async def test_persist_inferred_purpose_swallows_errors():
     """Helper logs and returns on storage failure — does NOT raise."""
     with patch(
-        "src.mcp_handlers.updates.phases.agent_storage.update_agent",
+        "src.mcp_handlers.updates.post_update_helpers.agent_storage.update_agent",
         new_callable=AsyncMock,
         side_effect=RuntimeError("storage offline"),
     ):
@@ -108,7 +108,7 @@ async def test_persist_inferred_purpose_swallows_errors():
 async def test_persist_inferred_purpose_schedulable_as_task():
     """Caller pattern: asyncio.create_task(...) must be valid."""
     with patch(
-        "src.mcp_handlers.updates.phases.agent_storage.update_agent",
+        "src.mcp_handlers.updates.post_update_helpers.agent_storage.update_agent",
         new_callable=AsyncMock,
     ):
         task = asyncio.create_task(
