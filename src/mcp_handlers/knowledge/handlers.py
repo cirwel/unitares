@@ -1472,7 +1472,7 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
     """Run knowledge graph lifecycle cleanup.
 
     Manages discovery lifecycle based on type-based policies:
-    - Permanent: architecture_decision, learning, pattern (never auto-archive)
+    - Permanent: architectural_decision, learning, pattern (never auto-archive)
     - Standard: resolved items archived after 30 days
     - Ephemeral: tagged with ephemeral/temp/scratch, archived after 7 days
 

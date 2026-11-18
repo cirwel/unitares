@@ -63,10 +63,9 @@ def _updates_source() -> str:
     from src.mcp_handlers.updates import enrichments as E
 
     updates_dir = Path(E.__file__).parent
-    return "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in sorted(p for p in updates_dir.glob("*.py") if p.name != "__init__.py")
-    )
+    files = sorted(p for p in updates_dir.glob("*.py") if p.name != "__init__.py")
+    assert files, f"expected updates modules in {updates_dir}"
+    return "\n".join(p.read_text(encoding="utf-8") for p in files)
 
 
 def _reflection(decision, state=None, verdict="safe"):

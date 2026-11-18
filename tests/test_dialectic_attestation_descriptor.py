@@ -277,7 +277,9 @@ class TestAttachAttestation:
             / "dialectic"
         )
         total_serving = 0
-        for path in sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py"):
+        files = sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py")
+        assert files, f"expected dialectic modules in {dialectic_dir}"
+        for path in files:
             mod_name = path.name
             lines = path.read_text().split("\n")
             serving = [
@@ -339,7 +341,9 @@ class TestNoForgeableFallbackKey:
             pathlib.Path(__file__).resolve().parents[1]
             / "src" / "mcp_handlers" / "dialectic"
         )
-        for path in sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py"):
+        files = sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py")
+        assert files, f"expected dialectic modules in {dialectic_dir}"
+        for path in files:
             mod_name = path.name
             for i, line in enumerate(path.read_text().splitlines(), 1):
                 if line.lstrip().startswith("#"):

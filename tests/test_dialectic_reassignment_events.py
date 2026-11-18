@@ -114,7 +114,9 @@ class TestBothProducersEmit:
         from pathlib import Path
 
         pkg = Path(events.__file__).parent
-        for path in sorted(p for p in pkg.glob("*.py") if p.name not in {"__init__.py", "events.py"}):
+        files = sorted(p for p in pkg.glob("*.py") if p.name not in {"__init__.py", "events.py"})
+        assert files, f"expected dialectic modules in {pkg}"
+        for path in files:
             name = path.name
             text = path.read_text(encoding="utf-8")
             assert '"event_type": "dialectic_reviewer_reassigned"' not in text, (
