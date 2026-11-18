@@ -192,18 +192,23 @@ class TestSynthesisHandlerSerializesPhaseTransition:
         # both load it concurrently in SYNTHESIS phase, both submit_synthesis
         # paths would race on phase mutation. With the lock, the second
         # handler enters serially and observes phase=RESOLVED.
-        with patch(f"{self.DIALECTIC}.mcp_server", self._mock_server()), \
-             patch("src.mcp_handlers.shared.get_mcp_server", return_value=self._mock_server()), \
-             patch(f"{self.DIALECTIC}.load_session", new_callable=AsyncMock,
+        PHASE = "src.mcp_handlers.dialectic.phase_submission"
+        RES = "src.mcp_handlers.dialectic.resolution_helpers"
+        server = self._mock_server()
+        with patch(f"{PHASE}.mcp_server", server), \
+             patch(f"{RES}.mcp_server", server), \
+             patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+             patch(f"{PHASE}.load_session", new_callable=AsyncMock,
                    return_value=session), \
              patch(
-                 f"{self.DIALECTIC}.pg_add_message",
+                 f"{RES}.pg_add_message",
                  new=AsyncMock(side_effect=successful_dialectic_message_append),
              ), \
              patch(f"{self.DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-             patch(f"{self.DIALECTIC}.pg_resolve_session", new_callable=AsyncMock), \
-             patch(f"{self.DIALECTIC}.save_session", new_callable=AsyncMock), \
-             patch(f"{self.DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+             patch(f"{RES}.pg_resolve_session", new_callable=AsyncMock), \
+             patch(f"{PHASE}.save_session", new_callable=AsyncMock), \
+             patch(f"{RES}.save_session", new_callable=AsyncMock), \
+             patch(f"{RES}.execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True, "agent_id": "agent-paused", "new_status": "active"}), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
             results = await asyncio.gather(

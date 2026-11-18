@@ -155,6 +155,25 @@ def _emit_audit(agent_uuid: str, original_paused_at: Optional[str]) -> None:
         logger.debug("[pause-ttl] audit emit failed: %r", exc)
 
 
+def record_paused_refusal(agent_uuid: str, meta: Any, surface: str) -> None:
+    """Audit one write refused by a pause. Fire-and-forget; never raises.
+
+    Both pause gates (the check-in circuit breaker in updates/phases.py and
+    ``_check_agent_status`` in support/agent_auth.py) call this immediately
+    before returning ``AGENT_PAUSED``, so the refusal is countable without
+    changing what is refused.
+    """
+    try:
+        from src.audit_log import audit_logger
+        audit_logger.log_paused_write_refused(
+            agent_id=agent_uuid,
+            surface=surface,
+            paused_at=getattr(meta, "paused_at", None),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask
+        logger.debug("[pause-ttl] paused-refusal audit emit failed: %r", exc)
+
+
 # ─── Async entry point (process_agent_update path) ─────────────────────
 
 

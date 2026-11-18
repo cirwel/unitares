@@ -176,7 +176,7 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
             return_value="agent-a",
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("agent-a", None),
         ),
         patch(
@@ -188,15 +188,15 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
             return_value=None,
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             AsyncMock(return_value=graph),
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers._capture_store_provenance",
+            "src.mcp_handlers.knowledge.mutation_helpers._capture_store_provenance",
             AsyncMock(return_value=({"source": "explicit_store"}, None)),
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+            "src.mcp_handlers.knowledge.mutation_helpers._broadcast_knowledge_write",
             AsyncMock(),
         ),
     ):
@@ -246,7 +246,7 @@ async def test_promote_memory_rejects_memory_only_corroboration():
             return_value="agent-a",
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("agent-a", None),
         ),
         patch(
@@ -258,7 +258,7 @@ async def test_promote_memory_rejects_memory_only_corroboration():
             return_value=None,
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             AsyncMock(return_value=graph),
         ),
     ):
@@ -305,13 +305,13 @@ async def test_promote_memory_claim_refused_while_paused(cold_cache, monkeypatch
             return_value="agent-a",
         ),
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("agent-a", None),
         ),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         verify_ownership as ownership,
         patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             AsyncMock(return_value=graph),
         ),
     ):

@@ -61,11 +61,12 @@ from src.agent_process_mgmt import (
 from src.agent_monitor_state import (
     monitors,
     get_state_file,
-    _write_state_file,
+    write_state_file,
     save_monitor_state_async,
     save_monitor_state,
     load_monitor_state,
 )
+_write_state_file = write_state_file
 
 # --- agent_identity_auth ---
 from src.agent_identity_auth import (
@@ -140,7 +141,7 @@ __all__ = [
     # Functions
     "load_metadata_async", "ensure_metadata_loaded", "load_metadata",
     "get_or_create_metadata", "register_agent",
-    "get_state_file",
+    "get_state_file", "write_state_file",
     "save_monitor_state_async", "save_monitor_state", "load_monitor_state",
     "check_agent_status", "check_agent_id_default",
     "validate_agent_id_format", "require_explicit_agent_id",

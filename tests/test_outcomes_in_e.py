@@ -69,9 +69,9 @@ def test_account_matches_the_deployed_formula():
         "external_signal": 3,
     }
     assert evidence["caused_by_your_change"] == "not_recorded"
-    # Nominal 0.50 under neutralized self-loops, kept at 0.80 by the continuity blend and 0.85 by tool success.
-    assert evidence["share_of_observation"] == pytest.approx(0.50 * 0.80 * 0.85, abs=1e-4)
-    assert evidence["term_range"] == pytest.approx([0.34 * 0.3, 0.34 * 0.9], abs=1e-4)
+    # Nominal 0.50 under neutralized self-loops, kept at 0.85 by tool success (continuity_E_input dropped under SH1).
+    assert evidence["share_of_observation"] == pytest.approx(0.50 * 0.85, abs=1e-4)
+    assert evidence["term_range"] == pytest.approx([0.425 * 0.3, 0.425 * 0.9], abs=1e-4)
 
     # Recording one more adverse outcome (a seventh row, not a reclassified
     # sixth) lowers the published observation by exactly next_adverse_outcome.
@@ -134,7 +134,7 @@ def test_mirror_line_carries_both_caveats():
     line = mirror_line(_evidence(_outcomes(6, 2)))
     assert line.startswith("Outcomes in E: 2 of 6 recorded outcomes in the last 24h are adverse")
     assert "test_failed x2" in line
-    assert "34% of each E observation" in line
+    assert "42% of each E observation" in line
     assert "without attribution to your change" in line
     assert "not fault" in line
 
@@ -230,11 +230,11 @@ def test_self_referential_trajectory_outcomes_do_not_enter_e_or_account_when_neu
         {"outcome_type": "cirs_resonance", "is_bad": True, "outcome_score": 0.0},
         {"outcome_type": "trajectory_validated", "is_bad": False, "outcome_score": 0.80},
     ]
-    # Legacy (flag off): echo rows included with 0.20 nominal outcome weight
+    # Legacy (flag off): echo rows included with 0.20 nominal outcome weight (0.85 retained under SH1)
     monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
     legacy_ev = _evidence(echo_only)
     assert legacy_ev["counted"] == 4
-    assert legacy_ev["share_of_observation"] == pytest.approx(0.20 * 0.80 * 0.85, abs=1e-4)
+    assert legacy_ev["share_of_observation"] == pytest.approx(0.20 * 0.85, abs=1e-4)
 
     # Default (flag on): server-generated echoes excluded; caller-reported trajectory_validated preserved
     monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
@@ -248,7 +248,11 @@ def test_self_referential_trajectory_outcomes_do_not_enter_e_or_account_when_neu
     assert evidence["counted"] == 4
     assert evidence["adverse"] == 1
     assert evidence["adverse_by_type"] == {"test_failed": 1}
-    assert evidence["share_of_observation"] == pytest.approx(0.50 * 0.80 * 0.85, abs=1e-4)
+    assert evidence["share_of_observation"] == pytest.approx(0.50 * 0.85, abs=1e-4)
+
+    monkeypatch.setenv("UNITARES_DROP_CONTINUITY_E_BLEND", "0")
+    assert _evidence(mixed)["share_of_observation"] == pytest.approx(0.50 * 0.80 * 0.85, abs=1e-4)
+    monkeypatch.delenv("UNITARES_DROP_CONTINUITY_E_BLEND", raising=False)
     assert compute_behavioral_sensor_eisv(**_inputs(mixed)) == compute_behavioral_sensor_eisv(
         **_inputs(_outcomes(4, 1))
     )

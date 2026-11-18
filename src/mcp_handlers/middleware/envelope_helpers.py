@@ -428,7 +428,8 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     """True only while the verdict is owned by the cold-start prior.
 
     Narrower than a "provisional" verdict: that grade also covers a
-    behavioral reading that is not yet baselined (check-ins 3-24), which is a
+    behavioral reading that is not yet baselined (read check-ins 6–27 under default
+    `HU1`, or check-ins 3–24 when `UNITARES_HOLD_UNREAD_AXES=0`), which is a
     measurement of the agent, not the prior.
     """
     attribution = payload.get("risk_attribution")

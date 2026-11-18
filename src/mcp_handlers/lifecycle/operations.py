@@ -732,7 +732,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     Automatic archival is disabled by default. This tool reports what would be
     archived; use agent(action='archive') for deliberate manual archival.
     """
-    from src.agent_lifecycle import _agent_age_hours, auto_agent_archival_enabled
+    from src.agent_lifecycle import agent_age_hours, auto_agent_archival_enabled
 
     max_age_hours = arguments.get("max_age_hours", 6)
     max_age_days = arguments.get("max_age_days")
@@ -790,7 +790,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
             continue
 
         # Age-based archive
-        age_h = _agent_age_hours(meta)
+        age_h = agent_age_hours(meta)
         if age_h is None or age_h < max_age_hours:
             continue
         reason = f"Inactive for {age_h:.1f} hours (threshold: {max_age_hours} hours)"
@@ -837,7 +837,7 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     - dry_run: Preview without archiving (default: true).
     """
     from src.agent_lifecycle import (
-        _agent_update_count,
+        agent_update_count,
         auto_archive_orphan_agents,
         auto_agent_archival_enabled,
     )
@@ -861,7 +861,7 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     eligible_metadata = {
         agent_id: meta
         for agent_id, meta in mcp_server.agent_metadata.items()
-        if _agent_update_count(meta) <= max_updates
+        if agent_update_count(meta) <= max_updates
     }
 
     # Initializing agents (0 updates) are never archived — see

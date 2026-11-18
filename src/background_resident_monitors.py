@@ -2,36 +2,23 @@
 Resident monitoring, silence detection, pause escalation, and progress-flat probe
 background tasks for the governance MCP server.
 
-Extracted from src/background_tasks.py. All public and private symbols are
-re-exported on src.background_tasks and dynamically resolved through
-src.background_tasks so test monkeypatches continue to work.
+Extracted from src/background_tasks.py. Public and internal entrypoints are
+re-exported on src/background_tasks.py for backwards compatibility.
 """
 
-import asyncio as _default_asyncio
-import sys
+import asyncio
 from datetime import datetime, timezone
 
 from config.governance_config import (
     LABEL_CHECKIN_INTERVALS as _PERSISTENT_AGENT_INTERVALS,
 )
 from src.background_task_health import (
-    record_failure as _default_record_failure,
-    record_success as _default_record_success,
+    record_failure,
+    record_success,
 )
 from src.logging_utils import get_logger
 
 logger = get_logger("src.background_tasks")
-
-
-def _bt():
-    return sys.modules.get("src.background_tasks")
-
-
-def _bt_attr(name: str, default=None):
-    mod = _bt()
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
 
 
 # ---------------------------------------------------------------------------
@@ -49,15 +36,12 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
     """
     import os
 
-    aio = _bt_attr("asyncio", _default_asyncio)
-    log = _bt_attr("logger", logger)
-
     if interval_seconds is None:
         override = os.getenv("UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS")
         interval_seconds = float(override) if override else 300.0
 
     # Let the DB pool warm up before the first probe (mirror deep_health_probe pattern).
-    await aio.sleep(5.0)
+    await asyncio.sleep(5.0)
 
     # Lazy imports to avoid circular import at module load.
     from src.db import get_db
@@ -93,7 +77,7 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
                 )
                 audit_logger._write_entry(entry)
             except Exception as e:
-                log.warning("[PROGRESS_FLAT] audit emit failed: %s", e)
+                logger.warning("[PROGRESS_FLAT] audit emit failed: %s", e)
 
     class _MetadataStore:
         async def get(self, agent_uuid: str):
@@ -134,9 +118,9 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
 
     plugin_result = discover_progress_sources(db, builtin_names=sources.keys())
     for err in plugin_result.errors:
-        log.warning("[PROGRESS_FLAT] source plugin rejected: %s", err)
+        logger.warning("[PROGRESS_FLAT] source plugin rejected: %s", err)
     if plugin_result.sources:
-        log.info(
+        logger.info(
             "[PROGRESS_FLAT] loaded %d third-party source(s): %s",
             len(plugin_result.sources),
             ", ".join(sorted(plugin_result.sources)),
@@ -148,20 +132,20 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
         writer=SnapshotWriter(db),
         audit_emitter=_AuditEmitter(),
     )
-    log.info(
+    logger.info(
         "[PROGRESS_FLAT] probe started; interval=%ss", interval_seconds,
     )
     while True:
         try:
             await probe.tick()
-        except aio.CancelledError:
-            log.info("[PROGRESS_FLAT] task cancelled")
+        except asyncio.CancelledError:
+            logger.info("[PROGRESS_FLAT] task cancelled")
             break
         except Exception as e:
-            log.warning("[PROGRESS_FLAT] tick failed: %s", e, exc_info=True)
+            logger.warning("[PROGRESS_FLAT] tick failed: %s", e, exc_info=True)
         try:
-            await aio.sleep(interval_seconds)
-        except aio.CancelledError:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
             break
 
 
@@ -185,9 +169,8 @@ CADENCE_FROM_TAG: dict[str, int] = {
 
 def cadence_from_tags(tags) -> int | None:
     """Return the expected check-in interval (seconds) for an agent from its tags, or None."""
-    mapping = _bt_attr("CADENCE_FROM_TAG", CADENCE_FROM_TAG)
     for tag in (tags or []):
-        interval = mapping.get(tag)
+        interval = CADENCE_FROM_TAG.get(tag)
         if interval is not None:
             return interval
     return None
@@ -242,7 +225,6 @@ def _canonical_active_resident_ids(agent_metadata_map) -> set[str]:
     except Exception:
         KNOWN_RESIDENT_LABELS = frozenset()
 
-    parse_fn = _bt_attr("_parse_last_update_aware", _parse_last_update_aware)
     by_label: dict[str, tuple[str, object, datetime | None]] = {}
     for agent_id, meta in list(agent_metadata_map.items()):
         if getattr(meta, "status", None) != "active":
@@ -250,7 +232,7 @@ def _canonical_active_resident_ids(agent_metadata_map) -> set[str]:
         label = getattr(meta, "label", None)
         if not label or label not in KNOWN_RESIDENT_LABELS:
             continue
-        last = parse_fn(getattr(meta, "last_update", None) or "")
+        last = _parse_last_update_aware(getattr(meta, "last_update", None) or "")
         current = by_label.get(label)
         if current is None:
             by_label[label] = (agent_id, meta, last)
@@ -296,13 +278,11 @@ def _get_expected_interval(meta) -> int | None:
         except Exception:
             pass
     tags = meta.tags or []
-    cadence_fn = _bt_attr("cadence_from_tags", cadence_from_tags)
-    tagged_cadence = cadence_fn(tags)
+    tagged_cadence = cadence_from_tags(tags)
     if tagged_cadence is not None:
         return tagged_cadence
-    intervals = _bt_attr("_PERSISTENT_AGENT_INTERVALS", _PERSISTENT_AGENT_INTERVALS)
-    if label and label in intervals:
-        return intervals[label]
+    if label and label in _PERSISTENT_AGENT_INTERVALS:
+        return _PERSISTENT_AGENT_INTERVALS[label]
     if "embodied" in tags or "autonomous" in tags:
         return 300  # default for embodied/autonomous agents
     return None  # ephemeral — skip
@@ -337,11 +317,9 @@ def _proxy_alive(label: str, now: datetime, threshold_seconds: float) -> bool:
     """
     from src.agent_metadata_model import agent_metadata
 
-    proxy_map = _bt_attr("_SILENCE_PROXY_AGENTS", _SILENCE_PROXY_AGENTS)
-    proxy_key = proxy_map.get(label)
+    proxy_key = _SILENCE_PROXY_AGENTS.get(label)
     if not proxy_key:
         return False
-    parse_fn = _bt_attr("_parse_last_update_aware", _parse_last_update_aware)
     # The proxy may be keyed by agent_id or by label depending on how
     # it was registered. Search both.
     for _aid, _meta in agent_metadata.items():
@@ -350,7 +328,7 @@ def _proxy_alive(label: str, now: datetime, threshold_seconds: float) -> bool:
             continue
         if _meta.status != "active":
             continue
-        proxy_last = parse_fn(_meta.last_update or "")
+        proxy_last = _parse_last_update_aware(_meta.last_update or "")
         if proxy_last is None:
             continue
         if (now - proxy_last).total_seconds() <= threshold_seconds:
@@ -377,9 +355,6 @@ async def _log_resident_silence_finding(
     CRITICAL branch above (a real label + expected interval), never on a
     resident name (see the fleet-neutrality contract in CLAUDE.md/AGENTS.md).
     """
-    log = _bt_attr("logger", logger)
-    rec_success = _bt_attr("record_success", _default_record_success)
-    rec_failure = _bt_attr("record_failure", _default_record_failure)
     try:
         from src.knowledge_graph import DiscoveryNode, get_knowledge_graph
 
@@ -415,9 +390,9 @@ async def _log_resident_silence_finding(
             status="open",
         )
         await graph.add_discovery(note)
-        rec_success("silence_finding_write", log=log)
+        record_success("silence_finding_write", log=logger)
     except Exception as e:
-        rec_failure("silence_finding_write", e, log=log)
+        record_failure("silence_finding_write", e, log=logger)
 
 
 # Agents whose last close attempt failed. The health record is one task for
@@ -427,28 +402,24 @@ _silence_close_pending: dict[str, str] = {}
 
 
 def _record_silence_close(agent_id: str, error: "BaseException | str | None") -> None:
-    log = _bt_attr("logger", logger)
-    rec_success = _bt_attr("record_success", _default_record_success)
-    rec_failure = _bt_attr("record_failure", _default_record_failure)
-    pending_map = _bt_attr("_silence_close_pending", _silence_close_pending)
     if error is None:
-        pending_map.pop(agent_id, None)
+        _silence_close_pending.pop(agent_id, None)
     else:
-        pending_map[agent_id] = (
+        _silence_close_pending[agent_id] = (
             f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
         )
-    if not pending_map:
-        rec_success("silence_finding_close", log=log)
+    if not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
         return
     # A successful close for another agent is not another failed attempt.
     # Keep the pending failure visible without advancing its streak or time.
     if error is None:
         return
-    pending = sorted(pending_map.items())
-    rec_failure(
+    pending = sorted(_silence_close_pending.items())
+    record_failure(
         "silence_finding_close",
         "; ".join(f"{agent}: {reason}" for agent, reason in pending),
-        log=log,
+        log=logger,
     )
 
 
@@ -472,7 +443,6 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
     "nothing to close"), False on a KG error or a rejected update so the caller
     retries on a later iteration.
     """
-    rec_close = _bt_attr("_record_silence_close", _record_silence_close)
     try:
         from src.knowledge_graph import get_knowledge_graph
 
@@ -486,7 +456,7 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             and getattr(d, "agent_id", agent_id) == agent_id
         ]
         if not rows:
-            rec_close(agent_id, None)
+            _record_silence_close(agent_id, None)
             return True
         now = datetime.now(timezone.utc)
         reconnect_iso = reconnected_at.isoformat()
@@ -515,13 +485,13 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             })
             if landed is False:
                 all_landed = False
-        rec_close(
+        _record_silence_close(
             agent_id,
             None if all_landed else "the knowledge graph rejected a resolve update; retried next pass",
         )
         return all_landed
     except Exception as e:
-        rec_close(agent_id, e)
+        _record_silence_close(agent_id, e)
         return False
 
 
@@ -537,8 +507,24 @@ _SILENCE_ANY_ALERT_EVENTS: tuple[str, ...] = (
 async def _silence_episode_already_alerted(
     agent_id: str, last_active: datetime, event_types: tuple[str, ...]
 ) -> bool:
-    """True when this silence episode was already alerted, per durable state."""
-    log = _bt_attr("logger", logger)
+    """True when this silence episode was already alerted, per durable state.
+
+    A silence episode starts at the agent's last real activity
+    (``last_active``, its uncapped ``last_update``). Any alert event of
+    ``event_types`` recorded for this agent at or after that moment means a
+    previous process already announced this same episode. The in-memory alert
+    sets cannot answer that: they are empty after every restart, and the
+    silence clock restarts at server start, so each restart used to announce
+    the same long outage again (three restarts on 2026-10-18 produced three
+    identical CRITICAL alerts for the same two agents).
+
+    An agent that becomes active after the alert moves ``last_active`` past
+    it, so the lookup comes back empty and the next silence is a new episode
+    that alerts normally.
+
+    Fails open: if the audit store cannot be read, return False so the alert
+    fires. A duplicate alert is recoverable; a suppressed one is not.
+    """
     try:
         from src.audit_db import query_audit_events_async
 
@@ -550,7 +536,7 @@ async def _silence_episode_already_alerted(
             order="desc",
         )
     except Exception as e:
-        log.debug(f"[SILENCE] durable alert lookup failed for {agent_id[:12]}: {e}")
+        logger.debug(f"[SILENCE] durable alert lookup failed for {agent_id[:12]}: {e}")
         return False
     return bool(rows)
 
@@ -562,37 +548,16 @@ async def _silence_check_iteration() -> None:
     from src.audit_db import append_audit_event_async
     from src.broadcaster import broadcaster_instance
 
-    log = _bt_attr("logger", logger)
-    rec_success = _bt_attr("record_success", _default_record_success)
-    mod = _bt()
-
     now = datetime.now(timezone.utc)
 
     # Record server start time on first call.  Only alert about silence
     # that accumulated *while this process was running* — pre-existing
     # staleness from Mac sleep / prior shutdown is not actionable.
-    server_start = getattr(mod, "_silence_server_start", _silence_server_start) if mod is not None else _silence_server_start
-    if server_start is None:
-        server_start = now
+    if _silence_server_start is None:
         _silence_server_start = now
-        if mod is not None:
-            mod._silence_server_start = now
+    server_start = _silence_server_start
 
-    alerted_set = _bt_attr("_silence_alerted", _silence_alerted)
-    crit_set = _bt_attr("_silence_critical_alerted", _silence_critical_alerted)
-    dup_warned_set = _bt_attr("_silence_duplicate_warned", _silence_duplicate_warned)
-    close_checked_set = _bt_attr("_silence_close_checked", _silence_close_checked)
-    close_pending_map = _bt_attr("_silence_close_pending", _silence_close_pending)
-
-    canon_fn = _bt_attr("_canonical_active_resident_ids", _canonical_active_resident_ids)
-    interval_fn = _bt_attr("_get_expected_interval", _get_expected_interval)
-    parse_fn = _bt_attr("_parse_last_update_aware", _parse_last_update_aware)
-    proxy_fn = _bt_attr("_proxy_alive", _proxy_alive)
-    already_fn = _bt_attr("_silence_episode_already_alerted", _silence_episode_already_alerted)
-    log_finding_fn = _bt_attr("_log_resident_silence_finding", _log_resident_silence_finding)
-    close_finding_fn = _bt_attr("_close_resident_silence_findings", _close_resident_silence_findings)
-
-    canonical_residents = canon_fn(agent_metadata)
+    canonical_residents = _canonical_active_resident_ids(agent_metadata)
 
     for agent_id, meta in list(agent_metadata.items()):
         if meta.status != "active":
@@ -604,21 +569,21 @@ async def _silence_check_iteration() -> None:
             except Exception:
                 KNOWN_RESIDENT_LABELS = frozenset()
             if label in KNOWN_RESIDENT_LABELS:
-                if agent_id not in dup_warned_set:
-                    dup_warned_set.add(agent_id)
-                    log.warning(
+                if agent_id not in _silence_duplicate_warned:
+                    _silence_duplicate_warned.add(agent_id)
+                    logger.warning(
                         f"[SILENCE] Skipping duplicate resident row {label} "
                         f"({agent_id[:8]}...) for silence detection; canonical "
                         "active row exists"
                     )
                 continue
-        interval = interval_fn(meta)
+        interval = _get_expected_interval(meta)
         if interval is None:
             continue
         if not meta.last_update:
             continue
 
-        last = parse_fn(meta.last_update)
+        last = _parse_last_update_aware(meta.last_update)
         if last is None:
             continue
 
@@ -629,15 +594,15 @@ async def _silence_check_iteration() -> None:
 
         silence_minutes = silence_seconds / 60
 
-        if silence_seconds >= interval * 5 and agent_id not in crit_set:
-            if proxy_fn(meta.label, now, threshold_seconds=interval * 2):
-                if agent_id not in alerted_set:
-                    alerted_set.add(agent_id)
-                    if await already_fn(
+        if silence_seconds >= interval * 5 and agent_id not in _silence_critical_alerted:
+            if _proxy_alive(meta.label, now, threshold_seconds=interval * 2):
+                if agent_id not in _silence_alerted:
+                    _silence_alerted.add(agent_id)
+                    if await _silence_episode_already_alerted(
                         agent_id, last, _SILENCE_ANY_ALERT_EVENTS
                     ):
                         continue
-                    log.warning(
+                    logger.warning(
                         f"[SILENCE] {meta.label or agent_id[:12]} check-in path silent for {silence_minutes:.0f}m "
                         f"(expected every {interval // 60}m) — proxy alive, suppressing CRITICAL"
                     )
@@ -651,21 +616,21 @@ async def _silence_check_iteration() -> None:
                             "proxy_alive": True,
                         },
                     )
-            elif await already_fn(
+            elif await _silence_episode_already_alerted(
                 agent_id, last, _SILENCE_CRITICAL_ALERT_EVENTS
             ):
-                crit_set.add(agent_id)
-                alerted_set.add(agent_id)
-                log.info(
+                _silence_critical_alerted.add(agent_id)
+                _silence_alerted.add(agent_id)
+                logger.info(
                     f"[SILENCE] {meta.label or agent_id[:12]} still silent; CRITICAL "
                     "already recorded for this episode, not re-alerting"
                 )
-                await log_finding_fn(agent_id, meta, silence_minutes, interval)
+                await _log_resident_silence_finding(agent_id, meta, silence_minutes, interval)
             else:
-                crit_set.add(agent_id)
-                close_checked_set.discard(agent_id)
-                alerted_set.add(agent_id)
-                log.error(
+                _silence_critical_alerted.add(agent_id)
+                _silence_close_checked.discard(agent_id)
+                _silence_alerted.add(agent_id)
+                logger.error(
                     f"[SILENCE] CRITICAL: {meta.label or agent_id[:12]} silent for {silence_minutes:.0f}m "
                     f"(expected every {interval // 60}m)"
                 )
@@ -678,14 +643,14 @@ async def _silence_check_iteration() -> None:
                         "label": meta.label,
                     },
                 )
-                await log_finding_fn(agent_id, meta, silence_minutes, interval)
-        elif silence_seconds >= interval * 2 and agent_id not in alerted_set:
-            alerted_set.add(agent_id)
-            if await already_fn(
+                await _log_resident_silence_finding(agent_id, meta, silence_minutes, interval)
+        elif silence_seconds >= interval * 2 and agent_id not in _silence_alerted:
+            _silence_alerted.add(agent_id)
+            if await _silence_episode_already_alerted(
                 agent_id, last, _SILENCE_ANY_ALERT_EVENTS
             ):
                 continue
-            log.warning(
+            logger.warning(
                 f"[SILENCE] {meta.label or agent_id[:12]} silent for {silence_minutes:.0f}m "
                 f"(expected every {interval // 60}m)"
             )
@@ -710,33 +675,41 @@ async def _silence_check_iteration() -> None:
             })
         elif silence_seconds < interval * 2:
             # Agent recovered — clear alert state
-            alerted_set.discard(agent_id)
-            was_critical = agent_id in crit_set
-            crit_set.discard(agent_id)
+            _silence_alerted.discard(agent_id)
+            was_critical = agent_id in _silence_critical_alerted
+            _silence_critical_alerted.discard(agent_id)
             really_fresh = (now - last).total_seconds() < interval * 2
-            if really_fresh and (was_critical or agent_id not in close_checked_set):
-                if await close_finding_fn(agent_id, last):
-                    close_checked_set.add(agent_id)
+            if really_fresh and (was_critical or agent_id not in _silence_close_checked):
+                if await _close_resident_silence_findings(agent_id, last):
+                    _silence_close_checked.add(agent_id)
 
     # Prune alert sets — remove agents no longer active
     active_ids = {aid for aid, m in agent_metadata.items() if m.status == "active"}
-    alerted_set.intersection_update(active_ids)
-    crit_set.intersection_update(active_ids)
-    dup_warned_set.intersection_update(active_ids)
-    close_checked_set.intersection_update(active_ids)
-    inactive_pending = set(close_pending_map) - active_ids
+    _silence_alerted.intersection_update(active_ids)
+    _silence_critical_alerted.intersection_update(active_ids)
+    _silence_duplicate_warned.intersection_update(active_ids)
+    _silence_close_checked.intersection_update(active_ids)
+    inactive_pending = set(_silence_close_pending) - active_ids
     for agent_id in sorted(inactive_pending):
-        close_pending_map.pop(agent_id)
-        log.warning(
+        _silence_close_pending.pop(agent_id)
+        logger.warning(
             "[SILENCE] stopped close retries for inactive agent %s; "
             "its finding remains unresolved", agent_id,
         )
-    if inactive_pending and not close_pending_map:
-        rec_success("silence_finding_close", log=log)
+    if inactive_pending and not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
 
 
 async def _resident_pause_check_iteration() -> None:
-    """Escalate configured residents stuck in a paused (circuit-breaker) state."""
+    """Escalate configured residents stuck in a paused (circuit-breaker) state.
+
+    The silence detector skips non-active agents, so a paused resident is
+    otherwise unmonitored. Keyed on the explicit ``meta.status == "paused"``
+    state (not silence inference), so proxy-alive suppression, server-restart
+    clock resets, and duplicate-identity blindness cannot hide it. Emits a
+    critical ``lifecycle_resident_paused`` event (the bridge routes
+    severity=critical to #alerts) and re-nags at most hourly while still paused.
+    """
     from src.agent_metadata_model import agent_metadata
     from src.audit_db import append_audit_event_async
     from src.broadcaster import broadcaster_instance
@@ -745,11 +718,6 @@ async def _resident_pause_check_iteration() -> None:
         from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
     except Exception:
         KNOWN_RESIDENT_LABELS = frozenset()
-
-    log = _bt_attr("logger", logger)
-    pause_alerted = _bt_attr("_resident_pause_alerted", _resident_pause_alerted)
-    realert_s = _bt_attr("RESIDENT_PAUSE_REALERT_SECONDS", RESIDENT_PAUSE_REALERT_SECONDS)
-    parse_fn = _bt_attr("_parse_last_update_aware", _parse_last_update_aware)
 
     now = datetime.now(timezone.utc)
     paused_resident_ids: set[str] = set()
@@ -763,17 +731,17 @@ async def _resident_pause_check_iteration() -> None:
 
         paused_resident_ids.add(agent_id)
 
-        last_alert = pause_alerted.get(agent_id)
-        if last_alert is not None and (now - last_alert).total_seconds() < realert_s:
+        last_alert = _resident_pause_alerted.get(agent_id)
+        if last_alert is not None and (now - last_alert).total_seconds() < RESIDENT_PAUSE_REALERT_SECONDS:
             continue  # already escalated recently — don't spam
 
-        pause_alerted[agent_id] = now
+        _resident_pause_alerted[agent_id] = now
 
-        paused_at_dt = parse_fn(getattr(meta, "paused_at", None) or "")
+        paused_at_dt = _parse_last_update_aware(getattr(meta, "paused_at", None) or "")
         paused_minutes = (now - paused_at_dt).total_seconds() / 60 if paused_at_dt else None
         dur = f"{paused_minutes:.0f}m" if paused_minutes is not None else "unknown duration"
 
-        log.error(
+        logger.error(
             f"[RESIDENT_PAUSE] CRITICAL: resident {label} ({agent_id[:12]}) paused for {dur} "
             "— dark to governance until recovered; escalating to operator."
         )
@@ -803,30 +771,24 @@ async def _resident_pause_check_iteration() -> None:
 
     # Re-arm: forget residents that are no longer paused so a future pause
     # escalates immediately rather than waiting out the re-nag window.
-    for aid in [aid for aid in pause_alerted if aid not in paused_resident_ids]:
-        del pause_alerted[aid]
+    for aid in [aid for aid in _resident_pause_alerted if aid not in paused_resident_ids]:
+        del _resident_pause_alerted[aid]
 
 
 async def check_agent_silence():
     """Detect persistent agents that have missed expected check-ins."""
-    aio = _bt_attr("asyncio", _default_asyncio)
-    await aio.sleep(120)  # startup delay
+    await asyncio.sleep(120)  # startup delay
     while True:
-        log = _bt_attr("logger", logger)
-        rec_success = _bt_attr("record_success", _default_record_success)
-        rec_failure = _bt_attr("record_failure", _default_record_failure)
-        silence_iter = _bt_attr("_silence_check_iteration", _silence_check_iteration)
-        pause_iter = _bt_attr("_resident_pause_check_iteration", _resident_pause_check_iteration)
         try:
-            await silence_iter()
-            rec_success("silence_check", log=log)
+            await _silence_check_iteration()
+            record_success("silence_check", log=logger)
         except Exception as e:
-            rec_failure("silence_check", e, log=log)
+            record_failure("silence_check", e, log=logger)
 
         try:
-            await pause_iter()
-            rec_success("resident_pause_check", log=log)
+            await _resident_pause_check_iteration()
+            record_success("resident_pause_check", log=logger)
         except Exception as e:
-            rec_failure("resident_pause_check", e, log=log)
+            record_failure("resident_pause_check", e, log=logger)
 
-        await aio.sleep(600)  # every 10 minutes
+        await asyncio.sleep(600)  # every 10 minutes

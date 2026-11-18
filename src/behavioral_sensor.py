@@ -133,6 +133,11 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+# Decisions of history the sensor needs before it can read anything; the
+# ``< 3`` guards in the component functions below are this number. An agent's
+# first SENSOR_MIN_HISTORY check-ins therefore cannot carry a reading.
+SENSOR_MIN_HISTORY = 3
+
 HOLD_UNREAD_AXES_ENV = "UNITARES_HOLD_UNREAD_AXES"
 HOLD_UNREAD_AXES_MODE = "hold_v1"
 _READING_DIMENSIONS = ("E", "I", "S")
@@ -141,12 +146,9 @@ _READING_DIMENSIONS = ("E", "I", "S")
 def hold_unread_axes_enabled() -> bool:
     """Return True when an axis with no supplied base term is held, not filled.
 
-    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default OFF; set to
-    ``1``/``true``/``yes``/``on`` to hold). It ships off so that a routine
-    deploy does not start era ``HU1``; turning it on is the operator's
-    separate step, and that change adds the era entry and regenerates the
-    golden trajectories (``tests/eisv_preservation_driver.py``). Each of E, I and
-    S is built from base terms and then adjusted by blends. When no base term
+    Controlled by ``UNITARES_HOLD_UNREAD_AXES`` (default ON, era ``HU1``; set
+    to ``0``/``false``/``no``/``off``/``""`` to restore filling). Each of E, I
+    and S is built from base terms and then adjusted by blends. When no base term
     was supplied, the formula substitutes a constant (0.85 for E, 0.75 for I,
     the drift and divergence defaults for S) and the blends adjust that
     constant, so the published number looks like a reading without being one.
@@ -158,7 +160,7 @@ def hold_unread_axes_enabled() -> bool:
     The component record and the shadow ablations still carry the filled
     arithmetic, so what the formula would have published stays inspectable.
     """
-    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "0").strip().lower()
+    raw = os.environ.get(HOLD_UNREAD_AXES_ENV, "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -213,12 +215,9 @@ SENSOR_DRIFT_MIN_AGENT_CALIBRATION_PAIRS = 10
 def sensor_drift_agent_local_enabled() -> bool:
     """Return True when the sensor's drift input keeps only agent-local parts.
 
-    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default OFF, which
-    passes the full drift-vector norm as before; set to ``1``/``true``/``yes``/
-    ``on`` to keep only agent-local parts). It ships off so that a routine
-    deploy does not start era ``SD1``; turning it on is the operator's separate
-    step, and that change adds the era entry and regenerates the golden
-    trajectories. The governance drift vector has four components, and on the
+    Controlled by ``UNITARES_SENSOR_DRIFT_AGENT_LOCAL`` (default ON, era ``SD1``;
+    set to ``0``/``false``/``no``/``off``/``""`` to pass the full drift-vector
+    norm as before). The governance drift vector has four components, and on the
     behavioral sensor path two of them carry no per-agent information:
 
     - ``stability_deviation`` is ``1 - decision_consistency``. The drift
@@ -237,7 +236,7 @@ def sensor_drift_agent_local_enabled() -> bool:
     enough fresh verified pairs). With neither, the drift input is ``None``
     and S's drift term is reported unobserved instead of as a reading.
     """
-    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "0").strip().lower()
+    raw = os.environ.get(SENSOR_DRIFT_AGENT_LOCAL_ENV, "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -336,37 +335,39 @@ ACTOR_WORK_TOOL_STATS_MODE = "db_actor_work_tools_v1"
 def drop_continuity_e_blend_enabled() -> bool:
     """Return True when ``continuity_E_input`` is dropped from behavioral E.
 
-    Controlled by ``UNITARES_DROP_CONTINUITY_E_BLEND`` (default OFF; set to
-    ``1``/``true``/``yes``/``on`` to omit the ``continuity_E_input`` 0.20 post-base
-    blend unconditionally across both clipped and unclipped continuity regimes,
+    Controlled by ``UNITARES_DROP_CONTINUITY_E_BLEND`` (default ON, era ``SH1``;
+    set to ``0``/``false``/``no``/``off``/``""`` to restore the legacy 0.20
+    ``continuity_E_input`` post-base blend). Omits ``continuity_E_input``
+    unconditionally across both clipped and unclipped continuity regimes,
     avoiding clip-threshold discontinuities while keeping continuity telemetry
-    intact).
+    intact.
     """
-    raw = os.environ.get("UNITARES_DROP_CONTINUITY_E_BLEND", "0").strip().lower()
+    raw = os.environ.get("UNITARES_DROP_CONTINUITY_E_BLEND", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
 def drop_unique_tools_i_blend_enabled() -> bool:
     """Return True when ``unique_tools_ratio`` is dropped from behavioral I.
 
-    Controlled by ``UNITARES_DROP_UNIQUE_TOOLS_I_BLEND`` (default OFF; set to
-    ``1``/``true``/``yes``/``on`` to omit the ``unique_tools_ratio`` 0.10 post-base
-    blend unconditionally, removing volume confounding and specialist penalties
-    while keeping diagnostic tool-diversity inputs in telemetry).
+    Controlled by ``UNITARES_DROP_UNIQUE_TOOLS_I_BLEND`` (default ON, era ``SH1``;
+    set to ``0``/``false``/``no``/``off``/``""`` to restore the legacy 0.10
+    ``unique_tools_ratio`` post-base blend). Omits ``unique_tools_ratio``
+    unconditionally, removing volume confounding and specialist penalties
+    while keeping diagnostic tool-diversity inputs in telemetry.
     """
-    raw = os.environ.get("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0").strip().lower()
+    raw = os.environ.get("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
 def actor_work_tool_stats_enabled() -> bool:
     """Return True when behavioral tool stats read clean actor DB work tools.
 
-    Controlled by ``UNITARES_ACTOR_WORK_TOOL_STATS`` (default OFF; set to
-    ``1``/``true``/``yes``/``on`` to read ``audit.tool_usage`` work-tool stats
-    via ``get_behavioral_work_tool_stats_async`` instead of the REST/stdio
-    ``ToolUsageTracker`` JSONL file).
+    Controlled by ``UNITARES_ACTOR_WORK_TOOL_STATS`` (default ON, era ``SH1``;
+    set to ``0``/``false``/``no``/``off``/``""`` to restore the legacy
+    REST/stdio ``ToolUsageTracker`` JSONL file). Reads ``audit.tool_usage``
+    work-tool stats via ``get_behavioral_work_tool_stats_async``.
     """
-    raw = os.environ.get("UNITARES_ACTOR_WORK_TOOL_STATS", "0").strip().lower()
+    raw = os.environ.get("UNITARES_ACTOR_WORK_TOOL_STATS", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 

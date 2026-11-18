@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -22,6 +21,10 @@ from src.db.age_queries import create_supersedes_edge
 logger = get_logger("src.storage.knowledge_graph_age")
 
 _DISCOVERIES_TABLE = "knowledge.discoveries"
+_RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES = 4
+_response_chain_query_slots = asyncio.BoundedSemaphore(
+    _RESPONSE_CHAIN_MAX_CONCURRENT_QUERIES
+)
 
 _BACKFILL_MISSING_HINT = (
     "semantic search will not find it until it is re-embedded "
@@ -31,19 +34,6 @@ _BACKFILL_STALE_HINT = (
     "its previous vector, if any, stays in place "
     "(python scripts/migration/reembed_corpus.py --rebuild rewrites it)"
 )
-
-
-def _age_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.storage.knowledge_graph_age")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
-
-
-def _log_embedding_skipped(discovery_id: str, op: str) -> None:
-    fn = _age_attr("_log_embedding_skipped")
-    if fn is not None:
-        fn(discovery_id, op)
 
 
 class KnowledgeGraphAGESearchMixin:
@@ -339,10 +329,21 @@ class KnowledgeGraphAGESearchMixin:
             "offset": offset,
             "limit": query_limit,
         }
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SET LOCAL statement_timeout = '2000ms'")
-                rows = await db.graph_query(cypher, params, conn=conn)
+        # Fail fast instead of queueing enough traversals to occupy the whole
+        # PostgreSQL pool. The middleware also meters public calls; this gate
+        # protects direct callers and limits an admitted parallel burst.
+        if _response_chain_query_slots.locked():
+            raise RuntimeError(
+                "Response-chain query concurrency limit reached; retry later"
+            )
+        await _response_chain_query_slots.acquire()
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL statement_timeout = '2000ms'")
+                    rows = await db.graph_query(cypher, params, conn=conn)
+        finally:
+            _response_chain_query_slots.release()
 
         # Deduplicate by id using smallest depth
         best: Dict[str, tuple[int, DiscoveryNode]] = {}
@@ -1153,7 +1154,9 @@ class KnowledgeGraphAGESearchMixin:
         try:
             from src.embeddings import get_embeddings_service, embeddings_available
             if not embeddings_available():
-                _log_embedding_skipped(discovery_id, "refresh")
+                from src.storage import knowledge_graph_age as kg_age
+
+                kg_age._log_embedding_skipped(discovery_id, "refresh")
                 return
             discovery = await self.get_discovery(discovery_id)
             if not discovery:
