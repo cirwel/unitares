@@ -66,13 +66,6 @@ def _sample_counts(checker: CalibrationChecker) -> dict[str, int]:
     }
 
 
-def _total_bin_samples(checker: CalibrationChecker) -> int:
-    counts = _sample_counts(checker)
-    # Channel bins duplicate aggregate tactical observations, so take max instead of summing both.
-    tactical_effective = max(counts["tactical"], counts["tactical_by_channel"])
-    return counts["strategic"] + tactical_effective + counts["complexity"]
-
-
 def _summarize_accuracy_bins(bins_map: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for bin_key in sorted(bins_map.keys()):
@@ -156,14 +149,12 @@ def build_report_payload(
 ) -> dict[str, Any]:
     """Build structured report payload; marks empty state cleanly."""
     sample_counts = _sample_counts(checker)
-    total_samples = _total_bin_samples(checker)
-    if total_samples == 0:
+    if not any(sample_counts.values()):
         return {
             "empty": True,
             "source": source_meta.get("source"),
             "version": source_meta.get("version"),
             "updated_at": source_meta.get("updated_at"),
-            "total_samples": 0,
             "sample_counts": sample_counts,
             "message": f"No calibration samples found in {source_meta.get('source')}.",
         }
@@ -214,7 +205,6 @@ def build_report_payload(
         "source": source_meta.get("source"),
         "version": source_meta.get("version"),
         "updated_at": source_meta.get("updated_at"),
-        "total_samples": total_samples,
         "sample_counts": sample_counts,
         "strategic_bins": strategic,
         "tactical_bins": tactical,

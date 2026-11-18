@@ -123,7 +123,13 @@ def test_report_calibration_help_empty_and_missing_state_file(tmp_path, monkeypa
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["empty"] is True
-    assert payload["total_samples"] == 0
+    assert "total_samples" not in payload
+    assert payload["sample_counts"] == {
+        "strategic": 0,
+        "tactical": 0,
+        "tactical_by_channel": 0,
+        "complexity": 0,
+    }
 
     rc_missing = report_calibration.main(["--state-file", str(tmp_path / "nonexistent.json")])
     assert rc_missing == 2
@@ -185,7 +191,7 @@ def test_report_calibration_state_file_and_from_db(tmp_path, monkeypatch, capsys
     payload = json.loads(capsys.readouterr().out)
     assert payload["empty"] is False
     assert payload["version"] == 77
-    assert payload["total_samples"] == 18
+    assert "total_samples" not in payload
     assert payload["sample_counts"] == {
         "strategic": 10,
         "tactical": 8,
@@ -197,8 +203,8 @@ def test_report_calibration_state_file_and_from_db(tmp_path, monkeypatch, capsys
     assert payload["tactical_bins_by_channel"]["tests"][0]["count"] == 8
     assert len(created_conns) == 1
 
-    # Insufficient evidence must report UNASSESSED rather than CALIBRATED, and channel
-    # observations must not double-count aggregate tactical samples.
+    # Insufficient evidence must report UNASSESSED rather than CALIBRATED, and
+    # aggregate vs per-channel tactical counts stay separate (cannot infer overlap).
     sparse_state = {
         "bins": {
             "0.7-0.8": {
@@ -219,7 +225,7 @@ def test_report_calibration_state_file_and_from_db(tmp_path, monkeypatch, capsys
     assert "Overall Status: UNASSESSED" in sparse_text
     assert "Overall Status: CALIBRATED" not in sparse_text
 
-    channel_dup_state = {
+    disjoint_state = {
         "bins": {},
         "tactical_bins": {
             "0.7-0.8": {
@@ -230,23 +236,29 @@ def test_report_calibration_state_file_and_from_db(tmp_path, monkeypatch, capsys
             }
         },
         "tactical_bins_by_channel": {
-            "tests": {
+            "trajectory": {
                 "0.7-0.8": {
-                    "count": 10,
-                    "predicted_correct": 10,
-                    "actual_correct": 8,
-                    "confidence_sum": 7.5,
+                    "count": 5,
+                    "predicted_correct": 5,
+                    "actual_correct": 4,
+                    "confidence_sum": 3.75,
                 }
             }
         },
         "complexity_bins": {},
     }
-    channel_file = tmp_path / "channel_dup.json"
-    channel_file.write_text(json.dumps(channel_dup_state), encoding="utf-8")
-    assert report_calibration.main(["--state-file", str(channel_file), "--json"]) == 0
-    channel_payload = json.loads(capsys.readouterr().out)
-    assert channel_payload["total_samples"] == 10
-    assert channel_payload["calibration_status"] == "unassessed"
+    disjoint_file = tmp_path / "disjoint.json"
+    disjoint_file.write_text(json.dumps(disjoint_state), encoding="utf-8")
+    assert report_calibration.main(["--state-file", str(disjoint_file), "--json"]) == 0
+    disjoint_payload = json.loads(capsys.readouterr().out)
+    assert "total_samples" not in disjoint_payload
+    assert disjoint_payload["sample_counts"] == {
+        "strategic": 0,
+        "tactical": 10,
+        "tactical_by_channel": 5,
+        "complexity": 0,
+    }
+    assert disjoint_payload["calibration_status"] == "unassessed"
 
 
 def test_eisv_pca_legacy_gate_enforced(tmp_path):
