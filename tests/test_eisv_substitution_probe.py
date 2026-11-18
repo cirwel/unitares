@@ -119,6 +119,72 @@ def test_parse_run_rejects_collection_errors(tmp_path, returncode, stdout):
         probe.parse_run("count", returncode, stdout, "", reach)
 
 
+def test_parse_run_rejects_collection_errors_the_plugin_recorded(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_ok.py::t", encoding="utf-8")
+    probe.collection_errors_path(reach).write_text("tests/test_broken.py", encoding="utf-8")
+    with pytest.raises(probe.IncompleteRun, match="collection errors"):
+        probe.parse_run("count", 1, "1 passed in 0.1s\n", "", reach)
+
+
+def test_exception_text_mentioning_collection_is_a_measured_failure(tmp_path):
+    reach = tmp_path / "reach.txt"
+    reach.write_text("tests/test_a.py::t1", encoding="utf-8")
+    stdout = (
+        "ERROR tests/test_a.py::t1 - RuntimeError: error during collection of invoices\n"
+        "1 error in 0.1s\n"
+    )
+    run = probe.parse_run("freeze_pause", 1, stdout, "", reach)
+    assert run["failed"] == ["tests/test_a.py::t1"]
+
+
+def test_runner_does_not_inherit_pytest_addopts(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, env, **kwargs):
+        seen["env"] = env
+        (tmp_path / "reach_count.txt").write_text("", encoding="utf-8")
+        return probe.subprocess.CompletedProcess(cmd, 0, "1 passed\n", "")
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--collect-only -x")
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.run_mode("count", ["tests/test_a.py"], tmp_path)
+    assert "PYTEST_ADDOPTS" not in seen["env"]
+
+
+def test_runner_clears_stale_result_files(tmp_path, monkeypatch):
+    reach = tmp_path / "reach_count.txt"
+    reach.write_text("tests/old.py::t", encoding="utf-8")
+    probe.collection_errors_path(reach).write_text("tests/old.py", encoding="utf-8")
+    monkeypatch.setattr(
+        probe.subprocess, "run", lambda cmd, **kw: probe.subprocess.CompletedProcess(cmd, 0, "1 passed\n", "")
+    )
+    with pytest.raises(probe.IncompleteRun, match="did not report"):
+        probe.run_mode("count", ["tests/test_a.py"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "./tests/test_eisv_substitution_probe.py",
+        "tests/../tests/test_eisv_substitution_probe.py",
+        "tests/test_eisv_substitution_probe.py::test_unknown_mode_is_refused",
+    ],
+)
+def test_every_spelling_of_a_self_test_is_excluded(spelling, monkeypatch):
+    def no_run(*args, **kwargs):
+        raise AssertionError("pytest must not run")
+
+    monkeypatch.setattr(probe.subprocess, "run", no_run)
+    assert probe.is_self_test(spelling)
+    assert probe.main(["--files", spelling]) == 2
+
+
+def test_other_targets_are_not_mistaken_for_self_tests():
+    assert not probe.is_self_test("tests/test_governance_monitor.py")
+    assert not probe.is_self_test("tests")
+
+
 def test_parse_run_rejects_a_nonzero_session_with_no_attributable_failure(tmp_path):
     reach = tmp_path / "reach.txt"
     reach.write_text("tests/test_a.py::t1", encoding="utf-8")

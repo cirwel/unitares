@@ -35,8 +35,13 @@ Usage:
 
 Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
 only on the files whose tests reached the estimator. The probe's own tests are
-never measured. A session that pytest did not complete (internal error,
-interruption, a collection error in any target, nothing collected), that
+never measured, however a target spells them (``./`` aliases and node ids
+included). Every session runs with the same pytest options: the ini
+``addopts`` and an inherited ``PYTEST_ADDOPTS`` are both cleared, so options
+such as ``--collect-only`` or ``-x`` cannot shape one mode differently from
+another. A session that pytest did not complete (internal error,
+interruption, a collection error in any target as pytest's own collection
+reports record it, nothing collected), that
 failed at session level without naming a test, or in which the plugin did not
 report is an
 incomplete run: the runner says so and exits 2 rather than reporting zero
@@ -188,6 +193,7 @@ def install(mode: str, on_call: Optional[Callable[[], None]] = None) -> Callable
 
 _current_test: List[Optional[str]] = [None]
 _reached: set = set()
+_collection_errors: List[str] = []
 
 
 def _record_reach() -> None:
@@ -206,9 +212,18 @@ def pytest_runtest_protocol(item, nextitem):  # pragma: no cover - exercised by 
     return None
 
 
+def pytest_collectreport(report):  # pragma: no cover - exercised by the runner
+    # pytest's own record of a collector that failed: unlike the text of the
+    # summary, a test's exception message cannot imitate it.
+    if os.environ.get("EISV_PROBE_MODE") and report.failed:
+        _collection_errors.append(report.nodeid or "<session>")
+
+
 def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised by the runner
     path = os.environ.get("EISV_PROBE_REACH")
     if os.environ.get("EISV_PROBE_MODE") and path:
+        if _collection_errors:
+            collection_errors_path(Path(path)).write_text("\n".join(_collection_errors), encoding="utf-8")
         Path(path).write_text("\n".join(sorted(_reached)), encoding="utf-8")
 
 
@@ -217,9 +232,12 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised b
 # --------------------------------------------------------------------------
 
 _FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
-# A short-summary ERROR naming a file (no "::") is a collection error, and
-# pytest's own line says so; either means some targets were never measured.
-_COLLECTION_ERROR_RE = re.compile(r"^ERROR [^\s:]+(?:\s|$)|errors? during collection", re.MULTILINE)
+# A short-summary ERROR naming a file (no "::") is a collection error, which
+# means some targets were never measured. The plugin's collection-error file is
+# the primary signal; this anchored line is the fallback for a session in which
+# the plugin did not load. Free text such as "error during collection" is not
+# matched: a test's own exception message can contain it.
+_COLLECTION_ERROR_RE = re.compile(r"^ERROR [^\s:]+(?:\s|$)", re.MULTILINE)
 # A session-level failure: a hook failed the whole session rather than a test
 # (tests/conftest.py does this for unawaited AsyncMock coroutines, writing
 # "FAILED: N unawaited ..." to stderr). It names no test node, so it cannot be
@@ -240,11 +258,33 @@ class IncompleteRun(RuntimeError):
     """A pytest session that did not produce a measurement."""
 
 
+def collection_errors_path(reach_path: Path) -> Path:
+    """Where the plugin lists the collectors that failed, next to the reach file."""
+    return reach_path.with_name(reach_path.name + ".collection_errors")
+
+
+def _repo_path(target: str) -> Path:
+    """The file a pytest target names, resolved as the runner's pytest sees it."""
+    return (REPO_ROOT / target.split("::", 1)[0]).resolve()
+
+
+def is_self_test(target: str) -> bool:
+    """True for any spelling of a probe self-test: ``./`` aliases, node ids."""
+    return _repo_path(target) in {_repo_path(path) for path in SELF_TESTS}
+
+
 def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
     if not targets:
         raise IncompleteRun(f"mode {mode!r}: no targets; pytest would fall back to default discovery")
     reach_path = workdir / f"reach_{mode}.txt"
+    # count runs twice with the same paths; a stale file must not stand in for
+    # a session that did not write one.
+    for stale in (reach_path, collection_errors_path(reach_path)):
+        stale.unlink(missing_ok=True)
     env = dict(os.environ)
+    # "-o addopts=" clears only the ini setting; an inherited PYTEST_ADDOPTS
+    # (--collect-only, -x, -k ...) would still shape each session differently.
+    env.pop("PYTEST_ADDOPTS", None)
     env["EISV_PROBE_MODE"] = mode
     env["EISV_PROBE_REACH"] = str(reach_path)
     env["PYTHONPATH"] = os.pathsep.join(
@@ -264,7 +304,8 @@ def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: 
     tail = "\n".join((stdout + "\n" + stderr).strip().splitlines()[-15:])
     if returncode not in _MEASURED_EXIT_CODES:
         raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode}, no measurement\n{tail}")
-    if _COLLECTION_ERROR_RE.search(stdout):
+    errors_path = collection_errors_path(reach_path)
+    if (errors_path.exists() and errors_path.read_text(encoding="utf-8").strip()) or _COLLECTION_ERROR_RE.search(stdout):
         raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
     if not reach_path.exists():
         raise IncompleteRun(f"mode {mode!r}: the probe plugin did not report, no measurement\n{tail}")
@@ -303,7 +344,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         results: Dict[str, Dict[str, Any]] = {}
-        targets = [f for f in (args.files or ["tests"]) if f not in SELF_TESTS]
+        targets = [f for f in (args.files or ["tests"]) if not is_self_test(f)]
         if not targets:
             # An empty target list would make pytest fall back to its
             # configured default discovery, measuring something not asked for.
