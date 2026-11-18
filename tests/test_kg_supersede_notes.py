@@ -29,8 +29,9 @@ _NOW = "2026-09-28T00:00:00.000001+00:00"
 
 @pytest.fixture(autouse=True)
 def _fixed_clock():
-    with patch(
-        "src.mcp_handlers.knowledge.handlers._utc_now_iso", return_value=_NOW
+    with (
+        patch("src.mcp_handlers.knowledge.handlers._utc_now_iso", return_value=_NOW),
+        patch("src.mcp_handlers.knowledge.mutation_helpers._utc_now_iso", return_value=_NOW),
     ):
         yield
 
@@ -50,6 +51,7 @@ def handler_env():
         ),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", server),
     ):
         yield server
 
@@ -76,7 +78,7 @@ def _graph(old: DiscoveryNode | None, *, flipped=True):
 async def _supersede(graph, **arguments):
     call = {"discovery_id": "new-1", "supersedes_id": "old-1", **arguments}
     with patch(
-        "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+        "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
         AsyncMock(return_value=graph),
     ):
         return parse_result(await kg_handlers.handle_supersede_discovery(call))
@@ -239,7 +241,7 @@ async def test_the_owner_keeps_its_notes_when_the_finding_is_raised_meanwhile(ha
     graph = _graph_with_reads(_old(), _old(severity="critical"), calls=calls)
     with (
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("owner-1", None),
         ),
         patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
@@ -302,7 +304,7 @@ class TestHighSeverityGate:
         graph = _graph(_old(severity="critical", agent_id="owner-1"))
         with (
             patch(
-                "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+                "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
                 return_value=("someone-else", None),
             ),
             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
@@ -322,7 +324,7 @@ class TestHighSeverityGate:
         graph = _graph(_old(severity="high", agent_id="owner-1"))
         with (
             patch(
-                "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+                "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
                 return_value=("owner-1", None),
             ),
             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=False),
@@ -336,7 +338,7 @@ class TestHighSeverityGate:
         graph = _graph(_old(severity="critical", agent_id="owner-1"))
         with (
             patch(
-                "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+                "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
                 return_value=("owner-1", None),
             ),
             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),

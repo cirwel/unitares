@@ -493,8 +493,13 @@ def test_each_declared_requirement_is_refused_when_missing(action, name):
             return_value="probe-agent",
         ),
         patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", graph),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", graph),
         patch(
             "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("probe-agent", None),
+        ),
+        patch(
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("probe-agent", None),
         ),
         patch("src.mcp_handlers.utils.check_agent_can_operate", return_value=None),
