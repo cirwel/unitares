@@ -91,7 +91,7 @@ def tokenizer_available() -> bool:
 def _renderer() -> MarkdownIt:
     if MarkdownIt is None:
         raise MissingTokenizer(INSTALL_HINT)
-    return MarkdownIt("commonmark", {"html": True, "breaks": True}).enable(
+    return MarkdownIt("commonmark", {"html": True, "breaks": True, "strikethrough_single_tilde": True}).enable(
         ["table", "strikethrough"]
     )
 

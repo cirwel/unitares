@@ -1071,6 +1071,13 @@ def _pick(lines: list[str]) -> str | None:
 _RENDERED = json.loads((FIXTURES / "rendered_bodies.json").read_text())["cases"]
 
 
+@pytest.mark.parametrize("run,visible", [("~", False), ("~~", False), ("~~~", True)])
+def test_footer_in_tilde_delimiters(run, visible):
+    other = "22222222-2222-4222-8222-222222222222"
+    body = f"UNITARES agent: {AGENT}\n\ntext {run}example\nUNITARES agent: {other}\nexample{run}"
+    assert ev.agent_uuid_from_body(body) == (other if visible else AGENT)
+
+
 @pytest.mark.parametrize("case", _RENDERED, ids=[str(i) for i in range(len(_RENDERED))])
 def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
     # ``expected`` was read by hand from GitHub's HTML when it was recorded
