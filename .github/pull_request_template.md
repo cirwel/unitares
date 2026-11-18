@@ -14,6 +14,12 @@
 
 <!-- Note compatibility, migration, security, deployment, and rollback implications. -->
 
+## Detection record (fix PRs)
+
+<!-- A PR classified as a fix states who noticed the defect, directly above the
+     signature; unknown is fine in every field. Fields and values:
+     docs/operations/github-workflow-conventions.md, Detection record. -->
+
 ## Reviewer focus
 
 <!-- Point reviewers to the highest-risk assumption, file, or behavior. Name any

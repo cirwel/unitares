@@ -298,15 +298,23 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
 # The subject holds only the model. The squash body ends with the PR's final
 # `Model:` and `UNITARES agent:` lines as trailers, so the landed commit names
 # both together whatever its branch commits said. Same self-reported values;
-# an unusable Model line is left out. Empty for an unsigned PR, which keeps
-# GitHub's default body.
+# an unusable Model line is left out. A fix PR's detection record (who noticed
+# the defect: scripts/dev/check_detection_record.py) goes just above them, each
+# field's last line in a fixed order, so the landed commit keeps it too. Empty
+# for a PR with neither, which keeps GitHub's default body.
 squash_signature() {  # <pr-json> -> trailer lines, or empty
   jq -r '
     [(.body // "") | splits("\\r?\\n")] as $lines
+    | [ "Defect-in", "Detected-by", "Detection-trigger", "Prompted-by", "Detected-at", "Detection-record" ]
+      as $fields
+    | [ $fields[] as $f
+        | ([$lines[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
+            | select(test("^[^`<>]{1,200}$"))] | last) as $v
+        | select($v != null) | "\($f): \($v)" ] as $detection
     | ([$lines[] | capture("^Model:[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v] | last // "") as $model
     | ([$lines[] | capture("^UNITARES agent:[ \\t]*(?<v>[0-9A-Fa-f-]{36})[ \\t]*$"; "i") | .v]
        | last // "") as $agent
-    | [ (if ($model | ascii_downcase) == "unavailable" then "Model: unavailable"
+    | $detection + [ (if ($model | ascii_downcase) == "unavailable" then "Model: unavailable"
          elif ($model | test("^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,127}$")) then "Model: \($model)"
          else empty end),
         (if $agent != "" then "UNITARES agent: \($agent)" else empty end) ]

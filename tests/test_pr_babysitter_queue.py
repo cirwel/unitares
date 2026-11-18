@@ -409,6 +409,23 @@ def test_the_squash_body_lists_commits_credits_authors_and_ends_with_the_signatu
     ))]
 
 
+def test_a_fix_prs_detection_record_lands_above_the_signature(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [_commit("fix: only")])
+    body = (f"Classification: fix\n\n```\nDetected-by: check:example\n```\n"
+            "Detected-at: 2026-11-04\nDefect-in: #2831\nDetected-by: operator\n"
+            "Detection-trigger: unprompted\nDetection-record: none\n\n"
+            f"Model: gpt-5\nUNITARES agent: {AGENT}\n")
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1, model="gpt-5", body=(
+        "* fix: only\n\n"
+        "---------\n\n"
+        "Defect-in: #2831\nDetected-by: operator\nDetection-trigger: unprompted\n"
+        "Detected-at: 2026-11-04\nDetection-record: none\n"
+        f"Model: gpt-5\nUNITARES agent: {AGENT}\n\n"
+        "Co-authored-by: Kenny Wang <k@example.org>"
+    ))]
+
+
 def test_the_co_author_credits_stay_a_trailer_block_git_can_parse(tmp_path: Path) -> None:
     _commits(tmp_path, 1, [_commit("fix: only")])
     script = SCRIPT.read_text()

@@ -1,0 +1,32 @@
+name: Detection Record
+
+# A PR whose body says `Classification: fix` records who noticed the defect it
+# fixes (operator ruling 2026-11-18; scripts/dev/check_detection_record.py
+# documents the block). `unknown` is accepted in every field, so the check asks
+# for an honest record, not for knowledge the author lacks. Non-fix PRs pass.
+#
+# Why pull_request_target: the job checks out the BASE branch (the trusted
+# checker) and reads only the PR body from the event, passed through the
+# environment, never interpolated into the script. No step runs anything from
+# the PR head. `edited` re-runs it when the body changes.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  detection-record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Check the detection record
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/dev/check_detection_record.py
