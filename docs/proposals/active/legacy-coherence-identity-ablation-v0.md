@@ -1,9 +1,13 @@
 # Legacy coherence identity ablation v0
 
-Status: measurement-only; the shadow is built, the aggregation read is not
-done (re-read 2026-09-23, proposals audit). The shadow is computed on every
-check-in (`compute_legacy_coherence_identity_shadow` in
-`src/behavioral_trajectory.py`, called from `src/mcp_handlers/updates/phases.py`).
+Status: measurement-only; the shadow is built, and the initial 30-day
+aggregation read is completed in
+[`docs/analysis/shadow-reads-2026-10-14.md`](../../analysis/shadow-reads-2026-10-14.md)
+(with its `physical`/`behavioral` split recorded in
+[`docs/EVALUATION_INDEX.md`](../../EVALUATION_INDEX.md), #2807); conditions 2–5
+below remain unfulfilled, so the deployed identity path is unchanged. The shadow
+is computed on every check-in (`compute_legacy_coherence_identity_shadow` in
+`src/behavioral_trajectory.py`, wired via `src/mcp_handlers/updates/post_update_helpers.py`).
 
 Earlier status (as first written): measurement-only proposal; superseded by the 2026-09-23 re-read.
 Schema: `legacy_coherence_identity_ablation.v1`
