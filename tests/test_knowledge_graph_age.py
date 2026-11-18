@@ -1050,6 +1050,10 @@ class TestGetResponseChain:
         assert result[0].id == "root"
         assert result[1].id == "reply1"
         assert result[2].id == "reply2"
+        mock_db._mock_conn.fetchval.assert_awaited_once_with(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
+            "knowledge-response-chain-query",
+        )
         mock_db._mock_conn.execute.assert_awaited_once_with(
             "SET LOCAL statement_timeout = '2000ms'"
         )
@@ -1089,6 +1093,48 @@ class TestGetResponseChain:
         assert mock_db.graph_query.await_args.args[1]["limit"] == 201
 
     @pytest.mark.asyncio
+    async def test_concurrent_saturation_rejects_before_db_acquisition(self, monkeypatch):
+        """A live traversal occupies the only local slot before pool checkout."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+        query_started = asyncio.Event()
+        release_query = asyncio.Event()
+
+        async def hold_query(*_args, **_kwargs):
+            query_started.set()
+            await release_query.wait()
+            return []
+
+        mock_db.graph_query.side_effect = hold_query
+        admitted = asyncio.create_task(kg.get_response_chain("admitted"))
+        await query_started.wait()
+
+        with pytest.raises(RuntimeError, match="concurrency limit"):
+            await kg.get_response_chain("rejected")
+
+        assert mock_db.acquire.call_count == 1
+        assert mock_db.graph_query.await_count == 1
+        release_query.set()
+        await admitted
+        assert not slots.locked()
+
+    @pytest.mark.asyncio
+    async def test_deployment_lock_rejects_before_age_query(self, monkeypatch):
+        """A competing worker's advisory lock prevents the expensive AGE query."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+        mock_db._mock_conn.fetchval.return_value = False
+
+        with pytest.raises(RuntimeError, match="deployment concurrency limit"):
+            await kg.get_response_chain("root")
+
+        mock_db.acquire.assert_called_once()
+        mock_db.graph_query.assert_not_awaited()
+        assert not slots.locked()
+
+    @pytest.mark.asyncio
     async def test_rejects_when_query_concurrency_budget_is_full(self, monkeypatch):
         """A saturated traversal gate rejects before acquiring a DB connection."""
         kg, mock_db = make_kg_with_mock_db()
@@ -1113,6 +1159,33 @@ class TestGetResponseChain:
         with pytest.raises(RuntimeError, match="query failed"):
             await kg.get_response_chain("root")
 
+        assert not slots.locked()
+
+    @pytest.mark.asyncio
+    async def test_releases_query_slot_after_cancellation(self, monkeypatch):
+        """Cancelling an admitted traversal restores capacity for the next read."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+        query_started = asyncio.Event()
+        never_release = asyncio.Event()
+
+        async def hold_query(*_args, **_kwargs):
+            query_started.set()
+            await never_release.wait()
+            return []
+
+        mock_db.graph_query.side_effect = hold_query
+        admitted = asyncio.create_task(kg.get_response_chain("cancelled"))
+        await query_started.wait()
+        admitted.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await admitted
+
+        assert not slots.locked()
+        mock_db.graph_query.side_effect = None
+        mock_db.graph_query.return_value = []
+        await kg.get_response_chain("after-cancellation")
         assert not slots.locked()
 
     @pytest.mark.asyncio
