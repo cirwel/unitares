@@ -82,6 +82,10 @@ _PHRASING = frozenset(
 _FORMATTING = frozenset(
     {"b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
 )
+# Opening one of these puts a scope marker in the list of active formatting
+# elements; closing it clears the list back to that marker, so formatting
+# left open inside a table cell does not carry out of it.
+_FORMATTING_SCOPES = frozenset({"applet", "caption", "marquee", "object", "td", "template", "th"})
 # Start tags that end an open paragraph (HTML's "close a p element").
 _CLOSES_P = frozenset(
     {
@@ -187,7 +191,8 @@ class _VisibleLines(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.lines: list[str] = []
         self._stack: list[str] = []  # open non-void elements other than ``p``
-        self._active: list[str] = []  # closed formatting still re-opened around text
+        # Closed formatting still re-opened around text; None is a scope marker.
+        self._active: list[str | None] = []
         self._in_p = False  # inside a paragraph that can hold a footer
         self._p_open = False  # inside any paragraph
         self._p_base = 0  # stack depth when the current paragraph opened
@@ -223,6 +228,18 @@ class _VisibleLines(HTMLParser):
                 return self._stack[:index]
         return self._stack
 
+    def _in_scope(self) -> list[str | None]:
+        """Active formatting entries after the last scope marker."""
+        if None in self._active:
+            return self._active[len(self._active) - self._active[::-1].index(None) :]
+        return self._active
+
+    def _clear_scopes(self, closed: list[str]) -> None:
+        """Clear active formatting back to one marker per scope element closed."""
+        for _ in range(sum(tag in _FORMATTING_SCOPES for tag in closed)):
+            while self._active and self._active.pop() is not None:
+                pass
+
     def _taint(self) -> None:
         if self._in_p:
             self._tainted = True
@@ -247,6 +264,8 @@ class _VisibleLines(HTMLParser):
             self._taint()  # a table part outside any table is ignored
         else:
             self._stack.append(tag)
+            if tag in _FORMATTING_SCOPES:
+                self._active.append(None)
             self._taint()
 
     def handle_startendtag(self, tag: str, attrs) -> None:
@@ -263,7 +282,7 @@ class _VisibleLines(HTMLParser):
             return
         self._taint()
         if tag not in self._stack:
-            if tag in self._active:  # its own end tag ends a carried element
+            if tag in self._in_scope():  # its own end tag ends a carried element
                 del self._active[len(self._active) - 1 - self._active[::-1].index(tag)]
             return
         index = len(self._stack) - 1 - self._stack[::-1].index(tag)
@@ -271,6 +290,7 @@ class _VisibleLines(HTMLParser):
             return  # out of scope: the browser ignores this end tag
         # Formatting elements closed by this end tag rather than their own stay active.
         self._active.extend(t for t in self._stack[index + 1 :] if t in _FORMATTING)
+        self._clear_scopes(self._stack[index:])
         del self._stack[index:]
         if self._in_p and len(self._stack) < self._p_base:
             self._end_paragraph()  # the paragraph's container closed
@@ -278,8 +298,10 @@ class _VisibleLines(HTMLParser):
     def handle_data(self, data: str) -> None:
         if not self._in_p or not data:
             return
-        if len(self._stack) > self._p_base or self._active:
-            # inside an element in the paragraph, or re-wrapped in active formatting
+        # Inside an element in the paragraph, or re-wrapped in active
+        # formatting. (A scope marker means its cell is still open, which
+        # already keeps a paragraph from counting, so markers need no check.)
+        if len(self._stack) > self._p_base or any(self._active):
             self._tainted = True
         else:
             self._line.append(data)

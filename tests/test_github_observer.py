@@ -1213,3 +1213,20 @@ def test_active_formatting_is_tracked_apart_from_open_elements(body_tail, expect
     body = f"UNITARES agent: {_UUID_A}\n\n" + body_tail.format(b=_UUID_B)
     assert ev.agent_uuid_from_body(body) == expected
 
+
+@pytest.mark.parametrize(
+    ("body_tail", "expected"),
+    [
+        # Formatting left open in a cell or caption ends with it; formatting
+        # opened before the table carries past it (GitHub POST /markdown, 2026-11-17).
+        ("<table><tr><td><b>x</td></tr></table>\n\nUNITARES agent: {b}", _UUID_B),
+        ("<table><caption><i>c</caption><tr><td>y</td></tr></table>\n\nUNITARES agent: {b}", _UUID_B),
+        ("text <b>x<table><tr><td>y</td></tr></table>\n\nUNITARES agent: {b}", _UUID_A),
+        # A </b> inside the cell cannot end a <b> carried from before the table.
+        ("text <b>x<table><tr><td></b>y</td></tr></table>\n\nUNITARES agent: {b}", _UUID_A),
+    ],
+)
+def test_formatting_left_open_in_a_table_cell_stays_in_the_cell(body_tail, expected):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + body_tail.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == expected
+
