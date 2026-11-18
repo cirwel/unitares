@@ -102,6 +102,7 @@ def _make_patch_stack(ctx, db):
     storage = MagicMock()
     storage.record_agent_state = AsyncMock()
     stack.enter_context(patch("src.mcp_handlers.updates.phases.agent_storage", storage))
+    stack.enter_context(patch("src.mcp_handlers.updates.post_update_helpers.agent_storage", storage))
     ctx.mcp_server.process_mgr.write_heartbeat = MagicMock()
     stack.enter_context(patch(
         "src.agent_behavioral_baseline.get_agent_behavioral_baseline",
