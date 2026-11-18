@@ -1,6 +1,6 @@
 # Live read of the 2026-10-15 basin and I-rest repairs: decision rule v0
 
-**Status:** decision rule, declared 2026-10-16, before the read it governs.
+**Status:** decision rule, declared 2026-10-16, before the read it governs; read completed 2026-11-18 in [`result-v0.md`](result-v0.md).
 The read is due on or after 2026-10-23. The rule sets telemetry thresholds
 only. It carries no removal or enforcement authority, so it sits in the agents'
 column of `CLAUDE.md`'s authority table. Nothing it reports changes a
