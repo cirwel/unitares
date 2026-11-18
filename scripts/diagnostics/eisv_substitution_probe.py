@@ -35,8 +35,11 @@ Usage:
 
 Without ``--files`` the first run is ``count`` over ``tests/``; later modes run
 only on the files whose tests reached the estimator. The probe's own tests are
-never measured, however a target spells them (``./`` aliases and node ids
-included). Every session runs with the same pytest options: the ini
+never measured, however a target spells them (``./`` aliases, node ids and
+symlinks included). Failures, collection errors and reach come from pytest's
+own reports, which the plugin writes to files; the runner never parses them
+out of the session's text, which a test's printed output can imitate. Every
+session runs with the same pytest options: the ini
 ``addopts`` and an inherited ``PYTEST_ADDOPTS`` are both cleared, so options
 such as ``--collect-only`` or ``-x`` cannot shape one mode differently from
 another. A session that pytest did not complete (internal error,
@@ -193,6 +196,7 @@ def install(mode: str, on_call: Optional[Callable[[], None]] = None) -> Callable
 
 _current_test: List[Optional[str]] = [None]
 _reached: set = set()
+_failed: set = set()
 _collection_errors: List[str] = []
 
 
@@ -212,36 +216,51 @@ def pytest_runtest_protocol(item, nextitem):  # pragma: no cover - exercised by 
     return None
 
 
+# The runner learns what happened from pytest's own reports, which the plugin
+# writes beside the reach file, never from the text of the session: a test's
+# printed output or exception message can imitate any line pytest prints.
+
+
 def pytest_collectreport(report):  # pragma: no cover - exercised by the runner
-    # pytest's own record of a collector that failed: unlike the text of the
-    # summary, a test's exception message cannot imitate it.
     if os.environ.get("EISV_PROBE_MODE") and report.failed:
         _collection_errors.append(report.nodeid or "<session>")
+
+
+def pytest_runtest_logreport(report):  # pragma: no cover - exercised by the runner
+    # A failure in any phase: "FAILED" for the call, "ERROR" for setup/teardown.
+    if os.environ.get("EISV_PROBE_MODE") and report.failed:
+        _failed.add(report.nodeid)
+
+
+def pytest_ignore_collect(collection_path, config):  # pragma: no cover - exercised by the runner
+    # pytest's own --ignore compares unresolved paths, so a symlinked directory
+    # would reach the self-tests through it; compare resolved paths instead.
+    # (pytest does not consult this hook for paths given on the command line;
+    # the runner filters those with is_self_test.)
+    if os.environ.get("EISV_PROBE_MODE") and Path(collection_path).resolve() in _self_test_paths():
+        return True
+    return None
 
 
 def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - exercised by the runner
     path = os.environ.get("EISV_PROBE_REACH")
     if os.environ.get("EISV_PROBE_MODE") and path:
-        if _collection_errors:
-            collection_errors_path(Path(path)).write_text("\n".join(_collection_errors), encoding="utf-8")
-        Path(path).write_text("\n".join(sorted(_reached)), encoding="utf-8")
+        reach_path = Path(path)
+        collection_errors_path(reach_path).write_text("\n".join(_collection_errors), encoding="utf-8")
+        failed_path(reach_path).write_text("\n".join(sorted(_failed)), encoding="utf-8")
+        # Written last: its presence means the plugin finished reporting.
+        reach_path.write_text("\n".join(sorted(_reached)), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
 # runner
 # --------------------------------------------------------------------------
 
-_FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)")
-# A short-summary ERROR naming a file (no "::") is a collection error, which
-# means some targets were never measured. The plugin's collection-error file is
-# the primary signal; this anchored line is the fallback for a session in which
-# the plugin did not load. Free text such as "error during collection" is not
-# matched: a test's own exception message can contain it.
-_COLLECTION_ERROR_RE = re.compile(r"^ERROR [^\s:]+(?:\s|$)", re.MULTILINE)
 # A session-level failure: a hook failed the whole session rather than a test
 # (tests/conftest.py does this for unawaited AsyncMock coroutines, writing
 # "FAILED: N unawaited ..." to stderr). It names no test node, so it cannot be
-# attributed to a mode's dependency on the estimator.
+# attributed to a mode's dependency on the estimator. Only stderr is read:
+# pytest reports a test's captured output on stdout, so a test cannot imitate it.
 _SESSION_FAILURE_RE = re.compile(r"^\s*FAILED:", re.MULTILINE)
 
 # pytest exit codes that describe a completed measurement: all passed, or
@@ -263,14 +282,23 @@ def collection_errors_path(reach_path: Path) -> Path:
     return reach_path.with_name(reach_path.name + ".collection_errors")
 
 
+def failed_path(reach_path: Path) -> Path:
+    """Where the plugin lists the test nodes that failed, next to the reach file."""
+    return reach_path.with_name(reach_path.name + ".failed")
+
+
 def _repo_path(target: str) -> Path:
     """The file a pytest target names, resolved as the runner's pytest sees it."""
     return (REPO_ROOT / target.split("::", 1)[0]).resolve()
 
 
+def _self_test_paths() -> set:
+    return {_repo_path(path) for path in SELF_TESTS}
+
+
 def is_self_test(target: str) -> bool:
     """True for any spelling of a probe self-test: ``./`` aliases, node ids."""
-    return _repo_path(target) in {_repo_path(path) for path in SELF_TESTS}
+    return _repo_path(target) in _self_test_paths()
 
 
 def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
@@ -279,7 +307,7 @@ def run_mode(mode: str, targets: List[str], workdir: Path) -> Dict[str, Any]:
     reach_path = workdir / f"reach_{mode}.txt"
     # count runs twice with the same paths; a stale file must not stand in for
     # a session that did not write one.
-    for stale in (reach_path, collection_errors_path(reach_path)):
+    for stale in (reach_path, collection_errors_path(reach_path), failed_path(reach_path)):
         stale.unlink(missing_ok=True)
     env = dict(os.environ)
     # "-o addopts=" clears only the ini setting; an inherited PYTEST_ADDOPTS
@@ -304,14 +332,14 @@ def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: 
     tail = "\n".join((stdout + "\n" + stderr).strip().splitlines()[-15:])
     if returncode not in _MEASURED_EXIT_CODES:
         raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode}, no measurement\n{tail}")
-    errors_path = collection_errors_path(reach_path)
-    if (errors_path.exists() and errors_path.read_text(encoding="utf-8").strip()) or _COLLECTION_ERROR_RE.search(stdout):
-        raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
-    if not reach_path.exists():
+    errors_path, failures_path = collection_errors_path(reach_path), failed_path(reach_path)
+    if not (reach_path.exists() and failures_path.exists()):
         raise IncompleteRun(f"mode {mode!r}: the probe plugin did not report, no measurement\n{tail}")
-    if _SESSION_FAILURE_RE.search(stderr) or _SESSION_FAILURE_RE.search(stdout):
+    if errors_path.exists() and errors_path.read_text(encoding="utf-8").strip():
+        raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
+    if _SESSION_FAILURE_RE.search(stderr):
         raise IncompleteRun(f"mode {mode!r}: a session-level failure names no test, no measurement\n{tail}")
-    failed = sorted({m.group(1) for line in stdout.splitlines() if (m := _FAILED_RE.match(line))})
+    failed = sorted(set(failures_path.read_text(encoding="utf-8").split()))
     if returncode != 0 and not failed:
         raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode} with no attributable test failure\n{tail}")
     summary = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
