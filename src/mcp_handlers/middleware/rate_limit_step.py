@@ -51,10 +51,14 @@ def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
 def _response_chain_rate_bucket(ctx) -> str:
     """Return a server-owned budget key for response-chain expansion.
 
-    A bound identity was resolved by the identity middleware and is safe to
-    partition on. An unbound details read has no trusted caller key, so every
-    such expansion shares one aggregate bucket. Caller-supplied ``agent_id``
-    and transport fingerprints never select this expensive-read budget.
+    A bound identity was resolved by the identity middleware, so bound
+    callers are partitioned per identity; this budget is only as strong as
+    identity minting, which is itself rate-limited. An unbound details read
+    has no trusted caller key, so every such expansion shares one aggregate
+    bucket. Caller-supplied ``agent_id`` and transport fingerprints never
+    select this expensive-read budget. The per-traversal ceilings and the
+    deployment-wide advisory lock in get_response_chain bound total AGE work
+    regardless of how many buckets exist.
     """
     bound = getattr(ctx, "bound_agent_id", None)
     if bound:
@@ -217,9 +221,9 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # pre-onboarding read, agent_id is caller-supplied target metadata, not
     # authenticated caller identity, and the transport fingerprint is
     # spoofable. Unbound callers therefore share a fixed aggregate bucket, so
-    # rotating either cannot mint fresh expansion budgets. Ordinary details
-    # reads and onboarding retain their existing exemptions and per-caller
-    # buckets above.
+    # rotating either cannot mint a fresh unbound expansion budget. Bound
+    # callers are budgeted per resolved identity. Ordinary details reads and
+    # onboarding retain their existing exemptions and per-caller buckets.
     bucket = (
         _response_chain_rate_bucket(ctx)
         if response_chain_read
