@@ -691,3 +691,33 @@ class TestPreOnboardToolsClassification:
                 f"Write-bearing tool {name!r} must be requires_identity='required' "
                 f"to gate at the middleware boundary; got {actual!r}."
             )
+
+
+class TestPublicRegistryAccessors:
+    """Public registry readers isolate callers from private dicts."""
+
+    def test_is_first_party_module(self):
+        from src.mcp_handlers.decorators import is_first_party_module
+
+        assert is_first_party_module("src.mcp_handlers.core") is True
+        assert is_first_party_module("governance_core.verification") is True
+        assert is_first_party_module("config.governance_config") is True
+        assert is_first_party_module("third_party_plugin.tools") is False
+
+    def test_get_registered_tool_definitions_returns_shallow_copy(self):
+        from src.mcp_handlers.decorators import get_registered_tool_definitions
+
+        defs = get_registered_tool_definitions()
+        assert defs == _TOOL_DEFINITIONS
+        assert defs is not _TOOL_DEFINITIONS
+
+    def test_get_router_action_handlers_returns_shallow_copy(self):
+        import src.mcp_handlers  # noqa: F401
+        from src.mcp_handlers.decorators import (
+            _ROUTER_ACTION_HANDLERS,
+            get_router_action_handlers,
+        )
+
+        handlers = get_router_action_handlers()
+        assert handlers == _ROUTER_ACTION_HANDLERS
+        assert handlers is not _ROUTER_ACTION_HANDLERS

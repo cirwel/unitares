@@ -241,6 +241,11 @@ def _registered_public_tool_names() -> list[str]:
     ]
 
 
+def registered_public_tool_names() -> list[str]:
+    """Return the live public dispatch index used by discovery and gateway."""
+    return _registered_public_tool_names()
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -321,12 +326,13 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     #     direct_resume_if_safe hit exactly that when its broken alias was
     #     removed (2026-08-29).
     from ..tool_stability import list_all_aliases
-    from ..decorators import _TOOL_DEFINITIONS
+    from ..decorators import get_registered_tool_definitions
+    tool_definitions = get_registered_tool_definitions()
     deprecated_aliases = (
         set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
     )
     deprecated_handlers = {
-        name for name, definition in _TOOL_DEFINITIONS.items()
+        name for name, definition in tool_definitions.items()
         if definition.deprecated
     }
     _deprecated = deprecated_aliases | deprecated_handlers
@@ -409,7 +415,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         if tool_name in _deprecated:
             tool_info["deprecated"] = True
             superseded_by = getattr(
-                _TOOL_DEFINITIONS.get(tool_name), "superseded_by", None
+                tool_definitions.get(tool_name), "superseded_by", None
             )
             if superseded_by:
                 tool_info["superseded_by"] = superseded_by
@@ -945,12 +951,12 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # so point at the router call that reaches the same handler.
         if alias_info is None:
             from .. import TOOL_HANDLERS
-            from ..decorators import _ROUTER_ACTION_HANDLERS
+            from ..decorators import get_router_action_handlers
 
             if tool_name not in TOOL_HANDLERS:
                 routes = [
                     (router, action)
-                    for router, handlers in _ROUTER_ACTION_HANDLERS.items()
+                    for router, handlers in get_router_action_handlers().items()
                     for action, handler in handlers.items()
                     if getattr(handler, "_mcp_tool_name", None) == tool_name
                 ]

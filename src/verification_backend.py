@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from governance_core.verification import (
     VerificationSignal,
     score_harm_confession,
-    _verdict_for,
+    verdict_for,
 )
 
 # Known category vocabulary (must match the regex backend's categories so the
@@ -115,7 +115,7 @@ def _coerce(parsed: Dict[str, Any], floor: VerificationSignal) -> VerificationSi
 
     return VerificationSignal(
         score=score,
-        verdict=_verdict_for(score),
+        verdict=verdict_for(score),
         categories=dict(sorted(categories.items())),
         matches=list(floor.matches),
         abstained=False,
