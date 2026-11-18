@@ -45,12 +45,12 @@ def _default_connect(db_url: str) -> Any:
     return psycopg2.connect(db_url)
 
 
-def _total_bin_samples(checker: CalibrationChecker) -> int:
+def _sample_counts(checker: CalibrationChecker) -> dict[str, int]:
     strategic = sum(int(s.get("count", 0)) for s in checker.bin_stats.values())
     tactical = sum(
         int(s.get("count", 0)) for s in getattr(checker, "tactical_bin_stats", {}).values()
     )
-    by_channel = sum(
+    tactical_by_channel = sum(
         int(s.get("count", 0))
         for channel_bins in getattr(checker, "tactical_bin_stats_by_channel", {}).values()
         for s in channel_bins.values()
@@ -58,7 +58,19 @@ def _total_bin_samples(checker: CalibrationChecker) -> int:
     complexity = sum(
         int(s.get("count", 0)) for s in getattr(checker, "complexity_stats", {}).values()
     )
-    return strategic + tactical + by_channel + complexity
+    return {
+        "strategic": strategic,
+        "tactical": tactical,
+        "tactical_by_channel": tactical_by_channel,
+        "complexity": complexity,
+    }
+
+
+def _total_bin_samples(checker: CalibrationChecker) -> int:
+    counts = _sample_counts(checker)
+    # Channel bins duplicate aggregate tactical observations, so take max instead of summing both.
+    tactical_effective = max(counts["tactical"], counts["tactical_by_channel"])
+    return counts["strategic"] + tactical_effective + counts["complexity"]
 
 
 def _summarize_accuracy_bins(bins_map: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -143,6 +155,7 @@ def build_report_payload(
     min_samples: int = 5,
 ) -> dict[str, Any]:
     """Build structured report payload; marks empty state cleanly."""
+    sample_counts = _sample_counts(checker)
     total_samples = _total_bin_samples(checker)
     if total_samples == 0:
         return {
@@ -151,6 +164,7 @@ def build_report_payload(
             "version": source_meta.get("version"),
             "updated_at": source_meta.get("updated_at"),
             "total_samples": 0,
+            "sample_counts": sample_counts,
             "message": f"No calibration samples found in {source_meta.get('source')}.",
         }
 
@@ -201,11 +215,13 @@ def build_report_payload(
         "version": source_meta.get("version"),
         "updated_at": source_meta.get("updated_at"),
         "total_samples": total_samples,
+        "sample_counts": sample_counts,
         "strategic_bins": strategic,
         "tactical_bins": tactical,
         "tactical_bins_by_channel": tactical_by_channel,
         "complexity_bins": complexity_rows,
         "is_calibrated": is_calibrated,
+        "calibration_status": check_result.get("calibration_status"),
         "check_summary": check_result,
         "failure_characterization": characterization,
     }
@@ -285,7 +301,19 @@ def render_text(payload: Mapping[str, Any]) -> str:
                 print()
 
         print("=" * 70)
-        print(f"Overall Status: {'CALIBRATED' if payload['is_calibrated'] else 'NOT CALIBRATED'}")
+        cal_status = payload.get("calibration_status") or payload.get("check_summary", {}).get(
+            "calibration_status"
+        )
+        if cal_status == "calibrated":
+            status_line = "CALIBRATED"
+        elif cal_status == "unassessed":
+            reason = payload.get("check_summary", {}).get("assessability", {}).get("reason")
+            status_line = f"UNASSESSED ({reason})" if reason else "UNASSESSED"
+        elif cal_status == "miscalibrated":
+            status_line = "NOT CALIBRATED (miscalibrated)"
+        else:
+            status_line = "CALIBRATED" if payload["is_calibrated"] else "NOT CALIBRATED"
+        print(f"Overall Status: {status_line}")
         print("=" * 70)
         print()
         print("FAILURE CHARACTERIZATION")

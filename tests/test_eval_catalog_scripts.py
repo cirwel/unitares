@@ -185,9 +185,68 @@ def test_report_calibration_state_file_and_from_db(tmp_path, monkeypatch, capsys
     payload = json.loads(capsys.readouterr().out)
     assert payload["empty"] is False
     assert payload["version"] == 77
+    assert payload["total_samples"] == 18
+    assert payload["sample_counts"] == {
+        "strategic": 10,
+        "tactical": 8,
+        "tactical_by_channel": 8,
+        "complexity": 0,
+    }
+    assert payload["calibration_status"] == "calibrated"
     assert payload["strategic_bins"][0]["count"] == 10
     assert payload["tactical_bins_by_channel"]["tests"][0]["count"] == 8
     assert len(created_conns) == 1
+
+    # Insufficient evidence must report UNASSESSED rather than CALIBRATED, and channel
+    # observations must not double-count aggregate tactical samples.
+    sparse_state = {
+        "bins": {
+            "0.7-0.8": {
+                "count": 1,
+                "predicted_correct": 1,
+                "actual_correct": 1,
+                "confidence_sum": 0.75,
+            }
+        },
+        "tactical_bins": {},
+        "tactical_bins_by_channel": {},
+        "complexity_bins": {},
+    }
+    sparse_file = tmp_path / "sparse_cal.json"
+    sparse_file.write_text(json.dumps(sparse_state), encoding="utf-8")
+    assert report_calibration.main(["--state-file", str(sparse_file)]) == 0
+    sparse_text = capsys.readouterr().out
+    assert "Overall Status: UNASSESSED" in sparse_text
+    assert "Overall Status: CALIBRATED" not in sparse_text
+
+    channel_dup_state = {
+        "bins": {},
+        "tactical_bins": {
+            "0.7-0.8": {
+                "count": 10,
+                "predicted_correct": 10,
+                "actual_correct": 8,
+                "confidence_sum": 7.5,
+            }
+        },
+        "tactical_bins_by_channel": {
+            "tests": {
+                "0.7-0.8": {
+                    "count": 10,
+                    "predicted_correct": 10,
+                    "actual_correct": 8,
+                    "confidence_sum": 7.5,
+                }
+            }
+        },
+        "complexity_bins": {},
+    }
+    channel_file = tmp_path / "channel_dup.json"
+    channel_file.write_text(json.dumps(channel_dup_state), encoding="utf-8")
+    assert report_calibration.main(["--state-file", str(channel_file), "--json"]) == 0
+    channel_payload = json.loads(capsys.readouterr().out)
+    assert channel_payload["total_samples"] == 10
+    assert channel_payload["calibration_status"] == "unassessed"
 
 
 def test_eisv_pca_legacy_gate_enforced(tmp_path):
