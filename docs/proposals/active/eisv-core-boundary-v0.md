@@ -40,11 +40,13 @@ once as the final named era, then freeze the EISV maths. From that deploy on,
 no change to the update path, sensor blend, policy thresholds or calibration
 (that is, nothing that needs a new entry in `config/eisv_instrument_eras.json`)
 lands except a correctness fix named as one. The freeze lifts when the stop
-rule's new premise exists: an independent label channel. EISV keeps running
-as optional, per-era telemetry. Remaining effort goes to the core boundary:
+rule's new premise exists: an independent label channel. Every fresh
+accepted check-in still runs the estimator, so EISV keeps producing per-era
+telemetry; making it an optional module remains the staged target of the
+2026-10-10 decision, which stands. Remaining effort goes to the core boundary:
 #3294 (risk surface), #3295 (pause refusal audit) and #3296 (record export).
 This replaces the instrument-quality-first ordering of the 2026-10-13
-decision; the 2026-10-10 optional-module decision stands.
+decision.
 
 **Bounded implementation authorization, 2026-11-02:** the operator's subsequent
 "proceed" applies to the proposed next increment of durable neutral checkpoint
