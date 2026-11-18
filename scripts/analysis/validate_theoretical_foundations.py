@@ -12,6 +12,7 @@ Usage:
     python3 scripts/analysis/validate_theoretical_foundations.py
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -25,8 +26,8 @@ GOVERNANCE_CORE_SOURCE = project_root / "governance_core"
 HAS_SOURCE = GOVERNANCE_CORE_SOURCE.is_dir() and (GOVERNANCE_CORE_SOURCE / "dynamics.py").exists()
 
 from governance_core.coherence import coherence, lambda1
-from governance_core.dynamics import DEFAULT_STATE, _integration_substeps, compute_dynamics
-from governance_core.parameters import DEFAULT_PARAMS, DEFAULT_THETA, Theta
+from governance_core.dynamics import DEFAULT_STATE, State, _integration_substeps, compute_dynamics
+from governance_core.parameters import DEFAULT_PARAMS, DEFAULT_THETA, Theta, get_i_dynamics_mode
 
 
 class ValidationResult:
@@ -109,8 +110,10 @@ def check_equations_match(result: ValidationResult):
             "Directional control boost minus detrended S coupling",
         ),
         "dI/dt includes -γI·I (v5 linear default) and -γI·I·(1-I) (legacy logistic)": (
-            "params.gamma_I * I" in code and "params.gamma_I * I * (1 - I)" in code,
-            "Both v5 linear damping and legacy logistic damping present",
+            'if i_mode == "linear":' in code
+            and "dI_dt = A - params.gamma_I * I\n" in code
+            and "dI_dt = A - params.gamma_I * I * (1 - I)" in code,
+            "Both v5 linear damping branch and legacy logistic damping present",
         ),
         "dS/dt includes -μ·(S - σ)": (
             "-params.mu * (S - s_setpoint)" in code,
@@ -238,18 +241,27 @@ def check_numerical_integration(result: ValidationResult):
     else:
         result.add_fail("Legacy Euler integration", "_integrate_euler pattern not found")
 
-    if "def _integration_substeps" in code and "math.ceil(work)" in code and "step_dt = dt / steps" in code:
+    if "def _integration_substeps" in code and "math.ceil(work)" in code and "for _ in range(steps):" in code:
         steps = _integration_substeps(DEFAULT_PARAMS, DEFAULT_THETA, 0.1, False, s_setpoint=0.145)
+        stiff_steps = _integration_substeps(DEFAULT_PARAMS, DEFAULT_THETA, 10.0, False, s_setpoint=0.145)
         next_state = compute_dynamics(DEFAULT_STATE, [0.0, 0.0, 0.0], DEFAULT_THETA, DEFAULT_PARAMS, dt=0.1)
-        if steps >= 1 and 0.0 <= next_state.E <= 1.0 and 0.0 <= next_state.I <= 1.0:
+        stiff_state = compute_dynamics(DEFAULT_STATE, [0.0, 0.0, 0.0], DEFAULT_THETA, DEFAULT_PARAMS, dt=10.0)
+        if (
+            steps >= 1
+            and stiff_steps > steps
+            and 0.0 <= next_state.E <= 1.0
+            and 0.0 <= next_state.I <= 1.0
+            and 0.0 <= stiff_state.E <= 1.0
+            and 0.0 <= stiff_state.I <= 1.0
+        ):
             result.add_pass(
                 "RK1 deterministic substepping active",
-                f"_integration_substeps (h*L <= 1); dt=0.1 uses {steps} substeps",
+                f"_integration_substeps scales with dt (dt=0.1 -> {steps}, dt=10.0 -> {stiff_steps})",
             )
         else:
-            result.add_fail("RK1 deterministic substepping", "Invalid runtime substep or state output")
+            result.add_fail("RK1 deterministic substepping", "Substep scaling or state bounds check failed")
     else:
-        result.add_fail("RK1 deterministic substepping", "_integration_substeps not found in dynamics.py")
+        result.add_fail("RK1 deterministic substepping", "_integration_substeps loop not found in dynamics.py")
 
 
 # Backward-compatible name for callers importing the earlier function.
@@ -263,13 +275,31 @@ def check_self_regulation(result: ValidationResult):
     dynamics_file = project_root / "governance_core" / "dynamics.py"
     code = dynamics_file.read_text(encoding="utf-8")
 
-    if "params.gamma_I * I" in code and "params.gamma_I * I * (1 - I)" in code:
+    orig_mode = os.environ.pop("UNITARES_I_DYNAMICS", None)
+    try:
+        default_mode = get_i_dynamics_mode()
+        test_state = State(E=0.6, I=0.5, S=0.2, V=0.0)
+        linear_out = compute_dynamics(test_state, [0.0, 0.0, 0.0], DEFAULT_THETA, DEFAULT_PARAMS, dt=0.1)
+        os.environ["UNITARES_I_DYNAMICS"] = "logistic"
+        logistic_out = compute_dynamics(test_state, [0.0, 0.0, 0.0], DEFAULT_THETA, DEFAULT_PARAMS, dt=0.1)
+    finally:
+        if orig_mode is None:
+            os.environ.pop("UNITARES_I_DYNAMICS", None)
+        else:
+            os.environ["UNITARES_I_DYNAMICS"] = orig_mode
+
+    if (
+        default_mode == "linear"
+        and "dI_dt = A - params.gamma_I * I\n" in code
+        and "dI_dt = A - params.gamma_I * I * (1 - I)" in code
+        and linear_out.I < logistic_out.I
+    ):
         result.add_pass(
             "I-channel self-regulation",
-            "v5 linear -γI·I (default) and legacy logistic -γI·I·(1-I) both implemented",
+            f"v5 linear -γI·I (default) damps faster than legacy logistic at I=0.5 ({linear_out.I:.6f} < {logistic_out.I:.6f})",
         )
     else:
-        result.add_fail("I-channel self-regulation", "Expected linear and logistic terms not found")
+        result.add_fail("I-channel self-regulation", f"Unexpected default mode ({default_mode!r}) or branch delta")
 
 
 def check_bounded_domains(result: ValidationResult):
