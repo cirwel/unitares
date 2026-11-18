@@ -8,21 +8,21 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import os
 import secrets
-import sys
+import threading
 
 from ..utils import (
     success_response,
     error_response,
-    require_agent_id as _default_require_agent_id,
-    require_registered_agent as _default_require_registered_agent,
+    require_agent_id,
+    require_registered_agent,
 )
 from ..identity.stable_session import audit_reference
 from src.knowledge_graph import (
-    get_knowledge_graph as _default_get_knowledge_graph,
+    get_knowledge_graph,
     DiscoveryNode,
     ResponseTo,
     normalize_tags,
@@ -43,8 +43,8 @@ from src.coherence_provenance import (
     BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
     coherence_role_for_source,
 )
-from src.mcp_handlers.shared import lazy_mcp_server as _default_mcp_server
-from src.broadcaster import broadcaster_instance as _default_broadcaster_instance
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.broadcaster import broadcaster_instance
 
 from .validation_helpers import (
     VALID_DISCOVERY_TYPES,
@@ -102,51 +102,47 @@ from .search_helpers import (
 logger = get_logger(__name__)
 
 
-def _h_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.knowledge.handlers")
-    return getattr(mod, name, default) if mod is not None else default
-
-
-class _McpServerProxy:
-    def __getattr__(self, name: str) -> Any:
-        server = _h_attr("mcp_server", _default_mcp_server)
-        return getattr(server, name)
-
-
-class _BroadcasterProxy:
-    def __getattr__(self, name: str) -> Any:
-        b = _h_attr("broadcaster_instance", _default_broadcaster_instance)
-        return getattr(b, name)
-
-
-mcp_server = _McpServerProxy()
-broadcaster_instance = _BroadcasterProxy()
-
-
 def _utc_now_iso() -> str:
-    fn = _h_attr("_utc_now_iso", None)
-    if fn is not None:
-        return fn()
+    """Return current UTC time as an offset-aware ISO 8601 string.
+
+    Bug fix 2026-04-25: write-path timestamps were generated with
+    naive ``datetime.now()`` (server local TZ), causing ``id`` to drift
+    from ``created_at`` (UTC, via PG TIMESTAMPTZ) by the server's offset
+    and breaking lex-sort across multi-tz fleets. All KG write-path
+    timestamps must be UTC-aware.
+    """
     return datetime.now(timezone.utc).isoformat()
+
+
+_discovery_id_lock = threading.Lock()
+_last_discovery_id_dt: Optional[datetime] = None
 
 
 def _new_discovery_id() -> str:
-    fn = _h_attr("_new_discovery_id", None)
-    if fn is not None:
-        return fn()
-    return datetime.now(timezone.utc).isoformat()
+    """Generate a strictly-monotonic UTC ISO timestamp for use as a discovery id.
 
+    Discovery ids double as the primary key *and* as a lex-sortable creation
+    timestamp (consumers parse them with ``datetime.fromisoformat`` and the
+    not-found helper prefix-matches them). A bare ``datetime.now()`` collides
+    when two writes land in the same microsecond — a batch loop or rapid
+    successive single stores — and the storage layer's
+    ``INSERT ... ON CONFLICT (id) DO UPDATE`` then *silently overwrites* the
+    first write (data loss, no error returned). Bumping by 1µs on collision
+    guarantees uniqueness within this process while preserving the
+    ISO-timestamp contract and chronological ordering.
 
-async def get_knowledge_graph(*args: Any, **kwargs: Any) -> Any:
-    return await _h_attr("get_knowledge_graph", _default_get_knowledge_graph)(*args, **kwargs)
-
-
-def require_agent_id(*args: Any, **kwargs: Any) -> Any:
-    return _h_attr("require_agent_id", _default_require_agent_id)(*args, **kwargs)
-
-
-def require_registered_agent(*args: Any, **kwargs: Any) -> Any:
-    return _h_attr("require_registered_agent", _default_require_registered_agent)(*args, **kwargs)
+    Residual: two *separate* processes can still mint the same microsecond
+    id; closing that requires moving the primary key off a bare timestamp,
+    which is a contract change (docs + tests treat ids as parseable ISO
+    timestamps) and is out of scope here.
+    """
+    global _last_discovery_id_dt
+    with _discovery_id_lock:
+        now = datetime.now(timezone.utc)
+        if _last_discovery_id_dt is not None and now <= _last_discovery_id_dt:
+            now = _last_discovery_id_dt + timedelta(microseconds=1)
+        _last_discovery_id_dt = now
+        return now.isoformat()
 
 
 async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
@@ -505,7 +501,7 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     if isinstance(raw_display, dict):
         agent_display = dict(raw_display)
     else:
-        agent_display = _h_attr("_resolve_agent_display", _resolve_agent_display)(agent_id)
+        agent_display = _resolve_agent_display(agent_id)
 
     # Drop inherited context at the construction site, not after enrichment.
     # Both paths below return ``agent_display`` early — a signature that raises,
@@ -883,7 +879,7 @@ async def _resolve_store_writer(
     """Resolve the writer using the severity-dependent identity policy."""
     inferred_exempt = await _inferred_writer_exempt()
     if not _store_needs_registered_writer(arguments):
-        agent_id, error, is_anonymous = _h_attr("_resolve_low_friction_writer", _resolve_low_friction_writer)(
+        agent_id, error, is_anonymous = _resolve_low_friction_writer(
             arguments, inferred_exempt=inferred_exempt
         )
         return agent_id, error, None, is_anonymous
@@ -894,7 +890,7 @@ async def _resolve_store_writer(
     agent_id, error = require_registered_agent(arguments)
     if error:
         return agent_id, error, None, False
-    display_name_error, display_name_warning = _h_attr("_check_display_name_required", _check_display_name_required)(agent_id, arguments)
+    display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
     return agent_id, display_name_error, display_name_warning, False
 
 
@@ -946,7 +942,7 @@ def resolve_knowledge_write_author(
         if store and _store_needs_registered_writer(candidate):
             agent_id, error = require_registered_agent(candidate)
         else:
-            agent_id, error, _ = _h_attr("_resolve_low_friction_writer", _resolve_low_friction_writer)(candidate)
+            agent_id, error, _ = _resolve_low_friction_writer(candidate)
         bound = get_context_agent_id()
     except Exception:
         logger.warning(
@@ -1035,7 +1031,9 @@ async def _capture_store_provenance(arguments: Dict[str, Any], agent_id: str) ->
     provenance_chain = None
     try:
         from src.provenance_context import attach_s22_context, build_s22_write_context
-        _get_lineage = _h_attr("_get_store_lineage_fn")()
+        from .handlers import _get_store_lineage_fn
+
+        _get_lineage = _get_store_lineage_fn()
 
         meta = None
         if agent_id in mcp_server.agent_metadata:
@@ -1100,7 +1098,7 @@ async def _capture_store_provenance(arguments: Dict[str, Any], agent_id: str) ->
                 # is a bearer credential, so store its audit reference.
                 provenance["writer_session_id_at_write"] = audit_reference(writer_session)
 
-        provenance_chain = await _h_attr("_build_s7_provenance_chain_with_fallback", _build_s7_provenance_chain_with_fallback)(agent_id, meta, _get_lineage)
+        provenance_chain = await _build_s7_provenance_chain_with_fallback(agent_id, meta, _get_lineage)
         from src.provenance_context import classify_fork_for_s22_context
 
         episode_fork_kind, identity_lineage_fork = classify_fork_for_s22_context(meta, agent_id)
@@ -1134,7 +1132,7 @@ async def _build_store_discovery(state: _KnowledgeStoreState) -> None:
     arguments = request.arguments
     state.response_to = _parse_store_response_to(arguments)
     state.severity = _parse_store_severity(arguments)
-    state.provenance, state.provenance_chain = await _h_attr("_capture_store_provenance", _capture_store_provenance)(arguments, request.agent_id)
+    state.provenance, state.provenance_chain = await _capture_store_provenance(arguments, request.agent_id)
     state.discovery = DiscoveryNode(
         id=_new_discovery_id(),
         agent_id=request.agent_id,
@@ -1187,7 +1185,7 @@ async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
     request = state.request
     discovery = state.discovery
     await state.graph.add_discovery(discovery)
-    await _h_attr("_broadcast_knowledge_write", _broadcast_knowledge_write)(discovery, request.agent_id)
+    await _broadcast_knowledge_write(discovery, request.agent_id)
     if request.supersedes_id and state.supersedes_target is not None:
         await state.graph.update_discovery(
             request.supersedes_id,
@@ -1206,7 +1204,7 @@ async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
 
 def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
     request = state.request
-    agent_display = _h_attr("_agent_display_for_response", _agent_display_for_response)(request.agent_id, request.arguments)
+    agent_display = _agent_display_for_response(request.agent_id, request.arguments)
     display_name = agent_display.get("display_name", request.agent_id)
     response = {
         "message": f"Discovery stored for agent '{display_name}'",
@@ -1257,7 +1255,7 @@ def _resolve_update_writer(
             raise _UpdateResponseError(refusal)
         agent_id, error = require_registered_agent(request.arguments)
     else:
-        agent_id, error, _ = _h_attr("_resolve_low_friction_writer", _resolve_low_friction_writer)(
+        agent_id, error, _ = _resolve_low_friction_writer(
             request.arguments, inferred_exempt=inferred_exempt
         )
     if error:
@@ -1523,7 +1521,7 @@ async def _persist_batch_discovery(
         raise _BatchItemError(" ".join(oversized))
 
     await graph.add_discovery(discovery)
-    await _h_attr("_broadcast_knowledge_write", _broadcast_knowledge_write)(discovery, agent_id)
+    await _broadcast_knowledge_write(discovery, agent_id)
     stored_item = {
         "discovery_id": discovery.id,
         "summary": prepared.summary,
@@ -1712,7 +1710,7 @@ async def _persist_note_discovery(
     if oversized:
         raise _NoteResponseError(_write_bound_refusal(*oversized))
     await graph.add_discovery(note)
-    await _h_attr("_broadcast_knowledge_write", _broadcast_knowledge_write)(note, agent_id)
+    await _broadcast_knowledge_write(note, agent_id)
 
 
 def _build_note_response(
@@ -1722,7 +1720,7 @@ def _build_note_response(
     response = {
         "message": "Note saved",
         "note_id": note.id,
-        "agent": _h_attr("_agent_display_for_response", _agent_display_for_response)(
+        "agent": _agent_display_for_response(
             request.agent_id, request.arguments
         ),
         "note": note.to_dict(include_details=False),
@@ -2274,7 +2272,7 @@ async def _handle_promote_memory_claim(
                 )
             ]
 
-        provenance, provenance_chain = await _h_attr("_capture_store_provenance", _capture_store_provenance)(
+        provenance, provenance_chain = await _capture_store_provenance(
             arguments, agent_id
         )
         # One server-minted timestamp identifies the durable row and the
@@ -2328,7 +2326,7 @@ async def _handle_promote_memory_claim(
         if oversized:
             return [_write_bound_refusal(*oversized)]
         await graph.add_discovery(claim)
-        await _h_attr("_broadcast_knowledge_write", _broadcast_knowledge_write)(claim, agent_id)
+        await _broadcast_knowledge_write(claim, agent_id)
 
         return success_response(
             {

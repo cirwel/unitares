@@ -1,6 +1,6 @@
 """Session creation, session read/list, and thesis/antithesis/synthesis submission helpers for Dialectic handlers."""
 
-from typing import Dict, Any, Sequence, Optional, List
+from typing import Dict, Any, Sequence, List
 from mcp.types import TextContent
 import asyncio
 import json
@@ -12,27 +12,23 @@ from src.dialectic_protocol import (
     DialecticPhase,
 )
 from src.dialectic_reviewed_work import (
-    ReviewedWorkAuthorship,
-    ReviewedWorkAuthorshipError,
-    declaration_for_request,
     embed_reviewed_work_authorship,
-    parse_reviewed_work_author_agent_ids,
     read_reviewed_work_authorship,
 )
 from src.coherence_provenance import coherence_role_for_source
 from ..utils import (
     success_response,
     error_response,
-    require_registered_agent as _default_require_registered_agent,
+    require_registered_agent,
 )
 from ..support.coerce import (
     LimitError,
     coerce_bool,
     parse_limit,
-    resolve_agent_uuid as _default_resolve_agent_uuid,
+    resolve_agent_uuid,
 )
 from .read_projection import compact_session_read
-from .events import emit_reviewer_abstained as _default_emit_reviewer_abstained
+from .events import emit_reviewer_abstained
 from .responses import (
     get_session_exception_recovery,
     get_session_timeout_recovery,
@@ -44,19 +40,25 @@ from .responses import (
     session_not_found_recovery,
 )
 from src.logging_utils import get_logger
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .session import (
     attach_attestation,
-    save_session as _default_save_session,
-    load_session as _default_load_session,
-    load_session_as_dict as _default_load_session_as_dict,
-    list_all_sessions as _default_list_all_sessions,
-    ACTIVE_SESSIONS as _default_ACTIVE_SESSIONS,
-    get_session_lock as _default_get_session_lock,
+    save_session,
+    load_session,
+    load_session_as_dict,
+    list_all_sessions,
+    ACTIVE_SESSIONS,
+    get_session_lock,
 )
-from .beam_resolve_client import BeamDialecticPolicyRefusal
+from .beam_resolve_client import BeamDialecticPolicyRefusal, beam_create_session
 from .reviewer import (
-    select_reviewer as _default_select_reviewer,
-    is_agent_in_active_session as _default_is_agent_in_active_session,
+    select_reviewer,
+    is_agent_in_active_session,
+)
+from src.dialectic_db import (
+    create_session_async as pg_create_session,
+    get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
+    mark_awaiting_facilitation_async as pg_mark_awaiting_facilitation,
 )
 from .actionability import (
     _synthetic_review_budget,
@@ -70,7 +72,6 @@ from .actionability import (
     _reviewer_authorship_conflict,
     _PAUSE_EVIDENCE_SCHEMA,
     _capture_pause_evidence,
-    AutomatedTrigger,
     _preview_topic,
     SYNTHETIC_REVIEWER_ID,
     _judgment_was_formed,
@@ -85,69 +86,36 @@ from .actionability import (
     _get_dialectic_next_steps,
 )
 from .resolution_helpers import (
-    _DictProxy,
-    _McpServerProxy,
-    _h_call,
-    _proxy,
-    check_reviewer_stuck as _default_check_reviewer_stuck,
-    _attach_public_resolution_effect as _default_attach_public_resolution_effect,
-    _validate_explicit_reviewer_candidate as _default_validate_explicit_reviewer_candidate,
-    _reviewer_reassignment_actor as _default_reviewer_reassignment_actor,
-    _apply_reviewer_reassignment as _default_apply_reviewer_reassignment,
-    _validate_synthesis_participant_and_conflict as _default_validate_synthesis_participant_and_conflict,
-    _record_synthesis_abstention as _default_record_synthesis_abstention,
-    _parse_synthesis_proposal as _default_parse_synthesis_proposal,
-    _submit_and_persist_synthesis_message as _default_submit_and_persist_synthesis_message,
-    _finalize_converged_synthesis as _default_finalize_converged_synthesis,
-    _finalize_max_rounds_synthesis_failure as _default_finalize_max_rounds_synthesis_failure,
+    _append_protocol_message,
+    _attach_public_resolution_effect,
+    _apply_reviewer_reassignment,
+    _bind_pause_token,
+    _commit_terminal_resolution,
+    _emit_dialectic_event,
+    _emit_phase_changed,
+    _finalize_converged_synthesis,
+    _finalize_max_rounds_synthesis_failure,
+    _parse_synthesis_proposal,
+    _read_proposed_conditions,
+    _record_synthesis_abstention,
+    _recorded_trigger_source,
+    _requested_reviewed_work_authorship,
+    _resolve_dialectic_agent_id,
+    _reviewer_objection_stands_refusal,
+    _reviewer_reassignment_actor,
+    _set_awaiting_facilitation,
+    _submit_and_persist_synthesis_message,
+    _validate_explicit_reviewer_candidate,
+    _validate_synthesis_participant_and_conflict,
+    check_reviewer_stuck,
 )
 from .llm_assisted import (
-    _run_synthetic_review as _default_run_synthetic_review,
-    _thesis_recorded_after_facilitation_refused as _default_thesis_recorded_after_facilitation_refused,
+    _handle_llm_assisted_dialectic,
+    _run_synthetic_review,
+    _thesis_recorded_after_facilitation_refused,
 )
 
 logger = get_logger(__name__)
-
-mcp_server = _McpServerProxy()
-ACTIVE_SESSIONS = _DictProxy("ACTIVE_SESSIONS", _default_ACTIVE_SESSIONS)
-
-require_registered_agent = _proxy("require_registered_agent", _default_require_registered_agent)
-resolve_agent_uuid = _proxy("resolve_agent_uuid", _default_resolve_agent_uuid)
-save_session = _proxy("save_session", _default_save_session)
-load_session = _proxy("load_session", _default_load_session)
-load_session_as_dict = _proxy("load_session_as_dict", _default_load_session_as_dict)
-list_all_sessions = _proxy("list_all_sessions", _default_list_all_sessions)
-get_session_lock = _proxy("get_session_lock", _default_get_session_lock)
-select_reviewer = _proxy("select_reviewer", _default_select_reviewer)
-is_agent_in_active_session = _proxy("is_agent_in_active_session", _default_is_agent_in_active_session)
-emit_reviewer_abstained = _proxy("emit_reviewer_abstained", _default_emit_reviewer_abstained)
-check_reviewer_stuck = _proxy("check_reviewer_stuck", _default_check_reviewer_stuck)
-_attach_public_resolution_effect = _proxy("_attach_public_resolution_effect", _default_attach_public_resolution_effect)
-_validate_explicit_reviewer_candidate = _proxy("_validate_explicit_reviewer_candidate", _default_validate_explicit_reviewer_candidate)
-_reviewer_reassignment_actor = _proxy("_reviewer_reassignment_actor", _default_reviewer_reassignment_actor)
-_apply_reviewer_reassignment = _proxy("_apply_reviewer_reassignment", _default_apply_reviewer_reassignment)
-_validate_synthesis_participant_and_conflict = _proxy("_validate_synthesis_participant_and_conflict", _default_validate_synthesis_participant_and_conflict)
-_record_synthesis_abstention = _proxy("_record_synthesis_abstention", _default_record_synthesis_abstention)
-_parse_synthesis_proposal = _proxy("_parse_synthesis_proposal", _default_parse_synthesis_proposal)
-_submit_and_persist_synthesis_message = _proxy("_submit_and_persist_synthesis_message", _default_submit_and_persist_synthesis_message)
-_finalize_converged_synthesis = _proxy("_finalize_converged_synthesis", _default_finalize_converged_synthesis)
-_finalize_max_rounds_synthesis_failure = _proxy("_finalize_max_rounds_synthesis_failure", _default_finalize_max_rounds_synthesis_failure)
-_run_synthetic_review = _proxy("_run_synthetic_review", _default_run_synthetic_review)
-_thesis_recorded_after_facilitation_refused = _proxy("_thesis_recorded_after_facilitation_refused", _default_thesis_recorded_after_facilitation_refused)
-_resolve_dialectic_agent_id = _proxy("_resolve_dialectic_agent_id")
-_read_proposed_conditions = _proxy("_read_proposed_conditions")
-_append_protocol_message = _proxy("_append_protocol_message")
-_commit_terminal_resolution = _proxy("_commit_terminal_resolution")
-_emit_dialectic_event = _proxy("_emit_dialectic_event")
-_emit_phase_changed = _proxy("_emit_phase_changed")
-_set_awaiting_facilitation = _proxy("_set_awaiting_facilitation")
-_reviewer_objection_stands_refusal = _proxy("_reviewer_objection_stands_refusal")
-handle_llm_assisted_dialectic = _proxy("handle_llm_assisted_dialectic")
-handle_submit_thesis = _proxy("handle_submit_thesis")
-pg_get_all_sessions_by_agent = _proxy("pg_get_all_sessions_by_agent")
-beam_create_session = _proxy("beam_create_session")
-pg_create_session = _proxy("pg_create_session")
-pg_mark_awaiting_facilitation = _proxy("pg_mark_awaiting_facilitation")
 
 
 async def _handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -266,98 +234,13 @@ async def _handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCon
     }, arguments=arguments)
 
 
-async def _bind_pause_token(
-    evidence: Dict[str, Any], agent_id: str
-) -> Dict[str, Any]:
-    """Bind a review to the authoritative pause generation at session open."""
-    from src.agent_storage import read_authoritative_pause_binding
-
-    binding = await read_authoritative_pause_binding(agent_id)
-    cached = getattr(mcp_server, "agent_metadata", {}).get(agent_id)
-    cached_status = getattr(cached, "status", None) if cached is not None else None
-    cached_token = getattr(cached, "paused_at", None) if cached is not None else None
-    if cached_status == "paused":
-        if not binding["pause_effect_required"]:
-            raise RuntimeError(
-                "cache reports a pause that is absent from durable status"
-            )
-        if cached_token and cached_token != binding["pause_token"]:
-            raise RuntimeError(
-                "cache and durable state report different pause generations"
-            )
-    bound = dict(evidence)
-    bound["pause_effect_required"] = binding["pause_effect_required"]
-    bound["pause_token"] = binding["pause_token"]
-    return bound
-
-
-def _recorded_trigger_source(arguments: Dict[str, Any]) -> str:
-    supplied = arguments.get("trigger_source")
-    if isinstance(supplied, AutomatedTrigger) and str(supplied):
-        return str(supplied)
-    return "manual"
-
-
-async def _requested_reviewed_work_authorship(
-    arguments: Dict[str, Any], *, declared_by_agent_id: str
-) -> tuple[Optional[ReviewedWorkAuthorship], Optional[Sequence[TextContent]]]:
-    """Validate the requester's author-recusal declaration.
-
-    This is a conflict declaration, not an authorship attestation.  UUID-only
-    lookup avoids first-match label/public-id ambiguity, and every accepted ID
-    must already be registered.  The field can only shrink the eligible
-    reviewer pool.
-    """
-    raw = arguments.get("reviewed_work_author_agent_ids")
-    try:
-        author_ids = parse_reviewed_work_author_agent_ids(raw)
-    except ReviewedWorkAuthorshipError as exc:
-        return None, [error_response(
-            str(exc),
-            error_code="REVIEW_AUTHOR_DECLARATION_INVALID",
-            error_category="validation_error",
-            recovery={
-                "action": (
-                    "Pass canonical UUIDs of registered agents whose authored "
-                    "work is being reviewed, or omit the field when unspecified."
-                ),
-                "related_tools": ["identity", "agent", "request_review"],
-            },
-            arguments=arguments,
-        )]
-
-    if author_ids:
-        await mcp_server.load_metadata_async()
-        missing = [
-            author_id
-            for author_id in author_ids
-            if author_id not in mcp_server.agent_metadata
-        ]
-        if missing:
-            return None, [error_response(
-                "Every reviewed-work author must be a registered UNITARES agent UUID.",
-                error_code="REVIEW_AUTHOR_NOT_FOUND",
-                error_category="validation_error",
-                recovery={
-                    "action": "Correct or remove the unregistered author UUIDs.",
-                    "unregistered_agent_ids": missing,
-                    "related_tools": ["agent", "identity"],
-                },
-                arguments=arguments,
-            )]
-
-    return declaration_for_request(
-        author_ids, declared_by_agent_id=declared_by_agent_id
-    ), None
-
-
 # register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 async def _handle_request_dialectic_review(
     arguments: Dict[str, Any],
     *,
-    beam_create_session_fn: Any = None,
-    pg_create_session_fn: Any = None,
+    llm_assisted_fn: Any = None,
+    submit_thesis_fn: Any = None,
 ) -> Sequence[TextContent]:
     """
     Create a dialectic review session.
@@ -456,7 +339,7 @@ async def _handle_request_dialectic_review(
         )]
 
     reviewed_work_authorship, authorship_error = (
-        await _h_call("_requested_reviewed_work_authorship")(
+        await _requested_reviewed_work_authorship(
             arguments, declared_by_agent_id=agent_uuid
         )
     )
@@ -481,7 +364,7 @@ async def _handle_request_dialectic_review(
     topic = arguments.get("topic") or arguments.get("issue_description") or reason
     reviewer_mode = arguments.get("reviewer_mode", "auto")  # auto|self|llm
     max_synthesis_rounds = arguments.get("max_synthesis_rounds", 5)
-    trigger_source = _h_call("_recorded_trigger_source")(arguments)
+    trigger_source = _recorded_trigger_source(arguments)
 
     # LLM-assisted dialectic: delegate to synthetic reviewer
     if reviewer_mode == "llm":
@@ -503,7 +386,8 @@ async def _handle_request_dialectic_review(
             llm_args["reviewed_work_author_agent_ids"] = list(
                 reviewed_work_authorship.author_agent_ids
             )
-        return await handle_llm_assisted_dialectic(llm_args)
+        _llm_fn = llm_assisted_fn or _handle_llm_assisted_dialectic
+        return await _llm_fn(llm_args)
 
     # Capture the exact decision-time evidence bundle. Never substitute the
     # monitor's bare ODE state: it is diagnostic and not the verdict authority.
@@ -524,7 +408,7 @@ async def _handle_request_dialectic_review(
         paused_agent_state, reviewed_work_authorship
     )
     try:
-        paused_agent_state = await _h_call("_bind_pause_token")(
+        paused_agent_state = await _bind_pause_token(
             paused_agent_state, agent_uuid
         )
     except Exception as exc:
@@ -606,8 +490,7 @@ async def _handle_request_dialectic_review(
         # is opened.
         # (dialectic-on-BEAM Slice 2.1)
         beam_detail: Dict[str, Any] = {}
-        _beam_create_fn = beam_create_session_fn or beam_create_session
-        beam_created = await _beam_create_fn(
+        beam_created = await beam_create_session(
             session_id=session.session_id,
             paused_agent_id=session.paused_agent_id,
             fields={
@@ -641,8 +524,7 @@ async def _handle_request_dialectic_review(
                 arguments=arguments,
             )]
         if beam_created is None:
-            _pg_create_fn = pg_create_session_fn or pg_create_session
-            await _pg_create_fn(
+            await pg_create_session(
                 session_id=session.session_id,
                 paused_agent_id=session.paused_agent_id,
                 reviewer_agent_id=session.reviewer_agent_id,
@@ -734,7 +616,8 @@ async def _handle_request_dialectic_review(
         for key in ("client_session_id", "api_key"):
             if key in arguments:
                 thesis_args[key] = arguments[key]
-        thesis_result = await handle_submit_thesis(thesis_args)
+        _submit_thesis_fn = submit_thesis_fn or _handle_submit_thesis
+        thesis_result = await _submit_thesis_fn(thesis_args)
         try:
             payload = json.loads(thesis_result[0].text)
         except Exception:
@@ -1303,8 +1186,6 @@ async def _handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence
 
 async def _handle_submit_thesis(
     arguments: Dict[str, Any],
-    *,
-    mark_awaiting_facilitation_fn: Any = None,
 ) -> Sequence[TextContent]:
     """
     Paused agent submits thesis: "What I did, what I think happened"
@@ -1681,7 +1562,7 @@ async def _handle_submit_thesis(
                     ):
                         try:
                             facilitation_written = bool(
-                                await (mark_awaiting_facilitation_fn or pg_mark_awaiting_facilitation)(
+                                await pg_mark_awaiting_facilitation(
                                     session_id,
                                     expected_phase=persisted_phase,
                                     expected_reviewer=persisted_reviewer,

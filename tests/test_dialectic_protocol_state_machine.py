@@ -585,12 +585,14 @@ def _apply_live_reassignment(
         agent_metadata=fake_meta,
     )
     try:
+        from src.mcp_handlers.dialectic import resolution_helpers as res_helpers
+
         with patch.object(
-            dialectic_handlers,
+            res_helpers,
             "_reviewer_reassignment_actor",
             return_value="operator",
         ), patch.object(
-            dialectic_handlers,
+            res_helpers,
             "mcp_server",
             fake_mcp,
         ), patch(

@@ -48,6 +48,9 @@ ROUTER_EX = "elixir/lease_plane/lib/unitares_lease_plane/http_router.ex"
 LIVENESS_EX = "elixir/lease_plane/lib/unitares_lease_plane/dialectic_liveness.ex"
 AUTO_RESOLVE = "src/mcp_handlers/dialectic/auto_resolve.py"
 HANDLERS = "src/mcp_handlers/dialectic/handlers.py"
+PHASE_SUBMISSION = "src/mcp_handlers/dialectic/phase_submission.py"
+RESOLUTION_HELPERS = "src/mcp_handlers/dialectic/resolution_helpers.py"
+LLM_ASSISTED = "src/mcp_handlers/dialectic/llm_assisted.py"
 SESSION = "src/mcp_handlers/dialectic/session.py"
 
 _OBSERVED_VIA_BEAM = (
@@ -120,37 +123,37 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
             "(via=sweeper; a reap_failed guarded write)"
         ),
     },
-    (HANDLERS, "_append_protocol_message"): {
+    (RESOLUTION_HELPERS, "_append_protocol_message"): {
         "calls": ("add_message_async",),
         "writer": (
             "shared interactive transcript append: message and phase/round/reviewer/"
             "status frontier advance in one guarded transaction"
         ),
     },
-    (HANDLERS, "_commit_terminal_resolution"): {
+    (RESOLUTION_HELPERS, "_commit_terminal_resolution"): {
         "calls": ("beam_resolve", "resolve_session_async"),
         "writer": (
             "shared terminal effect owner: BEAM resolution or exact "
             "phase/reviewer/transcript-CAS Python fallback, before any runtime effect"
         ),
     },
-    (HANDLERS, "_set_awaiting_facilitation"): {
+    (RESOLUTION_HELPERS, "_set_awaiting_facilitation"): {
         "calls": ("mark_awaiting_facilitation_async",
                   "update_session_awaiting_facilitation_async"),
         "writer": "shared guarded facilitation set/clear at the loaded transcript frontier",
     },
-    (HANDLERS, "handle_request_dialectic_review"): {
+    (PHASE_SUBMISSION, "_handle_request_dialectic_review"): {
         "calls": ("beam_create_session", "create_session_async"),
         "writer": "session creation",
     },
-    (HANDLERS, "handle_llm_assisted_dialectic"): {
+    (LLM_ASSISTED, "_handle_llm_assisted_dialectic"): {
         "calls": ("create_session_async",),
         "writer": (
             "one-call LLM-assisted session creation; later writes delegate to the "
             "shared transcript and terminal helpers"
         ),
     },
-    (HANDLERS, "handle_submit_thesis"): {
+    (PHASE_SUBMISSION, "_handle_submit_thesis"): {
         "calls": ("mark_awaiting_facilitation_async",),
         "writer": (
             "guarded facilitation request after a timed-out synthetic reviewer; "

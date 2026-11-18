@@ -75,10 +75,11 @@ async def test_handler_refuses_paused_agent_before_candidate_selection_or_writes
     server.load_metadata_async = AsyncMock()
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.mcp_server", server
-    ), patch(
-        "src.mcp_handlers.dialectic.handlers.ACTIVE_SESSIONS",
+        "src.mcp_handlers.dialectic.resolution_helpers.mcp_server", server
+    ), patch.dict(
+        "src.mcp_handlers.dialectic.session.ACTIVE_SESSIONS",
         {session.session_id: session},
+        clear=True,
     ), patch(
         "src.mcp_handlers.identity.operator.is_operator_caller",
         return_value=False,
@@ -86,7 +87,7 @@ async def test_handler_refuses_paused_agent_before_candidate_selection_or_writes
         "src.mcp_handlers.context.get_context_agent_id",
         return_value="agent-paused",
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.select_reviewer",
+        "src.mcp_handlers.dialectic.resolution_helpers.select_reviewer",
         new_callable=AsyncMock,
     ) as select_reviewer:
         result = parse_result(await handle_reassign_reviewer({

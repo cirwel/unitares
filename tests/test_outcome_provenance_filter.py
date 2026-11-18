@@ -724,7 +724,7 @@ class TestEveryWritePathIsAccountedFor:
         # does not call the recorder. Keep scanning every import/reference,
         # including imports through reexports, instead of weakening detection
         # to silence the name collision. Direct calls remain the four above.
-        assert references == expected | {"src/mcp_handlers/dialectic/handlers.py"}, references
+        assert references == expected | {"src/mcp_handlers/dialectic/resolution_helpers.py"}, references
 
     def test_no_unvouched_caller_can_reach_the_top_two_grades(self):
         """Ties the enumeration to the invariant: for every call site that does

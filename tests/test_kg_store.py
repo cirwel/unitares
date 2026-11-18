@@ -146,7 +146,9 @@ def patch_common(mock_mcp_server, mock_graph):
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.mcp_server", mock_mcp_server), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"):
         yield mock_mcp_server, mock_graph
 
@@ -1325,7 +1327,7 @@ class TestBatchStoreAdditional:
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 
-        with patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+        with patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
                     new_callable=AsyncMock, side_effect=RuntimeError("KG unavailable")):
             result = await handle_store_knowledge_graph({
                 "agent_id": registered_agent,
@@ -2055,11 +2057,11 @@ class TestMonotonicDiscoveryId:
         """Even when wall-clock now() repeats, ids are unique, increasing, ISO/UTC."""
         from datetime import datetime, timezone
         from unittest.mock import patch as _patch
-        import src.mcp_handlers.knowledge.handlers as h
+        import src.mcp_handlers.knowledge.mutation_helpers as h
 
         frozen = datetime(2026, 6, 13, 20, 36, 40, 123456, tzinfo=timezone.utc)
         with _patch.object(h, "_last_discovery_id_dt", None):
-            with _patch("src.mcp_handlers.knowledge.handlers.datetime") as mock_dt:
+            with _patch("src.mcp_handlers.knowledge.mutation_helpers.datetime") as mock_dt:
                 # now() always returns the same instant; fromisoformat/etc. pass through
                 mock_dt.now.return_value = frozen
                 ids = [h._new_discovery_id() for _ in range(5)]

@@ -129,7 +129,7 @@ async def test_equal_facilitation_state_still_verifies_the_durable_frontier():
     mark = AsyncMock()
     emit = AsyncMock()
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_update_awaiting_facilitation", new=update), patch(
         f"{D}.pg_mark_awaiting_facilitation", new=mark
     ), patch(f"{D}._emit_dialectic_event", new=emit):
@@ -165,7 +165,7 @@ async def test_equal_facilitation_state_refusal_evicts_the_stale_cache():
     session.awaiting_facilitation = False
     ACTIVE_SESSIONS[session.session_id] = session
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(
         f"{D}.pg_update_awaiting_facilitation",
         new=AsyncMock(return_value=False),
@@ -200,7 +200,7 @@ async def test_reassign_revives_a_swept_facilitation_session():
 
     writes = []
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_add_message", new=_persisting_append(writes)), \
          patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
@@ -234,7 +234,7 @@ async def test_reassign_does_not_resurrect_an_ordinary_failed_session():
 
     writes = []
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_add_message", new=_persisting_append(writes)), \
          patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
@@ -268,7 +268,7 @@ async def test_revival_persistence_is_one_guarded_append():
 
     calls = []
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_add_message", new=_persisting_append(calls)), \
          patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
@@ -300,7 +300,7 @@ async def test_revival_refused_reviewer_write_raises_under_strict():
         dispute_type="verification",
     )
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_add_message", new_callable=AsyncMock, return_value=0), \
          patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         with pytest.raises(RuntimeError):
@@ -396,7 +396,7 @@ async def test_reassignment_rewinds_a_refused_self_review_to_antithesis():
         reasoning="my case", root_cause="rc",
     ))
 
-    D = "src.mcp_handlers.dialectic.handlers"
+    D = "src.mcp_handlers.dialectic.resolution_helpers"
     with patch(f"{D}.pg_add_message", new=_persisting_append()), \
          patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
