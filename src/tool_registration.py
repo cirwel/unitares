@@ -343,6 +343,7 @@ def get_tool_wrapper(tool_name: str):
                         # refreshing agent:/ presence leases — neither is a
                         # telemetry change and neither was measured here.
                         audit_only=True,
+                        actor_verified=bool(agent_id),
                     )
                 except Exception as telemetry_error:  # pragma: no cover - defensive
                     logger.debug(

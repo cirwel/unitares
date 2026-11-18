@@ -136,17 +136,19 @@ controller history:
 
 | | Historical name | What the index contains |
 |---|---|---|
-| **E** | Energy | Prior decision scores, controller coherence level and complexity divergence, with available outcome, continuity and tool features |
-| **I** | Integrity | Calibration error and controller coherence trend, with available outcome-score consistency, continuity and tool-variety features |
-| **S** | Entropy | Drift, regime transitions and complexity divergence, with available continuity and tool features |
-| **V** | Valence | A separately smoothed raw `E_obs − I_obs` gap |
+| **E** | Energy | Complexity divergence, non-echo outcomes, and caller-bound actor work-tool error rate (`continuity_E_input` and controller self-loops excluded by default) |
+| **I** | Integrity | Per-agent tactical calibration, non-echo outcome consistency, and continuity (`unique_tools_ratio` and legacy coherence/fleet self-loops excluded by default) |
+| **S** | Entropy | Agent-local drift, complexity divergence, continuity, and caller-bound work-tool velocity (regime and shared fleet drift excluded by default) |
+| **V** | Valence | A separately smoothed raw `E_obs − I_obs` gap (steps when both E and I are read) |
 
 The historical names carry intended interpretations; the implemented indices
-are defined by their inputs and transformations. Check-ins 1–2 use a cold-start
-prior, check-ins 3–24 use fixed behavioral thresholds, and from check-in 25 risk
-scoring is also relative to the agent's own history. Prior decisions feed back
-into E, so a policy response can change later readings without a change in task
-inputs.
+are defined by their inputs and transformations. Under default `HU1` (with the
+first 3 check-ins unread by the sensor), check-ins 1–5 use a cold-start prior,
+check-ins 6–27 use fixed behavioral thresholds once readings arrive (otherwise
+drawing no verdict via `insufficient_reading`), and from check-in 28 risk
+scoring is also relative to the agent's own history (`1–2 / 3–24 / 25` when
+`UNITARES_HOLD_UNREAD_AXES=0`). Under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`,
+controller decisions no longer feed back into E, I, or S.
 
 The policy action also carries a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`): proximity to the nearest measurable decision threshold (risk, void or coherence). Read `margin_scope` and `unmeasurable_edges` with it.
 

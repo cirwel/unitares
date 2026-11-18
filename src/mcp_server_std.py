@@ -502,8 +502,15 @@ async def _call_local_tool(
 ) -> Sequence[TextContent]:
     """Run the local stdio boundary after proxy selection has settled."""
     # Activity tracking for auto-heartbeat
-    from src.mcp_handlers.middleware.params_step import unwrapped_view
+    from src.mcp_handlers.middleware.params_step import (
+        remove_reserved_dispatch_keys,
+        unwrapped_view,
+    )
     from src.mcp_handlers.decorators import resolve_canonical_action_and_source
+    from src.services.tool_usage_recorder import (
+        resolve_audit_agent_id,
+        resolve_dispatch_bound_agent_id,
+    )
     # The runner and parameter middleware each unwrap one kwargs layer.
     tracking_args = unwrapped_view(arguments, depth=2) if isinstance(arguments, dict) else {}
     agent_id = tracking_args.get('agent_id')
@@ -543,6 +550,7 @@ async def _call_local_tool(
     # Dispatch to handler registry; record tool_usage at each exit point
     # (JSONL tracker + fire-and-forget write to audit.tool_usage)
     t0 = time.monotonic()
+    remove_reserved_dispatch_keys(arguments)
     # #1387 action discriminator — built BEFORE dispatch. dispatch_tool runs
     # params_step.resolve_alias, which mutates `arguments` in place to inject
     # an alias's implied action; building afterwards would misreport every
@@ -577,29 +585,38 @@ async def _call_local_tool(
         finally:
             reset_nested_tool_invoker(invoker_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
+        caller_id = resolve_dispatch_bound_agent_id(arguments) or resolve_audit_agent_id(None)
         if result is not None:
             success, error_type = classify_tool_result(result)
+            final_caller = resolve_minted_agent_id(name, caller_id, result)
             if not nested_delegated:
                 record_tool_usage(tool_name=name,
                                   agent_id=resolve_minted_agent_id(name, agent_id, result),
                                   success=success,
                                   error_type=error_type, latency_ms=latency_ms,
-                                  session_id=session_id, payload=usage_payload)
+                                  session_id=session_id, payload=usage_payload,
+                                  audit_agent_id=final_caller,
+                                  actor_verified=bool(final_caller))
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                           error_type="unknown_tool", latency_ms=latency_ms,
-                          session_id=session_id, payload=usage_payload)
+                          session_id=session_id, payload=usage_payload,
+                          audit_agent_id=caller_id,
+                          actor_verified=bool(caller_id))
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}, indent=2))]
     except ImportError:
         # Previously the one exit point with no row: a handler-registry import
         # failure returned an error to the caller and left audit.tool_usage
         # silent, so a broken deploy looked like "no traffic" rather than
         # "every call failed".
+        caller_id = resolve_audit_agent_id(None)
         if not nested_delegated:
             record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                               error_type="handler_registry_unavailable",
                               latency_ms=int((time.monotonic() - t0) * 1000),
-                              session_id=session_id, payload=usage_payload)
+                              session_id=session_id, payload=usage_payload,
+                              audit_agent_id=caller_id,
+                              actor_verified=bool(caller_id))
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Handler registry not available for tool '{name}'"}, indent=2))]
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -609,10 +626,13 @@ async def _call_local_tool(
             f"Error executing tool '{name}': {str(e)}",
             recovery={"action": "Check tool parameters and try again"}
         )
+        caller_id = resolve_dispatch_bound_agent_id(arguments) or resolve_audit_agent_id(None)
         if not nested_delegated:
             record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                               error_type="execution_error", latency_ms=latency_ms,
-                              session_id=session_id, payload=usage_payload)
+                              session_id=session_id, payload=usage_payload,
+                              audit_agent_id=caller_id,
+                              actor_verified=bool(caller_id))
         return [sanitized_error]
 
 

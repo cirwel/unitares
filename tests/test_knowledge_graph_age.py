@@ -30,6 +30,7 @@ This file covers the async/DB-dependent methods:
   - archive_discoveries_batch / cleanup_stale_discoveries
 """
 
+import asyncio
 import json
 import math
 import pytest
@@ -46,6 +47,7 @@ sys.path.insert(0, str(project_root))
 from src.storage.knowledge_graph import KnowledgeGraphAGE
 from src.knowledge_graph import DiscoveryNode, ResponseTo
 import src.storage.knowledge_graph_age as kg_age_module
+import src.storage.knowledge_graph_age_search as kg_age_search_module
 
 
 @pytest.fixture(autouse=True)
@@ -1085,6 +1087,33 @@ class TestGetResponseChain:
         await kg.get_response_chain("root", limit=200, lookahead=True)
 
         assert mock_db.graph_query.await_args.args[1]["limit"] == 201
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_query_concurrency_budget_is_full(self, monkeypatch):
+        """A saturated traversal gate rejects before acquiring a DB connection."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        await slots.acquire()
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+
+        with pytest.raises(RuntimeError, match="concurrency limit"):
+            await kg.get_response_chain("root")
+
+        mock_db.acquire.assert_not_called()
+        mock_db.graph_query.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_releases_query_slot_after_graph_failure(self, monkeypatch):
+        """A failed graph query returns its slot for later legitimate reads."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+        mock_db.graph_query.side_effect = RuntimeError("query failed")
+
+        with pytest.raises(RuntimeError, match="query failed"):
+            await kg.get_response_chain("root")
+
+        assert not slots.locked()
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_smallest_depth(self):

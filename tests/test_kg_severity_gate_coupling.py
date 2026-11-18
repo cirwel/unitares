@@ -123,10 +123,10 @@ class TestWriterGateCoupling:
     def test_escalation_requires_registered_agent(self):
         """The regression: low -> critical used to take the anonymous path."""
         with patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("caller", None),
         ) as registered, patch(
-            "src.mcp_handlers.knowledge.handlers._resolve_low_friction_writer",
+            "src.mcp_handlers.knowledge.mutation_helpers._resolve_low_friction_writer",
             return_value=("anon", None, True),
         ) as low_friction:
             agent_id = _resolve_update_writer(
@@ -140,10 +140,10 @@ class TestWriterGateCoupling:
     def test_non_escalating_update_keeps_the_low_friction_path(self):
         """Ungated edits must stay cheap — this is not a blanket tightening."""
         with patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("caller", None),
         ) as registered, patch(
-            "src.mcp_handlers.knowledge.handlers._resolve_low_friction_writer",
+            "src.mcp_handlers.knowledge.mutation_helpers._resolve_low_friction_writer",
             return_value=("anon", None, True),
         ) as low_friction:
             agent_id = _resolve_update_writer(
@@ -157,10 +157,10 @@ class TestWriterGateCoupling:
     def test_stored_high_severity_still_gated(self):
         """Pre-existing behaviour, pinned so the refactor cannot loosen it."""
         with patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("caller", None),
         ) as registered, patch(
-            "src.mcp_handlers.knowledge.handlers._resolve_low_friction_writer",
+            "src.mcp_handlers.knowledge.mutation_helpers._resolve_low_friction_writer",
             return_value=("anon", None, True),
         ):
             _resolve_update_writer(_request(status="resolved"), _discovery("critical"))

@@ -117,6 +117,11 @@ def _is_first_party_module(module: str) -> bool:
     )
 
 
+def is_first_party_module(module: str) -> bool:
+    """Public check for whether ``module`` is one of this repo's shipped packages."""
+    return _is_first_party_module(module)
+
+
 def mcp_tool(
     name: Optional[str] = None,
     timeout: Optional[float] = 30.0,
@@ -712,6 +717,19 @@ def _handler_operation(name: str) -> CallOperation:
 def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
     """Get the full ToolDefinition for a registered tool."""
     return _TOOL_DEFINITIONS.get(tool_name)
+
+
+def get_registered_tool_definitions() -> Dict[str, ToolDefinition]:
+    """Return a shallow copy of all registered ToolDefinition records."""
+    return dict(_TOOL_DEFINITIONS)
+
+
+def get_router_action_handlers() -> Dict[str, Dict[str, Callable]]:
+    """Return a shallow copy of registered action-router handler maps."""
+    return {
+        router: dict(actions)
+        for router, actions in _ROUTER_ACTION_HANDLERS.items()
+    }
 
 
 def list_plugin_registered_tools() -> list[str]:

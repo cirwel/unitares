@@ -17,6 +17,100 @@ from src.dialectic_protocol import DialecticSession, DialecticPhase
 from tests.helpers import parse_result, successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+
+_DIALECTIC_SUBMODULES = {
+    "mcp_server": ("phase_submission", "resolution_helpers", "llm_assisted", "handlers"),
+    "load_session": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "load_session_as_dict": ("phase_submission", "llm_assisted"),
+    "save_session": ("phase_submission", "resolution_helpers"),
+    "select_reviewer": ("phase_submission", "resolution_helpers"),
+    "require_registered_agent": ("phase_submission", "llm_assisted"),
+    "resolve_agent_uuid": ("phase_submission", "llm_assisted"),
+    "pg_create_session": ("phase_submission", "llm_assisted"),
+    "pg_mark_awaiting_facilitation": ("phase_submission", "resolution_helpers"),
+    "pg_get_resolution_effect": ("resolution_helpers", "handlers"),
+    "emit_reviewer_abstained": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "discard_receipt_unless_written": ("resolution_helpers", "llm_assisted"),
+    "record_resolution_outcome": ("resolution_helpers", "llm_assisted"),
+    "_resolve_dialectic_agent_id": ("phase_submission", "llm_assisted"),
+    "_emit_dialectic_event": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_emit_phase_changed": ("phase_submission", "resolution_helpers"),
+    "_set_awaiting_facilitation": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_commit_terminal_resolution": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_commit_converged_resolution": ("resolution_helpers", "llm_assisted"),
+    "_apply_durable_resolution_effect": ("resolution_helpers", "llm_assisted"),
+    "_run_synthetic_review": ("phase_submission",),
+    "beam_create_session": ("phase_submission",),
+    "check_reviewer_stuck": ("phase_submission", "resolution_helpers"),
+    "get_session_lock": ("phase_submission",),
+    "is_agent_in_active_session": ("phase_submission",),
+    "list_all_sessions": ("phase_submission",),
+    "pg_get_all_sessions_by_agent": ("phase_submission",),
+    "_record_operator_resolution_telemetry": ("resolution_helpers",),
+    "_reviewer_reassignment_actor": ("resolution_helpers", "phase_submission"),
+    "agent_pause_is_live": ("resolution_helpers",),
+    "beam_resolve": ("resolution_helpers",),
+    "emit_participant_abstained": ("resolution_helpers",),
+    "execute_resolution": ("resolution_helpers",),
+    "pg_acknowledge_resolution_effect": ("resolution_helpers",),
+    "pg_add_message": ("resolution_helpers",),
+    "pg_claim_resolution_effect": ("resolution_helpers",),
+    "pg_complete_resolution_effect": ("resolution_helpers",),
+    "pg_fail_resolution_effect": ("resolution_helpers",),
+    "pg_quarantine_resolution_effect": ("resolution_helpers",),
+    "pg_resolve_session": ("resolution_helpers",),
+    "pg_update_awaiting_facilitation": ("resolution_helpers",),
+    "update_calibration_from_dialectic": ("resolution_helpers",),
+    "update_calibration_from_dialectic_disagreement": ("resolution_helpers",),
+    "handle_llm_assisted_dialectic": ("handlers",),
+    "pg_update_phase": ("handlers",),
+    "pg_update_reviewer": ("handlers",),
+    "beam_update_reviewer": ("handlers",),
+}
+
+
+class _MultiPatch:
+    """Apply the same mock across every dialectic submodule that binds a symbol."""
+
+    def __init__(self, targets, *args, **kwargs):
+        self._targets = targets
+        self._args = args
+        self._kwargs = kwargs
+        self._patches = []
+
+    def __enter__(self):
+        first, *rest = self._targets
+        p0 = patch(first, *self._args, **self._kwargs)
+        mock = p0.__enter__()
+        self._patches = [p0]
+        try:
+            for target in rest:
+                pt = patch(target, new=mock)
+                pt.__enter__()
+                self._patches.append(pt)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return mock
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.__exit__(*exc)
+        self._patches.clear()
+
+    def start(self):
+        return self.__enter__()
+
+    def stop(self):
+        self.__exit__(None, None, None)
+
+
+def _patch_dialectic(symbol, *args, **kwargs):
+    submods = _DIALECTIC_SUBMODULES[symbol]
+    targets = tuple(f"src.mcp_handlers.dialectic.{submod}.{symbol}" for submod in submods)
+    if len(targets) == 1:
+        return patch(targets[0], *args, **kwargs)
+    return _MultiPatch(targets, *args, **kwargs)
 LLM = "src.mcp_handlers.support.llm_delegation"
 
 
@@ -60,7 +154,7 @@ def server_patch():
     server = MagicMock()
     server.agent_metadata = {}   # .get(uuid) -> None -> api_key fallback
     server.monitors = {}         # no live monitor -> agent_state None
-    with patch(f"{DIALECTIC}.mcp_server", server):
+    with _patch_dialectic("mcp_server", server):
         yield server
 
 
@@ -91,26 +185,24 @@ def authoritative_pause_binding():
 def _common_patches():
     """Patch the persistence + auth seams used by submit_thesis."""
     return [
-        patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
+        _patch_dialectic("_resolve_dialectic_agent_id",
               new=AsyncMock(return_value=("agent-paused", None))),
-        patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
-        patch(
-            f"{DIALECTIC}.pg_add_message",
+        _patch_dialectic("load_session", new=AsyncMock(return_value=None)),
+        _patch_dialectic("pg_add_message",
             new=AsyncMock(side_effect=successful_dialectic_message_append),
         ),
-        patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
-        patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)),
-        patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)),
-        patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
-        patch(f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=True)),
-        patch(
-            f"{DIALECTIC}.execute_resolution",
+        _patch_dialectic("pg_update_phase", new=AsyncMock()),
+        _patch_dialectic("beam_update_reviewer", new=AsyncMock(return_value=None)),
+        _patch_dialectic("pg_update_reviewer", new=AsyncMock(return_value=True)),
+        _patch_dialectic("pg_update_awaiting_facilitation", new=AsyncMock()),
+        _patch_dialectic("pg_resolve_session", new=AsyncMock(return_value=True)),
+        _patch_dialectic("execute_resolution",
             new=AsyncMock(
                 return_value={"success": True, "applied_conditions": []}
             ),
         ),
-        patch(f"{DIALECTIC}.record_resolution_outcome", new=AsyncMock()),
-        patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
+        _patch_dialectic("record_resolution_outcome", new=AsyncMock()),
+        _patch_dialectic("save_session", new=AsyncMock()),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
     ]
@@ -197,25 +289,16 @@ async def test_synthetic_reviewer_claims_open_slot_with_antithesis_append():
     ), patch(
         f"{LLM}.generate_synthesis",
         new=AsyncMock(return_value=_synthesis("RESUME")),
-    ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=beam_update_reviewer
-    ), patch(
-        f"{DIALECTIC}.pg_update_reviewer", new=update_reviewer
-    ), patch(
-        f"{DIALECTIC}.pg_add_message", new=add_message,
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
-    ), patch(
-        f"{DIALECTIC}.pg_resolve_session", new=resolve_row
-    ), patch(
-        f"{DIALECTIC}.execute_resolution",
+    ), _patch_dialectic("beam_update_reviewer", new=beam_update_reviewer
+    ), _patch_dialectic("pg_update_reviewer", new=update_reviewer
+    ), _patch_dialectic("pg_add_message", new=add_message,
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("beam_resolve", new=AsyncMock(return_value=None)
+    ), _patch_dialectic("pg_resolve_session", new=resolve_row
+    ), _patch_dialectic("execute_resolution",
         new=AsyncMock(return_value={"success": True, "applied_conditions": []}),
-    ), patch(
-        f"{DIALECTIC}.record_resolution_outcome", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()
+    ), _patch_dialectic("record_resolution_outcome", new=AsyncMock()
+    ), _patch_dialectic("_emit_dialectic_event", new=AsyncMock()
     ):
         result = await _run_synthetic_review(
             session,
@@ -258,12 +341,9 @@ async def test_synthetic_reviewer_aborts_when_open_slot_cas_loses():
         new=AsyncMock(return_value=_antithesis("refine")),
     ), patch(
         f"{LLM}.generate_synthesis", new=generate_synthesis
-    ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=beam_claim
-    ), patch(
-        f"{DIALECTIC}.pg_update_reviewer", new=claim
-    ), patch(
-        f"{DIALECTIC}.pg_add_message", new=add_message
+    ), _patch_dialectic("beam_update_reviewer", new=beam_claim
+    ), _patch_dialectic("pg_update_reviewer", new=claim
+    ), _patch_dialectic("pg_add_message", new=add_message
     ):
         result = await _run_synthetic_review(
             session,
@@ -305,13 +385,12 @@ async def test_aborted_synthetic_claim_is_routed_to_facilitation(server_patch):
         for p in _common_patches():
             stack.enter_context(p)
         stack.enter_context(
-            patch(
-                f"{DIALECTIC}.pg_mark_awaiting_facilitation",
+            _patch_dialectic("pg_mark_awaiting_facilitation",
                 new=facilitation,
             )
         )
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_abort_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_abort_after_claim)
         )
         response = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -361,10 +440,9 @@ async def test_timed_out_synthetic_claim_is_guarded_into_facilitation(server_pat
         for p in _common_patches():
             stack.enter_context(p)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_timeout_after_claim)
         )
-        stack.enter_context(patch(
-            f"{DIALECTIC}.load_session_as_dict",
+        stack.enter_context(_patch_dialectic("load_session_as_dict",
             new=AsyncMock(return_value={
                 "status": "active",
                 "phase": "antithesis",
@@ -372,10 +450,9 @@ async def test_timed_out_synthetic_claim_is_guarded_into_facilitation(server_pat
                 "resolution_effect_state": None,
             }),
         ))
-        stack.enter_context(patch(
-            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        stack.enter_context(_patch_dialectic("pg_mark_awaiting_facilitation", new=mark
         ))
-        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        stack.enter_context(_patch_dialectic("_emit_dialectic_event", new=emit))
         response = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -427,10 +504,9 @@ async def test_timed_out_synthetic_terminal_readback_is_not_flagged(server_patch
         for p in _common_patches():
             stack.enter_context(p)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_timeout_after_claim)
         )
-        stack.enter_context(patch(
-            f"{DIALECTIC}.load_session_as_dict",
+        stack.enter_context(_patch_dialectic("load_session_as_dict",
             new=AsyncMock(return_value={
                 "status": "resolved",
                 "phase": "resolved",
@@ -438,8 +514,7 @@ async def test_timed_out_synthetic_terminal_readback_is_not_flagged(server_patch
                 "resolution_effect_state": "pending",
             }),
         ))
-        stack.enter_context(patch(
-            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        stack.enter_context(_patch_dialectic("pg_mark_awaiting_facilitation", new=mark
         ))
         response = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -480,10 +555,9 @@ async def test_timed_out_synthetic_failed_readback_surfaces_terminal_block(serve
         for p in _common_patches():
             stack.enter_context(p)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_timeout_after_claim)
         )
-        stack.enter_context(patch(
-            f"{DIALECTIC}.load_session_as_dict",
+        stack.enter_context(_patch_dialectic("load_session_as_dict",
             new=AsyncMock(return_value={
                 "status": "failed",
                 "phase": "failed",
@@ -495,8 +569,7 @@ async def test_timed_out_synthetic_failed_readback_surfaces_terminal_block(serve
                 "resolution_effect_state": None,
             }),
         ))
-        stack.enter_context(patch(
-            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        stack.enter_context(_patch_dialectic("pg_mark_awaiting_facilitation", new=mark
         ))
         response = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -540,14 +613,12 @@ async def test_timed_out_synthetic_unknown_readback_is_not_success(server_patch)
         for item in _common_patches():
             stack.enter_context(item)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_timeout_after_claim)
         )
-        stack.enter_context(patch(
-            f"{DIALECTIC}.load_session_as_dict",
+        stack.enter_context(_patch_dialectic("load_session_as_dict",
             new=AsyncMock(return_value=None),
         ))
-        stack.enter_context(patch(
-            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        stack.enter_context(_patch_dialectic("pg_mark_awaiting_facilitation", new=mark
         ))
         response = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -587,10 +658,9 @@ async def test_timed_out_resolved_without_effect_record_is_not_success(server_pa
         for item in _common_patches():
             stack.enter_context(item)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+            _patch_dialectic("_run_synthetic_review", new=_timeout_after_claim)
         )
-        stack.enter_context(patch(
-            f"{DIALECTIC}.load_session_as_dict",
+        stack.enter_context(_patch_dialectic("load_session_as_dict",
             new=AsyncMock(return_value={
                 "status": "resolved",
                 "phase": "resolved",
@@ -629,19 +699,13 @@ async def test_synthetic_terminal_write_refusal_is_not_reported_as_resolved():
     ), patch(
         f"{LLM}.generate_synthesis",
         new=AsyncMock(return_value=_synthesis("RESUME")),
-    ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
-    ), patch(
-        f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)
-    ), patch(
-        f"{DIALECTIC}.pg_add_message",
+    ), _patch_dialectic("beam_update_reviewer", new=AsyncMock(return_value=None)
+    ), _patch_dialectic("pg_update_reviewer", new=AsyncMock(return_value=True)
+    ), _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=successful_dialectic_message_append),
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=False)
-    ), patch(
-        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("pg_resolve_session", new=AsyncMock(return_value=False)
+    ), _patch_dialectic("_emit_dialectic_event", new=emit
     ):
         result = await _run_synthetic_review(
             session,
@@ -681,25 +745,16 @@ async def test_synthetic_ambiguous_commit_stops_before_python_writer_and_effect(
     ), patch(
         f"{LLM}.generate_synthesis",
         new=AsyncMock(return_value=_synthesis("RESUME")),
-    ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
-    ), patch(
-        f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)
-    ), patch(
-        f"{DIALECTIC}.pg_add_message",
+    ), _patch_dialectic("beam_update_reviewer", new=AsyncMock(return_value=None)
+    ), _patch_dialectic("pg_update_reviewer", new=AsyncMock(return_value=True)
+    ), _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=successful_dialectic_message_append),
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.beam_resolve", new=_unknown_beam
-    ), patch(
-        f"{DIALECTIC}.pg_resolve_session", new=python_writer
-    ), patch(
-        f"{DIALECTIC}.pg_claim_resolution_effect", new=claim_effect
-    ), patch(
-        f"{DIALECTIC}.pg_update_awaiting_facilitation", new=facilitation
-    ), patch(
-        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("beam_resolve", new=_unknown_beam
+    ), _patch_dialectic("pg_resolve_session", new=python_writer
+    ), _patch_dialectic("pg_claim_resolution_effect", new=claim_effect
+    ), _patch_dialectic("pg_update_awaiting_facilitation", new=facilitation
+    ), _patch_dialectic("_emit_dialectic_event", new=emit
     ):
         result = await _run_synthetic_review(
             session,
@@ -756,7 +811,7 @@ async def test_submit_thesis_reports_ambiguous_synthetic_commit_as_unsuccessful(
         for item in _common_patches():
             stack.enter_context(item)
         stack.enter_context(
-            patch(f"{DIALECTIC}._run_synthetic_review", new=_ambiguous_review)
+            _patch_dialectic("_run_synthetic_review", new=_ambiguous_review)
         )
         response = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -793,31 +848,23 @@ async def test_llm_assisted_terminal_write_refusal_requires_facilitation():
         "synthesis": _synthesis("RESUME"),
     }
 
-    with patch(f"{DIALECTIC}.mcp_server", server), patch(
-        f"{DIALECTIC}.require_registered_agent",
+    with _patch_dialectic("mcp_server", server), _patch_dialectic("require_registered_agent",
         return_value=("agent-paused", None),
-    ), patch(
-        f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"
+    ), _patch_dialectic("resolve_agent_uuid", return_value="agent-paused"
     ), patch(
         f"{LLM}.local_endpoint_refusal", return_value=None
     ), patch(
         f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
     ), patch(
         f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)
-    ), patch(
-        f"{DIALECTIC}.pg_create_session", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.pg_add_message",
+    ), _patch_dialectic("pg_create_session", new=AsyncMock()
+    ), _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=successful_dialectic_message_append),
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.pg_mark_awaiting_facilitation",
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("pg_mark_awaiting_facilitation",
         new=update_facilitation,
-    ), patch(
-        f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=False)
-    ), patch(
-        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ), _patch_dialectic("pg_resolve_session", new=AsyncMock(return_value=False)
+    ), _patch_dialectic("_emit_dialectic_event", new=emit
     ), patch(
         "src.knowledge_graph.get_knowledge_graph",
         new=AsyncMock(return_value=graph),
@@ -871,37 +918,29 @@ async def test_llm_assisted_consumes_durable_effect_before_reporting_resolution(
         "synthesis": _synthesis("RESUME"),
     }
 
-    with patch(f"{DIALECTIC}.mcp_server", server), patch(
-        f"{DIALECTIC}.require_registered_agent",
+    with _patch_dialectic("mcp_server", server), _patch_dialectic("require_registered_agent",
         return_value=("agent-paused", None),
-    ), patch(
-        f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"
+    ), _patch_dialectic("resolve_agent_uuid", return_value="agent-paused"
     ), patch(
         f"{LLM}.local_endpoint_refusal", return_value=None
     ), patch(
         f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
     ), patch(
         f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)
-    ), patch(
-        f"{DIALECTIC}.pg_create_session", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.pg_add_message",
+    ), _patch_dialectic("pg_create_session", new=AsyncMock()
+    ), _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=successful_dialectic_message_append),
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}._commit_converged_resolution",
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("_commit_converged_resolution",
         new=AsyncMock(return_value=_ResolutionCommitResult(True, False, "test")),
-    ), patch(
-        f"{DIALECTIC}._apply_durable_resolution_effect",
+    ), _patch_dialectic("_apply_durable_resolution_effect",
         new=AsyncMock(return_value=_ResolutionEffectResult(
             state,
             claimed,
             {"success": state == "applied"},
             None if state == "applied" else "partial",
         )),
-    ) as apply_effect, patch(
-        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ) as apply_effect, _patch_dialectic("_emit_dialectic_event", new=emit
     ), patch(
         "src.knowledge_graph.get_knowledge_graph",
         new=AsyncMock(return_value=graph),
@@ -950,34 +989,26 @@ async def _run_llm_assisted_truthfulness_case(*, hard_limits, commit):
     }
     apply_effect = AsyncMock()
 
-    with patch(f"{DIALECTIC}.mcp_server", server), patch(
-        f"{DIALECTIC}.require_registered_agent",
+    with _patch_dialectic("mcp_server", server), _patch_dialectic("require_registered_agent",
         return_value=("agent-paused", None),
-    ), patch(
-        f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"
+    ), _patch_dialectic("resolve_agent_uuid", return_value="agent-paused"
     ), patch(
         f"{LLM}.local_endpoint_refusal", return_value=None
     ), patch(
         f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
     ), patch(
         f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)
-    ), patch(
-        f"{DIALECTIC}.pg_create_session", new=AsyncMock()
-    ), patch(
-        f"{DIALECTIC}.pg_add_message",
+    ), _patch_dialectic("pg_create_session", new=AsyncMock()
+    ), _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=successful_dialectic_message_append),
-    ), patch(
-        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
+    ), _patch_dialectic("pg_update_phase", new=AsyncMock()
     ), patch.object(
         DialecticSession, "check_hard_limits", return_value=hard_limits
-    ), patch(
-        f"{DIALECTIC}._commit_converged_resolution",
+    ), _patch_dialectic("_commit_converged_resolution",
         new=AsyncMock(return_value=commit),
-    ), patch(
-        f"{DIALECTIC}._commit_terminal_resolution",
+    ), _patch_dialectic("_commit_terminal_resolution",
         new=AsyncMock(return_value=commit),
-    ), patch(
-        f"{DIALECTIC}._apply_durable_resolution_effect", new=apply_effect
+    ), _patch_dialectic("_apply_durable_resolution_effect", new=apply_effect
     ), patch(
         "src.knowledge_graph.get_knowledge_graph",
         new=AsyncMock(return_value=graph),
@@ -1094,7 +1125,7 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         # reviewer is running/healthy (not a fast crash) → async path owns it
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
-        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        stack.enter_context(_patch_dialectic("_emit_dialectic_event", new=emit))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -1149,12 +1180,12 @@ async def test_orchestrated_dispatch_survives_reviewer_claiming_slot_first(serve
         for p in _common_patches():
             stack.enter_context(p)
         stack.enter_context(
-            patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=refused)
+            _patch_dialectic("pg_update_awaiting_facilitation", new=refused)
         )
         stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
-        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        stack.enter_context(_patch_dialectic("_emit_dialectic_event", new=emit))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -1190,14 +1221,14 @@ async def test_orchestrated_dispatch_clears_a_stale_flag_with_the_thesis(server_
     with contextlib.ExitStack() as stack:
         for p in _common_patches():
             stack.enter_context(p)
-        stack.enter_context(patch(f"{DIALECTIC}.pg_add_message", new=append))
+        stack.enter_context(_patch_dialectic("pg_add_message", new=append))
         stack.enter_context(
-            patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=refused)
+            _patch_dialectic("pg_update_awaiting_facilitation", new=refused)
         )
         stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
-        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()))
+        stack.enter_context(_patch_dialectic("_emit_dialectic_event", new=AsyncMock()))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -1306,7 +1337,7 @@ async def test_a_failed_reviewer_profile_spawn_is_the_result(
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast",
                                   new=AsyncMock(return_value=crashed)))
         mark = stack.enter_context(
-            patch(f"{DIALECTIC}._set_awaiting_facilitation", new=AsyncMock()))
+            _patch_dialectic("_set_awaiting_facilitation", new=AsyncMock()))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -1369,19 +1400,19 @@ async def _submit_thesis_while_reviewer_claims_slot(
     with contextlib.ExitStack() as stack:
         for p in _common_patches():
             stack.enter_context(p)
-        stack.enter_context(patch(f"{DIALECTIC}.pg_add_message", new=append))
+        stack.enter_context(_patch_dialectic("pg_add_message", new=append))
         stack.enter_context(
-            patch(f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark)
+            _patch_dialectic("pg_mark_awaiting_facilitation", new=mark)
         )
         stack.enter_context(
-            patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=readback))
+            _patch_dialectic("load_session_as_dict", new=AsyncMock(return_value=readback))
         )
         stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("refine"))))
         stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
         stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=crashed_fast))
-        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        stack.enter_context(_patch_dialectic("_emit_dialectic_event", new=emit))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",

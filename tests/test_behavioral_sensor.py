@@ -881,9 +881,15 @@ class TestToolUsageBlending:
         r_high = compute_behavioral_sensor_eisv(**h, tool_call_velocity=15.0)
         assert r_extreme["S"] == r_high["S"]
 
-    def test_high_tool_diversity_maintains_i(self):
-        """High unique_tools_ratio signals coherent work, maintains I."""
+    def test_high_tool_diversity_maintains_i(self, monkeypatch):
+        """With unique_tools_ratio dropped by default (SH1), I ignores tool diversity; setting 0 restores it."""
         h = make_histories(n=10)
+        monkeypatch.delenv("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", raising=False)
+        r_low_div_default = compute_behavioral_sensor_eisv(**h, unique_tools_ratio=0.1)
+        r_high_div_default = compute_behavioral_sensor_eisv(**h, unique_tools_ratio=0.9)
+        assert r_high_div_default["I"] == r_low_div_default["I"]
+
+        monkeypatch.setenv("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0")
         r_low_div = compute_behavioral_sensor_eisv(**h, unique_tools_ratio=0.1)
         r_high_div = compute_behavioral_sensor_eisv(**h, unique_tools_ratio=0.9)
         assert r_high_div["I"] > r_low_div["I"]
@@ -1772,6 +1778,7 @@ def test_unobserved_share_counts_defaulted_base_terms_through_later_blends():
 
     # No complexity divergence, no outcomes, no calibration: E and I rest on
     # their defaults. Drift is supplied, so S's only base term is observed.
+    # Under SH1 defaults, continuity_E_input and unique_tools_ratio are omitted.
     components = _unobserved_components(
         drift_norm=0.3,
         continuity_E_input=0.3,
@@ -1782,17 +1789,38 @@ def test_unobserved_share_counts_defaulted_base_terms_through_later_blends():
 
     assert share["schema"] == UNOBSERVED_SHARE_SCHEMA
     assert share["policy_applied"] is False
+    # E: default base (weight 1.0) retained through the 0.15 tool blend only.
+    assert share["by_dimension"]["E"] == pytest.approx(0.85)
+    # I: default base unblended under SH1.
+    assert share["by_dimension"]["I"] == pytest.approx(1.0)
+    assert share["by_dimension"]["S"] == pytest.approx(0.0)
+    assert share["mean"] == pytest.approx((0.85 + 1.0 + 0.0) / 3)
+    assert share["defaulted_terms"] == {
+        "E": ["complexity_calibration"],
+        "I": ["uncalibrated_base_fallback"],
+        "S": [],
+    }
+
+
+def test_unobserved_share_with_legacy_blends_restored(monkeypatch):
+    from src.behavioral_sensor import compute_unobserved_share
+
+    monkeypatch.setenv("UNITARES_DROP_CONTINUITY_E_BLEND", "0")
+    monkeypatch.setenv("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0")
+    components = _unobserved_components(
+        drift_norm=0.3,
+        continuity_E_input=0.3,
+        tool_error_rate=0.0,
+        unique_tools_ratio=0.02,
+    )
+    share = compute_unobserved_share(components)
+
     # E: default base (weight 1.0) retained through a 0.20 and a 0.15 blend.
     assert share["by_dimension"]["E"] == pytest.approx(0.80 * 0.85)
     # I: default base retained through the 0.10 tool-variety blend.
     assert share["by_dimension"]["I"] == pytest.approx(0.90)
     assert share["by_dimension"]["S"] == pytest.approx(0.0)
     assert share["mean"] == pytest.approx((0.68 + 0.90 + 0.0) / 3)
-    assert share["defaulted_terms"] == {
-        "E": ["complexity_calibration"],
-        "I": ["uncalibrated_base_fallback"],
-        "S": [],
-    }
 
 
 def test_unobserved_share_falls_when_inputs_are_supplied():
@@ -1810,8 +1838,8 @@ def test_unobserved_share_falls_when_inputs_are_supplied():
     share = compute_unobserved_share(components)
 
     assert share["by_dimension"]["E"] == pytest.approx(0.0)
-    # I's base is still the uncalibrated fallback, now diluted by two blends.
-    assert share["by_dimension"]["I"] == pytest.approx(0.80 * 0.90)
+    # I's base is still the uncalibrated fallback, diluted by continuity_I_input only under SH1.
+    assert share["by_dimension"]["I"] == pytest.approx(0.80)
     assert share["by_dimension"]["S"] == pytest.approx(0.0)
 
 

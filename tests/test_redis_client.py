@@ -916,6 +916,22 @@ class TestModuleLevelFunctions:
         finally:
             mod._client = original_client
 
+    def test_is_redis_enabled_function(self):
+        """is_redis_enabled() reads config.enabled from the singleton client."""
+        import src.cache.redis_client as mod
+        original_client = mod._client
+
+        try:
+            mock_client = MagicMock(spec=ResilientRedisClient)
+            mock_client.config = RedisConfig(enabled=False)
+            mod._client = mock_client
+            assert mod.is_redis_enabled() is False
+
+            mock_client.config = RedisConfig(enabled=True)
+            assert mod.is_redis_enabled() is True
+        finally:
+            mod._client = original_client
+
     @pytest.mark.asyncio
     async def test_close_redis_function(self):
         """close_redis() delegates to singleton client."""
