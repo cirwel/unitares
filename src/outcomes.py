@@ -157,6 +157,11 @@ def _coerce_bool_flag(value: Any) -> bool:
     return False
 
 
+def coerce_bool_flag(value: Any) -> bool:
+    """Interpret a JSON-ish truthy flag (bool/int/str) conservatively."""
+    return _coerce_bool_flag(value)
+
+
 # Lite eisv_snapshot keys returned by default on outcome acks (#604 dogfood
 # 2026-06-24). The actual state numbers and the active source are kept (the
 # small primary/behavioral/ode views) plus the compact field glossary; the heavy

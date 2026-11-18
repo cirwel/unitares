@@ -20,6 +20,7 @@ from src.outcomes import (
     _CONTROLLED_FIXTURE_BINDINGS as _CONTROLLED_FIXTURE_BINDINGS,
     _SERVER_SCRAPED_PREDICTION_SOURCES as _SERVER_SCRAPED_PREDICTION_SOURCES,
     _HARD_EXOGENOUS_TYPE_TO_CHANNEL as _HARD_EXOGENOUS_TYPE_TO_CHANNEL,
+    coerce_bool_flag as coerce_bool_flag,
     _coerce_bool_flag as _coerce_bool_flag,
     _LITE_SNAPSHOT_KEYS as _LITE_SNAPSHOT_KEYS,
     _lite_eisv_snapshot as _lite_eisv_snapshot,

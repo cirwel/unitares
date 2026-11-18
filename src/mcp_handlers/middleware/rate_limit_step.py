@@ -137,10 +137,10 @@ def _use_tool_delegates_to_public_target(arguments: Dict[str, Any]) -> bool:
         return False
     try:
         from ..introspection.tool_introspection import (
-            _registered_public_tool_names,
+            registered_public_tool_names,
         )
 
-        return target in set(_registered_public_tool_names())
+        return target in set(registered_public_tool_names())
     except Exception:
         logger.warning(
             "_use_tool_delegates_to_public_target: classification failed for %r — "
