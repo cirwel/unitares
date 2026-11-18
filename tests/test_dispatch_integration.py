@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 from collections import deque
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock, call
 
 import pytest
 
@@ -28,6 +28,9 @@ from src.mcp_handlers.middleware import (
     validate_params,
     check_rate_limit,
     _tool_call_history,
+)
+from src.mcp_handlers.middleware.rate_limit_step import (
+    _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET,
 )
 from src.mcp_handlers.tool_stability import resolve_tool_alias, _TOOL_ALIASES
 
@@ -375,8 +378,8 @@ class TestCheckRateLimit:
         assert "loop detected" in text.lower() or "rate limit" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_response_chain_read_uses_expensive_read_budget(self):
-        """Response expansion is metered despite details being pre-onboarding."""
+    async def test_unbound_response_chain_uses_server_owned_aggregate_budget(self):
+        """Caller identity metadata cannot select an unbound expansion bucket."""
         ctx = _make_ctx()
         limiter = MagicMock()
         limiter.check_rate_limit.return_value = (False, "Too many requests")
@@ -395,7 +398,75 @@ class TestCheckRateLimit:
             result = await check_rate_limit("knowledge", arguments, ctx)
 
         assert _is_short_circuit(result)
-        limiter.check_rate_limit.assert_called_once_with("anonymous")
+        limiter.check_rate_limit.assert_called_once_with(
+            _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET
+        )
+
+    @pytest.mark.asyncio
+    async def test_unbound_response_chain_ignores_rotated_ids_and_fingerprints(self):
+        """Rotating spoofable inputs cannot mint another expansion budget."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (True, None)
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ), patch(
+            "src.mcp_handlers.context.get_session_signals",
+        ) as get_signals:
+            get_signals.return_value = MagicMock(ip_ua_fingerprint="spoofed-one")
+            await check_rate_limit(
+                "knowledge",
+                {
+                    "action": "details",
+                    "include_response_chain": True,
+                    "agent_id": "rotated-one",
+                },
+                ctx,
+            )
+            get_signals.return_value = MagicMock(ip_ua_fingerprint="spoofed-two")
+            await check_rate_limit(
+                "knowledge",
+                {
+                    "action": "details",
+                    "include_response_chain": True,
+                    "agent_id": "rotated-two",
+                },
+                ctx,
+            )
+
+        assert limiter.check_rate_limit.call_args_list == [
+            call(_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET),
+            call(_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET),
+        ]
+        get_signals.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bound_response_chain_uses_resolved_identity(self):
+        """The server-resolved identity wins over caller-supplied target metadata."""
+        ctx = _make_ctx(bound_agent_id="bound-agent")
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (True, None)
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit(
+                "knowledge",
+                {
+                    "action": "details",
+                    "include_response_chain": True,
+                    "agent_id": "caller-selected-target",
+                },
+                ctx,
+            )
+
+        assert result[2] is ctx
+        limiter.check_rate_limit.assert_called_once_with(
+            "response-chain:bound:bound-agent"
+        )
 
     @pytest.mark.asyncio
     async def test_plain_details_read_remains_rate_exempt(self):
@@ -412,6 +483,46 @@ class TestCheckRateLimit:
 
         assert result == ("knowledge", arguments, ctx)
         limiter.check_rate_limit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chain_budget_does_not_block_plain_details_or_onboarding(self):
+        """Only optional expansion is refused when its aggregate budget is full."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        limiter.check_rate_limit.side_effect = lambda bucket: (
+            (False, "Too many expansions")
+            if bucket == _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET
+            else (True, None)
+        )
+        limiter.get_stats.return_value = {"calls": 60}
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            expanded = await check_rate_limit(
+                "knowledge",
+                {"action": "details", "include_response_chain": True},
+                ctx,
+            )
+            plain = await check_rate_limit(
+                "knowledge",
+                {"action": "details", "include_response_chain": False},
+                ctx,
+            )
+            onboarding = await check_rate_limit(
+                "onboard",
+                {"force_new": True},
+                ctx,
+            )
+
+        assert _is_short_circuit(expanded)
+        assert plain[0] == "knowledge"
+        assert onboarding[0] == "onboard"
+        assert limiter.check_rate_limit.call_args_list == [
+            call(_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET),
+            call("anonymous"),
+        ]
 
     @pytest.mark.asyncio
     async def test_loop_detection_old_calls_expire(self):
@@ -619,7 +730,16 @@ class TestDispatchToolIntegration:
             mock_resolve.side_effect = fake_resolve_identity
             mock_verify.side_effect = fake_verify_trajectory
 
-            yield mock_resolve, mock_verify
+            # Dispatch iterates the registered steps captured at module import.
+            from src.mcp_handlers import middleware
+            from src.mcp_handlers.middleware.identity_step import resolve_identity
+            from src.mcp_handlers.middleware.trajectory_step import verify_trajectory
+
+            replacements = {resolve_identity: mock_resolve, verify_trajectory: mock_verify}
+            with patch.object(middleware, "PRE_DISPATCH_STEPS", [
+                replacements.get(step, step) for step in middleware.PRE_DISPATCH_STEPS
+            ]):
+                yield mock_resolve, mock_verify
 
     @pytest.fixture
     def mock_track_patterns(self):
@@ -713,6 +833,88 @@ class TestDispatchToolIntegration:
             result = await dispatch_tool("search_shared_memory", {"query": "x"})
             assert result is not None
             TOOL_HANDLERS["knowledge"].assert_awaited_once()
+        finally:
+            TOOL_HANDLERS["knowledge"] = original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["knowledge", "search_shared_memory"])
+    async def test_response_chain_budget_covers_canonical_and_alias_dispatch(
+        self,
+        tool_name,
+        mock_identity_pipeline,
+        mock_track_patterns,
+        clean_rate_limit,
+    ):
+        """Canonical and alias dispatch reach the same expansion budget."""
+        from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+
+        _require_registered("knowledge", TOOL_HANDLERS)
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (False, "Too many expansions")
+        limiter.get_stats.return_value = {"calls": 60}
+        original = TOOL_HANDLERS["knowledge"]
+        TOOL_HANDLERS["knowledge"] = AsyncMock()
+        try:
+            with patch(
+                "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+                return_value=limiter,
+            ):
+                result = await dispatch_tool(
+                    tool_name,
+                    {
+                        "action": "details",
+                        "discovery_id": "discovery-1",
+                        "include_response_chain": True,
+                    },
+                )
+
+            assert _is_short_circuit(result)
+            limiter.check_rate_limit.assert_called_once_with(
+                "response-chain:bound:test-agent-uuid"
+            )
+            TOOL_HANDLERS["knowledge"].assert_not_awaited()
+        finally:
+            TOOL_HANDLERS["knowledge"] = original
+
+    @pytest.mark.asyncio
+    async def test_response_chain_budget_covers_use_tool_dispatch(
+        self,
+        mock_identity_pipeline,
+        mock_track_patterns,
+        clean_rate_limit,
+    ):
+        """Delegated dispatch charges the nested expansion exactly once."""
+        from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+
+        _require_registered("use_tool", TOOL_HANDLERS)
+        _require_registered("knowledge", TOOL_HANDLERS)
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (False, "Too many expansions")
+        limiter.get_stats.return_value = {"calls": 60}
+        original = TOOL_HANDLERS["knowledge"]
+        TOOL_HANDLERS["knowledge"] = AsyncMock()
+        try:
+            with patch(
+                "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+                return_value=limiter,
+            ):
+                result = await dispatch_tool(
+                    "use_tool",
+                    {
+                        "tool_name": "knowledge",
+                        "arguments": {
+                            "action": "details",
+                            "discovery_id": "discovery-1",
+                            "include_response_chain": True,
+                        },
+                    },
+                )
+
+            assert _is_short_circuit(result)
+            limiter.check_rate_limit.assert_called_once_with(
+                "response-chain:bound:test-agent-uuid"
+            )
+            TOOL_HANDLERS["knowledge"].assert_not_awaited()
         finally:
             TOOL_HANDLERS["knowledge"] = original
 

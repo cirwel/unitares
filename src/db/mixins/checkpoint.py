@@ -207,3 +207,18 @@ class CheckpointMixin:
                 "WHERE checkpoint_id = $1 AND assessor = $2 AND claim_token = $3 AND status = $4)",
                 checkpoint, assessor, token, status,
             ))
+
+
+    async def list_identity_checkpoints(self, identity_id: int, *, limit: int) -> list[dict]:
+        """Newest-first neutral checkpoints for one identity (read only)."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT checkpoint_id::text AS checkpoint_id, seq, "
+                "prev_checkpoint_id::text AS prev_checkpoint_id, recorded_at, "
+                "report_excerpt, provenance "
+                "FROM core.checkpoints WHERE identity_id = $1 ORDER BY seq DESC LIMIT $2",
+                identity_id, limit,
+            )
+        return [dict(r) for r in rows]

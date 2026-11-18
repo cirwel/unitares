@@ -1058,6 +1058,8 @@ The estimate does not model V, the transient before rest, or the closed loop thr
 
 Still open: the physical ODE has no anchor under `behavioral_only`, so the basin's I and E on physical rows are the ODE's own rest, not a reading of the sensor (on 2026-10-15 Lumen's sensor I was 0.846 while its ODE I was 0.66). This repair moves that rest to where the dynamics place it with σ = 0; it does not tie it to the sensor.
 
+*Live telemetry read (2026-11-18, [`../evaluations/eisv-i-rest-live-read/result-v0.md`](../evaluations/eisv-i-rest-live-read/result-v0.md)):* under [`rule-v0.md`](../evaluations/eisv-i-rest-live-read/rule-v0.md), comparing `RK1` (`2026-10-16T02:59:50Z .. 2026-10-22T14:27:20Z`, `8,273` `RK1:a2579740d3bea62a` rows) separately against pre-repair `ID` (`2026-10-05T22:06:59Z .. 2026-10-15T13:45:00Z`), `Sentinel`/`Vigil`/`Watcher` are `INCONCLUSIVE` by construction (`N = 1 < 5`, `100% > 50%`, moving `0.0% -> 100.0%`), and `behavioral_assessment/engaged_ephemeral` moved `26.2% -> 93.0%` (`ABOVE, loop-consistent`, range-only against `[44.1%, 84.5%]`, `E trend p50 +0.0688`). Telemetry only; joins no outcome labels.
+
 **51. "Φ detrends S by exactly the σ the ODE rests at"** (`src/monitor_setpoint.py`,
 `setpoint_for_monitor` docstring) → **IMPLEMENTATION MISMATCH; no exposure
 found in the window by the persisted-label fold.** `_resolve_agent_class`
