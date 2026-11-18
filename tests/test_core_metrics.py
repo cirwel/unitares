@@ -963,7 +963,9 @@ class TestExportToFile:
         mock_server.project_root = str(tmp_path)
 
         with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
-             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)), \
+             patch("src.mcp_handlers.introspection.export._read_agent_record", AsyncMock(return_value={})), \
+             patch("src.db.get_db", return_value=MagicMock()):
 
             from src.mcp_handlers.introspection.export import handle_export_to_file
             result = await handle_export_to_file({
