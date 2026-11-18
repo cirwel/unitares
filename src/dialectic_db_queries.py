@@ -7,22 +7,14 @@ functions remain re-exported on src.dialectic_db.
 """
 
 import json
-import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from src.db.acquire_compat import compatible_acquire as _default_compatible_acquire
-from src.dialectic_session_writes import note_session_read as _default_note_session_read
+from src.db.acquire_compat import compatible_acquire
+from src.dialectic_session_writes import note_session_read
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
-
-
-def _db_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.dialectic_db")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
 
 
 class DialecticDBQueriesMixin:
@@ -32,9 +24,7 @@ class DialecticDBQueriesMixin:
         """Get session by ID with all messages."""
         read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        note_read = _db_attr("note_session_read", _default_note_session_read)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 SELECT s.*,
                        e.state AS resolution_effect_state,
@@ -73,7 +63,7 @@ class DialecticDBQueriesMixin:
 
             session["messages"] = [dict(msg) for msg in msg_rows]
             # The state a later write in this task acts on (its decision time).
-            note_read(session_id, read_at)
+            note_session_read(session_id, read_at)
             return session
 
     async def get_session_by_agent(self, agent_id: str, active_only: bool = True) -> Optional[Dict[str, Any]]:
@@ -97,7 +87,6 @@ class DialecticDBQueriesMixin:
         """Get all active sessions where agent is paused agent or reviewer."""
         read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
-        note_read = _db_attr("note_session_read", _default_note_session_read)
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT session_id FROM core.dialectic_sessions
@@ -111,7 +100,7 @@ class DialecticDBQueriesMixin:
                 session = await self.get_session(row["session_id"])
                 if session:
                     sessions.append(session)
-            note_read([x.get("session_id") for x in sessions], read_at)
+            note_session_read([x.get("session_id") for x in sessions], read_at)
             return sessions
 
     async def get_resolution_effect(
@@ -119,8 +108,7 @@ class DialecticDBQueriesMixin:
     ) -> Optional[Dict[str, Any]]:
         """Return the durable runtime-effect record for a resolved session."""
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 SELECT session_id, paused_agent_id, reviewer_agent_id,
                        effect_required, pause_token, resolution_payload_json,
@@ -161,8 +149,7 @@ class DialecticDBQueriesMixin:
         state that now owns reconciliation.
         """
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             async with conn.transaction():
                 row = await conn.fetchrow("""
                     UPDATE coordination.dialectic_resolution_effects AS e
@@ -227,8 +214,7 @@ class DialecticDBQueriesMixin:
     ) -> bool:
         """Mark the effect applied, but only for its current claimant."""
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 UPDATE coordination.dialectic_resolution_effects
                 SET state = 'applied',
@@ -255,8 +241,7 @@ class DialecticDBQueriesMixin:
         automatically retried.
         """
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 UPDATE coordination.dialectic_resolution_effects
                 SET state = 'unknown_partial', last_error = $3,
@@ -295,8 +280,7 @@ class DialecticDBQueriesMixin:
                 "reason": reason,
             },
         }
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 UPDATE coordination.dialectic_resolution_effects
                 SET state = 'applied',
@@ -325,8 +309,7 @@ class DialecticDBQueriesMixin:
         still requires live-state repair before it can be acknowledged.
         """
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 UPDATE coordination.dialectic_resolution_effects
                 SET state = 'unknown_partial',
@@ -376,7 +359,6 @@ class DialecticDBQueriesMixin:
         system.
         """
         await self._ensure_pool()
-        log = _db_attr("logger", logger)
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -391,7 +373,7 @@ class DialecticDBQueriesMixin:
                 )
                 return row is not None
         except Exception as e:
-            log.debug(f"has_inflight_saga check failed for {session_id[:16]}...: {e}")
+            logger.debug(f"has_inflight_saga check failed for {session_id[:16]}...: {e}")
             return None
 
     async def probe_saga_since(
@@ -417,7 +399,6 @@ class DialecticDBQueriesMixin:
 
         Read-only. Never raises.
         """
-        log = _db_attr("logger", logger)
         try:
             await self._ensure_pool()
             async with self._pool.acquire() as conn:
@@ -439,7 +420,7 @@ class DialecticDBQueriesMixin:
                 )
                 return dict(row) if row is not None else {}
         except Exception as e:
-            log.debug(f"probe_saga_since failed for {session_id[:16]}...: {e}")
+            logger.debug(f"probe_saga_since failed for {session_id[:16]}...: {e}")
             return None
 
     async def get_session_terminal_state(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -550,8 +531,7 @@ class DialecticDBQueriesMixin:
         terminal phase, so a revived row always carries a workable one.
         """
         await self._ensure_pool()
-        comp_acquire = _db_attr("compatible_acquire", _default_compatible_acquire)
-        async with comp_acquire(self._pool) as conn:
+        async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 SELECT 1 FROM core.dialectic_sessions
                 WHERE (paused_agent_id = $1 OR reviewer_agent_id = $1)
@@ -602,7 +582,6 @@ class DialecticDBQueriesMixin:
         newer active sessions.
         """
         await self._ensure_pool()
-        note_read = _db_attr("note_session_read", _default_note_session_read)
         order_by = (
             "COALESCE(updated_at, created_at) ASC, created_at ASC"
             if least_recently_updated_first
@@ -617,14 +596,13 @@ class DialecticDBQueriesMixin:
                 LIMIT $1
             """, limit)
             out = [dict(row) for row in rows]
-            note_read([r.get("session_id") for r in out], read_at)
+            note_session_read([r.get("session_id") for r in out], read_at)
             return out
 
     async def get_sessions_awaiting_reviewer(self) -> List[Dict[str, Any]]:
         """Get sessions that need a reviewer assigned."""
         read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
-        note_read = _db_attr("note_session_read", _default_note_session_read)
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT * FROM core.dialectic_sessions
@@ -633,7 +611,7 @@ class DialecticDBQueriesMixin:
                 ORDER BY created_at ASC
             """)
             out = [dict(row) for row in rows]
-            note_read([r.get("session_id") for r in out], read_at)
+            note_session_read([r.get("session_id") for r in out], read_at)
             return out
 
     async def get_stats(self) -> Dict[str, Any]:
@@ -795,8 +773,9 @@ class DialecticDBQueriesMixin:
 
 
 async def _get_db():
-    getter = _db_attr("get_dialectic_db")
-    return await getter()
+    from src.dialectic_db import get_dialectic_db
+
+    return await get_dialectic_db()
 
 
 async def get_session_async(session_id: str) -> Optional[Dict[str, Any]]:

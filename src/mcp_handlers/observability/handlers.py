@@ -15,6 +15,7 @@ from src.agent_monitor_state import ensure_hydrated
 from src.mcp_handlers.observability.analytics_helpers import (  # noqa: F401
     DEFAULT_ANOMALY_SCAN_CAP,
     _OUTCOME_AGGREGATE_BATCH,
+    _agent_display_name,
     _handle_aggregate_metrics,
     _handle_audit_events,
     _handle_detect_anomalies,
@@ -133,18 +134,6 @@ def _resolve_agent_from_memory(target: str) -> str | None:
 
 def _get_observable_monitor(agent_id: str):
     return mcp_server.monitors.get(agent_id)
-
-
-def _agent_display_name(agent_id: str) -> str | None:
-    """Best-effort display label for event payloads."""
-    meta = mcp_server.agent_metadata.get(agent_id)
-    if meta is None:
-        return None
-    for attr in ("display_name", "label", "structured_id", "public_agent_id", "agent_id"):
-        value = getattr(meta, attr, None)
-        if value:
-            return str(value)
-    return None
 
 
 def _observed_agent_identifier(agent_id: str, meta: Any) -> tuple[str, bool]:
@@ -845,7 +834,16 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
 
 @mcp_tool("aggregate_metrics", timeout=15.0, register=False)
 async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get fleet-level health overview."""
+    """Get fleet-level health overview.
+
+    Postgres-canonical. Reads indexed core.agent_state (LATEST_MEASURED_STATE_FOR_SCOPE_JOIN) for per-agent state
+    rollups, core.agents for active membership + currently-paused, audit.events
+    for current-epoch pause counts, and audit.r1_score_audit for verdict
+    distribution. No in-memory monitor iteration — the prior implementation
+    summed monitor.state across in-process monitors, which is load-once-per-
+    process and drifts from PG truth on cross-process writes, producing
+    persistent "0 pauses" reports while audit.events has hundreds.
+    """
     return await _handle_aggregate_metrics(arguments)
 
 
@@ -857,7 +855,35 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
 
 @mcp_tool("audit_events_query", timeout=15.0, register=False)
 async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Query the Postgres ``audit.events`` table by event_type + time window."""
+    """Query the Postgres ``audit.events`` table by event_type + time window.
+
+    Issue #422 — S1-c grace-period evaluations could not distinguish "zero emits
+    in window" from "no query surface." This action wraps
+    ``query_audit_events_async`` so grace-window verdicts and similar
+    audit-driven evaluations can be computed without operator SQL access.
+
+    Args (all optional except ``event_type``):
+      event_type: str — exact audit event type to filter on
+      event_types: list[str] — alternative to event_type, for IN-list filters
+      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
+      until: str | None — window end; ISO; default now
+      target_agent_id: str | None — restrict to one agent. Do NOT use `agent_id`
+        — that is auto-injected by the identity middleware with the caller's UUID
+        and would silently scope the query to the caller (zero rows for an
+        observer asking about fleet activity).
+      limit: int — max event rows returned (default 1000, capped at 5000)
+      include_events: bool — include event payloads in response (default False;
+        counts + per-agent breakdown only)
+      include_test_fixtures: bool — include agents whose id (case-insensitive)
+        starts with ``test_`` (covers ``test_agent``, ``test_stress``,
+        ``test_recovery_agent``, ``Test_Agent_S9``, etc. — verified against the
+        live audit.events table 2026-05-20). Default True for transparency; set
+        False to mirror the recommended-subtasks filter in #422.
+
+    Returns counts grouped by agent and event_type plus first/last timestamps.
+    Always reports test-fixture totals separately so the caller decides whether
+    to discount them.
+    """
     return await _handle_audit_events(arguments)
 
 

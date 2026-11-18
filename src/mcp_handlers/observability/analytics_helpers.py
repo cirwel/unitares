@@ -3,40 +3,36 @@ Fleet analytics, anomaly detection, outcome evidence, and audit event query
 helpers for observability MCP handlers.
 
 Extracted from src/mcp_handlers/observability/handlers.py. All public and
-private symbols are re-exported on src.mcp_handlers.observability.handlers
-and dynamically resolved so test monkeypatches continue to work.
+private symbols remain re-exported on src.mcp_handlers.observability.handlers.
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Sequence
 import hashlib
 import json
-import sys
 
 from mcp.types import TextContent
 
-from src.governance_glossary import get_eisv_glossary as _default_get_eisv_glossary
+from src.agent_monitor_state import ensure_hydrated
 from src.db.mixins.state import LATEST_MEASURED_STATE_FOR_SCOPE_JOIN
+from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import get_mcp_server
-from src.mcp_handlers.utils import (
-    error_response as _default_error_response,
-    success_response as _default_success_response,
-)
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.mcp_handlers.utils import error_response, success_response
 
 logger = get_logger("src.mcp_handlers.observability.handlers")
-_default_mcp_server = get_mcp_server()
 
 
-def _h():
-    return sys.modules.get("src.mcp_handlers.observability.handlers")
-
-
-def _h_attr(name: str, default: Any = None) -> Any:
-    mod = _h()
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
+def _agent_display_name(agent_id: str) -> str | None:
+    """Best-effort display label for event payloads."""
+    meta = mcp_server.agent_metadata.get(agent_id)
+    if meta is None:
+        return None
+    for attr in ("display_name", "label", "structured_id", "public_agent_id", "agent_id"):
+        value = getattr(meta, attr, None)
+        if value:
+            return str(value)
+    return None
 
 
 def anomaly_change_token(anomaly: Dict[str, Any]) -> str:
@@ -68,20 +64,10 @@ DEFAULT_ANOMALY_SCAN_CAP = 50
 
 
 async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Detect anomalies across agents."""
+    """Detect anomalies across agents"""
     import asyncio
 
-    srv = _h_attr("mcp_server", _default_mcp_server)
-    log = _h_attr("logger", logger)
-    scan_cap = _h_attr("DEFAULT_ANOMALY_SCAN_CAP", DEFAULT_ANOMALY_SCAN_CAP)
-    change_token_fn = _h_attr("anomaly_change_token", anomaly_change_token)
-    display_name_fn = _h_attr("_agent_display_name")
-    hydrated_fn = _h_attr("ensure_hydrated")
-    glossary_fn = _h_attr("get_eisv_glossary", _default_get_eisv_glossary)
-    ok_resp = _h_attr("success_response", _default_success_response)
-    err_resp = _h_attr("error_response", _default_error_response)
-
-    await srv.load_metadata_async()
+    await mcp_server.load_metadata_async()
 
     agent_ids = arguments.get("agent_ids")
     requested_agent_ids = agent_ids
@@ -95,24 +81,24 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
     active_agent_ids = None
     if not agent_ids:
         active_agent_ids = [
-            aid for aid, meta in srv.agent_metadata.items()
+            aid for aid, meta in mcp_server.agent_metadata.items()
             if meta.status == "active"
         ]
-        agent_ids = active_agent_ids[:scan_cap]
+        agent_ids = active_agent_ids[:DEFAULT_ANOMALY_SCAN_CAP]
 
     all_anomalies = []
     skipped_no_activity: list[str] = []
     loop = asyncio.get_running_loop()
 
     async def process_agent(agent_id: str):
-        """Process a single agent's anomalies."""
-        meta = srv.agent_metadata.get(agent_id)
+        """Process a single agent's anomalies"""
+        meta = mcp_server.agent_metadata.get(agent_id)
         if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
             skipped_no_activity.append(agent_id)
             return
 
-        monitor = await loop.run_in_executor(None, srv.get_or_create_monitor, agent_id)
-        await hydrated_fn(monitor, agent_id)
+        monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
+        await ensure_hydrated(monitor, agent_id)
 
         if monitor:
             from src.pattern_analysis import analyze_agent_patterns
@@ -122,7 +108,7 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
             )
 
             agent_anomalies = []
-            agent_name = display_name_fn(agent_id)
+            agent_name = _agent_display_name(agent_id)
             for anomaly in analysis.get("anomalies", []):
                 if anomaly["type"] in anomaly_types:
                     anomaly_severity_level = severity_levels.get(anomaly.get("severity", "low"), 0)
@@ -145,13 +131,13 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
                 if isinstance(result, list):
                     all_anomalies.extend(result)
                 elif isinstance(result, Exception):
-                    log.warning(
+                    logger.warning(
                         f"Error processing agent in detect_anomalies: {result}",
                         exc_info=True,
                     )
     except Exception as e:
-        log.error(f"Error in detect_anomalies: {e}", exc_info=True)
-        return [err_resp(f"Error detecting anomalies: {str(e)}")]
+        logger.error(f"Error in detect_anomalies: {e}", exc_info=True)
+        return [error_response(f"Error detecting anomalies: {str(e)}")]
 
     new_anomalies = []
     if all_anomalies:
@@ -163,7 +149,7 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
             ).hexdigest()[:16]
             stored = event_detector.record_event({
                 "fingerprint": fp,
-                "change_token": change_token_fn(a),
+                "change_token": anomaly_change_token(a),
                 "type": a.get("type"),
                 "severity": a.get("severity"),
                 "agent_id": a.get("agent_id"),
@@ -224,19 +210,19 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
     if active_agent_ids is not None:
         unscanned = len(active_agent_ids) - len(agent_ids)
         scan["agents_active"] = len(active_agent_ids)
-        scan["scan_cap"] = scan_cap
+        scan["scan_cap"] = DEFAULT_ANOMALY_SCAN_CAP
         scan["truncated"] = unscanned > 0
         if unscanned > 0:
             scan["note"] = (
                 f"{unscanned} active agents were not analyzed: the default scan "
-                f"stops at {scan_cap}. Pass agent_ids to cover "
+                f"stops at {DEFAULT_ANOMALY_SCAN_CAP}. Pass agent_ids to cover "
                 "them; the counts below describe the agents scanned, not the fleet."
             )
 
-    return ok_resp({
+    return success_response({
         "anomalies": all_anomalies,
         "scan": scan,
-        "eisv_labels": glossary_fn(),
+        "eisv_labels": get_eisv_glossary(),
         "anomaly_policy": {
             "schema": "observability.anomaly.authority.v2",
             "coherence_drop_required_role": "behavioral_update_consistency",
@@ -257,11 +243,18 @@ async def _handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCo
 
 
 async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get fleet-level health overview."""
-    from src.db import get_db
+    """Get fleet-level health overview.
 
-    ok_resp = _h_attr("success_response", _default_success_response)
-    fetch_total_updates = _h_attr("_fetch_scope_total_updates")
+    Postgres-canonical. Reads indexed core.agent_state (LATEST_MEASURED_STATE_FOR_SCOPE_JOIN) for per-agent state
+    rollups, core.agents for active membership + currently-paused, audit.events
+    for current-epoch pause counts, and audit.r1_score_audit for verdict
+    distribution. No in-memory monitor iteration — the prior implementation
+    summed monitor.state across in-process monitors, which is load-once-per-
+    process and drifts from PG truth on cross-process writes, producing
+    persistent "0 pauses" reports while audit.events has hundreds.
+    """
+    from src.db import get_db
+    from .handlers import _fetch_scope_total_updates
 
     agent_ids = arguments.get("agent_ids")
     include_health_breakdown = arguments.get("include_health_breakdown", True)
@@ -324,7 +317,7 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
                 "SELECT count(*)::int FROM core.agents WHERE status = 'paused'"
             )
 
-        total_updates = await fetch_total_updates(conn, scope_clause, scope_args)
+        total_updates = await _fetch_scope_total_updates(conn, scope_clause, scope_args)
 
         if epoch_started_at is not None:
             from src.db.mixins.audit import count_lifecycle_pauses_since
@@ -410,13 +403,21 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
             "unknown": int(state_row["unknown_health"]),
         }
 
-    return ok_resp({
+    return success_response({
         "aggregate": aggregate_data,
     })
 
 
 def _parse_window_arg(value: Any, default_hours: float = 24.0) -> "datetime":
-    """Parse `since`/`until` window args into an aware datetime."""
+    """Parse `since`/`until` window args into an aware datetime.
+
+    Accepts:
+      - shorthand: ``"14d"``, ``"168h"``, ``"30m"``
+      - ISO 8601 string (``"2026-05-08T00:00:00Z"`` or ``"2026-05-08T00:00:00+00:00"``)
+      - ``None`` → now − default_hours
+
+    Returned datetime is timezone-aware UTC.
+    """
     now = datetime.now(timezone.utc)
     if value is None:
         return now - timedelta(hours=default_hours)
@@ -456,10 +457,6 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
         ceiling_for_verification_source,
     )
 
-    ok_resp = _h_attr("success_response", _default_success_response)
-    err_resp = _h_attr("error_response", _default_error_response)
-    parse_win = _h_attr("_parse_window_arg", _parse_window_arg)
-
     diagnostic = str(
         arguments.get("diagnostic") or arguments.get("mode") or "claim_only_task_completed"
     ).lower()
@@ -470,7 +467,7 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
         "events",
     }
     if diagnostic not in valid_diagnostics:
-        return err_resp(
+        return error_response(
             f"invalid diagnostic {diagnostic!r}",
             error_code="invalid_argument",
             recovery={"valid_diagnostics": sorted(valid_diagnostics)},
@@ -479,14 +476,14 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
     since_arg = arguments.get("since")
     window_defaulted = since_arg is None
     try:
-        start_dt = parse_win(since_arg, default_hours=168.0)
+        start_dt = _parse_window_arg(since_arg, default_hours=168.0)
         end_dt = (
-            parse_win(arguments.get("until"), default_hours=0.0)
+            _parse_window_arg(arguments.get("until"), default_hours=0.0)
             if arguments.get("until") is not None
             else None
         )
     except (ValueError, KeyError) as e:
-        return err_resp(
+        return error_response(
             f"invalid window arg: {e}",
             error_code="invalid_argument",
         )
@@ -554,6 +551,10 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
         return {}
 
     def _grade(row) -> tuple[Dict[str, Any], Dict[str, Any], Any]:
+        """Detail -> corroboration metadata. The grading lives in Python
+        (assess_outcome_corroboration inspects the JSON detail), which is why
+        the aggregate below walks rows instead of being a GROUP BY: expressing
+        this in SQL would fork the grading rules into a second implementation."""
         detail = _row_detail(row["detail"])
         verification_source = row["verification_source"] or detail.get("verification_source")
         metadata = assess_outcome_corroboration(
@@ -568,7 +569,7 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
     agent_stats: Dict[str, Dict[str, Any]] = {}
     events: list[Dict[str, Any]] = []
 
-    batch_size = _h_attr("_OUTCOME_AGGREGATE_BATCH", _OUTCOME_AGGREGATE_BATCH)
+    batch_size = _OUTCOME_AGGREGATE_BATCH
     window_total = 0
     cursor_ts = None
     cursor_id = None
@@ -704,21 +705,45 @@ async def _handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCo
     if include_events:
         payload["events"] = events
 
-    return ok_resp(payload)
+    return success_response(payload)
 
 
 async def _handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Query the Postgres ``audit.events`` table by event_type + time window."""
-    from src.audit_db import aggregate_audit_events_async, query_audit_events_async
+    """Query the Postgres ``audit.events`` table by event_type + time window.
 
-    ok_resp = _h_attr("success_response", _default_success_response)
-    err_resp = _h_attr("error_response", _default_error_response)
-    parse_win = _h_attr("_parse_window_arg", _parse_window_arg)
+    Issue #422 — S1-c grace-period evaluations could not distinguish "zero emits
+    in window" from "no query surface." This action wraps
+    ``query_audit_events_async`` so grace-window verdicts and similar
+    audit-driven evaluations can be computed without operator SQL access.
+
+    Args (all optional except ``event_type``):
+      event_type: str — exact audit event type to filter on
+      event_types: list[str] — alternative to event_type, for IN-list filters
+      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
+      until: str | None — window end; ISO; default now
+      target_agent_id: str | None — restrict to one agent. Do NOT use `agent_id`
+        — that is auto-injected by the identity middleware with the caller's UUID
+        and would silently scope the query to the caller (zero rows for an
+        observer asking about fleet activity).
+      limit: int — max event rows returned (default 1000, capped at 5000)
+      include_events: bool — include event payloads in response (default False;
+        counts + per-agent breakdown only)
+      include_test_fixtures: bool — include agents whose id (case-insensitive)
+        starts with ``test_`` (covers ``test_agent``, ``test_stress``,
+        ``test_recovery_agent``, ``Test_Agent_S9``, etc. — verified against the
+        live audit.events table 2026-05-20). Default True for transparency; set
+        False to mirror the recommended-subtasks filter in #422.
+
+    Returns counts grouped by agent and event_type plus first/last timestamps.
+    Always reports test-fixture totals separately so the caller decides whether
+    to discount them.
+    """
+    from src.audit_db import aggregate_audit_events_async, query_audit_events_async
 
     event_type = arguments.get("event_type")
     event_types_arg = arguments.get("event_types")
     if not event_type and not event_types_arg:
-        return err_resp(
+        return error_response(
             "event_type or event_types is required",
             error_code="missing_argument",
             details={
@@ -761,14 +786,14 @@ async def _handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextConten
     since_arg = arguments.get("since")
     window_defaulted = since_arg is None
     try:
-        start_dt = parse_win(since_arg, default_hours=168.0)
+        start_dt = _parse_window_arg(since_arg, default_hours=168.0)
         end_dt = (
-            parse_win(arguments.get("until"), default_hours=0.0)
+            _parse_window_arg(arguments.get("until"), default_hours=0.0)
             if arguments.get("until") is not None
             else None
         )
     except (ValueError, KeyError) as e:
-        return err_resp(
+        return error_response(
             f"invalid window arg: {e}",
             error_code="invalid_argument",
         )
@@ -865,4 +890,4 @@ async def _handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextConten
     if include_events:
         payload["events"] = visible_events
 
-    return ok_resp(payload)
+    return success_response(payload)

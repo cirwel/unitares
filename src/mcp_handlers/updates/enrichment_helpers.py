@@ -6,10 +6,11 @@ Extracted from ``updates/enrichments.py`` to keep phase-6 enrichment pipelines m
 import asyncio
 import hashlib
 import os
-import sys
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from config.governance_config import GovernanceConfig
 from src.knowledge_authority import is_imported_context
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
@@ -32,19 +33,96 @@ from .context import UpdateContext
 
 logger = get_logger(__name__)
 
+# Below this blended relevance, a related-discovery match is noise rather than
+# signal and is not surfaced as a "build on these" suggestion. The score is the
+# post-blend value (semantic similarity blended with connectivity, then decayed),
+# so this floor sits well under the raw similarity gate.
+_RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
 
-def _e() -> Any:
-    mod = sys.modules.get("src.mcp_handlers.updates.enrichments")
-    if mod is None:
-        from src.mcp_handlers.updates import enrichments as mod
-    return mod
+# ─── Opt-in proactive KG surfacing (adoption v0) ────────────────────────
+# Check-ins never reach this cadence gate unless the caller explicitly sets
+# include_memory_suggestions=true. Within that deliberate recall request,
+# proactive surfacing can offer strong prior work during healthy steady state.
+# It is additionally OFF by default and bounded on three axes so an opt-in
+# cannot regress the steady-state latency budget (KG calls amplify ~60x
+# in-handler, see CLAUDE.md "Substrate Tax"):
+#   1. Cadence — only every UNITARES_KG_PROACTIVE_EVERY-th check-in fires a
+#      search (0 = disabled, the default), so cost is amortized to 1/N.
+#   2. Relevance — a higher floor than the reactive path: a proactive nudge
+#      must be a strong match, not a marginal one.
+#   3. Novelty — session-scoped dedup (Redis) so a given discovery is surfaced
+#      at most once per session; what reaches the agent is always new to it.
+_KG_PROACTIVE_FLOOR = 0.35
+# KG-search timeout for the mirror-signals enrichment. The KG semantic/full-text
+# search is the dominant check-in tail: per-enrichment telemetry (2026-06-28,
+# n=2133) put enrich_mirror_signals at p99=281ms / max=2624ms while every other
+# enrichment was <16ms mean — the cost is this anyio-amplified KG I/O (see
+# CLAUDE.md "Substrate Tax"). KG surfacing is advisory, so a slow search degrades
+# to "no surfacing this turn" (return []) instead of blocking the response.
+_KG_SEARCH_TIMEOUT = float(os.getenv("UNITARES_KG_SEARCH_TIMEOUT_S", "0.25"))
+# Session-scope TTL for the per-agent set of already-surfaced discovery_ids.
+_KG_SURFACED_TTL_SECONDS = 86400
 
 
-def _e_attr(name: str, default: Any = None) -> Any:
-    mod = _e()
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
+def _redis_notif_timeout() -> float:
+    """Read the canonical Redis notification timeout from enrichments."""
+    from . import enrichments
+
+    return enrichments._REDIS_NOTIF_TIMEOUT
+
+# ─── In-flow review nudge (adoption increment 2, #1685) ─────────────────
+# When a check-in itself reports uncertain ground, suggest the one-call
+# review surface in the same response. The #1387 adjudication confirmed the
+# entry-cost hypothesis (agents do reach for request_review when it works);
+# this closes the discovery gap for agents who don't know the surface exists
+# at the moment it would help. OFF by default (UNITARES_REVIEW_NUDGE unset).
+# Conservative by design — an irrelevant nudge trains agents that the channel
+# is noise (the proactive-KG relevance lesson), so it keys only on what the
+# agent itself reported or the policy's own guide verdict, never on cadence,
+# and fires at most once per agent-session.
+_REVIEW_NUDGE_CONF_CEILING = 0.4
+_REVIEW_NUDGE_COMPLEXITY_FLOOR = 0.8
+_REVIEW_NUDGE_TTL_SECONDS = GovernanceConfig.SESSION_TTL_SECONDS
+
+_QUERY_STOPWORDS = frozenset({
+    "about", "after", "again", "against", "because", "been", "before", "being",
+    "below", "between", "both", "could", "does", "doing", "down", "during",
+    "each", "from", "further", "have", "having", "here", "into", "just", "more",
+    "most", "once", "only", "other", "over", "same", "should", "some", "such",
+    "than", "that", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "under", "until", "very", "were", "what", "when",
+    "where", "which", "while", "with", "would", "your",
+})
+_MAX_QUERY_TERMS = 8
+_MIN_TERM_LEN = 4
+
+
+def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
+    """Pick a bounded set of salient terms from free text for a KG lookup.
+
+    Bounded because `websearch_to_tsquery` ANDs bare terms: handing it a whole
+    check-in matches nothing, and OR-ing a whole check-in matches everything.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    seen: list = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", text.lower()):
+        if len(token) < _MIN_TERM_LEN or token in _QUERY_STOPWORDS:
+            continue
+        if token not in seen:
+            seen.append(token)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _memory_suggestions_requested(ctx: UpdateContext) -> bool:
+    """Whether this check-in explicitly opted into shared-memory retrieval."""
+    arguments = getattr(ctx, "arguments", {})
+    value = arguments.get("include_memory_suggestions", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return value is True
 
 
 async def _enrich_trajectory_identity_impl(
@@ -561,7 +639,7 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
         #    silently spend retrieval/context budget unless this check-in set
         #    include_memory_suggestions=true. Explicit search_shared_memory is
         #    the normal path for deliberate recall.
-        if _e_attr("_memory_suggestions_requested")(ctx):
+        if _memory_suggestions_requested(ctx):
             if _should_search_kg_by_checkin_text(ctx, signals, reflection):
                 kg_results = await _cached_kg_search_by_checkin_text(ctx)
                 if kg_results:
@@ -570,7 +648,7 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
             # caller opt-in is necessary but not sufficient for this branch.
             elif _proactive_kg_due(ctx):
                 proactive = await _cached_kg_search_by_checkin_text(
-                    ctx, floor=getattr(_e(), "_KG_PROACTIVE_FLOOR")
+                    ctx, floor=_KG_PROACTIVE_FLOOR
                 )
                 proactive = await _dedupe_surfaced_kg(ctx, proactive)
                 if proactive:
@@ -581,7 +659,7 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
                         "value": max(
                             (r.get("relevance", 0) or 0) for r in proactive
                         ),
-                        "threshold": getattr(_e(), "_KG_PROACTIVE_FLOOR"),
+                        "threshold": _KG_PROACTIVE_FLOOR,
                         "fired": True,
                         "discovery_ids": [
                             r.get("discovery_id") for r in proactive if r.get("discovery_id")
@@ -605,8 +683,8 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
                     else None
                 ),
                 "threshold": (
-                    getattr(_e(), "_REVIEW_NUDGE_CONF_CEILING") if nudge_reason == "low_confidence"
-                    else getattr(_e(), "_REVIEW_NUDGE_COMPLEXITY_FLOOR") if nudge_reason == "high_complexity"
+                    _REVIEW_NUDGE_CONF_CEILING if nudge_reason == "low_confidence"
+                    else _REVIEW_NUDGE_COMPLEXITY_FLOOR if nudge_reason == "high_complexity"
                     else None
                 ),
                 "fired": True,
@@ -769,20 +847,20 @@ async def _search_kg_by_checkin_text(
         results = []
         try:
             results = await asyncio.wait_for(
-                graph.semantic_search(response_text, limit=3), timeout=getattr(_e(), "_KG_SEARCH_TIMEOUT")
+                graph.semantic_search(response_text, limit=3), timeout=_KG_SEARCH_TIMEOUT
             )
         except asyncio.TimeoutError:
-            logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", getattr(_e(), "_KG_SEARCH_TIMEOUT") * 1000)
+            logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
             _mark_surfacing_degraded(ctx)
             return []
         except (AttributeError, NotImplementedError):
             try:
                 results = await asyncio.wait_for(
                     _full_text_search_with_recall(graph, response_text),
-                    timeout=getattr(_e(), "_KG_SEARCH_TIMEOUT"),
+                    timeout=_KG_SEARCH_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", getattr(_e(), "_KG_SEARCH_TIMEOUT") * 1000)
+                logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
                 _mark_surfacing_degraded(ctx)
                 return []
             except (AttributeError, NotImplementedError):
@@ -845,7 +923,7 @@ async def _full_text_search_with_recall(graph: Any, response_text: str) -> list:
     The caller wraps this whole sequence in one timeout, so the fallback does
     not double the advisory path's latency budget.
     """
-    terms = _e_attr("_distinctive_terms")(response_text)
+    terms = _distinctive_terms(response_text)
     query = " ".join(terms) or response_text
     results = await graph.full_text_search(query, limit=3)
     if not results and len(terms) > 1:
@@ -865,14 +943,14 @@ async def _cached_kg_search_by_checkin_text(
     (currently proactive surfacing) filter that bounded list locally.
     """
     if not getattr(ctx, "_kg_search_ready", False):
-        results = await _e_attr("_search_kg_by_checkin_text", _search_kg_by_checkin_text)(
-            ctx, floor=getattr(_e(), "_RELATED_DISCOVERY_RELEVANCE_FLOOR")
+        results = await _search_kg_by_checkin_text(
+            ctx, floor=_RELATED_DISCOVERY_RELEVANCE_FLOOR
         )
         ctx._kg_search_results = list(results)
         ctx._kg_search_ready = True
 
     results = list(getattr(ctx, "_kg_search_results", []))
-    if floor <= getattr(_e(), "_RELATED_DISCOVERY_RELEVANCE_FLOOR"):
+    if floor <= _RELATED_DISCOVERY_RELEVANCE_FLOOR:
         return results
 
     filtered = []
@@ -929,9 +1007,9 @@ def _review_nudge_trigger(ctx: UpdateContext) -> Optional[str]:
         total = getattr(ctx.meta, "total_updates", 0) if ctx.meta else 0
         if total <= 3:
             return None
-        if ctx.confidence is not None and ctx.confidence <= getattr(_e(), "_REVIEW_NUDGE_CONF_CEILING"):
+        if ctx.confidence is not None and ctx.confidence <= _REVIEW_NUDGE_CONF_CEILING:
             return "low_confidence"
-        if ctx.complexity is not None and ctx.complexity >= getattr(_e(), "_REVIEW_NUDGE_COMPLEXITY_FLOOR"):
+        if ctx.complexity is not None and ctx.complexity >= _REVIEW_NUDGE_COMPLEXITY_FLOOR:
             return "high_complexity"
         decision = ctx.response_data.get("decision")
         if isinstance(decision, dict) and decision.get("sub_action") == "guide":
@@ -968,9 +1046,9 @@ async def _review_nudge_novel(ctx: UpdateContext) -> bool:
                 f"review_nudge:{ctx.agent_uuid}:{session_scope}",
                 "1",
                 nx=True,
-                ex=getattr(_e(), "_REVIEW_NUDGE_TTL_SECONDS"),
+                ex=_REVIEW_NUDGE_TTL_SECONDS,
             ),
-            timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT"),
+            timeout=_redis_notif_timeout(),
         )
         return bool(added)
     except Exception:
@@ -1004,7 +1082,7 @@ async def _dedupe_surfaced_kg(ctx: UpdateContext, results: list) -> list:
                 continue
             try:
                 added = await asyncio.wait_for(
-                    redis.sadd(key, did), timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT")
+                    redis.sadd(key, did), timeout=_redis_notif_timeout()
                 )
             except (asyncio.TimeoutError, Exception):
                 fresh.append(entry)  # fail-open on this entry
@@ -1014,8 +1092,8 @@ async def _dedupe_surfaced_kg(ctx: UpdateContext, results: list) -> list:
         if fresh:
             try:
                 await asyncio.wait_for(
-                    redis.expire(key, getattr(_e(), "_KG_SURFACED_TTL_SECONDS")),
-                    timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT"),
+                    redis.expire(key, _KG_SURFACED_TTL_SECONDS),
+                    timeout=_redis_notif_timeout(),
                 )
             except (asyncio.TimeoutError, Exception):
                 pass

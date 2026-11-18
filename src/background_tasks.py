@@ -51,7 +51,6 @@ from src.background_resident_monitors import (  # noqa: F401
     _silence_critical_alerted,
     _silence_duplicate_warned,
     _silence_episode_already_alerted,
-    _silence_server_start,
     cadence_from_tags,
     check_agent_silence,
     progress_flat_probe_task,
