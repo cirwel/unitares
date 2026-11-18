@@ -188,6 +188,14 @@ def test_other_targets_are_not_mistaken_for_self_tests():
     assert not probe.is_self_test("tests")
 
 
+def test_node_ids_containing_spaces_are_read_whole(tmp_path):
+    node = "tests/test_a.py::test_sp[a b]"
+    reach = _report(tmp_path / "reach.txt", reached=[node, "tests/test_a.py::t2"], failed=[node])
+    run = probe.parse_run("freeze_pause", 1, "1 failed, 1 passed in 0.1s\n", "", reach)
+    assert run["failed"] == [node]
+    assert run["reached"] == [node, "tests/test_a.py::t2"]
+
+
 def test_parse_run_rejects_a_nonzero_session_with_no_attributable_failure(tmp_path):
     reach = _report(tmp_path / "reach.txt", reached=["tests/test_a.py::t1"])
     with pytest.raises(probe.IncompleteRun, match="no attributable test failure"):

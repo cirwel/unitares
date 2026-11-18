@@ -282,6 +282,11 @@ def collection_errors_path(reach_path: Path) -> Path:
     return reach_path.with_name(reach_path.name + ".collection_errors")
 
 
+def _lines(path: Path) -> List[str]:
+    """The node ids a report file lists, one per line: an id may contain spaces."""
+    return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def failed_path(reach_path: Path) -> Path:
     """Where the plugin lists the test nodes that failed, next to the reach file."""
     return reach_path.with_name(reach_path.name + ".failed")
@@ -339,11 +344,11 @@ def parse_run(mode: str, returncode: int, stdout: str, stderr: str, reach_path: 
         raise IncompleteRun(f"mode {mode!r}: collection errors, some targets were not measured\n{tail}")
     if _SESSION_FAILURE_RE.search(stderr):
         raise IncompleteRun(f"mode {mode!r}: a session-level failure names no test, no measurement\n{tail}")
-    failed = sorted(set(failures_path.read_text(encoding="utf-8").split()))
+    failed = sorted(set(_lines(failures_path)))
     if returncode != 0 and not failed:
         raise IncompleteRun(f"mode {mode!r}: pytest exited {returncode} with no attributable test failure\n{tail}")
     summary = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
-    reached = reach_path.read_text(encoding="utf-8").split()
+    reached = _lines(reach_path)
     return {"mode": mode, "failed": failed, "reached": reached, "summary": summary}
 
 
