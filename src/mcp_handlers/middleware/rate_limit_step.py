@@ -81,6 +81,8 @@ def _rate_bucket_key(arguments: Dict[str, Any], ctx) -> str:
     (the 2026-06-12 bootstrap-lockout incident). The fingerprint is
     caller-supplied and spoofable; this is runaway protection, not an
     auth boundary — identity enforcement lives in the #425 gates.
+    Response-chain expansion does not use this key; see
+    _response_chain_rate_bucket.
     """
     agent_id = arguments.get('agent_id')
     if agent_id:
@@ -145,10 +147,10 @@ def _use_tool_delegates_to_public_target(arguments: Dict[str, Any]) -> bool:
         return False
     try:
         from ..introspection.tool_introspection import (
-            _registered_public_tool_names,
+            registered_public_tool_names,
         )
 
-        return target in set(_registered_public_tool_names())
+        return target in set(registered_public_tool_names())
     except Exception:
         logger.warning(
             "_use_tool_delegates_to_public_target: classification failed for %r — "
@@ -211,11 +213,13 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     ) and not response_chain_read:
         return name, arguments, ctx
 
-    # Response-chain expansion uses only server-resolved identity. Unbound
-    # callers share a fixed aggregate bucket, so rotating target agent_id or a
-    # spoofable transport fingerprint cannot mint fresh expansion budgets.
-    # Ordinary details reads and onboarding retain their existing exemptions
-    # and per-caller buckets above.
+    # Response-chain expansion uses only server-resolved identity. On a
+    # pre-onboarding read, agent_id is caller-supplied target metadata, not
+    # authenticated caller identity, and the transport fingerprint is
+    # spoofable. Unbound callers therefore share a fixed aggregate bucket, so
+    # rotating either cannot mint fresh expansion budgets. Ordinary details
+    # reads and onboarding retain their existing exemptions and per-caller
+    # buckets above.
     bucket = (
         _response_chain_rate_bucket(ctx)
         if response_chain_read

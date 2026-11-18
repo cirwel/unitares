@@ -690,6 +690,13 @@ def _normalize_tool_outcomes(payload: dict[str, Any]) -> dict[str, Any]:
     errors = _required_count(payload, "tool_error_delta", maximum=1_000_000)
     not_executed = _required_count(payload, "tool_not_executed_delta", maximum=1_000_000)
     repeats = _required_count(payload, "repeat_failure_delta", maximum=1_000_000)
+    unknown = None
+    if "tool_unknown_status_delta" in payload:
+        unknown = _required_count(payload, "tool_unknown_status_delta", maximum=1_000_000)
+        if errors + unknown > tool_delta:
+            raise RuntimeObservationError(
+                "errors plus unknown statuses cannot exceed 'tool_delta'"
+            )
     if errors > tool_delta:
         raise RuntimeObservationError("'tool_error_delta' cannot exceed 'tool_delta'")
     if not_executed > errors:
@@ -708,7 +715,7 @@ def _normalize_tool_outcomes(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeObservationError(
             f"'window_basis' must be one of {sorted(TOOL_OUTCOME_WINDOW_BASES)}"
         )
-    return {
+    result = {
         "tool_delta": tool_delta,
         "tool_error_delta": errors,
         "tool_not_executed_delta": not_executed,
@@ -718,6 +725,10 @@ def _normalize_tool_outcomes(payload: dict[str, Any]) -> dict[str, Any]:
         "window_truncated": truncated,
         "window_basis": basis,
     }
+    # Omission by older producers means unreported coverage, not zero unknowns.
+    if unknown is not None:
+        result["tool_unknown_status_delta"] = unknown
+    return result
 
 
 def _normalize_probe(payload: dict[str, Any]) -> dict[str, Any]:

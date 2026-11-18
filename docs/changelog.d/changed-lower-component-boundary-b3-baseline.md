@@ -1,0 +1,1 @@
+- **component boundaries:** exposed public wrappers and accessors on owning modules and updated 10 non-sensitive callers to eliminate 16 cross-component private imports (`B3`), lowering `scripts/dev/component_boundaries_baseline.txt` from 56 to 47 entries (9 entries removed, `src/mcp_handlers/middleware/envelope_step.py` lowered from 4 to 1).

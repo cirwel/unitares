@@ -1135,6 +1135,20 @@ class TestGetResponseChain:
         assert not slots.locked()
 
     @pytest.mark.asyncio
+    async def test_rejects_when_query_concurrency_budget_is_full(self, monkeypatch):
+        """A saturated traversal gate rejects before acquiring a DB connection."""
+        kg, mock_db = make_kg_with_mock_db()
+        slots = asyncio.BoundedSemaphore(1)
+        await slots.acquire()
+        monkeypatch.setattr(kg_age_search_module, "_response_chain_query_slots", slots)
+
+        with pytest.raises(RuntimeError, match="concurrency limit"):
+            await kg.get_response_chain("root")
+
+        mock_db.acquire.assert_not_called()
+        mock_db.graph_query.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_releases_query_slot_after_graph_failure(self, monkeypatch):
         """A failed graph query returns its slot for later legitimate reads."""
         kg, mock_db = make_kg_with_mock_db()

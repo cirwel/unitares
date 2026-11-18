@@ -180,6 +180,7 @@ def _build_mock_server(
 # So we must patch the module-level `mcp_server` attribute.
 _OBS_MOD = "src.mcp_handlers.observability.handlers"
 _PATCH_SERVER = f"{_OBS_MOD}.mcp_server"
+_PATCH_ANALYTICS_SERVER = "src.mcp_handlers.observability.analytics_helpers.mcp_server"
 _PATCH_CTX = "src.mcp_handlers.context.get_context_agent_id"
 # require_registered_agent (used by compare_me_to_similar) calls get_mcp_server()
 # internally.  We must also patch that so it sees our mock server.
@@ -1293,7 +1294,7 @@ class TestHandleDetectAnomalies:
         id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
         server = _build_mock_server(agent_ids=[id1])
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1324,7 +1325,7 @@ class TestHandleDetectAnomalies:
             ]
         }
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1356,7 +1357,7 @@ class TestHandleDetectAnomalies:
     async def _detect(self, arguments):
         id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
         server = _build_mock_server(agent_ids=[id1])
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1399,7 +1400,7 @@ class TestHandleDetectAnomalies:
 
         ids = [f"aaaaaaaa-bbbb-cccc-dddd-{i:012d}" for i in range(DEFAULT_ANOMALY_SCAN_CAP + 7)]
         server = _build_mock_server(agent_ids=ids)
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch("src.pattern_analysis.analyze_agent_patterns",
                    return_value={"anomalies": []}):
@@ -1415,7 +1416,7 @@ class TestHandleDetectAnomalies:
     @pytest.mark.asyncio
     async def test_a_complete_fleet_scan_is_marked_complete(self):
         server = _build_mock_server(agent_ids=["aaaaaaaa-bbbb-cccc-dddd-111111111111"])
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch("src.pattern_analysis.analyze_agent_patterns",
                    return_value={"anomalies": []}):
@@ -1431,7 +1432,7 @@ class TestHandleDetectAnomalies:
     async def test_the_scan_reports_the_filters_that_excluded_findings(self):
         """A default call hides low-severity anomalies; the response admits it."""
         server = _build_mock_server(agent_ids=["aaaaaaaa-bbbb-cccc-dddd-111111111111"])
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch("src.pattern_analysis.analyze_agent_patterns",
                    return_value={"anomalies": []}):
@@ -1449,7 +1450,7 @@ class TestHandleDetectAnomalies:
 
         ids = [f"aaaaaaaa-bbbb-cccc-dddd-{i:012d}" for i in range(DEFAULT_ANOMALY_SCAN_CAP + 3)]
         server = _build_mock_server(agent_ids=ids)
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch("src.pattern_analysis.analyze_agent_patterns",
                    return_value={"anomalies": []}):
@@ -1471,7 +1472,7 @@ class TestHandleDetectAnomalies:
             idle: _make_metadata(idle, total_updates=0),
         }
         server = _build_mock_server(agent_ids=[active, idle], metadata_dict=metadata)
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch("src.pattern_analysis.analyze_agent_patterns",
                    return_value={"anomalies": []}):
@@ -1538,7 +1539,7 @@ class TestHandleDetectAnomalies:
 
         written: list[AuditEntry] = []
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1581,7 +1582,7 @@ class TestHandleDetectAnomalies:
         id2 = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
         server = _build_mock_server(agent_ids=[id1, id2])
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1598,7 +1599,7 @@ class TestHandleDetectAnomalies:
         """No active agents -> empty anomalies."""
         server = _build_mock_server()
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None):
             from src.mcp_handlers.observability.handlers import handle_detect_anomalies
             result = await handle_detect_anomalies({})
@@ -1620,7 +1621,7 @@ class TestHandleDetectAnomalies:
             ]
         }
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1652,7 +1653,7 @@ class TestHandleDetectAnomalies:
             ]
         }
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1679,7 +1680,7 @@ class TestHandleDetectAnomalies:
         # Simulate persisted state being found
         server.load_monitor_state = MagicMock(return_value=_make_state())
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1709,7 +1710,7 @@ class TestHandleDetectAnomalies:
                 raise RuntimeError("Boom!")
             return {"anomalies": []}
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1733,7 +1734,7 @@ class TestHandleDetectAnomalies:
             ]
         }
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1776,7 +1777,7 @@ class TestHandleDetectAnomalies:
             ]
         }
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -1807,7 +1808,7 @@ class TestHandleDetectAnomalies:
         id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
         server = _build_mock_server(agent_ids=[id1])
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -2233,7 +2234,7 @@ class TestHandleObserveRouter:
         """action='anomalies' routes to handle_detect_anomalies."""
         server = _build_mock_server()
 
-        with patch(_PATCH_SERVER, server), \
+        with patch(_PATCH_ANALYTICS_SERVER, server), \
              patch(_PATCH_CTX, return_value=None), \
              patch(
                  "src.pattern_analysis.analyze_agent_patterns",
@@ -3156,7 +3157,7 @@ class TestHandleOutcomeEvidence:
 
         with patch("src.db.get_db", return_value=db), \
              patch(
-                 "src.mcp_handlers.observability.handlers._OUTCOME_AGGREGATE_BATCH",
+                 "src.mcp_handlers.observability.analytics_helpers._OUTCOME_AGGREGATE_BATCH",
                  7,
              ):
             from src.mcp_handlers.observability.handlers import handle_outcome_evidence

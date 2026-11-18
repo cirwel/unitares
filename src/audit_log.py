@@ -299,6 +299,30 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_paused_write_refused(self, agent_id: str, surface: str,
+                                 paused_at: Optional[str]):
+        """Log a write refused because the agent is paused.
+
+        Before this row existed the refusal returned ``AGENT_PAUSED`` to the
+        caller and left nothing in the audit trail, so the record went blank
+        for exactly the agent under a pause and no reader could count how
+        often a pause actually gated a write. ``surface`` names the gate:
+        ``check_in`` (process_agent_update) or ``shared_memory_write``
+        (knowledge store, note and mutation gates). Observation only;
+        nothing reads this row to make a decision.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="paused_write_refused",
+            confidence=0.0,
+            details={
+                "surface": surface,
+                "paused_at": paused_at,
+            },
+        )
+        self._write_entry(entry)
+
     def log_attest_gap_suppressed(self, agent_id: str, elapsed_seconds: float,
                                    risk_score: float, original_reason: str,
                                    cycles_remaining: int,

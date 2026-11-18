@@ -83,6 +83,11 @@ def _write_state_file(state_file: Path, state_data: dict) -> None:
         raise
 
 
+def write_state_file(state_file: Path, state_data: dict) -> None:
+    """Atomically write an agent's monitor state file."""
+    _write_state_file(state_file, state_data)
+
+
 def _snapshot_governor_state(monitor: UNITARESMonitor) -> None:
     """Snapshot AdaptiveGovernor state into GovernanceState for persistence."""
     gov = getattr(monitor, 'adaptive_governor', None)
@@ -522,6 +527,9 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         monitor._cold_start_confirmation_lineage_status = "hydration_uncertain"
         logger.warning("DB hydration failed: %s", type(e).__name__)
         return False
+    finally:
+        if getattr(monitor, "_needs_hydration", False) is True:
+            monitor._needs_hydration = False
 
 
 async def ensure_hydrated(monitor: UNITARESMonitor, agent_id: str) -> bool:

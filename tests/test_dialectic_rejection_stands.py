@@ -385,19 +385,23 @@ async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=Tru
     flag = AsyncMock()
     execute = AsyncMock()
     server = _mock_server()
-    with patch(f"{DIALECTIC}.mcp_server", server), \
+    PHASE = "src.mcp_handlers.dialectic.phase_submission"
+    RES = "src.mcp_handlers.dialectic.resolution_helpers"
+    with patch(f"{PHASE}.mcp_server", server), \
+         patch(f"{RES}.mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
-         patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+         patch(f"{PHASE}.load_session", new_callable=AsyncMock, return_value=session), \
          patch(
-             f"{DIALECTIC}.pg_add_message",
+             f"{RES}.pg_add_message",
              new=AsyncMock(side_effect=successful_dialectic_message_append),
          ), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", flag), \
-         patch(f"{DIALECTIC}.pg_resolve_session", pg_resolve), \
-         patch(f"{DIALECTIC}.beam_resolve", beam), \
-         patch(f"{DIALECTIC}.execute_resolution", execute), \
+         patch(f"{PHASE}.save_session", new_callable=AsyncMock), \
+         patch(f"{RES}.save_session", new_callable=AsyncMock), \
+         patch(f"{RES}.pg_update_awaiting_facilitation", flag), \
+         patch(f"{RES}.pg_resolve_session", pg_resolve), \
+         patch(f"{RES}.beam_resolve", beam), \
+         patch(f"{RES}.execute_resolution", execute), \
          patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
         result = await handle_submit_synthesis({
             "session_id": session.session_id,

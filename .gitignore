@@ -92,6 +92,10 @@ tests/fixtures/*
 # `tests/fixtures/`) and selectively unignore.
 !tests/fixtures/wave3a_response_golden/
 !tests/fixtures/wave3a_response_golden/**
+# GitHub REST responses recorded for the outcome observer (trimmed; see
+# tests/test_github_observer.py).
+!tests/fixtures/github_observer/
+!tests/fixtures/github_observer/**
 # EISV instrument-preservation golden trajectories (load-bearing pin; see
 # docs/operations/eisv-instrument-preservation-harness.md).
 !tests/fixtures/eisv_preservation/

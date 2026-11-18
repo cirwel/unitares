@@ -398,12 +398,56 @@ def _is_fallback_risk_policy_candidate(decision: Mapping[str, Any]) -> bool:
     )
 
 
+INSUFFICIENT_READING_DRIVER = "insufficient_reading"
+
+
+def reading_insufficient(
+    *,
+    hold_unread: bool,
+    behavioral_confidence: Any,
+    checkin_confidence: Any,
+    behavioral_enabled: bool,
+    phi_telemetry: bool,
+) -> bool:
+    """Whether the agent is past cold start but supplied too little to assess.
+
+    Under the hold (``behavioral_sensor.hold_unread_axes_enabled``) behavioral
+    confidence counts check-ins that read something, and is 0 while no axis is
+    scored. An agent that keeps checking in without supplying sensor inputs
+    therefore never reaches the authority threshold. That is not cold start.
+    The Phi prior is a placeholder for an assessment that is on its way, not a
+    substitute for one that will not arrive. For such a check-in no verdict is
+    drawn: the agent proceeds, nothing is scored, and the driver is named
+    ``insufficient_reading``.
+
+    Cold start ends where an agent that supplied everything would have reached
+    authority: ``BehavioralEISV.checkin_confidence`` at the threshold, which
+    under the hold is check-in 6, because the sensor cannot read on the first
+    three check-ins. Until then the prior decides, so an alarming first few
+    check-ins keep their verdict while no behavioral reading is possible yet.
+    False whenever the hold is off, the behavioral verdict is disabled, or Phi
+    is configured to floor the verdict (``phi_telemetry`` False): there the
+    operator chose Phi as an authority, not a placeholder.
+    """
+    if not (hold_unread and behavioral_enabled and phi_telemetry):
+        return False
+    confidence = _finite_number(behavioral_confidence)
+    by_checkins = _finite_number(checkin_confidence)
+    if confidence is None or by_checkins is None:
+        return False
+    return (
+        confidence < BEHAVIORAL_AUTHORITY_THRESHOLD
+        and by_checkins >= BEHAVIORAL_AUTHORITY_THRESHOLD
+    )
+
+
 def classify_verdict_driver(
     *,
     behavioral_confidence: Any,
     behavioral_verdict: Any,
     behavioral_enabled: bool,
     phi_telemetry: bool,
+    insufficient_reading: bool = False,
 ) -> str:
     """Name the source that actually owns the final verdict."""
     confidence = _finite_number(behavioral_confidence)
@@ -418,6 +462,8 @@ def classify_verdict_driver(
         return "behavioral_assessment"
     if behavioral_warm:
         return "phi_floor"
+    if insufficient_reading:
+        return INSUFFICIENT_READING_DRIVER
     return "phi_cold_start"
 
 

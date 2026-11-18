@@ -326,14 +326,14 @@ def _inferred_binding_assurance() -> Optional[Dict[str, Any]]:
     try:
         from ..context import get_session_proof_origin, get_session_resolution_source
         from src.services.identity_payloads import (
-            _identity_assurance_from_source,
-            _normalize_source,
+            identity_assurance_from_source,
+            normalize_source,
         )
 
         if get_session_proof_origin() != "server_inferred":
             return None
-        return _identity_assurance_from_source(
-            _normalize_source(get_session_resolution_source()),
+        return identity_assurance_from_source(
+            normalize_source(get_session_resolution_source()),
             "server_inferred",
         )
     except Exception:
@@ -624,12 +624,12 @@ def _write_ack_raw_policy(
         # include_semantics is read the way the handler reads it (the schema
         # lets a string through validation), so the ack keeps the payload
         # exactly when the handler built the full snapshot for it.
-        from ..observability.outcome_events import _coerce_bool_flag
+        from ..observability.outcome_events import coerce_bool_flag
 
         full_mode = (
             str(arguments.get("response_mode") or "").strip().lower() == "full"
         )
-        wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
+        wants_full = full_mode or coerce_bool_flag(arguments.get("include_semantics"))
         identifiable = payload.get("outcome_id") is not None
         # The handler sets idempotent_replay exactly when the outcome was
         # recorded against a prediction_id (outcome_events), so its presence,
@@ -1263,6 +1263,8 @@ def build_experience_envelope(
             )
 
     elif canonical_name == "get_governance_metrics":
+        if isinstance(payload.get("observation_summary"), dict):
+            envelope["observation_summary"] = payload["observation_summary"]
         # Preserve the essential EISV read at the friendly surface so compact
         # mode can omit the repeated canonical payload without making the state
         # tool useless.

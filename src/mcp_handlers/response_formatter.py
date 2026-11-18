@@ -681,6 +681,7 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
             metrics.get("verdict"),
             evidence_source=metrics.get("primary_eisv_source"),
             decision_action=decision.get("action"),
+            verdict_driver=metrics.get("verdict_source"),
         )
     state_glossary = {}
     if interpreted.get("mode") is not None:
@@ -752,6 +753,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         verdict_raw,
         evidence_source=metrics.get("primary_eisv_source"),
         decision_action=decision.get("action"),
+        verdict_driver=metrics.get("verdict_source"),
     )
 
     # Collect mirror signals from enrichment-produced data
@@ -1080,6 +1082,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
             metrics.get("verdict"),
             evidence_source=metrics.get("primary_eisv_source"),
             decision_action=decision.get("action"),
+            verdict_driver=metrics.get("verdict_source"),
         )
 
     margin = decision.get("margin")
@@ -1139,6 +1142,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
             metrics.get("verdict"),
             evidence_source=metrics.get("primary_eisv_source"),
             decision_action=decision.get("action"),
+            verdict_driver=metrics.get("verdict_source"),
         ),
         "lambda1": metrics.get("lambda1"),
         "health_status": metrics.get("health_status"),

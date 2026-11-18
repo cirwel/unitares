@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -42,19 +41,6 @@ _BACKFILL_STALE_HINT = (
     "its previous vector, if any, stays in place "
     "(python scripts/migration/reembed_corpus.py --rebuild rewrites it)"
 )
-
-
-def _age_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.storage.knowledge_graph_age")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
-
-
-def _log_embedding_skipped(discovery_id: str, op: str) -> None:
-    fn = _age_attr("_log_embedding_skipped")
-    if fn is not None:
-        fn(discovery_id, op)
 
 
 class KnowledgeGraphAGESearchMixin:
@@ -1183,7 +1169,9 @@ class KnowledgeGraphAGESearchMixin:
         try:
             from src.embeddings import get_embeddings_service, embeddings_available
             if not embeddings_available():
-                _log_embedding_skipped(discovery_id, "refresh")
+                from src.storage import knowledge_graph_age as kg_age
+
+                kg_age._log_embedding_skipped(discovery_id, "refresh")
                 return
             discovery = await self.get_discovery(discovery_id)
             if not discovery:
