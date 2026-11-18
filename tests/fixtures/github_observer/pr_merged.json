@@ -7,6 +7,7 @@
   "updated_at": "2026-11-13T08:52:15Z",
   "author_association": "CONTRIBUTOR",
   "body": "---\nModel: claude-fable-5-2\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607\n",
+  "body_html": "<hr>\n<p>Model: claude-fable-5-2<br>\nUNITARES agent: 6bccb016-774c-44cf-90a0-612d2117f607</p>",
   "head": {
     "sha": "d01be6dc5d3709a691d6099546d0dbd6256d0d9e",
     "ref": "claude/runtime-failure-counts-6bccb016"

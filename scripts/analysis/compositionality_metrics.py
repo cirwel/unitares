@@ -6,7 +6,7 @@ Measures whether Lumen's primitive utterances form a compositional mapping
 from internal state space to signal space (topographic similarity).
 
 Usage:
-    python scripts/compositionality_metrics.py [--db PATH] [--synthetic] [--output-dir DIR]
+    python3 scripts/analysis/compositionality_metrics.py [--db PATH] [--synthetic] [--output-dir DIR]
 """
 
 import argparse

@@ -18,6 +18,9 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 _EXPORT_FORMATS = ("json", "csv")
+# Newest rows per record family (checkpoints, findings, outcomes) in a
+# complete package; each family reports `truncated` when more exist.
+_RECORD_LIMIT = 1000
 # A bare file stem: no separators, no leading dot, so it cannot name a path
 # outside the export directory (an absolute value makes os.path.join drop the
 # base, and ".." walks out of it).
@@ -30,6 +33,91 @@ def _invalid_export_stem(custom_filename: Any) -> bool:
         or _EXPORT_STEM.fullmatch(custom_filename) is None
         or ".." in custom_filename
     )
+
+
+_FINDING_FIELDS = (
+    "id", "type", "summary", "details", "tags", "severity", "status",
+    "response_to_id", "response_type", "closure_class", "closure_evidence",
+    "superseded_by",
+    "created_at", "updated_at", "resolved_at",
+)
+_EISV_OUTCOME_KEYS = (
+    "eisv_e", "eisv_i", "eisv_s", "eisv_v", "eisv_phi",
+    "eisv_verdict", "eisv_coherence", "eisv_regime",
+)
+
+
+def _plain(key: str, value: Any) -> Any:
+    """JSON-ready value: timestamps as ISO text, jsonb text decoded."""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if key in ("provenance", "detail") and isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _family(rows: list, limit: int, fields: tuple | None = None) -> dict:
+    """Newest `limit` rows; `truncated` when the read returned one more."""
+    items = [
+        {k: _plain(k, v) for k, v in dict(r).items() if fields is None or k in fields}
+        for r in rows[:limit]
+    ]
+    return {"items": items, "returned": len(items), "truncated": len(rows) > limit}
+
+
+async def _attach_replacements(items: list, graph: Any = None) -> None:
+    """Give each superseded finding its replacement ids as ``superseded_by``.
+
+    The replacement link is not a column on the finding's row: it lives only
+    on the knowledge graph's SUPERSEDES edge, so it is read through the graph
+    backend. Fail-soft: when the graph cannot be read, a superseded finding
+    keeps its status and gets an empty ``superseded_by``.
+    """
+    superseded = [i for i in items if i.get("status") == "superseded" and i.get("id")]
+    if not superseded:
+        return
+    replacements: dict = {}
+    try:
+        if graph is None:
+            from src.knowledge_graph import get_knowledge_graph
+            graph = await get_knowledge_graph()
+        if hasattr(graph, "get_superseded_by"):
+            replacements = await graph.get_superseded_by([i["id"] for i in superseded]) or {}
+    except Exception as e:  # noqa: BLE001 — the link is best-effort in an export
+        logger.debug("export: supersession lookup failed (non-fatal): %s", e)
+    for item in superseded:
+        item["superseded_by"] = list(replacements.get(item["id"]) or [])
+
+
+async def _read_agent_record(db: Any, agent_id: str, limit: int, graph: Any = None) -> dict:
+    """One agent's accountability record, read without the EISV estimator.
+
+    Each family is read through its owner's storage API: neutral checkpoints,
+    knowledge entries the agent authored, and outcome events. Estimator
+    values on outcome rows are kept apart under ``eisv`` (None when unset).
+    Findings keep their closure evidence, and a superseded finding names its
+    replacements from the knowledge graph's SUPERSEDES edge.
+    """
+    fetch = limit + 1
+    identity = await db.get_identity(agent_id)
+    checkpoints = (
+        await db.list_identity_checkpoints(identity.identity_id, limit=fetch)
+        if identity is not None else []
+    )
+    findings = _family(await db.kg_query(agent_id=agent_id, limit=fetch), limit, _FINDING_FIELDS)
+    await _attach_replacements(findings["items"], graph)
+    outcomes = _family(await db.list_agent_outcomes(agent_id, limit=fetch), limit)
+    for item in outcomes["items"]:
+        snapshot = {k[len("eisv_"):]: item.pop(k, None) for k in _EISV_OUTCOME_KEYS}
+        item["eisv"] = snapshot if any(v is not None for v in snapshot.values()) else None
+    return {
+        "checkpoints": _family(checkpoints, limit),
+        "findings": findings,
+        "outcomes": outcomes,
+    }
 
 
 def _contained_export_path(export_dir: str, filename: str) -> str | None:
@@ -124,10 +212,18 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             {"filename": custom_filename},
         )]
     
-    # Load monitor state from disk if not in memory (consistent with get_governance_metrics)
-    monitor = mcp_server.get_or_create_monitor(agent_id)
-    from src.agent_monitor_state import ensure_hydrated
-    await ensure_hydrated(monitor, agent_id)
+    # Load monitor state from disk if not in memory (consistent with get_governance_metrics).
+    # The complete package carries the accountability record even when the
+    # estimator's history cannot be read, so a monitor failure is kept here
+    # and only fails the history-only export.
+    monitor = None
+    monitor_error = None
+    try:
+        monitor = mcp_server.get_or_create_monitor(agent_id)
+        from src.agent_monitor_state import ensure_hydrated
+        await ensure_hydrated(monitor, agent_id)
+    except Exception as e:  # noqa: BLE001 — reported in the package
+        monitor_error = type(e).__name__
 
     if complete_package:
         # Export complete package: metadata + history + validation
@@ -137,9 +233,21 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
         meta = mcp_server.agent_metadata.get(agent_id)
         metadata_dict = meta.to_dict() if meta else {}
         
-        # Get history (parse JSON to dict)
-        history_json = monitor.export_history(format="json")
-        history_dict = json.loads(history_json)
+        # The accountability record, read without the estimator.
+        from src.db import get_db
+        record_error = None
+        try:
+            record = await _read_agent_record(get_db(), agent_id, _RECORD_LIMIT)
+        except Exception as e:  # noqa: BLE001 — reported in the package
+            record, record_error = None, type(e).__name__
+
+        # EISV history, optional: present when the estimator's state is readable.
+        history_dict = {}
+        if monitor is not None:
+            try:
+                history_dict = json.loads(monitor.export_history(format="json"))
+            except Exception as e:  # noqa: BLE001 — reported in the package
+                monitor_error = type(e).__name__
         
         # Validation checks
         # Check if state exists (monitor is loaded, state file exists, or monitor has history)
@@ -148,7 +256,7 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
         loop = asyncio.get_running_loop()
         persisted_state = await loop.run_in_executor(None, mcp_server.load_monitor_state, agent_id)
         state_exists = monitor is not None and (
-            len(monitor.state.V_history) > 0 or 
+            len(monitor.state.V_history) > 0 or
             persisted_state is not None
         )
         
@@ -176,10 +284,15 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             "export_type": "complete_package",
             "layers": {
                 "metadata": metadata_dict,
+                "record": record,
                 "history": history_dict
             },
             "validation": validation_checks
         }
+        if record_error:
+            package["record_error"] = record_error
+        if monitor_error:
+            package["history_error"] = monitor_error
         
         # Determine filename
         if custom_filename:
@@ -205,6 +318,12 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             )]
     else:
         # Original behavior: export history only (backward compatible)
+        if monitor is None:
+            return [error_response(
+                "EISV history could not be read for this agent. "
+                "Use complete_package=true for the record without it.",
+                {"agent_id": agent_id, "history_error": monitor_error},
+            )]
         history_data = monitor.export_history(format=format_type)
         export_data = history_data
         
@@ -273,7 +392,7 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             "agent_id": agent_id,
             "file_size_bytes": file_size,
             "complete_package": complete_package,
-            "layers_included": ["metadata", "history", "validation"] if complete_package else ["history"]
+            "layers_included": ["metadata", "record", "history", "validation"] if complete_package else ["history"]
         })
     except Exception as e:
         return [error_response(f"Failed to write file: {str(e)}", {"file_path": str(file_path)})]
