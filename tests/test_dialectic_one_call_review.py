@@ -16,6 +16,8 @@ from mcp.types import TextContent
 from tests.helpers import successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+PHASE = "src.mcp_handlers.dialectic.phase_submission"
+RES = "src.mcp_handlers.dialectic.resolution_helpers"
 
 
 def parse_result(result):
@@ -40,16 +42,17 @@ def request_env():
     server.agent_metadata = {"agent-paused": meta}
     server.load_metadata_async = AsyncMock()
     patches = [
-        patch(f"{DIALECTIC}.mcp_server", server),
-        patch(f"{DIALECTIC}.require_registered_agent", return_value=("agent-paused", None)),
+        patch(f"{PHASE}.mcp_server", server),
+        patch(f"{RES}.mcp_server", server),
+        patch(f"{PHASE}.require_registered_agent", return_value=("agent-paused", None)),
         patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
-        patch(f"{DIALECTIC}.pg_create_session", new_callable=AsyncMock),
+        patch(f"{PHASE}.pg_create_session", new_callable=AsyncMock),
         patch(
-            f"{DIALECTIC}.is_agent_in_active_session",
+            f"{PHASE}.is_agent_in_active_session",
             new_callable=AsyncMock, return_value=False,
         ),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
-        patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None),
+        patch(f"{PHASE}.select_reviewer", new_callable=AsyncMock, return_value=None),
         patch(
             "src.agent_storage.read_authoritative_pause_binding",
             new=AsyncMock(return_value={
@@ -234,21 +237,21 @@ class TestOneCallReview:
         )
         with (
             patch(
-                f"{DIALECTIC}._resolve_dialectic_agent_id",
+                f"{PHASE}._resolve_dialectic_agent_id",
                 new_callable=AsyncMock,
                 return_value=("agent-paused", None),
             ),
             patch(
-                f"{DIALECTIC}.load_session",
+                f"{PHASE}.load_session",
                 new_callable=AsyncMock,
                 return_value=session,
             ),
             patch(
-                f"{DIALECTIC}.pg_add_message",
+                f"{RES}.pg_add_message",
                 new=AsyncMock(side_effect=successful_dialectic_message_append),
             ) as add_message,
-            patch(f"{DIALECTIC}._emit_phase_changed", new_callable=AsyncMock),
-            patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock),
+            patch(f"{PHASE}._emit_phase_changed", new_callable=AsyncMock),
+            patch(f"{PHASE}.save_session", new_callable=AsyncMock),
         ):
             result = await handle_submit_thesis({
                 "session_id": session.session_id,
@@ -322,19 +325,19 @@ class TestOneCallIdentityForwarding:
         server.agent_metadata = {REAL_UUID: meta}
         server.load_metadata_async = AsyncMock()
         patches = [
-            patch(f"{DIALECTIC}.mcp_server", server),
+            patch(f"{PHASE}.mcp_server", server),
             patch(
-                f"{DIALECTIC}.require_registered_agent",
+                f"{PHASE}.require_registered_agent",
                 side_effect=_rewrites_agent_id_to_handle,
             ),
             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
-            patch(f"{DIALECTIC}.pg_create_session", new_callable=AsyncMock),
+            patch(f"{PHASE}.pg_create_session", new_callable=AsyncMock),
             patch(
-                f"{DIALECTIC}.is_agent_in_active_session",
+                f"{PHASE}.is_agent_in_active_session",
                 new_callable=AsyncMock, return_value=False,
             ),
             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
-            patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None),
+            patch(f"{PHASE}.select_reviewer", new_callable=AsyncMock, return_value=None),
             patch(
                 "src.agent_storage.read_authoritative_pause_binding",
                 new=AsyncMock(return_value={
@@ -343,6 +346,7 @@ class TestOneCallIdentityForwarding:
                     "status": "active",
                 }),
             ),
+            patch(f"{RES}.mcp_server", server),
         ]
         started = [p.start() for p in patches]
         yield started
@@ -865,7 +869,7 @@ class TestWhoseMove:
 
         payload = {"phase": "resolved"}
         with patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+            f"{RES}.pg_get_resolution_effect",
             new=AsyncMock(side_effect=RuntimeError("effect table unavailable")),
         ):
             await _attach_public_resolution_effect(payload, "sess-read-failed")

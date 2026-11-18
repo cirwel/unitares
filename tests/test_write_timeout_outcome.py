@@ -129,8 +129,14 @@ def _patched_handler_dependencies(graph, bound: str | None = None):
         ),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", server),
         patch(
             "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            new_callable=AsyncMock,
+            return_value=graph,
+        ),
+        patch(
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             new_callable=AsyncMock,
             return_value=graph,
         ),
@@ -416,7 +422,7 @@ def test_an_unresolvable_writer_lists_every_writer_and_says_so():
 
 def test_a_failing_author_resolution_is_logged_and_the_window_stays(caplog):
     with patch(
-        "src.mcp_handlers.knowledge.handlers._resolve_low_friction_writer",
+        "src.mcp_handlers.knowledge.mutation_helpers._resolve_low_friction_writer",
         side_effect=RuntimeError("context unavailable"),
     ), caplog.at_level("WARNING"):
         payload = _store_lookup_payload({"action": "store", "summary": "s"})
@@ -487,7 +493,7 @@ async def test_a_store_that_supersedes_names_the_second_write_its_list_does_not_
     with patch(
         "src.mcp_handlers.utils.check_agent_can_operate", return_value=None
     ), patch(
-        "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+        "src.mcp_handlers.knowledge.mutation_helpers._broadcast_knowledge_write",
         new_callable=AsyncMock,
     ):
         payload = _payload(await _run_patched(handler, _SupersedeGraph(), arguments))
@@ -673,7 +679,7 @@ async def test_a_batch_that_times_out_between_items_is_half_saved():
     with patch(
         "src.mcp_handlers.utils.check_agent_can_operate", return_value=None
     ), patch(
-        "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+        "src.mcp_handlers.knowledge.mutation_helpers._broadcast_knowledge_write",
         new_callable=AsyncMock,
     ):
         payload = _payload(

@@ -11,8 +11,8 @@ from src.dialectic_protocol import (
     DialecticPhase,
 )
 from src.dialectic_reviewed_work import embed_reviewed_work_authorship
-from ..utils import success_response, error_response, require_registered_agent as _default_require_registered_agent
-from ..support.coerce import resolve_agent_uuid as _default_resolve_agent_uuid
+from ..utils import success_response, error_response, require_registered_agent
+from ..support.coerce import resolve_agent_uuid
 from .responses import (
     llm_failed_recovery,
     llm_incomplete_recovery,
@@ -22,17 +22,18 @@ from .responses import (
     session_not_found_recovery,
 )
 from src.logging_utils import get_logger
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .session import (
-    discard_receipt_unless_written as _default_discard_receipt_unless_written,
-    load_session as _default_load_session,
-    load_session_as_dict as _default_load_session_as_dict,
-    ACTIVE_SESSIONS as _default_ACTIVE_SESSIONS,
+    discard_receipt_unless_written,
+    load_session,
+    load_session_as_dict,
+    ACTIVE_SESSIONS,
 )
-from .resolution import record_resolution_outcome as _default_record_resolution_outcome
-from .events import emit_reviewer_abstained as _default_emit_reviewer_abstained
+from .resolution import record_resolution_outcome
+from .events import emit_reviewer_abstained
 from src.dialectic_db import (
-    create_session_async as _default_pg_create_session,
-    add_bounded_message_async as _default_pg_add_bounded_message,
+    create_session_async as pg_create_session,
+    add_bounded_message_async as pg_add_bounded_message,
 )
 from .actionability import (
     SYNTHETIC_REVIEWER_ID,
@@ -51,32 +52,20 @@ from .actionability import (
     _thesis_session_advanced,
     _get_dialectic_next_steps,
 )
-from .resolution_helpers import _DictProxy, _McpServerProxy, _h_call, _proxy
+from .resolution_helpers import (
+    _append_protocol_message,
+    _apply_durable_resolution_effect,
+    _bind_pause_token,
+    _commit_converged_resolution,
+    _commit_terminal_resolution,
+    _emit_dialectic_event,
+    _recorded_trigger_source,
+    _requested_reviewed_work_authorship,
+    _resolve_dialectic_agent_id,
+    _set_awaiting_facilitation,
+)
 
 logger = get_logger(__name__)
-
-mcp_server = _McpServerProxy()
-ACTIVE_SESSIONS = _DictProxy("ACTIVE_SESSIONS", _default_ACTIVE_SESSIONS)
-
-require_registered_agent = _proxy("require_registered_agent", _default_require_registered_agent)
-resolve_agent_uuid = _proxy("resolve_agent_uuid", _default_resolve_agent_uuid)
-discard_receipt_unless_written = _proxy("discard_receipt_unless_written", _default_discard_receipt_unless_written)
-load_session = _proxy("load_session", _default_load_session)
-load_session_as_dict = _proxy("load_session_as_dict", _default_load_session_as_dict)
-record_resolution_outcome = _proxy("record_resolution_outcome", _default_record_resolution_outcome)
-emit_reviewer_abstained = _proxy("emit_reviewer_abstained", _default_emit_reviewer_abstained)
-pg_create_session = _proxy("pg_create_session", _default_pg_create_session)
-pg_add_bounded_message = _proxy("pg_add_bounded_message", _default_pg_add_bounded_message)
-_append_protocol_message = _proxy("_append_protocol_message")
-_commit_terminal_resolution = _proxy("_commit_terminal_resolution")
-_commit_converged_resolution = _proxy("_commit_converged_resolution")
-_apply_durable_resolution_effect = _proxy("_apply_durable_resolution_effect")
-_emit_dialectic_event = _proxy("_emit_dialectic_event")
-_set_awaiting_facilitation = _proxy("_set_awaiting_facilitation")
-_resolve_dialectic_agent_id = _proxy("_resolve_dialectic_agent_id")
-_bind_pause_token = _proxy("_bind_pause_token")
-_recorded_trigger_source = _proxy("_recorded_trigger_source")
-_requested_reviewed_work_authorship = _proxy("_requested_reviewed_work_authorship")
 
 
 async def _handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -501,7 +490,7 @@ async def _run_synthetic_review(
             is_safe, violation = session.check_hard_limits(resolution_obj)
             if is_safe:
                 session.resolution = resolution_obj
-                commit = await _h_call("_commit_converged_resolution")(
+                commit = await _commit_converged_resolution(
                     session,
                     resolution_obj,
                     expected_transcript_revision=int(session.transcript_revision),
@@ -525,7 +514,7 @@ async def _run_synthetic_review(
                 if not is_safe:
                     session.phase = DialecticPhase.FAILED
                 else:
-                    effect = await _h_call("_apply_durable_resolution_effect")(
+                    effect = await _apply_durable_resolution_effect(
                         session, resolution_obj
                     )
                     if effect.state == "applied":
@@ -707,7 +696,7 @@ async def _thesis_recorded_after_facilitation_refused(
     return success_response(result)
 
 
-async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any], *, create_session_fn: Any = None) -> Sequence[TextContent]:
+async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Run LLM-assisted dialectic recovery when no peer reviewer is available.
 
@@ -887,7 +876,7 @@ async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any], *, create_se
         )
         session_id = session.session_id
 
-        await (create_session_fn or pg_create_session)(
+        await pg_create_session(
             session_id=session_id,
             paused_agent_id=agent_uuid,
             reviewer_agent_id="llm-synthetic-reviewer",
@@ -1007,7 +996,7 @@ async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any], *, create_se
             )
             if is_safe:
                 session.resolution = resolution_obj
-                commit = await _h_call("_commit_converged_resolution")(
+                commit = await _commit_converged_resolution(
                     session,
                     resolution_obj,
                     expected_transcript_revision=int(session.transcript_revision),
@@ -1032,7 +1021,7 @@ async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any], *, create_se
                     session.phase = DialecticPhase.FAILED
                     session.awaiting_facilitation = False
                 else:
-                    effect = await _h_call("_apply_durable_resolution_effect")(
+                    effect = await _apply_durable_resolution_effect(
                         session, resolution_obj
                     )
                     resolution_effect_state = effect.state

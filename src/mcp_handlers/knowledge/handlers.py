@@ -15,51 +15,7 @@ Claude Desktop compatible: All operations are async and non-blocking.
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
-from datetime import datetime, timezone, timedelta
-import threading
-
-
-def _utc_now_iso() -> str:
-    """Return current UTC time as an offset-aware ISO 8601 string.
-
-    Bug fix 2026-04-25: write-path timestamps were generated with
-    naive ``datetime.now()`` (server local TZ), causing ``id`` to drift
-    from ``created_at`` (UTC, via PG TIMESTAMPTZ) by the server's offset
-    and breaking lex-sort across multi-tz fleets. All KG write-path
-    timestamps must be UTC-aware.
-    """
-    return datetime.now(timezone.utc).isoformat()
-
-
-_discovery_id_lock = threading.Lock()
-_last_discovery_id_dt: Optional[datetime] = None
-
-
-def _new_discovery_id() -> str:
-    """Generate a strictly-monotonic UTC ISO timestamp for use as a discovery id.
-
-    Discovery ids double as the primary key *and* as a lex-sortable creation
-    timestamp (consumers parse them with ``datetime.fromisoformat`` and the
-    not-found helper prefix-matches them). A bare ``datetime.now()`` collides
-    when two writes land in the same microsecond — a batch loop or rapid
-    successive single stores — and the storage layer's
-    ``INSERT ... ON CONFLICT (id) DO UPDATE`` then *silently overwrites* the
-    first write (data loss, no error returned). Bumping by 1µs on collision
-    guarantees uniqueness within this process while preserving the
-    ISO-timestamp contract and chronological ordering.
-
-    Residual: two *separate* processes can still mint the same microsecond
-    id; closing that requires moving the primary key off a bare timestamp,
-    which is a contract change (docs + tests treat ids as parseable ISO
-    timestamps) and is out of scope here.
-    """
-    global _last_discovery_id_dt
-    with _discovery_id_lock:
-        now = datetime.now(timezone.utc)
-        if _last_discovery_id_dt is not None and now <= _last_discovery_id_dt:
-            now = _last_discovery_id_dt + timedelta(microseconds=1)
-        _last_discovery_id_dt = now
-        return now.isoformat()
+from datetime import datetime, timezone  # noqa: F401
 import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent  # noqa: F401
 from ..decorators import mcp_tool
@@ -259,6 +215,8 @@ def _knowledge_read_response_mode(handler):
 
 
 from .mutation_helpers import (
+    _utc_now_iso,  # noqa: F401
+    _new_discovery_id,  # noqa: F401
     _broadcast_knowledge_write,  # noqa: F401
     _resolve_reader_agent_id,
     _annotate_supersession,
@@ -1511,28 +1469,82 @@ async def handle_leave_note(
 @mcp_tool("cleanup_knowledge_graph", timeout=60.0, register=False)
 @_requires_proven_writer("cleanup")
 async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Run knowledge graph lifecycle cleanup."""
+    """Run knowledge graph lifecycle cleanup.
+
+    Manages discovery lifecycle based on type-based policies:
+    - Permanent: architectural_decision, learning, pattern (never auto-archive)
+    - Standard: resolved items archived after 30 days
+    - Ephemeral: tagged with ephemeral/temp/scratch, archived after 7 days
+
+    Args:
+        dry_run: If true, preview changes without applying them (default: true)
+
+    Returns lifecycle cleanup summary with counts of archived/moved discoveries.
+
+    Philosophy: Never delete. Archive forever.
+    """
     return await _handle_cleanup_knowledge_graph(arguments)
 
 
 @mcp_tool("synthesize_knowledge_graph", timeout=120.0, register=False)
 @_requires_proven_writer("synthesize")
 async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Compound discrete discoveries into rolled-up topic summaries (Issue #1)."""
+    """Compound discrete discoveries into rolled-up topic summaries (Issue #1).
+
+    Closes the loop the knowledge-graph skill admits is open ("does not close
+    loops automatically"): a periodic/on-demand pass that maintains a
+    cross-referenced, compounded narrative per topic *before* query time, the
+    way GraphRAG maintains hierarchical community summaries.
+
+    Deliberately NOT a per-write hook — running an LLM pass on every store/note
+    across a multi-agent fleet is the auto-checkin anti-pattern. This runs like
+    lint/cleanup: on demand, or wired to a periodic trigger. Rollups are stored
+    as ordinary discovery rows (type='topic_rollup', deterministic id
+    'rollup::<topic>'), so they upsert in place and need no schema change.
+
+    Args:
+        topic:       Synthesize just this one tag. Omit to sweep the densest topics.
+        limit:       Max topics processed this run (default 20). Bounds cost.
+        min_members: Minimum discoveries a topic needs to be rolled up (default 3).
+        use_llm:     Use the local LLM for the narrative (default true). When the
+                     LLM is unreachable, falls back to a deterministic rollup.
+        dry_run:     Preview the rollups without persisting them.
+
+    Returns a per-topic report (member counts, cross-references, summary source).
+    """
     return await _handle_synthesize_knowledge_graph(arguments)
 
 
 @mcp_tool("get_lifecycle_stats", timeout=30.0, register=False)
 @_knowledge_read_response_mode
 async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get knowledge graph lifecycle statistics."""
+    """Get knowledge graph lifecycle statistics.
+
+    Shows discovery counts by status and lifecycle policy, plus candidates
+    ready for archival or cold storage.
+
+    Useful for understanding knowledge graph health and what cleanup would do.
+    """
     return await _handle_get_lifecycle_stats(arguments)
 
 
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
 @_requires_proven_writer("supersede")
 async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Mark a discovery as superseding another."""
+    """Mark a discovery as superseding another.
+
+    Creates a SUPERSEDES edge in the knowledge graph and flips the older
+    discovery to superseded. Superseded entries receive a ranking penalty in
+    search results. resolution_notes, when given, are appended to the older
+    discovery's details in that same flip, as an update appends them.
+
+    Args:
+        discovery_id: The newer discovery (the one that replaces)
+        supersedes_id: The older discovery being replaced
+        resolution_notes: Why it was superseded (optional)
+
+    Returns success/failure status.
+    """
     return await _handle_supersede_discovery(arguments)
 
 
@@ -1541,7 +1553,15 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
 async def handle_promote_memory_claim(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
-    """Promote one imported memory into a corroborated, governed KG claim."""
+    """Promote one imported memory into a corroborated, governed KG claim.
+
+    Promotion creates a new discovery and leaves the source memory unchanged.
+    The new row keeps the compatible knowledge-authority receipt and embeds a
+    content-addressed ``unitares.transition_receipt.v1`` over the exact
+    promotion projection.  A normal store cannot forge either receipt because
+    callers cannot supply provenance directly.  The transition receipt proves
+    attributable same-object persistence, not correctness or approval.
+    """
     default_type = arguments.get("discovery_type") or "insight"
     return await _handle_promote_memory_claim(arguments, default_discovery_type=default_type)
 
@@ -1549,5 +1569,16 @@ async def handle_promote_memory_claim(
 @mcp_tool("audit_knowledge_graph", timeout=60.0, register=False)
 @_requires_proven_writer("audit")
 async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Audit knowledge graph for staleness and health."""
+    """Audit knowledge graph for staleness and health.
+
+    Read-only analysis that scores open KG entries by age, activity,
+    and type, grouping them into health buckets. Does NOT modify anything.
+
+    Args:
+        scope: "open" (default), "all", "by_agent"
+        top_n: Number of stale entries to return (default: 10)
+        use_model: If true, ask the local model to assess relevance (default: false)
+
+    Returns audit report with bucket counts and top stale entries.
+    """
     return await _handle_audit_knowledge_graph(arguments)

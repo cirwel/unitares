@@ -1028,6 +1028,14 @@ def _identity_assurance_from_source(
     return assurance
 
 
+def identity_assurance_from_source(
+    source_key: str,
+    proof_origin: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compute assurance tier from a session-resolution source."""
+    return _identity_assurance_from_source(source_key, proof_origin)
+
+
 def _continuity_claim(
     source_key: str,
     *,
@@ -1066,6 +1074,11 @@ def _continuity_claim(
 def _normalize_source(value: Optional[str]) -> str:
     text = _normalize_optional_text(value)
     return text.lower() if text else "unknown"
+
+
+def normalize_source(value: Optional[str]) -> str:
+    """Normalize a session or identity resolution source label."""
+    return _normalize_source(value)
 
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:

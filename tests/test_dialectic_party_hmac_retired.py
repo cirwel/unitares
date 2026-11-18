@@ -291,20 +291,24 @@ async def test_peer_review_synthesis_path_mints_nothing():
     async def _quiet_save(session, *, defer_terminal=False):
         return None
 
+    PHASE = "src.mcp_handlers.dialectic.phase_submission"
+    RES = "src.mcp_handlers.dialectic.resolution_helpers"
     pg_resolve = AsyncMock(return_value=True)
     with patch("src.mcp_handlers.dialectic.auth.caller_is_bound_as", return_value=True), \
-         patch(f"{DIALECTIC}.mcp_server", server), \
+         patch(f"{PHASE}.mcp_server", server), \
+         patch(f"{RES}.mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
-         patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
-         patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
+         patch(f"{PHASE}.load_session", new_callable=AsyncMock, return_value=session), \
+         patch(f"{PHASE}.save_session", new=_quiet_save), \
+         patch(f"{RES}.save_session", new=_quiet_save), \
          patch(
-             f"{DIALECTIC}.pg_add_message",
+             f"{RES}.pg_add_message",
              new=AsyncMock(side_effect=successful_dialectic_message_append),
          ), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_resolve_session", pg_resolve), \
-         patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
-         patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+         patch(f"{RES}.pg_resolve_session", pg_resolve), \
+         patch(f"{RES}.beam_resolve", new_callable=AsyncMock, return_value=None), \
+         patch(f"{RES}.execute_resolution", new_callable=AsyncMock,
                return_value={"success": True}), \
          patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-reviewer"):
         response = await handle_submit_synthesis({
@@ -365,24 +369,32 @@ async def test_synthetic_reviewer_path_mints_nothing():
     session.phase = DialecticPhase.THESIS
     ACTIVE_SESSIONS[session.session_id] = session
 
+    PHASE = "src.mcp_handlers.dialectic.phase_submission"
+    RES = "src.mcp_handlers.dialectic.resolution_helpers"
+    LLM_MOD = "src.mcp_handlers.dialectic.llm_assisted"
     pg_resolve = AsyncMock(return_value=True)
     with contextlib.ExitStack() as stack:
         for p in (
-            patch(f"{DIALECTIC}.mcp_server", server),
-            patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
+            patch(f"{PHASE}.mcp_server", server),
+            patch(f"{RES}.mcp_server", server),
+            patch(f"{LLM_MOD}.mcp_server", server),
+            patch(f"{PHASE}._resolve_dialectic_agent_id",
                   new=AsyncMock(return_value=("agent-paused", None))),
-            patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
+            patch(f"{PHASE}.load_session", new=AsyncMock(return_value=None)),
+            patch(f"{RES}.load_session", new=AsyncMock(return_value=None)),
+            patch(f"{LLM_MOD}.load_session", new=AsyncMock(return_value=None)),
             patch(
-                f"{DIALECTIC}.pg_add_message",
+                f"{RES}.pg_add_message",
                 new=AsyncMock(side_effect=successful_dialectic_message_append),
             ),
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
-            patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
-            patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
-            patch(f"{DIALECTIC}.execute_resolution", new=AsyncMock(
+            patch(f"{RES}.pg_update_awaiting_facilitation", new=AsyncMock()),
+            patch(f"{RES}.pg_resolve_session", new=pg_resolve),
+            patch(f"{RES}.execute_resolution", new=AsyncMock(
                 return_value={"success": True, "applied_conditions": []}
             )),
-            patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
+            patch(f"{PHASE}.save_session", new=AsyncMock()),
+            patch(f"{RES}.save_session", new=AsyncMock()),
             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
             patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
             patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_synthetic_antithesis())),
@@ -420,25 +432,29 @@ async def test_llm_assisted_path_mints_nothing():
         "antithesis": _synthetic_antithesis(),
         "synthesis": _synthetic_synthesis(),
     }
+    RES = "src.mcp_handlers.dialectic.resolution_helpers"
+    LLM_MOD = "src.mcp_handlers.dialectic.llm_assisted"
     pg_resolve = AsyncMock(return_value=True)
     with contextlib.ExitStack() as stack:
         for p in (
-            patch(f"{DIALECTIC}.mcp_server", server),
-            patch(f"{DIALECTIC}.require_registered_agent", return_value=("agent-paused", None)),
-            patch(f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"),
+            patch(f"{LLM_MOD}.mcp_server", server),
+            patch(f"{RES}.mcp_server", server),
+            patch(f"{LLM_MOD}.require_registered_agent", return_value=("agent-paused", None)),
+            patch(f"{LLM_MOD}.resolve_agent_uuid", return_value="agent-paused"),
             patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
             patch(f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)),
-            patch(f"{DIALECTIC}.pg_create_session", new=AsyncMock()),
+            patch(f"{LLM_MOD}.pg_create_session", new=AsyncMock()),
             patch(
-                f"{DIALECTIC}.pg_add_message",
+                f"{RES}.pg_add_message",
                 new=AsyncMock(side_effect=successful_dialectic_message_append),
             ),
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
-            patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
-            patch(f"{DIALECTIC}.execute_resolution", new=AsyncMock(
+            patch(f"{RES}.pg_resolve_session", new=pg_resolve),
+            patch(f"{RES}.execute_resolution", new=AsyncMock(
                 return_value={"success": True, "applied_conditions": []}
             )),
-            patch(f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()),
+            patch(f"{LLM_MOD}._emit_dialectic_event", new=AsyncMock()),
+            patch(f"{RES}._emit_dialectic_event", new=AsyncMock()),
             patch(
                 "src.agent_storage.read_authoritative_pause_binding",
                 new=AsyncMock(return_value={

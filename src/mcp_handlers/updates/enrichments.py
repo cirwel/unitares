@@ -10,11 +10,9 @@ import asyncio
 import hashlib  # noqa: F401
 import json
 import os
-import re
 from datetime import datetime, timezone  # noqa: F401
 from typing import Any, Optional  # noqa: F401
 
-from config.governance_config import GovernanceConfig
 from src.knowledge_authority import is_imported_context
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD  # noqa: F401
@@ -53,52 +51,18 @@ from .enrichment_helpers import (
     _fork_honest_message,
     enrich_grounding,  # noqa: F401
     run_grounding_stage,  # noqa: F401
+    _RELATED_DISCOVERY_RELEVANCE_FLOOR,  # noqa: F401
+    _KG_PROACTIVE_FLOOR,  # noqa: F401
+    _KG_SURFACED_TTL_SECONDS,  # noqa: F401
+    _REVIEW_NUDGE_CONF_CEILING,  # noqa: F401
+    _REVIEW_NUDGE_COMPLEXITY_FLOOR,  # noqa: F401
+    _REVIEW_NUDGE_TTL_SECONDS,  # noqa: F401
+    _QUERY_STOPWORDS,  # noqa: F401
+    _MAX_QUERY_TERMS,  # noqa: F401
+    _MIN_TERM_LEN,  # noqa: F401
+    _distinctive_terms,  # noqa: F401
+    _memory_suggestions_requested,
 )
-
-
-# Below this blended relevance, a related-discovery match is noise rather than
-# signal and is not surfaced as a "build on these" suggestion. The score is the
-# post-blend value (semantic similarity blended with connectivity, then decayed),
-# so this floor sits well under the raw similarity gate.
-_RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
-
-# ─── Opt-in proactive KG surfacing (adoption v0) ────────────────────────
-# Check-ins never reach this cadence gate unless the caller explicitly sets
-# include_memory_suggestions=true. Within that deliberate recall request,
-# proactive surfacing can offer strong prior work during healthy steady state.
-# It is additionally OFF by default and bounded on three axes so an opt-in
-# cannot regress the steady-state latency budget (KG calls amplify ~60x
-# in-handler, see CLAUDE.md "Substrate Tax"):
-#   1. Cadence — only every UNITARES_KG_PROACTIVE_EVERY-th check-in fires a
-#      search (0 = disabled, the default), so cost is amortized to 1/N.
-#   2. Relevance — a higher floor than the reactive path: a proactive nudge
-#      must be a strong match, not a marginal one.
-#   3. Novelty — session-scoped dedup (Redis) so a given discovery is surfaced
-#      at most once per session; what reaches the agent is always new to it.
-_KG_PROACTIVE_FLOOR = 0.35
-# KG-search timeout for the mirror-signals enrichment. The KG semantic/full-text
-# search is the dominant check-in tail: per-enrichment telemetry (2026-06-28,
-# n=2133) put enrich_mirror_signals at p99=281ms / max=2624ms while every other
-# enrichment was <16ms mean — the cost is this anyio-amplified KG I/O (see
-# CLAUDE.md "Substrate Tax"). KG surfacing is advisory, so a slow search degrades
-# to "no surfacing this turn" (return []) instead of blocking the response.
-_KG_SEARCH_TIMEOUT = float(os.getenv("UNITARES_KG_SEARCH_TIMEOUT_S", "0.25"))
-# Session-scope TTL for the per-agent set of already-surfaced discovery_ids.
-_KG_SURFACED_TTL_SECONDS = 86400
-
-# ─── In-flow review nudge (adoption increment 2, #1685) ─────────────────
-# When a check-in itself reports uncertain ground, suggest the one-call
-# review surface in the same response. The #1387 adjudication confirmed the
-# entry-cost hypothesis (agents do reach for request_review when it works);
-# this closes the discovery gap for agents who don't know the surface exists
-# at the moment it would help. OFF by default (UNITARES_REVIEW_NUDGE unset).
-# Conservative by design — an irrelevant nudge trains agents that the channel
-# is noise (the proactive-KG relevance lesson), so it keys only on what the
-# agent itself reported or the policy's own guide verdict, never on cadence,
-# and fires at most once per agent-session.
-_REVIEW_NUDGE_CONF_CEILING = 0.4
-_REVIEW_NUDGE_COMPLEXITY_FLOOR = 0.8
-_REVIEW_NUDGE_TTL_SECONDS = GovernanceConfig.SESSION_TTL_SECONDS
 
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
@@ -573,17 +537,6 @@ def enrich_detected_patterns(ctx: UpdateContext) -> None:
 
 # ─── Knowledge Surfacing ───────────────────────────────────────────────
 
-_QUERY_STOPWORDS = frozenset({
-    "about", "after", "again", "against", "because", "been", "before", "being",
-    "below", "between", "both", "could", "does", "doing", "down", "during",
-    "each", "from", "further", "have", "having", "here", "into", "just", "more",
-    "most", "once", "only", "other", "over", "same", "should", "some", "such",
-    "than", "that", "their", "them", "then", "there", "these", "they", "this",
-    "those", "through", "under", "until", "very", "were", "what", "when",
-    "where", "which", "while", "with", "would", "your",
-})
-_MAX_QUERY_TERMS = 8
-_MIN_TERM_LEN = 4
 _NON_TOPICAL_AGENT_TAGS = frozenset({
     "autonomous",
     "embodied",
@@ -596,25 +549,6 @@ _NON_TOPICAL_AGENT_TAGS = frozenset({
 })
 
 
-def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
-    """Pick a bounded set of salient terms from free text for a KG lookup.
-
-    Bounded because `websearch_to_tsquery` ANDs bare terms: handing it a whole
-    check-in matches nothing, and OR-ing a whole check-in matches everything.
-    """
-    if not isinstance(text, str) or not text.strip():
-        return []
-    seen: list = []
-    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", text.lower()):
-        if len(token) < _MIN_TERM_LEN or token in _QUERY_STOPWORDS:
-            continue
-        if token not in seen:
-            seen.append(token)
-        if len(seen) >= limit:
-            break
-    return seen
-
-
 def _topical_agent_tags(tags: list | None) -> list:
     """Exclude identity/lifecycle classes from the discovery-tag fallback."""
     return [
@@ -624,15 +558,6 @@ def _topical_agent_tags(tags: list | None) -> list:
         and tag.strip()
         and tag.strip().lower() not in _NON_TOPICAL_AGENT_TAGS
     ]
-
-
-def _memory_suggestions_requested(ctx: UpdateContext) -> bool:
-    """Whether this check-in explicitly opted into shared-memory retrieval."""
-    arguments = getattr(ctx, "arguments", {})
-    value = arguments.get("include_memory_suggestions", False)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return value is True
 
 
 @enrichment(order=130, lite_safe=True)
@@ -667,10 +592,12 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
             )
             if agent_tags:
                 from src.knowledge_graph import get_knowledge_graph
+                from . import enrichment_helpers
+
                 graph = await get_knowledge_graph()
                 tag_matches = await asyncio.wait_for(
                     graph.query(tags=agent_tags, status="open", limit=10),
-                    timeout=_KG_SEARCH_TIMEOUT,
+                    timeout=enrichment_helpers._KG_SEARCH_TIMEOUT,
                 )
                 agent_tags_set = set(agent_tags)
                 scored = [
@@ -1151,7 +1078,14 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
 
 @enrichment(order=240, lite_safe=True)
 async def enrich_mirror_signals(ctx: UpdateContext) -> None:
-    """Build actionable self-awareness signals for mirror response mode."""
+    """Build actionable self-awareness signals for mirror response mode.
+
+    Produces:
+      - _mirror_signals: list of short insight strings
+      - _mirror_kg_results: relevant KG discoveries by text search
+      - _mirror_reflection: targeted descriptive reflection when state warrants it
+      - _has_sensor_data: bool for auto-mode routing
+    """
     await _enrich_mirror_signals_impl(ctx)
 
 # ─── Identity Notifications ──────────────────────────────────────────
