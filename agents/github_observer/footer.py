@@ -75,6 +75,22 @@ _PHRASING = frozenset(
         "time", "tt", "u", "var",
     }
 )
+# Of those, the ones GitHub re-opens around later content when a paragraph
+# ends with them still open (HTML's "formatting elements", less ``a``, which
+# GitHub's output does not re-open), so a later paragraph renders bold, code
+# and so on, not plain.
+_FORMATTING = frozenset(
+    {"b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
+)
+# Start tags that end an open paragraph (HTML's "close a p element").
+_CLOSES_P = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "center", "dd", "details", "dialog",
+        "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li", "listing",
+        "main", "menu", "nav", "ol", "pre", "search", "section", "summary", "table", "ul",
+    }
+)
 # GFM's tagfilter extension (https://github.github.com/gfm/#disallowed-raw-html-extension-).
 _TAGFILTER_RE = re.compile(
     r"<(?=/?(?:title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext)(?:[\s/>]|$))",
@@ -181,12 +197,14 @@ class _VisibleLines(HTMLParser):
         self._in_p = self._p_open = False
 
     def _close_paragraph(self) -> None:
-        """``</p>``: the paragraph ends, and inline elements opened in it close.
-        A block element opened in it (``<details>``) stays open."""
+        """The paragraph ends (``</p>``, or a tag that implies it). Inline
+        elements opened in it close, except formatting elements, which carry
+        on around what follows. A block element opened in it stays open."""
         was_open = self._p_open
         self._end_paragraph()
-        if was_open and all(tag in _PHRASING for tag in self._stack[self._p_base :]):
-            del self._stack[self._p_base :]
+        inner = self._stack[self._p_base :]
+        if was_open and all(tag in _PHRASING for tag in inner):
+            self._stack[self._p_base :] = [tag for tag in inner if tag in _FORMATTING]
 
     def _placement(self) -> list[str]:
         """The open elements a paragraph opened now would sit inside: inside a
@@ -207,9 +225,15 @@ class _VisibleLines(HTMLParser):
             self._in_p = all(open_tag in _CONTAINERS for open_tag in self._placement())
             self._p_open = True
             self._p_base = len(self._stack)
-        elif tag == "br":
+            return
+        if tag == "br":
             self._end_line()
-        elif tag in _VOID:
+            return
+        if tag in _CLOSES_P and self._p_open:
+            # The paragraph ends before the block, and the text before the tag
+            # stays a line of it.
+            self._close_paragraph()
+        if tag in _VOID:
             self._taint()
         elif tag in _TABLE_PARTS and tag != "table" and "table" not in self._stack:
             self._taint()  # a table part outside any table is ignored

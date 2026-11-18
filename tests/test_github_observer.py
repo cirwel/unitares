@@ -1155,3 +1155,41 @@ def test_strikethrough_follows_gfm_tilde_rules(tildes, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n" + tildes.format(b=_UUID_B)
     assert ev.agent_uuid_from_body(body) == expected
 
+
+@pytest.mark.parametrize(
+    ("after", "expected"),
+    [
+        # A block start tag ends the paragraph, so the text before it is a
+        # line of its own (GitHub POST /markdown, 2026-11-17).
+        ("UNITARES agent: {b}<hr>suffix", _UUID_B),
+        ("UNITARES agent: {b}<div>suffix</div>", _UUID_B),
+        ("note\nUNITARES agent: {b}<h2>h</h2>", _UUID_B),
+        ("prefix<hr>UNITARES agent: {b}", _UUID_A),  # after it: not in a paragraph
+        # Formatting open at the block carries on inside it: bold, not plain.
+        ("<b>x<div>UNITARES agent: {b}</div></b>", _UUID_A),
+        ("<b>x<div>\n\nUNITARES agent: {b}", _UUID_A),
+        ("<del>x<div>\n\nUNITARES agent: {b}\n\n</div>", _UUID_B),  # del is not re-opened
+    ],
+)
+def test_a_block_tag_ends_the_paragraph_it_interrupts(after, expected):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + after.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == expected
+
+
+@pytest.mark.parametrize(
+    ("unclosed", "expected"),
+    [
+        # GitHub re-opens these around the next paragraph (bold, code, italic).
+        ("text <b>bold", _UUID_A),
+        ("text <code>c", _UUID_A),
+        ("text <i>x<hr>", _UUID_A),
+        # ...and closes these with their paragraph (GitHub POST /markdown, 2026-11-17).
+        ('text <a href="https://example.com">l', _UUID_B),
+        ("text <span>s", _UUID_B),
+        ("text <sub>s", _UUID_B),
+    ],
+)
+def test_formatting_left_open_carries_into_the_next_paragraph(unclosed, expected):
+    body = f"UNITARES agent: {_UUID_A}\n\n{unclosed}\n\nUNITARES agent: {_UUID_B}\n"
+    assert ev.agent_uuid_from_body(body) == expected
+

@@ -375,6 +375,81 @@
    "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~~x\nUNITARES agent: 22222222-2222-4222-8222-222222222222\ny~\n",
    "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>~~x<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\ny~</p>",
    "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<hr>suffix\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><hr>suffix<p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<div>suffix</div>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><div>suffix</div><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<details><summary>s</summary>x</details>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><details><summary>s</summary>x</details><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nprefix<hr>UNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>prefix</p><hr>UNITARES agent: 22222222-2222-4222-8222-222222222222<p></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>x<div>UNITARES agent: 22222222-2222-4222-8222-222222222222</div></b>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><b>x</b></p><div><b>UNITARES agent: 22222222-2222-4222-8222-222222222222</b></div><p></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<blockquote>q</blockquote>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><blockquote>q</blockquote><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nnote\nUNITARES agent: 22222222-2222-4222-8222-222222222222<h2>h</h2>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>note<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p><h2>h</h2><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>x<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><b>x</b></p><div><p></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b></div>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<del>x<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</div>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>x</del></p><div><p></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</div>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>bold\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>bold</b></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <code>c\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <code class=\"notranslate\">c</code></p><code class=\"notranslate\">\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></code>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <a href=\"https://example.com\">l\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <a href=\"https://example.com\" rel=\"nofollow\">l</a></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <span>s\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <span>s</span></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <sub>s\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <sub>s</sub></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <i>x<hr>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <i>x</i></p><hr><p></p><i>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></i>",
+   "expected": "11111111-1111-4111-8111-111111111111"
   }
  ]
 }
