@@ -232,12 +232,20 @@ When Core moves to a VPS while coding harnesses (`claude`, `codex`,
   `/v1/hub/{exchange,check,revoke}` backchannel requires the macOS-only
   `UNITARES_UDS_SOCKET` listener (`src/dashboard_auth.py`), so hub sign-in reports
   itself unconfigured (`404`) on a Linux VPS while dashboard passkey sign-in and
-  the read-only timeline (`GET /v1/timeline` + `/ws/eisv` via
-  `UNITARES_READ_ONLY_TOKENS`) continue to work remotely. Keep `elixir/portal`
-  sign-in paused during initial Linux VPS cutover until the H2e private hub
-  listener (`UNITARES_HUB_PRIVATE_BIND`) specified in
-  [`portal-hub-v0.md`](../proposals/active/portal-hub-v0.md) (§3.2 H2e) is
-  enabled.
+  read-only timeline APIs (`GET /v1/timeline` + `/ws/eisv` via
+  `UNITARES_READ_ONLY_TOKENS`) can be used remotely by separately configured
+  clients. Those API credentials do not sign a browser into Portal: its timeline
+  UI is behind the operator-authentication guard. Keep `elixir/portal` sign-in
+  paused during initial Linux VPS cutover until **both** the H2e private Core
+  listener (`UNITARES_HUB_PRIVATE_BIND`) **and** Portal's matching client
+  transport/configuration are implemented, reviewed and enabled, with
+  `exchange`, `check` and `revoke` verified end to end. Today Portal requires
+  `PORTAL_GOV_SOCKET` and always uses a Unix socket; setting the proposed
+  `PORTAL_HUB_INTERNAL_URL` alone has no effect. Keep the browser authorization
+  origin (`PORTAL_GOV_ORIGIN`) separate from the private backchannel and do not
+  route hub credentials through the public listeners. The implementation and
+  acceptance requirements are in
+  [`portal-hub-v0.md`](../proposals/active/portal-hub-v0.md) (§3.2 H2e).
 
 ### Bootstrap the first dashboard passkey
 
