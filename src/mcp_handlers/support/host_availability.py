@@ -222,9 +222,9 @@ def _redis_configured() -> bool:
     """Whether Redis is meant to be in use (``REDIS_ENABLED`` not off). A None
     client then means unreachable or circuit-open, not "no Redis here"."""
     try:
-        from src.cache.redis_client import _get_client
+        from src.cache.redis_client import is_redis_enabled
 
-        return bool(_get_client().config.enabled)
+        return is_redis_enabled()
     except Exception:
         return False
 

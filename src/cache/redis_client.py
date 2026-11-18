@@ -742,6 +742,11 @@ def is_redis_available() -> bool:
     return _get_client().is_available()
 
 
+def is_redis_enabled() -> bool:
+    """Return whether Redis is configured to be enabled (non-blocking)."""
+    return bool(_get_client().config.enabled)
+
+
 async def close_redis() -> None:
     """Close Redis connection (call on shutdown)."""
     if _client is not None:

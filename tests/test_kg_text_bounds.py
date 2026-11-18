@@ -205,15 +205,16 @@ def handler_env():
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", server),
         patch("src.mcp_handlers.knowledge.handlers.record_ms"),
         patch(
-            "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+            "src.mcp_handlers.knowledge.mutation_helpers._broadcast_knowledge_write",
             AsyncMock(),
         ),
         # The lineage read behind a store's provenance_chain queries the
         # database; these tests make no database call.
         patch(
-            "src.mcp_handlers.knowledge.handlers._build_s7_provenance_chain_with_fallback",
+            "src.mcp_handlers.knowledge.mutation_helpers._build_s7_provenance_chain_with_fallback",
             AsyncMock(return_value=None),
         ),
     ):
@@ -382,7 +383,10 @@ class TestSingleStore:
     @pytest.mark.asyncio
     async def test_too_many_tags_are_refused_before_the_graph_is_opened(self, handler_env):
         opened = AsyncMock()
-        with patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", opened):
+        with (
+            patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", opened),
+            patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", opened),
+        ):
             data = parse_result(
                 await kg_handlers.handle_store_knowledge_graph(
                     {
@@ -401,9 +405,15 @@ class TestSingleStore:
     async def test_oversized_related_files_are_refused_before_storage(self, handler_env):
         graph = AsyncMock()
         graph.find_similar = AsyncMock(return_value=[])
-        with patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-            AsyncMock(return_value=graph),
+        with (
+            patch(
+                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
+            patch(
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
         ):
             data = parse_result(
                 await kg_handlers.handle_store_knowledge_graph(
@@ -424,9 +434,15 @@ class TestSingleStore:
     async def test_an_oversized_provenance_field_is_refused_before_storage(self, handler_env):
         graph = AsyncMock()
         graph.find_similar = AsyncMock(return_value=[])
-        with patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-            AsyncMock(return_value=graph),
+        with (
+            patch(
+                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
+            patch(
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
         ):
             data = parse_result(
                 await kg_handlers.handle_store_knowledge_graph(
@@ -445,9 +461,15 @@ class TestSingleStore:
     async def test_a_live_scale_store_is_stored(self, handler_env):
         graph = AsyncMock()
         graph.find_similar = AsyncMock(return_value=[])
-        with patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-            AsyncMock(return_value=graph),
+        with (
+            patch(
+                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
+            patch(
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
         ):
             data = parse_result(
                 await kg_handlers.handle_store_knowledge_graph(
@@ -469,9 +491,15 @@ class TestBatchStore:
     async def test_an_oversized_item_fails_alone(self, handler_env):
         graph = AsyncMock()
         graph.find_similar = AsyncMock(return_value=[])
-        with patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-            AsyncMock(return_value=graph),
+        with (
+            patch(
+                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
+            patch(
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
         ):
             data = parse_result(
                 await kg_handlers.handle_store_knowledge_graph(
@@ -505,7 +533,10 @@ class TestNote:
     @pytest.mark.asyncio
     async def test_too_many_tags_are_refused_before_the_graph_is_opened(self, handler_env):
         opened = AsyncMock()
-        with patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", opened):
+        with (
+            patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", opened),
+            patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", opened),
+        ):
             data = parse_result(
                 await kg_handlers.handle_knowledge_note(
                     {"summary": "a note", "tags": [f"t{i}" for i in range(MAX_TAGS + 1)]}
@@ -518,9 +549,15 @@ class TestNote:
     async def test_an_oversized_provenance_field_is_refused_before_storage(self, handler_env):
         graph = AsyncMock()
         graph.find_similar = AsyncMock(return_value=[])
-        with patch(
-            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-            AsyncMock(return_value=graph),
+        with (
+            patch(
+                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
+            patch(
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
+                AsyncMock(return_value=graph),
+            ),
         ):
             data = parse_result(
                 await kg_handlers.handle_knowledge_note(
@@ -565,7 +602,7 @@ class TestPromote:
                 return_value="agent-a",
             ),
             patch(
-                "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+                "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
                 return_value=("agent-a", None),
             ),
             patch(
@@ -574,15 +611,15 @@ class TestPromote:
             ),
             patch("src.mcp_handlers.utils.check_agent_can_operate", return_value=None),
             patch(
-                "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+                "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
                 AsyncMock(return_value=graph),
             ),
             patch(
-                "src.mcp_handlers.knowledge.handlers._capture_store_provenance",
+                "src.mcp_handlers.knowledge.mutation_helpers._capture_store_provenance",
                 AsyncMock(return_value=({"source": "explicit_store"}, None)),
             ),
             patch(
-                "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+                "src.mcp_handlers.knowledge.mutation_helpers._broadcast_knowledge_write",
                 AsyncMock(),
             ),
         ):

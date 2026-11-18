@@ -88,7 +88,10 @@ def patch_common(mock_mcp_server, mock_graph):
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.mcp_server", mock_mcp_server), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+               new_callable=AsyncMock, return_value=mock_graph), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
                new_callable=AsyncMock, return_value=mock_graph), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"), \
          patch("src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
