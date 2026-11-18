@@ -1193,3 +1193,23 @@ def test_formatting_left_open_carries_into_the_next_paragraph(unclosed, expected
     body = f"UNITARES agent: {_UUID_A}\n\n{unclosed}\n\nUNITARES agent: {_UUID_B}\n"
     assert ev.agent_uuid_from_body(body) == expected
 
+
+@pytest.mark.parametrize(
+    ("body_tail", "expected"),
+    [
+        # A carried <b> closes at its own end tag inside the quote; the quote
+        # stays open around the footer (GitHub POST /markdown, 2026-11-17).
+        ("text <b>x\n\n<blockquote>y</b>\n\nUNITARES agent: {b}", _UUID_A),
+        # Its end tag ends the carried <b>, so the next line is plain.
+        ("text <b>x\n\nx</b>\nUNITARES agent: {b}", _UUID_B),
+        # ...even inside a table, where the open stack would block a close.
+        ("text <b>x<hr><table></b></table>\n\nUNITARES agent: {b}", _UUID_B),
+        # A <b> closed by its container's end tag is re-opened around later text.
+        ("<div><b>x</div>\n\nUNITARES agent: {b}", _UUID_A),
+        ("<div><del>x</div>\n\nUNITARES agent: {b}", _UUID_B),
+    ],
+)
+def test_active_formatting_is_tracked_apart_from_open_elements(body_tail, expected):
+    body = f"UNITARES agent: {_UUID_A}\n\n" + body_tail.format(b=_UUID_B)
+    assert ev.agent_uuid_from_body(body) == expected
+

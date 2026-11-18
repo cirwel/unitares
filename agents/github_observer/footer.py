@@ -175,12 +175,19 @@ class _VisibleLines(HTMLParser):
     browser does, so ``</blockquote>`` also closes a ``<pre>`` left open in
     the quote, unless a scope barrier such as ``<table>`` stands between them.
     An end tag with no open element of its name is ignored.
+
+    A formatting element (``<b>``, ``<code>`` ...) closed by anything but its
+    own end tag stays *active*, as in HTML's list of active formatting
+    elements: text inserted later is wrapped in it again, so a line holding
+    such text is not plain. Its own end tag, when it is no longer open,
+    removes it from the list.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.lines: list[str] = []
         self._stack: list[str] = []  # open non-void elements other than ``p``
+        self._active: list[str] = []  # closed formatting still re-opened around text
         self._in_p = False  # inside a paragraph that can hold a footer
         self._p_open = False  # inside any paragraph
         self._p_base = 0  # stack depth when the current paragraph opened
@@ -204,7 +211,8 @@ class _VisibleLines(HTMLParser):
         self._end_paragraph()
         inner = self._stack[self._p_base :]
         if was_open and all(tag in _PHRASING for tag in inner):
-            self._stack[self._p_base :] = [tag for tag in inner if tag in _FORMATTING]
+            self._active.extend(tag for tag in inner if tag in _FORMATTING)
+            del self._stack[self._p_base :]
 
     def _placement(self) -> list[str]:
         """The open elements a paragraph opened now would sit inside: inside a
@@ -255,10 +263,14 @@ class _VisibleLines(HTMLParser):
             return
         self._taint()
         if tag not in self._stack:
+            if tag in self._active:  # its own end tag ends a carried element
+                del self._active[len(self._active) - 1 - self._active[::-1].index(tag)]
             return
         index = len(self._stack) - 1 - self._stack[::-1].index(tag)
         if tag not in _TABLE_PARTS and any(t in _SCOPE_BARRIERS for t in self._stack[index + 1 :]):
             return  # out of scope: the browser ignores this end tag
+        # Formatting elements closed by this end tag rather than their own stay active.
+        self._active.extend(t for t in self._stack[index + 1 :] if t in _FORMATTING)
         del self._stack[index:]
         if self._in_p and len(self._stack) < self._p_base:
             self._end_paragraph()  # the paragraph's container closed
@@ -266,7 +278,8 @@ class _VisibleLines(HTMLParser):
     def handle_data(self, data: str) -> None:
         if not self._in_p or not data:
             return
-        if len(self._stack) > self._p_base:  # inside an element in the paragraph
+        if len(self._stack) > self._p_base or self._active:
+            # inside an element in the paragraph, or re-wrapped in active formatting
             self._tainted = True
         else:
             self._line.append(data)
