@@ -251,6 +251,7 @@ class TestProcessAgentUpdate:
         stack.enter_context(patch("src.mcp_handlers.context.get_context_session_key", return_value=patches_dict["ctx_session_key"]))
         stack.enter_context(patch("src.mcp_handlers.identity.handlers.ensure_agent_persisted", new_callable=AsyncMock, return_value=False))
         stack.enter_context(patch("src.mcp_handlers.updates.phases.agent_storage", patches_dict["storage"]))
+        stack.enter_context(patch("src.mcp_handlers.updates.post_update_helpers.agent_storage", patches_dict["storage"]))
         return stack
 
     @pytest.mark.asyncio
@@ -733,6 +734,7 @@ class TestProcessAgentUpdateExtended:
         stack.enter_context(patch("src.mcp_handlers.context.get_context_session_key", return_value=patches_dict["ctx_session_key"]))
         stack.enter_context(patch("src.mcp_handlers.identity.handlers.ensure_agent_persisted", new_callable=AsyncMock, return_value=False))
         stack.enter_context(patch("src.mcp_handlers.updates.phases.agent_storage", patches_dict["storage"]))
+        stack.enter_context(patch("src.mcp_handlers.updates.post_update_helpers.agent_storage", patches_dict["storage"]))
         return stack
 
     # ------------------------------------------------------------------

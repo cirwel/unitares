@@ -366,7 +366,7 @@ def test_every_beam_fallback_python_write_is_attributed():
     from pathlib import Path
 
     pkg = Path(brc.__file__).parent
-    for name, expected in (("handlers.py", 1), ("session.py", 2)):
+    for name, expected in (("resolution_helpers.py", 1), ("session.py", 2)):
         text = (pkg / name).read_text(encoding="utf-8")
         attributed = re.findall(
             r"session_write_via\s*\(\s*[\"']python_fallback[\"']", text

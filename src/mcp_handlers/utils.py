@@ -29,8 +29,9 @@ from .response_base import (
 from .introspection.feedback import (
     get_calibration_feedback,
     generate_actionable_feedback,
-    _calibration_message_cache,
+    calibration_message_cache,
 )
+_calibration_message_cache = calibration_message_cache
 
 # Re-export types that were previously accessible via utils
 from .types import (
@@ -58,5 +59,6 @@ __all__ = [
     "success_response",
     "get_calibration_feedback",
     "generate_actionable_feedback",
+    "calibration_message_cache",
     "_calibration_message_cache",
 ]

@@ -112,6 +112,7 @@ def _patch_real_spine_edges(harness):
     stack.enter_context(patch("src.mcp_handlers.context.get_trajectory_confidence", return_value=None))
     stack.enter_context(patch("src.mcp_handlers.identity.handlers.ensure_agent_persisted", new=AsyncMock(return_value=False)))
     stack.enter_context(patch("src.mcp_handlers.updates.phases.agent_storage", harness.storage))
+    stack.enter_context(patch("src.mcp_handlers.updates.post_update_helpers.agent_storage", harness.storage))
     stack.enter_context(patch("src.db.get_db", return_value=harness.db))
     stack.enter_context(patch("src.tool_usage_tracker.get_tool_usage_tracker", return_value=harness.tool_usage_tracker))
     stack.enter_context(patch("src.agent_behavioral_baseline.ensure_baseline_loaded", new=AsyncMock(return_value=None)))

@@ -83,6 +83,11 @@ def _write_state_file(state_file: Path, state_data: dict) -> None:
         raise
 
 
+def write_state_file(state_file: Path, state_data: dict) -> None:
+    """Atomically write an agent's monitor state file."""
+    _write_state_file(state_file, state_data)
+
+
 def _snapshot_governor_state(monitor: UNITARESMonitor) -> None:
     """Snapshot AdaptiveGovernor state into GovernanceState for persistence."""
     gov = getattr(monitor, 'adaptive_governor', None)

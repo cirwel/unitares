@@ -445,3 +445,12 @@ async def test_a_landed_delete_rearms_the_warning(monkeypatch, caplog, redis):
     monkeypatch.setattr(ha, "_get_redis", _no_client)  # a second outage
     await ha.clear_async("codex:host-adapter")
     assert "was not deleted" in caplog.text
+
+
+def test_redis_configured_reads_public_redis_client_switch(monkeypatch):
+    import src.cache.redis_client as rc
+
+    monkeypatch.setattr(rc, "is_redis_enabled", lambda: True)
+    assert ha._redis_configured() is True
+    monkeypatch.setattr(rc, "is_redis_enabled", lambda: False)
+    assert ha._redis_configured() is False

@@ -16,7 +16,7 @@ from src.dialectic_protocol import DialecticMessage, DialecticPhase, DialecticSe
 from src.mcp_handlers.dialectic import handlers as h
 from tests.helpers import parse_result
 
-DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+DIALECTIC = "src.mcp_handlers.dialectic.llm_assisted"
 PROVENANCE = {"backend": "codex-cli", "model_used": "gpt-x", "consult_source": "pipeline review"}
 
 

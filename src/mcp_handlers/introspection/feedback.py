@@ -12,6 +12,7 @@ _calibration_message_cache = {
     'significance_threshold': 0.05,
     'min_updates_between': 10
 }
+calibration_message_cache = _calibration_message_cache
 
 
 def get_calibration_feedback(include_complexity: bool = True) -> Dict[str, Any]:
