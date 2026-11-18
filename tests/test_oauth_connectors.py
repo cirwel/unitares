@@ -125,6 +125,23 @@ def test_supplied_pkce_is_preserved_and_wrong_verifier_rejected():
 
 
 @pytest.mark.asyncio
+async def test_managed_fallback_challenge_is_bound_to_server_secret():
+    registry = Registry()
+
+    async def challenge(server_secret):
+        p = GovernanceOAuthProvider(secret=server_secret, connector_registry=registry)
+        with client_app(p) as client:
+            auth_code = code(client)
+            entry = await p.load_authorization_code(await p.get_client(ID), auth_code)
+            assert entry is not None
+            return entry.code_challenge
+
+    original = await challenge("test-server-key-a")
+    assert original == await challenge("test-server-key-a")
+    assert original != await challenge("test-server-key-b")
+
+
+@pytest.mark.asyncio
 async def test_revocation_and_database_outage_reject_cached_access_and_refresh():
     registry = Registry()
     p = provider(registry)

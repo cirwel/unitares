@@ -20,7 +20,7 @@ from starlette.routing import Route, request_response
 from src.oauth_connectors import managed_client_id, secret_digest
 from src.oauth_provider import (
     _REQUEST_CONNECTOR_CACHE, StaticClientBasicAuthShim, _basic_credentials,
-    _is_urlencoded, _MAX_TOKEN_BODY, _peek_body, static_pkce_verifier,
+    _is_urlencoded, _MAX_TOKEN_BODY, _peek_body,
 )
 
 
@@ -126,7 +126,7 @@ class ConnectorCompatibility:
             return await JSONResponse({"error": "invalid_client"}, 401)(scope, receive, send)
         shim = StaticClientBasicAuthShim(
             self.app, client_id=client_id,
-            pkce_verifier=static_pkce_verifier(record["secret_hash"]),
+            pkce_verifier=self.provider.managed_connector_pkce_verifier(client_id),
         )
         await shim(scope, receive, send)
 

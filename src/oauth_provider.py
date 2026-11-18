@@ -476,6 +476,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         at = self._access_tokens.get(token)
         return at.client_id if at and hasattr(at, "client_id") else None
 
+    def managed_connector_pkce_verifier(self, client_id: str) -> str:
+        """Derive the compatibility verifier from the server key and connector ID."""
+        message = b"unitares-managed-connector-pkce-v1\x00" + client_id.encode()
+        digest = hmac.digest(self._secret.encode(), message, "sha256")
+        return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
     async def managed_connector(
         self, client_id: str, *, raise_on_error: bool = False
     ) -> dict | None:
