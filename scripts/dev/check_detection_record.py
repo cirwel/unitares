@@ -14,7 +14,7 @@ directly above its provenance signature:
     Detection-trigger: unprompted | prompted | automated | unknown
     Detected-at: <YYYY-MM-DD or ISO time> | unknown
     Detection-record: <shared-memory discovery id> | none
-    Prompted-by: operator | agent:<uuid> | unknown     (only when prompted)
+    Prompted-by: operator | agent:<uuid> | unknown     (when, and only when, prompted)
 
 `unknown` is always accepted: the check asks for an honest record, not for
 knowledge the author lacks. Lines inside fenced code blocks and block quotes
@@ -112,6 +112,8 @@ def problems(body: str) -> list[str]:
             out.append(f"`Prompted-by: {fields['prompted-by']}` is not {_HINT['prompted-by']}")
         elif fields.get("detection-trigger", "").lower() not in ("prompted", "unknown"):
             out.append("`Prompted-by:` is given but `Detection-trigger:` is not `prompted`")
+    elif fields.get("detection-trigger", "").lower() == "prompted":
+        out.append(f"`Detection-trigger: prompted` needs a `Prompted-by:` line ({_HINT['prompted-by']})")
     return out
 
 

@@ -88,6 +88,23 @@ def test_prompted_by_needs_a_prompted_trigger():
     assert cdr.problems(body.replace("unprompted", "prompted")) == []
 
 
+@pytest.mark.parametrize("who", ["operator", "agent:" + AGENT, "unknown"])
+def test_a_prompted_trigger_accepts_each_prompted_by(who):
+    body = "Classification: fix\n" + BLOCK.replace("unprompted", "prompted") + f"Prompted-by: {who}\n"
+    assert cdr.problems(body) == []
+
+
+def test_a_prompted_trigger_needs_prompted_by():
+    body = "Classification: fix\n" + BLOCK.replace("unprompted", "prompted")
+    found = cdr.problems(body)
+    assert len(found) == 1 and "Prompted-by" in found[0]
+    # A fenced or quoted Prompted-by line does not count.
+    assert cdr.problems(body + "```\nPrompted-by: operator\n```\n") == found
+    assert cdr.problems(body + "> Prompted-by: operator\n") == found
+    assert cdr.problems(body + "Prompted-by: someone\n") == [
+        "`Prompted-by: someone` is not `operator`, `agent:<uuid>`, or `unknown`"]
+
+
 def test_the_last_line_of_a_field_wins():
     body = "Classification: fix\nDetected-by: me\n" + BLOCK
     assert cdr.problems(body) == []

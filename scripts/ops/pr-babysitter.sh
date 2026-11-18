@@ -300,15 +300,29 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
 # both together whatever its branch commits said. Same self-reported values;
 # an unusable Model line is left out. A fix PR's detection record (who noticed
 # the defect: scripts/dev/check_detection_record.py) goes just above them, each
-# field's last line in a fixed order, so the landed commit keeps it too. Empty
-# for a PR with neither, which keeps GitHub's default body.
+# field's last line in a fixed order, so the landed commit keeps it too. As in
+# the checker, detection lines inside fenced code or block quotes do not count,
+# so a quoted example cannot stand in for the real record. Empty for a PR with
+# neither, which keeps GitHub's default body.
 squash_signature() {  # <pr-json> -> trailer lines, or empty
   jq -r '
     [(.body // "") | splits("\\r?\\n")] as $lines
+    | [foreach $lines[] as $l ({fence: "", keep: null};
+        ([$l | capture("^ {0,3}(?<m>`{3,}|~{3,})(?<rest>.*)$")] | .[0]) as $run
+        | if $run != null then
+            (if .fence == "" then
+               (if ($run.m[0:1] == "`" and ($run.rest | contains("`"))) then . else .fence = $run.m end)
+             elif ($run.m[0:1] == .fence[0:1] and ($run.m | length) >= (.fence | length)
+                   and ($run.rest | test("^\\s*$"))) then .fence = ""
+             else . end)
+            | .keep = null
+          elif .fence != "" or ($l | test("^\\s*>")) then .keep = null
+          else .keep = $l end;
+        .keep | select(. != null))] as $plain
     | [ "Defect-in", "Detected-by", "Detection-trigger", "Prompted-by", "Detected-at", "Detection-record" ]
       as $fields
     | [ $fields[] as $f
-        | ([$lines[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
+        | ([$plain[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
             | select(test("^[^`<>]{1,200}$"))] | last) as $v
         | select($v != null) | "\($f): \($v)" ] as $detection
     | ([$lines[] | capture("^Model:[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v] | last // "") as $model
