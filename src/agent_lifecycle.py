@@ -89,12 +89,22 @@ def _agent_age_hours(meta: AgentMetadata) -> float | None:
         return None
 
 
+def agent_age_hours(meta: AgentMetadata) -> float | None:
+    """Return hours since last activity, or None if unparseable."""
+    return _agent_age_hours(meta)
+
+
 def _agent_update_count(meta: AgentMetadata) -> int:
     """Return total_updates as int, defaulting to 0."""
     try:
         return int(getattr(meta, 'total_updates', 0) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def agent_update_count(meta: AgentMetadata) -> int:
+    """Return total_updates as int, defaulting to 0."""
+    return _agent_update_count(meta)
 
 
 _UUID_PATTERN = re.compile(
@@ -224,8 +234,8 @@ async def auto_archive_orphan_agents(
     mutation_enabled = auto_enabled and not dry_run
     archive_one = None
     if mutation_enabled:
-        from src.mcp_handlers.lifecycle.helpers import _archive_one_agent
-        archive_one = _archive_one_agent
+        from src.mcp_handlers.lifecycle.helpers import archive_one_agent
+        archive_one = archive_one_agent
 
     results: list[dict] = []
 
