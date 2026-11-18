@@ -67,6 +67,10 @@ def _apply_patches(patches_dict):
         "src.mcp_handlers.updates.phases.agent_storage",
         patches_dict["storage"],
     ))
+    stack.enter_context(patch(
+        "src.mcp_handlers.updates.post_update_helpers.agent_storage",
+        patches_dict["storage"],
+    ))
     return stack
 
 

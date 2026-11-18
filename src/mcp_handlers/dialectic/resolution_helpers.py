@@ -1,9 +1,8 @@
 """Resolution, reviewer reassignment, and synthesis finalization helpers for Dialectic handlers."""
 
-from typing import Dict, Any, Sequence, Optional, Tuple
+from typing import Dict, Any, Sequence, Optional, Tuple, List
 from mcp.types import TextContent
 import asyncio
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -11,8 +10,18 @@ from src.dialectic_protocol import (
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
+    Resolution,
 )
+from src.dialectic_reviewed_work import (
+    ReviewedWorkAuthorship,
+    ReviewedWorkAuthorshipError,
+    declaration_for_request,
+    parse_reviewed_work_author_agent_ids,
+    read_reviewed_work_authorship,
+)
+from src.dialectic_session_writes import session_write_via
 from ..utils import success_response, error_response
+from .auth import resolve_dialectic_agent_id
 from .responses import (
     get_agent_not_found_recovery,
     missing_session_id_recovery,
@@ -22,44 +31,53 @@ from .responses import (
     session_not_found_recovery,
 )
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as _default_mcp_server
+from src.broadcaster import broadcaster_instance
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .session import (
-    discard_receipt_unless_written as _default_discard_receipt_unless_written,
+    attach_attestation,
+    discard_receipt_unless_written,
     seal_resolution_for_persistence,
-    save_session as _default_save_session,
-    load_session as _default_load_session,
-    ACTIVE_SESSIONS as _default_ACTIVE_SESSIONS,
-    _SESSION_METADATA_CACHE as _default_SESSION_METADATA_CACHE,
+    save_session,
+    load_session,
+    ACTIVE_SESSIONS,
+    _SESSION_METADATA_CACHE,
 )
 from .calibration import (
-    update_calibration_from_dialectic as _default_update_calibration_from_dialectic,
-    update_calibration_from_dialectic_disagreement as _default_update_calibration_from_dialectic_disagreement,
+    update_calibration_from_dialectic,
+    update_calibration_from_dialectic_disagreement,
 )
 from .resolution import (
-    execute_resolution as _default_execute_resolution,
-    record_resolution_outcome as _default_record_resolution_outcome,
+    agent_pause_is_live,
+    execute_resolution,
+    record_resolution_outcome,
 )
 from .beam_resolve_client import (
+    ALREADY_TERMINAL_ORIGIN,
     BeamDialecticPolicyRefusal,
-    beam_resolve as _default_beam_resolve,
+    BeamDialecticSagaInFlight,
+    BeamDialecticTranscriptConflict,
+    beam_resolve,
 )
-from .reviewer import select_reviewer as _default_select_reviewer
+from .reviewer import select_reviewer
 from .events import (
-    emit_participant_abstained as _default_emit_participant_abstained,
-    emit_reviewer_abstained as _default_emit_reviewer_abstained,
-    emit_reviewer_reassigned as _default_emit_reviewer_reassigned,
+    emit_participant_abstained,
+    emit_reviewer_abstained,
+    emit_reviewer_reassigned,
 )
 from src.dialectic_db import (
-    add_message_async as _default_pg_add_message,
-    resolve_session_async as _default_pg_resolve_session,
-    claim_resolution_effect_async as _default_pg_claim_resolution_effect,
-    complete_resolution_effect_async as _default_pg_complete_resolution_effect,
-    fail_resolution_effect_async as _default_pg_fail_resolution_effect,
-    get_resolution_effect_async as _default_pg_get_resolution_effect,
-    acknowledge_resolution_effect_async as _default_pg_acknowledge_resolution_effect,
-    quarantine_resolution_effect_async as _default_pg_quarantine_resolution_effect,
+    add_message_async as pg_add_message,
+    mark_awaiting_facilitation_async as pg_mark_awaiting_facilitation,
+    update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
+    resolve_session_async as pg_resolve_session,
+    claim_resolution_effect_async as pg_claim_resolution_effect,
+    complete_resolution_effect_async as pg_complete_resolution_effect,
+    fail_resolution_effect_async as pg_fail_resolution_effect,
+    get_resolution_effect_async as pg_get_resolution_effect,
+    acknowledge_resolution_effect_async as pg_acknowledge_resolution_effect,
+    quarantine_resolution_effect_async as pg_quarantine_resolution_effect,
 )
 from .actionability import (
+    AutomatedTrigger,
     _beam_policy_error_code,
     _beam_policy_recovery,
     _ResolutionCommitResult,
@@ -77,121 +95,676 @@ from .actionability import (
 logger = get_logger(__name__)
 
 
-def _h_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.dialectic.handlers")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return default
+async def _resolve_dialectic_agent_id(
+    arguments: Dict[str, Any],
+    *,
+    enforce_session_ownership: bool = False,
+    require_bound_caller: bool = False,
+) -> tuple:
+    """Backward-compatible wrapper around shared dialectic auth policy."""
+    return await resolve_dialectic_agent_id(
+        arguments,
+        enforce_session_ownership=enforce_session_ownership,
+        require_bound_caller=require_bound_caller,
+    )
 
 
-def _h_call(name: str) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.dialectic.handlers")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return globals()[name]
+async def _emit_dialectic_event(event_type: str, session, **payload_extra) -> None:
+    """Best-effort broadcast of a dialectic lifecycle event (#1167 Ask 1).
+
+    Telemetry only — must never raise into the resolution path, so it mirrors the
+    knowledge handlers' guarded broadcast pattern. The broadcaster auto-persists to
+    audit.events and serves the WS firehose; the dashboard and the Phoenix dialectic
+    pane subscribe to any ``dialectic_*`` event as a doorbell to refetch
+    authoritative state. Names include the engine-owner-ratified set from #1167
+    plus the reviewer-dispatch proof point:
+    ``dialectic_opened``, ``dialectic_reviewer_dispatched``,
+    ``dialectic_facilitation_needed``, ``dialectic_resolved``.
+
+    Emitted from the Python handler intentionally: when
+    UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM is an alternative *persistence*
+    backend, not an alternative control flow — this handler still runs, so a single
+    emit here covers both the BEAM and pg-fallback paths.
+    """
+    try:
+        phase = getattr(session, "phase", None)
+        payload = {
+            "session_id": getattr(session, "session_id", None),
+            "phase": getattr(phase, "value", phase),
+            "topic": getattr(session, "topic", None),
+            "session_type": getattr(session, "session_type", None),
+            "awaiting_facilitation": getattr(session, "awaiting_facilitation", False),
+        }
+        payload.update(payload_extra)
+        await broadcaster_instance.broadcast_event(
+            event_type,
+            agent_id=getattr(session, "paused_agent_id", None),
+            payload=payload,
+        )
+    except Exception as e:  # pragma: no cover - telemetry must not break the flow
+        logger.debug("dialectic event %s emit skipped: %s", event_type, e)
 
 
-class _McpServerProxy:
-    def __getattr__(self, name: str) -> Any:
-        return getattr(_h_attr("mcp_server", _default_mcp_server), name)
+async def _emit_phase_changed(session, prev_phase) -> None:
+    """Emit dialectic_phase_changed when an interactive submit advanced the phase
+    (thesis -> antithesis -> synthesis), for live intra-session progress. No-op if
+    the phase did not move (e.g. another synthesis round stays in SYNTHESIS).
+    Terminal phases (resolved/failed) are announced by dialectic_resolved, not here.
+    """
+    to_phase = getattr(getattr(session, "phase", None), "value", None)
+    if to_phase and to_phase != prev_phase:
+        await _emit_dialectic_event(
+            "dialectic_phase_changed", session, from_phase=prev_phase, to_phase=to_phase
+        )
 
 
-class _DictProxy:
-    def __init__(self, attr_name: str, default_dict: dict) -> None:
-        self._attr_name = attr_name
-        self._default = default_dict
+async def _set_awaiting_facilitation(
+    session: DialecticSession,
+    awaiting: bool,
+    *,
+    reason: Optional[str] = None,
+) -> bool:
+    """Persist a real transition into or out of human-facilitation state.
 
-    def _d(self) -> dict:
-        return _h_attr(self._attr_name, self._default)
+    An open reviewer slot before thesis submission is not yet a failure: the
+    orchestrated reviewer is summoned only after the thesis exists. Keeping the
+    flag transition at the point where automated review actually succeeds or
+    fails prevents false ``dialectic_facilitation_needed`` events while retaining
+    the existing fail-soft telemetry/persistence contract.
+    """
+    awaiting = bool(awaiting)
+    previous_awaiting = bool(
+        getattr(session, "awaiting_facilitation", False)
+    )
+    saga_revision = int(
+        getattr(session, "resolution_saga_revision", 0)
+    )
 
-    def __getitem__(self, key: Any) -> Any:
-        return self._d()[key]
+    try:
+        if awaiting and not previous_awaiting:
+            persisted = await pg_mark_awaiting_facilitation(
+                session.session_id,
+                expected_phase=session.phase.value,
+                expected_reviewer=session.reviewer_agent_id,
+                expected_transcript_revision=int(session.transcript_revision),
+                expected_resolution_saga_revision=saga_revision,
+                exclude_inflight_saga=True,
+                touch_updated_at=True,
+            )
+        else:
+            persisted = await pg_update_awaiting_facilitation(
+                session.session_id,
+                awaiting,
+                expected_phase=session.phase.value,
+                expected_reviewer=session.reviewer_agent_id,
+                expected_transcript_revision=int(session.transcript_revision),
+                expected_awaiting_facilitation=previous_awaiting,
+                expected_resolution_saga_revision=saga_revision,
+                exclude_inflight_saga=True,
+                live_only=True,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Could not persist awaiting_facilitation=%s for %s: %s",
+            awaiting,
+            session.session_id,
+            exc,
+        )
+        raise
 
-    def __setitem__(self, key: Any, value: Any) -> None:
-        self._d()[key] = value
+    if not persisted:
+        ACTIVE_SESSIONS.pop(session.session_id, None)
+        raise _TranscriptAppendRefused(
+            "the dialectic changed before facilitation state could be recorded"
+        )
 
-    def __delitem__(self, key: Any) -> None:
-        del self._d()[key]
+    session.awaiting_facilitation = awaiting
 
-    def __contains__(self, key: Any) -> bool:
-        return key in self._d()
-
-    def __iter__(self):
-        return iter(self._d())
-
-    def __len__(self) -> int:
-        return len(self._d())
-
-    def __bool__(self) -> bool:
-        return bool(self._d())
-
-    def get(self, key: Any, default: Any = None) -> Any:
-        return self._d().get(key, default)
-
-    def pop(self, key: Any, *args: Any) -> Any:
-        return self._d().pop(key, *args)
-
-    def setdefault(self, key: Any, default: Any = None) -> Any:
-        return self._d().setdefault(key, default)
-
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        self._d().update(*args, **kwargs)
-
-    def clear(self) -> None:
-        self._d().clear()
-
-    def keys(self):
-        return self._d().keys()
-
-    def values(self):
-        return self._d().values()
-
-    def items(self):
-        return self._d().items()
-
-
-mcp_server = _McpServerProxy()
-ACTIVE_SESSIONS = _DictProxy("ACTIVE_SESSIONS", _default_ACTIVE_SESSIONS)
-_SESSION_METADATA_CACHE = _DictProxy("_SESSION_METADATA_CACHE", _default_SESSION_METADATA_CACHE)
+    if awaiting and not previous_awaiting and reason:
+        await _emit_dialectic_event(
+            "dialectic_facilitation_needed", session, reason=reason
+        )
+    return True
 
 
-def _proxy(name: str, default: Any = None):
-    def _call(*args: Any, **kwargs: Any) -> Any:
-        return _h_attr(name, default)(*args, **kwargs)
-    return _call
+async def _append_protocol_message(
+    session: DialecticSession,
+    *,
+    expected_phase: str,
+    expected_reviewer: Optional[str],
+    expected_transcript_revision: int,
+    expected_awaiting_facilitation: Optional[bool] = None,
+    next_phase: str,
+    next_synthesis_round: int,
+    next_reviewer: Optional[str] = None,
+    update_reviewer: bool = False,
+    next_awaiting_facilitation: Optional[bool] = None,
+    next_status: Optional[str] = None,
+    reopen_failed_facilitation: bool = False,
+    **message: Any,
+) -> int:
+    """Append one message and atomically advance its durable protocol state."""
+    detail: Dict[str, Any] = {}
+    state_updates: Dict[str, Any] = {
+        "next_phase": next_phase,
+        "next_synthesis_round": next_synthesis_round,
+    }
+    state_updates["expected_awaiting_facilitation"] = (
+        bool(session.awaiting_facilitation)
+        if expected_awaiting_facilitation is None
+        else expected_awaiting_facilitation
+    )
+    if update_reviewer:
+        state_updates["next_reviewer"] = next_reviewer
+    if next_awaiting_facilitation is not None:
+        state_updates["next_awaiting_facilitation"] = (
+            next_awaiting_facilitation
+        )
+    if next_status is not None:
+        state_updates["next_status"] = next_status
+    if reopen_failed_facilitation:
+        state_updates["reopen_failed_facilitation"] = True
+    message_id = await pg_add_message(
+        session_id=session.session_id,
+        expected_phase=expected_phase,
+        expected_reviewer=expected_reviewer,
+        expected_transcript_revision=expected_transcript_revision,
+        detail=detail,
+        **state_updates,
+        **message,
+    )
+    revision = detail.get("transcript_revision")
+    expected_next_revision = expected_transcript_revision + 1
+    if (
+        not message_id
+        or type(revision) is not int
+        or revision != expected_next_revision
+    ):
+        raise _TranscriptAppendRefused(
+            "the dialectic transcript changed before the message committed"
+        )
+    session.transcript_revision = revision
+    return revision
 
 
-discard_receipt_unless_written = _proxy("discard_receipt_unless_written", _default_discard_receipt_unless_written)
-save_session = _proxy("save_session", _default_save_session)
-load_session = _proxy("load_session", _default_load_session)
-update_calibration_from_dialectic = _proxy("update_calibration_from_dialectic", _default_update_calibration_from_dialectic)
-update_calibration_from_dialectic_disagreement = _proxy("update_calibration_from_dialectic_disagreement", _default_update_calibration_from_dialectic_disagreement)
-execute_resolution = _proxy("execute_resolution", _default_execute_resolution)
-record_resolution_outcome = _proxy("record_resolution_outcome", _default_record_resolution_outcome)
-beam_resolve = _proxy("beam_resolve", _default_beam_resolve)
-select_reviewer = _proxy("select_reviewer", _default_select_reviewer)
-emit_participant_abstained = _proxy("emit_participant_abstained", _default_emit_participant_abstained)
-emit_reviewer_abstained = _proxy("emit_reviewer_abstained", _default_emit_reviewer_abstained)
-emit_reviewer_reassigned = _proxy("emit_reviewer_reassigned", _default_emit_reviewer_reassigned)
-pg_add_message = _proxy("pg_add_message", _default_pg_add_message)
-pg_resolve_session = _proxy("pg_resolve_session", _default_pg_resolve_session)
-pg_claim_resolution_effect = _proxy("pg_claim_resolution_effect", _default_pg_claim_resolution_effect)
-pg_complete_resolution_effect = _proxy("pg_complete_resolution_effect", _default_pg_complete_resolution_effect)
-pg_fail_resolution_effect = _proxy("pg_fail_resolution_effect", _default_pg_fail_resolution_effect)
-pg_get_resolution_effect = _proxy("pg_get_resolution_effect", _default_pg_get_resolution_effect)
-pg_acknowledge_resolution_effect = _proxy("pg_acknowledge_resolution_effect", _default_pg_acknowledge_resolution_effect)
-pg_quarantine_resolution_effect = _proxy("pg_quarantine_resolution_effect", _default_pg_quarantine_resolution_effect)
-_append_protocol_message = _proxy("_append_protocol_message")
-_commit_terminal_resolution = _proxy("_commit_terminal_resolution")
-_emit_dialectic_event = _proxy("_emit_dialectic_event")
-_set_awaiting_facilitation = _proxy("_set_awaiting_facilitation")
-_precommit_resolution_authority_refusal = _proxy("_precommit_resolution_authority_refusal")
-_self_review_requires_independent_authority = _proxy("_self_review_requires_independent_authority")
-_read_proposed_conditions = _proxy("_read_proposed_conditions")
-_refuse_self_review_convergence = _proxy("_refuse_self_review_convergence")
-_record_operator_resolution_telemetry = _proxy("_record_operator_resolution_telemetry")
-_emit_request_reviewer_reassigned = _proxy("_emit_request_reviewer_reassigned")
-_attach_resolution_to_result = _proxy("_attach_resolution_to_result")
+async def _commit_terminal_resolution(
+    session: DialecticSession,
+    payload: Dict[str, Any],
+    *,
+    status: str,
+    expected_transcript_revision: int,
+    expected_phase: str = DialecticPhase.SYNTHESIS.value,
+) -> _ResolutionCommitResult:
+    """Win one exact terminal transition at the loaded transcript frontier.
+
+    The phase, reviewer, and monotonically increasing transcript revision form
+    one authority boundary. BEAM owns the write when enabled; the Python
+    fallback carries the identical predicates. A live BEAM saga is not an
+    availability failure: falling back would create a second terminal writer,
+    so it is returned as a transient refusal.
+    """
+    beam_detail: Dict[str, Any] = {}
+    try:
+        beam_result = await beam_resolve(
+            session_id=session.session_id,
+            paused_agent_id=session.paused_agent_id,
+            reviewer_agent_id=session.reviewer_agent_id,
+            resolution=payload,
+            status=status,
+            expected_phase=expected_phase,
+            expected_transcript_revision=expected_transcript_revision,
+            expected_awaiting_facilitation=bool(
+                session.awaiting_facilitation
+            ),
+            detail=beam_detail,
+        )
+    except BeamDialecticSagaInFlight:
+        return _ResolutionCommitResult(False, False, "beam_saga_in_flight")
+    except BeamDialecticTranscriptConflict:
+        return _ResolutionCommitResult(False, False, "transcript_changed")
+    already_terminal = bool(
+        isinstance(beam_result, dict)
+        and beam_result.get("origin") == ALREADY_TERMINAL_ORIGIN
+    )
+    if beam_result is not None:
+        if already_terminal:
+            return _ResolutionCommitResult(False, False, "refused")
+        return _ResolutionCommitResult(True, False, "beam_ack")
+
+    # Once an HTTP request started, a lost/5xx response may hide either a
+    # committed terminal row or a different live saga's definitive 409. Never
+    # open a second, write-capable Python path under that ambiguity: a losing
+    # payload could otherwise beat the saga that already owns the session.
+    if beam_result is None and beam_detail.get("commit_unknown") is True:
+        return _ResolutionCommitResult(
+            False, True, "beam_commit_unknown_unconfirmed"
+        )
+
+    written = False
+    winner: Dict[str, Any] = {}
+    if beam_result is None:
+        with session_write_via(
+            "python_fallback", site="converged_resolution"
+        ):
+            try:
+                written = bool(
+                    await pg_resolve_session(
+                        session_id=session.session_id,
+                        resolution=payload,
+                        status=status,
+                        expected_phase=expected_phase,
+                        expected_reviewer=session.reviewer_agent_id,
+                        expected_transcript_revision=expected_transcript_revision,
+                        expected_awaiting_facilitation=bool(
+                            session.awaiting_facilitation
+                        ),
+                        expected_resolution_saga_revision=int(
+                            getattr(session, "resolution_saga_revision", 0)
+                        ),
+                        exclude_inflight_saga=True,
+                        winner=winner,
+                    )
+                )
+            except Exception:
+                raise
+    if written:
+        return _ResolutionCommitResult(True, False, "python_write")
+
+    if winner.get("winner_status") in {
+        DialecticPhase.RESOLVED.value,
+        DialecticPhase.FAILED.value,
+    }:
+        return _ResolutionCommitResult(False, False, "terminal_conflict")
+    return _ResolutionCommitResult(False, False, "refused")
+
+
+async def _self_review_requires_independent_authority(
+    session: DialecticSession,
+) -> bool:
+    """True when this verdict would let one identity authorize its own pause.
+
+    The frozen pause-generation binding is authoritative even when this
+    process's metadata cache still says ``active``. The live check remains for
+    the narrower active-at-open race covered by the existing TOCTOU guard.
+    """
+    agent_id = session.paused_agent_id
+    if not session.reviewer_agent_id or session.reviewer_agent_id != agent_id:
+        return False
+    paused_state = getattr(session, "paused_agent_state", {})
+    if (
+        isinstance(paused_state, dict)
+        and paused_state.get("pause_effect_required") is True
+    ):
+        return True
+    return await agent_pause_is_live(agent_id)
+
+
+async def _precommit_resolution_authority_refusal(
+    session: DialecticSession,
+) -> Optional[str]:
+    """Recheck the authority facts that can change before the terminal CAS.
+
+    The earlier handler guard gives a useful response, but an active reflection
+    can become a live pause while synthesis is being persisted.  This check is
+    deliberately adjacent to the effect-owner write: if the session is now a
+    self-authorized resume, it stays nonterminal and answerable.  Stored
+    authorship policy remains duplicated in the database guard as the final
+    cross-process boundary.
+    """
+    agent_id = session.paused_agent_id
+    if await _self_review_requires_independent_authority(session):
+        return "self_review_not_authorizing"
+
+    authorship = read_reviewed_work_authorship(
+        getattr(session, "paused_agent_state", {}),
+        expected_declared_by_agent_id=agent_id,
+    )
+    if authorship.is_invalid:
+        return "review_authorship_invalid"
+    if authorship.recuses(
+        session.reviewer_agent_id, paused_agent_id=agent_id
+    ):
+        return "reviewer_author_conflict"
+    return None
+
+
+def _read_proposed_conditions(arguments: Dict[str, Any]) -> List[str]:
+    """Read proposed_conditions, accepting `conditions` as an alias.
+
+    The dialectic tool surface exposes both `proposed_conditions` (used by
+    thesis/antithesis/synthesis) and `conditions` (used by vote). Callers
+    occasionally pass `conditions=[...]` to a synthesis call by mistake —
+    the field is silently dropped, which produces a synthesis message with
+    empty conditions, which trips check_hard_limits at finalize time and
+    leaves the session in a self-contradictory phase=failed /
+    resolution.action=resume terminal state.
+
+    Accept either name to prevent that silent-drop class of bug. A
+    falsy/missing `proposed_conditions` falls back to `conditions`; explicit
+    empty values are preserved as empty.
+    """
+    proposed = arguments.get('proposed_conditions')
+    if proposed:
+        return proposed
+    fallback = arguments.get('conditions')
+    if fallback:
+        return fallback
+    return [] if proposed is None else proposed
+
+
+async def _emit_request_reviewer_reassigned(
+    *,
+    session_id: str,
+    old_reviewer_id: Optional[str],
+    new_reviewer_id: str,
+    reason: str,
+) -> None:
+    await emit_reviewer_reassigned(
+        session_id=session_id,
+        old_reviewer_id=old_reviewer_id,
+        new_reviewer_id=new_reviewer_id,
+        reason=reason,
+        source="request",
+    )
+
+
+async def _refuse_self_review_convergence(
+    session: Any,
+    session_id: str,
+    result: Dict[str, Any],
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Route a converged self-review to facilitation instead of lifting a live pause."""
+    # A self-review may not release a live pause (#1585 item 1).
+    #
+    # `reviewer_mode="self"` collapses both roles into one
+    # identity, so `submit_synthesis` converged on the paused
+    # agent's own `agrees=True` and `execute_resolution` would
+    # return it to active on nobody's authority but its own.
+    # The existing guards cover only the neighbouring cases: a
+    # self-reviewer overturning its OWN recorded rejection, and
+    # a paused agent agreeing while an INDEPENDENT reviewer's
+    # verdict is pending. The plain first agreeing synthesis was
+    # documented as "the explicit self-review completion path" —
+    # which is the self-certification hole under its own name.
+    #
+    # ⛔The check belongs HERE, not in `submit_synthesis`. The
+    # protocol object cannot see live agent status, and the fact
+    # that decides this is precisely "would a pause be released",
+    # which is only knowable at the actuator. Putting it here
+    # also keeps `DialecticSession` pure and reuses the handler's
+    # established authority to override a convergence — the
+    # safety-violation branch directly above does the same thing.
+    #
+    # ROUTES, does not refuse. `recusal.py` settled the shape for
+    # this conflict class when the reviewing apparatus is an
+    # interested party: "It never renders a verdict. It routes...
+    # It fails toward facilitation — a person decides — rather
+    # than toward silent auto-review by a party with a stake."
+    # That module names this very case as the sibling conflict it
+    # deliberately does not cover ("issue #1585,
+    # reviewer_mode='self'"). Its reasoning for why introspection
+    # cannot close the gap is the reasoning for this guard: "the
+    # same generative process produced both the judgment and the
+    # introspection, so a better model narrows the gap without
+    # closing it. You close it by adding a DIFFERENT process."
+    #
+    # The synthesis is already recorded above, so the agent's
+    # reasoning survives for whoever picks the session up; what
+    # is refused is the resume, not the submission.
+    session.phase = DialecticPhase.SYNTHESIS
+    result["action"] = "facilitation_required"
+    result["success"] = False
+    result["converged"] = False
+    result["blocked"] = "self_review_not_authorizing"
+    await _set_awaiting_facilitation(
+        session, True, reason="self_review_not_authorizing"
+    )
+    # Re-snapshot: the save above ran while the protocol still
+    # had this session RESOLVED. `defer_terminal` suppressed the
+    # terminal PostgreSQL write but the JSON snapshot happened
+    # anyway, so without this the offline snapshot claims a
+    # resolution that was refused. The PG phase write was skipped
+    # on the converged path, so the row already reads SYNTHESIS.
+    try:
+        await save_session(session, primary_already_synced=True)
+    except Exception as e:
+        logger.warning(
+            f"Could not re-save session after refusing a self-review "
+            f"resolution: {e}"
+        )
+    return [error_response(
+        "A self-review cannot release your own pause. The synthesis "
+        "is recorded; resuming requires an independent reviewer or "
+        "an operator.",
+        error_code="SELF_REVIEW_NOT_AUTHORIZING",
+        error_category="governance_refusal",
+        details={
+            "session_id": session_id,
+            "reviewer_agent_id": session.reviewer_agent_id,
+            "paused_agent_id": session.paused_agent_id,
+            "awaiting_facilitation": True,
+        },
+        recovery={
+            "action": (
+                "Your synthesis WAS recorded and the session remains "
+                "open — what is refused is resuming yourself on your "
+                "own verdict. An operator can assign an independent "
+                "reviewer with dialectic(action='reassign', "
+                f"session_id='{session_id}', new_reviewer_id='<agent_id>'). "
+                "Self-review remains available for reflection; it only "
+                "stops short of lifting a pause."
+            ),
+            "related_tools": ["dialectic", "identity"],
+        },
+        arguments=arguments,
+    )]
+
+
+def _attach_resolution_to_result(result: Dict[str, Any], resolution: Any) -> None:
+    result["resolution"] = resolution.to_dict()
+    attach_attestation(result)
+
+
+def _reviewer_objection_stands_refusal(
+    session_id: str,
+    result: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Build refusal response when a standing reviewer rejection blocks synthesis convergence."""
+    operator_next_call = (
+        f"dialectic(action='reassign', session_id='{session_id}', "
+        "new_reviewer_id='<agent_id>', "
+        "reason='Facilitate standing reviewer rejection')"
+    )
+    # ⛔What is refused is the RESOLUTION, not the message. This
+    # submission was persisted to the transcript just above, before
+    # this branch ran, and the reviewer can read and answer it. Only
+    # a REPEAT attempt is refused before persistence.
+    #
+    # Saying only "refused" made a caller conclude its response was
+    # discarded — that happened on 2026-08-19 in session
+    # def32eb2b4b2ce93, where a paused agent conceded, was told
+    # "do not retry ... without being recorded", reported the
+    # concession as lost, and was wrong: the reviewer had already
+    # answered it point by point. An error envelope that understates
+    # what happened is the same defect class as a success envelope
+    # that overstates it.
+    return [error_response(
+        result.get("reason") or result.get("error")
+        or "Refused: the reviewer's standing verdict is a rejection.",
+        error_code="SELF_CLEAR_REFUSED",
+        error_category="governance_refusal",
+        recovery={
+            "action": (
+                "Your response WAS recorded in the transcript and the "
+                "reviewer can answer it. What is refused is resolving "
+                "the session over the reviewer's standing rejection — "
+                "not the submission itself. Do not retry: a repeat "
+                "attempt IS refused before persistence, and it also "
+                "resets nothing in your favour."
+            ),
+            "what_was_recorded": (
+                "This synthesis is now in the transcript under your "
+                "agent_id. Conceding is recorded the same way a "
+                "contest is; neither resumes you on its own."
+            ),
+            "what_you_can_do": [
+                (
+                    "Reviewer: read the newly recorded synthesis and submit a "
+                    "later one to maintain or revise the verdict."
+                ),
+                f"Operator: assign a facilitator/replacement reviewer with {operator_next_call}",
+                (
+                    "Paused agent: your position is on the record — poll "
+                    "dialectic(action='get') for the reviewer's answer rather "
+                    "than resubmitting."
+                ),
+            ],
+            "operator_next_call": operator_next_call,
+            "related_tools": ["dialectic", "agent"],
+        },
+    )]
+
+
+async def _record_operator_resolution_telemetry(
+    session: DialecticSession,
+    execution_result: Dict[str, Any],
+    *,
+    record_outcome: bool,
+    manually_reconciled: bool,
+) -> None:
+    """Best-effort downstream signals for the winning reconciliation path.
+
+    The durable resolution-effect row remains authoritative. None of these
+    signals may make an already-applied runtime effect replayable, so each is
+    isolated and failures are logged. Callers report only that delivery was
+    attempted: the downstream helpers are deliberately fail-soft and do not
+    provide a durable delivery acknowledgement.
+    """
+    resolution = session.resolution
+    if resolution is None:
+        return
+
+    if record_outcome:
+        try:
+            await record_resolution_outcome(
+                session, resolution, execution_result
+            )
+        except Exception as exc:
+            logger.warning(
+                "Resolution outcome telemetry failed for %s: %s",
+                session.session_id,
+                exc,
+            )
+
+    if not _resolution_effect_skips_resume_calibration(execution_result):
+        try:
+            await update_calibration_from_dialectic(session, resolution)
+        except Exception as exc:
+            logger.warning(
+                "Resolution calibration telemetry failed for %s: %s",
+                session.session_id,
+                exc,
+            )
+
+    try:
+        await _emit_dialectic_event(
+            "dialectic_resolved",
+            session,
+            action=resolution.action,
+            manually_reconciled=manually_reconciled,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Resolution lifecycle telemetry failed for %s: %s",
+            session.session_id,
+            exc,
+        )
+
+
+async def _bind_pause_token(
+    evidence: Dict[str, Any], agent_id: str
+) -> Dict[str, Any]:
+    """Bind a review to the authoritative pause generation at session open."""
+    from src.agent_storage import read_authoritative_pause_binding
+
+    binding = await read_authoritative_pause_binding(agent_id)
+    cached = getattr(mcp_server, "agent_metadata", {}).get(agent_id)
+    cached_status = getattr(cached, "status", None) if cached is not None else None
+    cached_token = getattr(cached, "paused_at", None) if cached is not None else None
+    if cached_status == "paused":
+        if not binding["pause_effect_required"]:
+            raise RuntimeError(
+                "cache reports a pause that is absent from durable status"
+            )
+        if cached_token and cached_token != binding["pause_token"]:
+            raise RuntimeError(
+                "cache and durable state report different pause generations"
+            )
+    bound = dict(evidence)
+    bound["pause_effect_required"] = binding["pause_effect_required"]
+    bound["pause_token"] = binding["pause_token"]
+    return bound
+
+
+def _recorded_trigger_source(arguments: Dict[str, Any]) -> str:
+    supplied = arguments.get("trigger_source")
+    if isinstance(supplied, AutomatedTrigger) and str(supplied):
+        return str(supplied)
+    return "manual"
+
+
+async def _requested_reviewed_work_authorship(
+    arguments: Dict[str, Any], *, declared_by_agent_id: str
+) -> tuple[Optional[ReviewedWorkAuthorship], Optional[Sequence[TextContent]]]:
+    """Validate the requester's author-recusal declaration.
+
+    This is a conflict declaration, not an authorship attestation.  UUID-only
+    lookup avoids first-match label/public-id ambiguity, and every accepted ID
+    must already be registered.  The field can only shrink the eligible
+    reviewer pool.
+    """
+    raw = arguments.get("reviewed_work_author_agent_ids")
+    try:
+        author_ids = parse_reviewed_work_author_agent_ids(raw)
+    except ReviewedWorkAuthorshipError as exc:
+        return None, [error_response(
+            str(exc),
+            error_code="REVIEW_AUTHOR_DECLARATION_INVALID",
+            error_category="validation_error",
+            recovery={
+                "action": (
+                    "Pass canonical UUIDs of registered agents whose authored "
+                    "work is being reviewed, or omit the field when unspecified."
+                ),
+                "related_tools": ["identity", "agent", "request_review"],
+            },
+            arguments=arguments,
+        )]
+
+    if author_ids:
+        await mcp_server.load_metadata_async()
+        missing = [
+            author_id
+            for author_id in author_ids
+            if author_id not in mcp_server.agent_metadata
+        ]
+        if missing:
+            return None, [error_response(
+                "Every reviewed-work author must be a registered UNITARES agent UUID.",
+                error_code="REVIEW_AUTHOR_NOT_FOUND",
+                error_category="validation_error",
+                recovery={
+                    "action": "Correct or remove the unregistered author UUIDs.",
+                    "unregistered_agent_ids": missing,
+                    "related_tools": ["agent", "identity"],
+                },
+                arguments=arguments,
+            )]
+
+    return declaration_for_request(
+        author_ids, declared_by_agent_id=declared_by_agent_id
+    ), None
 
 
 async def _commit_converged_resolution(
@@ -1282,7 +1855,7 @@ async def _commit_and_apply_converged_resume(
                 arguments=arguments,
             )]
 
-        commit = await _h_call("_commit_converged_resolution")(
+        commit = await _commit_converged_resolution(
             session,
             resolution,
             expected_transcript_revision=terminal_frontier,
@@ -1384,7 +1957,7 @@ async def _commit_and_apply_converged_resume(
     session.phase = DialecticPhase.RESOLVED
     _attach_resolution_to_result(result, resolution)
 
-    effect = await _h_call("_apply_durable_resolution_effect")(
+    effect = await _apply_durable_resolution_effect(
         session, resolution
     )
     result["resolution_effect_state"] = effect.state
@@ -1543,7 +2116,7 @@ async def _finalize_converged_synthesis(
     newly_applied_resolution_effect = False
 
     if not is_safe:
-        block_err = await _h_call("_finalize_hard_limit_block")(
+        block_err = await _finalize_hard_limit_block(
             session,
             session_id,
             result,
@@ -1560,7 +2133,7 @@ async def _finalize_converged_synthesis(
         )
     else:
         newly_applied_resolution_effect, resume_err = (
-            await _h_call("_commit_and_apply_converged_resume")(
+            await _commit_and_apply_converged_resume(
                 session,
                 session_id,
                 resolution,
@@ -1586,7 +2159,7 @@ async def _finalize_converged_synthesis(
         except Exception as cal_e:
             logger.debug(f"Calibration update after dialectic: {cal_e}")
 
-    await _h_call("_finalize_terminal_session_state")(
+    await _finalize_terminal_session_state(
         session, result, emit_resolved=newly_applied_resolution_effect
     )
     return None
@@ -1679,7 +2252,7 @@ async def _finalize_max_rounds_synthesis_failure(
     result["terminal_committed"] = True
     result["next_step"] = next_step_no_consensus()
     result["cooldown_until"] = (datetime.now() + timedelta(hours=1)).isoformat()
-    await _h_call("_finalize_terminal_session_state")(
+    await _finalize_terminal_session_state(
         session, result, emit_resolved=True
     )
     return None
@@ -1730,7 +2303,7 @@ async def _handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextC
             recovery=session_not_found_recovery(),
         )]
 
-    reassignment_actor = _h_call("_reviewer_reassignment_actor")(session)
+    reassignment_actor = _reviewer_reassignment_actor(session)
     if reassignment_actor is None:
         return [error_response(
             "Reviewer reassignment requires an operator credential or the current "
@@ -1778,7 +2351,7 @@ async def _handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextC
 
     if new_reviewer_id:
         # Validate the new reviewer exists and is eligible
-        validation_error = await _h_call("_validate_explicit_reviewer_candidate")(session, new_reviewer_id)
+        validation_error = await _validate_explicit_reviewer_candidate(session, new_reviewer_id)
         if validation_error:
             return validation_error
     else:
@@ -1819,7 +2392,7 @@ async def _handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextC
             )]
 
     try:
-        await _h_call("_apply_reviewer_reassignment")(
+        await _apply_reviewer_reassignment(
             session_id,
             session,
             new_reviewer_id,
@@ -2111,7 +2684,7 @@ async def _handle_reconcile_resolution_effect(
                 details={"resolution_effect": _resolution_effect_view(effect)},
                 arguments=arguments,
             )]
-        applied = await _h_call("_apply_durable_resolution_effect")(
+        applied = await _apply_durable_resolution_effect(
             session, session.resolution
         )
         current = await pg_get_resolution_effect(session_id)

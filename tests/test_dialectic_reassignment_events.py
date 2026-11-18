@@ -103,8 +103,8 @@ class TestBothProducersEmit:
 
         pkg = Path(events.__file__).parent
         text = "\n".join(
-            (pkg / name).read_text(encoding="utf-8")
-            for name in ("handlers.py", "resolution_helpers.py", "phase_submission.py")
+            path.read_text(encoding="utf-8")
+            for path in sorted(p for p in pkg.glob("*.py") if p.name not in {"__init__.py", "events.py"})
         )
         assert "emit_reviewer_reassigned(" in text
         assert 'source="request"' in text
@@ -114,8 +114,11 @@ class TestBothProducersEmit:
         from pathlib import Path
 
         pkg = Path(events.__file__).parent
-        for name in ("auto_resolve.py", "handlers.py", "resolution_helpers.py", "phase_submission.py"):
-            text = (pkg / name).read_text(encoding="utf-8")
+        files = sorted(p for p in pkg.glob("*.py") if p.name not in {"__init__.py", "events.py"})
+        assert files, f"expected dialectic modules in {pkg}"
+        for path in files:
+            name = path.name
+            text = path.read_text(encoding="utf-8")
             assert '"event_type": "dialectic_reviewer_reassigned"' not in text, (
                 f"{name} builds the reassignment payload inline; it must call "
                 "events.emit_reviewer_reassigned so the shape cannot drift"

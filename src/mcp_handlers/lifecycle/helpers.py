@@ -218,6 +218,17 @@ async def _archive_one_agent(
     return True
 
 
+async def archive_one_agent(
+    agent_id: str,
+    meta: AgentMetadata,
+    reason: str,
+    *,
+    monitors: dict | None = None,
+) -> bool:
+    """Public entry point for persisting archival and updating in-memory state."""
+    return await _archive_one_agent(agent_id, meta, reason, monitors=monitors)
+
+
 async def _invalidate_agent_cache(agent_id: str) -> None:
     """Invalidate Redis metadata cache for an agent. Best-effort, never raises."""
     try:

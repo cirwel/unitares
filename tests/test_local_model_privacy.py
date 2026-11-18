@@ -283,29 +283,29 @@ async def test_knowledge_rollup_falls_back_to_its_deterministic_text(external_en
 @pytest.mark.asyncio
 async def test_synthetic_reviewer_abstains_with_the_reason(external_endpoint, monkeypatch):
     from src.dialectic_protocol import DialecticSession, DialecticPhase
-    from src.mcp_handlers.dialectic import handlers
+    from src.mcp_handlers.dialectic import llm_assisted
     from src.mcp_handlers.support import llm_delegation
 
     session = DialecticSession(paused_agent_id="agent-paused", reviewer_agent_id=None, session_type="recovery")
     session.phase = DialecticPhase.ANTITHESIS
     abstained = AsyncMock(return_value=True)
-    monkeypatch.setattr(handlers, "emit_reviewer_abstained", abstained)
+    monkeypatch.setattr(llm_assisted, "emit_reviewer_abstained", abstained)
     monkeypatch.setattr(
         llm_delegation, "generate_antithesis", AsyncMock(side_effect=AssertionError("model asked"))
     )
-    result = await handlers._run_synthetic_review(session, {"root_cause": "r"}, "agent-paused")
+    result = await llm_assisted._run_synthetic_review(session, {"root_cause": "r"}, "agent-paused")
     assert result is None
     assert abstained.await_args.kwargs["reason"] == "local_model_endpoint_not_local"
 
 
 @pytest.mark.asyncio
 async def test_llm_assisted_dialectic_is_refused_by_name(external_endpoint, monkeypatch):
-    from src.mcp_handlers.dialectic import handlers
+    from src.mcp_handlers.dialectic import handlers, llm_assisted
     from src.mcp_handlers.support import llm_delegation
     from tests.helpers import parse_result
 
-    monkeypatch.setattr(handlers, "require_registered_agent", lambda args: ("agent-paused", None))
-    monkeypatch.setattr(handlers, "resolve_agent_uuid", lambda args, agent_id: "agent-paused")
+    monkeypatch.setattr(llm_assisted, "require_registered_agent", lambda args: ("agent-paused", None))
+    monkeypatch.setattr(llm_assisted, "resolve_agent_uuid", lambda args, agent_id: "agent-paused")
     monkeypatch.setattr(
         llm_delegation, "run_full_dialectic", AsyncMock(side_effect=AssertionError("model asked"))
     )

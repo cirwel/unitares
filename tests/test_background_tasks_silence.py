@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src import background_tasks
+from src import background_resident_monitors, background_tasks
 from src.agent_metadata_model import AgentMetadata, agent_metadata
 
 
@@ -28,7 +28,7 @@ def isolated_silence_state(monkeypatch):
     background_tasks._silence_close_checked.clear()
     # Pretend the server started 48h ago so pre-existing staleness cap
     # doesn't mask genuinely stale agents in tests.
-    background_tasks._silence_server_start = datetime.now(timezone.utc) - timedelta(hours=48)
+    background_resident_monitors._silence_server_start = datetime.now(timezone.utc) - timedelta(hours=48)
 
     broadcaster = AsyncMock()
     audit = AsyncMock()
@@ -46,7 +46,7 @@ def isolated_silence_state(monkeypatch):
     # Label-based intervals are deployment-local now (UNITARES_CLASS_CALIBRATION
     # overlay); inject representative test values so the silence detector has a
     # label map to exercise, without depending on shipped per-resident config.
-    monkeypatch.setattr(background_tasks, "_PERSISTENT_AGENT_INTERVALS",
+    monkeypatch.setattr(background_resident_monitors, "_PERSISTENT_AGENT_INTERVALS",
                         {"Vigil": 1800, "Lumen": 300, "Sentinel": 600, "Watcher": 21600})
 
     # Default the KG-finding write path (_log_resident_silence_finding) to a
@@ -65,7 +65,7 @@ def isolated_silence_state(monkeypatch):
     background_tasks._silence_critical_alerted.clear()
     background_tasks._silence_duplicate_warned.clear()
     background_tasks._silence_close_checked.clear()
-    background_tasks._silence_server_start = None
+    background_resident_monitors._silence_server_start = None
 
 
 def _make_meta(agent_id: str, label: str, last_update: str) -> AgentMetadata:
@@ -254,7 +254,7 @@ async def test_pre_existing_staleness_ignored_on_fresh_start(isolated_silence_st
     broadcaster, _ = isolated_silence_state
 
     # Simulate fresh server start (just now)
-    background_tasks._silence_server_start = datetime.now(timezone.utc)
+    background_resident_monitors._silence_server_start = datetime.now(timezone.utc)
 
     # Agent last checked in 6 hours ago (before this server started)
     stale = datetime.now(timezone.utc) - timedelta(hours=6)
@@ -546,7 +546,7 @@ async def test_recovery_after_critical_rechecks_even_if_already_checked(
 async def test_still_silent_resident_keeps_its_row(isolated_silence_state, monkeypatch):
     """Stale since before a restart looks 'recovered' on the start-capped clock."""
     kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
-    background_tasks._silence_server_start = datetime.now(timezone.utc)
+    background_resident_monitors._silence_server_start = datetime.now(timezone.utc)
     stale = datetime.now(timezone.utc) - timedelta(hours=6)
     agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", stale.isoformat())
 
@@ -679,7 +679,7 @@ def _simulate_restart(started_ago: timedelta) -> None:
     background_tasks._silence_critical_alerted.clear()
     background_tasks._silence_duplicate_warned.clear()
     background_tasks._silence_close_checked.clear()
-    background_tasks._silence_server_start = datetime.now(timezone.utc) - started_ago
+    background_resident_monitors._silence_server_start = datetime.now(timezone.utc) - started_ago
 
 
 def _critical_calls(broadcaster):
@@ -864,7 +864,7 @@ async def test_restart_does_not_repeat_warning_for_same_episode(audit_store):
 async def test_restart_does_not_repeat_proxy_alive_warning(audit_store, monkeypatch):
     """Past 5x with a live proxy, the WARNING is de-duplicated across restarts too."""
     broadcaster, store = audit_store
-    monkeypatch.setattr(background_tasks, "_proxy_alive", lambda *_a, **_kw: True)
+    monkeypatch.setattr(background_resident_monitors, "_proxy_alive", lambda *_a, **_kw: True)
     stale = datetime.now(timezone.utc) - timedelta(hours=30)
     agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
 

@@ -18,7 +18,7 @@ import pytest
 from starlette.requests import Request
 
 AUTH = "src.mcp_handlers.dialectic.auth"
-DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+DIALECTIC = "src.mcp_handlers.dialectic.phase_submission"
 PAUSED = "22222222-2222-4222-8222-222222222222"
 REVIEWER = "33333333-3333-4333-8333-333333333333"
 
