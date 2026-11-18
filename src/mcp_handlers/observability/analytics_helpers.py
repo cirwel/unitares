@@ -719,7 +719,7 @@ async def _handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextConten
     Args (all optional except ``event_type``):
       event_type: str — exact audit event type to filter on
       event_types: list[str] — alternative to event_type, for IN-list filters
-      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
+      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 7d (168h)
       until: str | None — window end; ISO; default now
       target_agent_id: str | None — restrict to one agent. Do NOT use `agent_id`
         — that is auto-injected by the identity middleware with the caller's UUID
