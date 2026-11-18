@@ -236,26 +236,28 @@ async def test_proxy_request_excludes_author_and_persists_declaration():
     server.load_metadata_async = AsyncMock()
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.mcp_server", server
+        "src.mcp_handlers.dialectic.phase_submission.mcp_server", server
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.require_registered_agent",
+        "src.mcp_handlers.dialectic.resolution_helpers.mcp_server", server
+    ), patch(
+        "src.mcp_handlers.dialectic.phase_submission.require_registered_agent",
         return_value=(PROXY, None),
     ), patch(
         "src.mcp_handlers.utils.verify_agent_ownership", return_value=True
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.is_agent_in_active_session",
+        "src.mcp_handlers.dialectic.phase_submission.is_agent_in_active_session",
         new=AsyncMock(return_value=False),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.select_reviewer",
+        "src.mcp_handlers.dialectic.phase_submission.select_reviewer",
         new=AsyncMock(return_value=PEER),
     ) as select_reviewer, patch(
-        "src.mcp_handlers.dialectic.handlers.beam_create_session",
+        "src.mcp_handlers.dialectic.phase_submission.beam_create_session",
         new=AsyncMock(return_value=None),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.pg_create_session",
+        "src.mcp_handlers.dialectic.phase_submission.pg_create_session",
         new=AsyncMock(),
     ) as create_session, patch(
-        "src.mcp_handlers.dialectic.handlers._emit_dialectic_event",
+        "src.mcp_handlers.dialectic.phase_submission._emit_dialectic_event",
         new=AsyncMock(),
     ), patch(
         "src.agent_storage.read_authoritative_pause_binding",
@@ -291,7 +293,7 @@ async def test_request_rejects_unregistered_author_uuid():
     server.agent_metadata = {PROXY: MagicMock(status="active")}
     server.load_metadata_async = AsyncMock()
 
-    with patch("src.mcp_handlers.dialectic.handlers.mcp_server", server):
+    with patch("src.mcp_handlers.dialectic.resolution_helpers.mcp_server", server):
         declaration, error = await _requested_reviewed_work_authorship(
             {"reviewed_work_author_agent_ids": [AUTHOR]},
             declared_by_agent_id=PROXY,
@@ -413,7 +415,7 @@ async def test_public_fast_get_identifies_author_and_offers_no_write_call():
     }
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.load_session_as_dict",
+        "src.mcp_handlers.dialectic.phase_submission.load_session_as_dict",
         new=AsyncMock(return_value=row),
     ), patch(
         "src.mcp_handlers.context.get_context_agent_id", return_value=AUTHOR
@@ -484,13 +486,13 @@ async def test_first_responder_author_is_rejected_before_any_write():
     session.phase = DialecticPhase.ANTITHESIS
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers._resolve_dialectic_agent_id",
+        "src.mcp_handlers.dialectic.phase_submission._resolve_dialectic_agent_id",
         new=AsyncMock(return_value=(AUTHOR, None)),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.load_session",
+        "src.mcp_handlers.dialectic.phase_submission.load_session",
         new=AsyncMock(return_value=session),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.pg_add_message",
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_add_message",
         new=AsyncMock(),
     ) as add_message, patch(
         "src.mcp_handlers.dialectic.handlers.pg_update_reviewer",
@@ -523,10 +525,10 @@ async def test_first_responder_atomic_append_refusal_aborts_all_later_writes():
     session.phase = DialecticPhase.ANTITHESIS
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers._resolve_dialectic_agent_id",
+        "src.mcp_handlers.dialectic.phase_submission._resolve_dialectic_agent_id",
         new=AsyncMock(return_value=(PEER, None)),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.load_session",
+        "src.mcp_handlers.dialectic.phase_submission.load_session",
         new=AsyncMock(return_value=session),
     ), patch(
         "src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
@@ -541,13 +543,13 @@ async def test_first_responder_atomic_append_refusal_aborts_all_later_writes():
         "src.mcp_handlers.dialectic.handlers.pg_update_reviewer",
         new=AsyncMock(return_value=False),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.pg_add_message",
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_add_message",
         new=AsyncMock(return_value=0),
     ) as add_message, patch(
         "src.mcp_handlers.dialectic.handlers.pg_update_phase",
         new=AsyncMock(),
     ) as update_phase, patch(
-        "src.mcp_handlers.dialectic.handlers.save_session",
+        "src.mcp_handlers.dialectic.phase_submission.save_session",
         new=AsyncMock(),
     ) as save_session:
         response = await handle_submit_antithesis({
@@ -585,25 +587,31 @@ async def test_recused_reviewer_cannot_submit_or_abstain_in_synthesis(
     emit = AsyncMock()
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers._resolve_dialectic_agent_id",
+        "src.mcp_handlers.dialectic.phase_submission._resolve_dialectic_agent_id",
         new=AsyncMock(return_value=(AUTHOR, None)),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.load_session",
+        "src.mcp_handlers.dialectic.phase_submission.load_session",
         new=AsyncMock(return_value=session),
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.pg_mark_awaiting_facilitation",
+        "src.mcp_handlers.dialectic.phase_submission.pg_mark_awaiting_facilitation",
         new=mark_facilitation,
     ), patch(
-        "src.mcp_handlers.dialectic.handlers._emit_dialectic_event",
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_mark_awaiting_facilitation",
+        new=mark_facilitation,
+    ), patch(
+        "src.mcp_handlers.dialectic.phase_submission._emit_dialectic_event",
         new=emit,
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.emit_reviewer_abstained",
+        "src.mcp_handlers.dialectic.resolution_helpers._emit_dialectic_event",
+        new=emit,
+    ), patch(
+        "src.mcp_handlers.dialectic.phase_submission.emit_reviewer_abstained",
         new=AsyncMock(),
     ) as abstained, patch(
-        "src.mcp_handlers.dialectic.handlers.pg_add_message",
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_add_message",
         new=AsyncMock(),
     ) as add_message, patch(
-        "src.mcp_handlers.dialectic.handlers.save_session",
+        "src.mcp_handlers.dialectic.phase_submission.save_session",
         new=AsyncMock(),
     ) as save_session:
         response = await handle_submit_synthesis({
@@ -657,9 +665,9 @@ async def test_reassigning_declared_author_rewinds_synthesis_for_new_peer():
         return 1
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.pg_add_message", new=_append
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_add_message", new=_append
     ), patch(
-        "src.mcp_handlers.dialectic.handlers.emit_reviewer_reassigned",
+        "src.mcp_handlers.dialectic.resolution_helpers.emit_reviewer_reassigned",
         new=AsyncMock(),
     ):
         await _apply_reviewer_reassignment(
@@ -725,7 +733,7 @@ async def test_reassignment_policy_refusal_rolls_back_memory():
     session.phase = DialecticPhase.ANTITHESIS
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.pg_add_message",
+        "src.mcp_handlers.dialectic.resolution_helpers.pg_add_message",
         new=AsyncMock(
             side_effect=BeamDialecticPolicyRefusal(
                 "session_identity_mismatch", operation="append_protocol_message"

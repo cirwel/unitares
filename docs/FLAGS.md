@@ -148,7 +148,7 @@ additions merge cleanly. -->
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1782); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1793) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichment_helpers.py |
-| `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichment_helpers.py |
 | `UNITARES_KG_SYNTHESIS_INTERVAL_HOURS` | `str(DEFAULT_INTERVAL_HOURS)` | Hours between scheduled synthesis cycles; a non-positive value falls back to the default. | src/kg_synthesis_schedule.py |
 | `UNITARES_KG_SYNTHESIS_SCHEDULE` | `DEFAULT_MODE` | Scheduled synthesis mode | src/kg_synthesis_schedule.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |

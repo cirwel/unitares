@@ -119,6 +119,100 @@ def _make_session(paused_id="agent-paused", reviewer_id="agent-reviewer",
 # Common patch targets (module-level references in dialectic.py)
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
+_DIALECTIC_SUBMODULES = {
+    "mcp_server": ("phase_submission", "resolution_helpers", "llm_assisted", "handlers"),
+    "load_session": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "load_session_as_dict": ("phase_submission", "llm_assisted"),
+    "save_session": ("phase_submission", "resolution_helpers"),
+    "select_reviewer": ("phase_submission", "resolution_helpers"),
+    "require_registered_agent": ("phase_submission", "llm_assisted"),
+    "resolve_agent_uuid": ("phase_submission", "llm_assisted"),
+    "pg_create_session": ("phase_submission", "llm_assisted"),
+    "pg_mark_awaiting_facilitation": ("phase_submission", "resolution_helpers"),
+    "pg_get_resolution_effect": ("resolution_helpers", "handlers"),
+    "emit_reviewer_abstained": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "discard_receipt_unless_written": ("resolution_helpers", "llm_assisted"),
+    "record_resolution_outcome": ("resolution_helpers", "llm_assisted"),
+    "_resolve_dialectic_agent_id": ("phase_submission", "llm_assisted"),
+    "_emit_dialectic_event": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_emit_phase_changed": ("phase_submission", "resolution_helpers"),
+    "_set_awaiting_facilitation": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_commit_terminal_resolution": ("phase_submission", "resolution_helpers", "llm_assisted"),
+    "_commit_converged_resolution": ("resolution_helpers", "llm_assisted"),
+    "_apply_durable_resolution_effect": ("resolution_helpers", "llm_assisted"),
+    "_run_synthetic_review": ("phase_submission",),
+    "beam_create_session": ("phase_submission",),
+    "check_reviewer_stuck": ("phase_submission", "resolution_helpers"),
+    "get_session_lock": ("phase_submission",),
+    "is_agent_in_active_session": ("phase_submission",),
+    "list_all_sessions": ("phase_submission",),
+    "pg_get_all_sessions_by_agent": ("phase_submission",),
+    "_record_operator_resolution_telemetry": ("resolution_helpers",),
+    "_reviewer_reassignment_actor": ("resolution_helpers", "phase_submission"),
+    "agent_pause_is_live": ("resolution_helpers",),
+    "beam_resolve": ("resolution_helpers",),
+    "emit_participant_abstained": ("resolution_helpers",),
+    "execute_resolution": ("resolution_helpers",),
+    "pg_acknowledge_resolution_effect": ("resolution_helpers",),
+    "pg_add_message": ("resolution_helpers",),
+    "pg_claim_resolution_effect": ("resolution_helpers",),
+    "pg_complete_resolution_effect": ("resolution_helpers",),
+    "pg_fail_resolution_effect": ("resolution_helpers",),
+    "pg_quarantine_resolution_effect": ("resolution_helpers",),
+    "pg_resolve_session": ("resolution_helpers",),
+    "pg_update_awaiting_facilitation": ("resolution_helpers",),
+    "update_calibration_from_dialectic": ("resolution_helpers",),
+    "update_calibration_from_dialectic_disagreement": ("resolution_helpers",),
+    "handle_llm_assisted_dialectic": ("handlers",),
+    "pg_update_phase": ("handlers",),
+    "pg_update_reviewer": ("handlers",),
+    "beam_update_reviewer": ("handlers",),
+}
+
+
+class _MultiPatch:
+    """Apply the same mock across every dialectic submodule that binds a symbol."""
+
+    def __init__(self, targets, *args, **kwargs):
+        self._targets = targets
+        self._args = args
+        self._kwargs = kwargs
+        self._patches = []
+
+    def __enter__(self):
+        first, *rest = self._targets
+        p0 = patch(first, *self._args, **self._kwargs)
+        mock = p0.__enter__()
+        self._patches = [p0]
+        try:
+            for target in rest:
+                pt = patch(target, new=mock)
+                pt.__enter__()
+                self._patches.append(pt)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return mock
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.__exit__(*exc)
+        self._patches.clear()
+
+    def start(self):
+        return self.__enter__()
+
+    def stop(self):
+        self.__exit__(None, None, None)
+
+
+def _patch_dialectic(symbol, *args, **kwargs):
+    submods = _DIALECTIC_SUBMODULES[symbol]
+    targets = tuple(f"src.mcp_handlers.dialectic.{submod}.{symbol}" for submod in submods)
+    if len(targets) == 1:
+        return patch(targets[0], *args, **kwargs)
+    return _MultiPatch(targets, *args, **kwargs)
+
 
 async def _successful_message_append(
     *_args,
@@ -160,7 +254,7 @@ def mock_server():
         "agent-waiting": _make_agent_meta(status="waiting_input"),
         "agent-mediator": _make_agent_meta(status="active"),  # Third-party synthesizer
     })
-    with patch(f"{DIALECTIC}.mcp_server", server), \
+    with _patch_dialectic("mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server):
         yield server
 
@@ -169,8 +263,7 @@ def mock_server():
 def mock_require_registered():
     """Mock require_registered_agent to return a known agent_id."""
     def _factory(agent_id="agent-paused", error=None):
-        return patch(
-            f"{DIALECTIC}.require_registered_agent",
+        return _patch_dialectic("require_registered_agent",
             return_value=(agent_id, error),
         )
     return _factory
@@ -189,14 +282,13 @@ def mock_verify_ownership():
 @pytest.fixture
 def mock_pg_create():
     """Mock pg_create_session."""
-    return patch(f"{DIALECTIC}.pg_create_session", new_callable=AsyncMock)
+    return _patch_dialectic("pg_create_session", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_pg_add_message():
     """Mock pg_add_message."""
-    return patch(
-        f"{DIALECTIC}.pg_add_message",
+    return _patch_dialectic("pg_add_message",
         new=AsyncMock(side_effect=_successful_message_append),
     )
 
@@ -204,26 +296,25 @@ def mock_pg_add_message():
 @pytest.fixture
 def mock_pg_update_phase():
     """Mock pg_update_phase."""
-    return patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock)
+    return _patch_dialectic("pg_update_phase", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_pg_update_reviewer():
     """Mock pg_update_reviewer."""
-    return patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock)
+    return _patch_dialectic("pg_update_reviewer", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_pg_resolve_session():
     """Mock pg_resolve_session."""
-    return patch(f"{DIALECTIC}.pg_resolve_session", new_callable=AsyncMock)
+    return _patch_dialectic("pg_resolve_session", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_is_in_session():
     """Mock is_agent_in_active_session to return False."""
-    return patch(
-        f"{DIALECTIC}.is_agent_in_active_session",
+    return _patch_dialectic("is_agent_in_active_session",
         new_callable=AsyncMock,
         return_value=False,
     )
@@ -232,20 +323,19 @@ def mock_is_in_session():
 @pytest.fixture
 def mock_save_session():
     """Mock save_session."""
-    return patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock)
+    return _patch_dialectic("save_session", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_load_session():
     """Mock load_session."""
-    return patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock)
+    return _patch_dialectic("load_session", new_callable=AsyncMock)
 
 
 @pytest.fixture
 def mock_select_reviewer():
     """Mock select_reviewer used by auto reviewer mode."""
-    return patch(
-        f"{DIALECTIC}.select_reviewer",
+    return _patch_dialectic("select_reviewer",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -293,7 +383,7 @@ class TestPauseGenerationBinding:
         server = _make_mock_server({
             "agent-paused": _make_agent_meta(status="active")
         })
-        with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        with _patch_dialectic("mcp_server", server), patch(
             "src.agent_storage.read_authoritative_pause_binding",
             new=AsyncMock(return_value={
                 "pause_effect_required": True,
@@ -313,7 +403,7 @@ class TestPauseGenerationBinding:
         meta = _make_agent_meta(status="paused")
         meta.paused_at = "pause-cache"
         server = _make_mock_server({"agent-paused": meta})
-        with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        with _patch_dialectic("mcp_server", server), patch(
             "src.agent_storage.read_authoritative_pause_binding",
             new=AsyncMock(return_value={
                 "pause_effect_required": False,
@@ -331,7 +421,7 @@ class TestPauseGenerationBinding:
         meta = _make_agent_meta(status="paused")
         meta.paused_at = "pause-cache"
         server = _make_mock_server({"agent-paused": meta})
-        with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        with _patch_dialectic("mcp_server", server), patch(
             "src.agent_storage.read_authoritative_pause_binding",
             new=AsyncMock(return_value={
                 "pause_effect_required": True,
@@ -349,7 +439,7 @@ class TestPauseGenerationBinding:
         meta = _make_agent_meta(status="paused")
         meta.paused_at = None
         server = _make_mock_server({"agent-paused": meta})
-        with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        with _patch_dialectic("mcp_server", server), patch(
             "src.agent_storage.read_authoritative_pause_binding",
             new=AsyncMock(return_value={
                 "pause_effect_required": True,
@@ -416,9 +506,9 @@ class TestHandleRequestDialecticReview:
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
              mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
              mock_select_reviewer, \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
+             _patch_dialectic("pg_update_awaiting_facilitation",
                    new_callable=AsyncMock) as update_awaiting, \
-             patch(f"{DIALECTIC}._emit_dialectic_event",
+             _patch_dialectic("_emit_dialectic_event",
                    new_callable=AsyncMock) as emit:
             result = await handle_request_dialectic_review({
                 "agent_id": "agent-paused",
@@ -459,7 +549,7 @@ class TestHandleRequestDialecticReview:
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
              mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
-             patch(f"{DIALECTIC}.beam_create_session", new=unknown_create):
+             _patch_dialectic("beam_create_session", new=unknown_create):
             result = await handle_request_dialectic_review({
                 "agent_id": "agent-paused",
                 "_agent_uuid": "agent-paused",
@@ -507,7 +597,7 @@ class TestHandleRequestDialecticReview:
         from src.mcp_handlers.utils import error_response
 
         err = error_response("Agent not registered")
-        with patch(f"{DIALECTIC}.require_registered_agent", return_value=(None, err)), \
+        with _patch_dialectic("require_registered_agent", return_value=(None, err)), \
              mock_context_agent:
             result = await handle_request_dialectic_review({
                 "agent_id": "unknown-agent",
@@ -584,7 +674,7 @@ class TestHandleRequestDialecticReview:
         from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
-             patch(f"{DIALECTIC}.is_agent_in_active_session",
+             _patch_dialectic("is_agent_in_active_session",
                    new_callable=AsyncMock, return_value=True), \
              mock_context_agent:
             result = await handle_request_dialectic_review({
@@ -604,7 +694,7 @@ class TestHandleRequestDialecticReview:
         ).model_dump()
         assert recovery_args["agent_id"] == "agent-paused"
         assert recovery_args["fields"] == "compact"
-        with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(
+        with _patch_dialectic("pg_get_all_sessions_by_agent", new=AsyncMock(
             return_value=[{
                 "session_id": "existing-pg-session", "phase": "synthesis",
                 "paused_agent_id": "agent-paused", "paused_agent_state": {},
@@ -629,7 +719,7 @@ class TestHandleRequestDialecticReview:
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
              mock_is_in_session, \
-             patch(f"{DIALECTIC}.pg_create_session",
+             _patch_dialectic("pg_create_session",
                    new_callable=AsyncMock,
                    side_effect=Exception("DB connection lost")), \
              mock_context_agent:
@@ -657,7 +747,7 @@ class TestHandleRequestDialecticReview:
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
              mock_is_in_session, mock_context_agent, \
-             patch(f"{DIALECTIC}.handle_llm_assisted_dialectic", mock_llm_handler):
+             _patch_dialectic("handle_llm_assisted_dialectic", mock_llm_handler):
             result = await handle_request_dialectic_review({
                 "agent_id": "agent-paused",
                 "_agent_uuid": "agent-paused",
@@ -817,7 +907,7 @@ class TestHandleSubmitThesis:
         """Returns error when session does not exist."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_thesis
 
-        with mock_server, patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
+        with mock_server, _patch_dialectic("load_session", new_callable=AsyncMock, return_value=None), \
              mock_context_agent:
             result = await handle_submit_thesis({
                 "session_id": "nonexistent-session",
@@ -886,7 +976,7 @@ class TestHandleSubmitThesis:
 
         session = _make_session(phase=DialecticPhase.THESIS)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -913,7 +1003,7 @@ class TestHandleSubmitThesis:
         session = _make_session(phase=DialecticPhase.THESIS)
         ACTIVE_SESSIONS[session.session_id] = session
 
-        with patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock,
+        with _patch_dialectic("pg_add_message", new_callable=AsyncMock,
                    side_effect=Exception("DB down")), \
              mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_thesis({
@@ -945,7 +1035,7 @@ class TestHandleSubmitThesis:
         ACTIVE_SESSIONS[session.session_id] = session
         stale_append = AsyncMock(return_value=0)
 
-        with patch(f"{DIALECTIC}.pg_add_message", new=stale_append), \
+        with _patch_dialectic("pg_add_message", new=stale_append), \
              mock_pg_update_phase as update_phase, mock_save_session as save, \
              mock_context_agent:
             result = await handle_submit_thesis({
@@ -1019,7 +1109,7 @@ class TestHandleSubmitAntithesis:
         """Returns error when session does not exist."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
-        with mock_server, patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
+        with mock_server, _patch_dialectic("load_session", new_callable=AsyncMock, return_value=None), \
              mock_context_agent:
             result = await handle_submit_antithesis({
                 "session_id": "nonexistent",
@@ -1114,7 +1204,7 @@ class TestHandleSubmitAntithesis:
 
         session = _make_session(phase=DialecticPhase.ANTITHESIS)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, mock_pg_update_reviewer:
@@ -1140,7 +1230,7 @@ class TestHandleSubmitAntithesis:
 
         session = _make_session(phase=DialecticPhase.ANTITHESIS)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-active"), \
              patch("src.mcp_handlers.identity.operator.is_operator_caller", return_value=True), \
              mock_pg_add_message as add_message, mock_pg_update_phase, mock_save_session, mock_pg_update_reviewer:
@@ -1193,8 +1283,7 @@ class TestHandleSubmitAntithesis:
         from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
         session = _make_session(phase=phase)
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new=AsyncMock(return_value=session),
         ), patch(
             "src.mcp_handlers.context.get_context_agent_id",
@@ -1246,8 +1335,7 @@ class TestHandleSubmitAntithesis:
             return 0
 
         add_message = AsyncMock(side_effect=_reassign_then_refuse)
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new=AsyncMock(return_value=session),
         ), patch(
             "src.mcp_handlers.context.get_context_agent_id",
@@ -1255,8 +1343,7 @@ class TestHandleSubmitAntithesis:
         ), patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_add_message", new=add_message
+        ), _patch_dialectic("pg_add_message", new=add_message
         ), mock_pg_update_phase, mock_save_session, mock_pg_update_reviewer:
             response = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1289,7 +1376,7 @@ class TestHandleSubmitAntithesis:
 
         session = _make_session(phase=DialecticPhase.ANTITHESIS)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              patch("src.mcp_handlers.context.get_context_agent_id",
                    return_value="agent-active"), \
@@ -1325,8 +1412,7 @@ class TestHandleSubmitAntithesis:
         active_check = AsyncMock(return_value=True)
         recent_check = AsyncMock(return_value=False)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new=AsyncMock(return_value=session),
         ), patch(
             "src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
@@ -1370,19 +1456,18 @@ class TestHandleSubmitAntithesis:
         pg_claim = AsyncMock(return_value=True)
         add_message = AsyncMock(side_effect=_successful_message_append)
 
-        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=beam_claim), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=pg_claim), \
-             patch(
-                 f"{DIALECTIC}.pg_add_message",
+             _patch_dialectic("beam_update_reviewer", new=beam_claim), \
+             _patch_dialectic("pg_update_reviewer", new=pg_claim), \
+             _patch_dialectic("pg_add_message",
                  new=add_message,
              ), \
-             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             _patch_dialectic("pg_update_phase", new_callable=AsyncMock), \
+             _patch_dialectic("save_session", new_callable=AsyncMock), \
              mock_context_agent:
             await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1410,14 +1495,14 @@ class TestHandleSubmitAntithesis:
         beam_claim = AsyncMock(return_value=None)
         pg_claim = AsyncMock(return_value=False)
 
-        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=beam_claim), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=pg_claim), \
-             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
+             _patch_dialectic("beam_update_reviewer", new=beam_claim), \
+             _patch_dialectic("pg_update_reviewer", new=pg_claim), \
+             _patch_dialectic("pg_add_message", new=add_message), \
              mock_context_agent:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1456,17 +1541,17 @@ class TestHandleSubmitAntithesis:
             detail["commit_unknown"] = True
             return None
 
-        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=ambiguous_beam_claim), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=fallback_claim), \
-             patch(f"{DIALECTIC}.load_session_as_dict", new=readback), \
-             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
-             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             _patch_dialectic("beam_update_reviewer", new=ambiguous_beam_claim), \
+             _patch_dialectic("pg_update_reviewer", new=fallback_claim), \
+             _patch_dialectic("load_session_as_dict", new=readback), \
+             _patch_dialectic("pg_add_message", new=add_message), \
+             _patch_dialectic("pg_update_phase", new_callable=AsyncMock), \
+             _patch_dialectic("save_session", new_callable=AsyncMock), \
              mock_context_agent:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1506,15 +1591,15 @@ class TestHandleSubmitAntithesis:
         })
         add_message = AsyncMock(return_value=0)
 
-        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=ambiguous_beam_claim), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.load_session_as_dict", new=readback), \
-             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
+             _patch_dialectic("beam_update_reviewer", new=ambiguous_beam_claim), \
+             _patch_dialectic("pg_update_reviewer", new=AsyncMock(return_value=False)), \
+             _patch_dialectic("load_session_as_dict", new=readback), \
+             _patch_dialectic("pg_add_message", new=add_message), \
              mock_context_agent:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1541,13 +1626,12 @@ class TestHandleSubmitAntithesis:
         session = _make_session(reviewer_id="agent-paused", phase=DialecticPhase.ANTITHESIS)
         session.awaiting_facilitation = True
 
-        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
-             patch(
-                 f"{DIALECTIC}.pg_add_message",
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
+             _patch_dialectic("pg_add_message",
                  new=AsyncMock(side_effect=_successful_message_append),
              ), \
-             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             _patch_dialectic("pg_update_phase", new_callable=AsyncMock), \
+             _patch_dialectic("save_session", new_callable=AsyncMock), \
              mock_context_agent:
             await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1572,8 +1656,7 @@ class TestHandleSubmitAntithesis:
         active_check = AsyncMock(return_value=False)
         recent_check = AsyncMock(return_value=True)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new=AsyncMock(return_value=session),
         ), patch(
             "src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
@@ -1617,7 +1700,7 @@ class TestHandleSubmitSynthesis:
         # handle_submit_synthesis always reloads from disk first
         ACTIVE_SESSIONS[session.session_id] = session
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -1652,7 +1735,7 @@ class TestHandleSubmitSynthesis:
         ))
         recorded = len(session.transcript)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message as add_message, mock_pg_update_phase, \
              mock_save_session, mock_context_agent:
@@ -1691,9 +1774,9 @@ class TestHandleSubmitSynthesis:
             agrees=False,
         ))
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
+             _patch_dialectic("pg_update_awaiting_facilitation",
                    new_callable=AsyncMock), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -1736,7 +1819,7 @@ class TestHandleSubmitSynthesis:
         """Returns error when session not found anywhere."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
-        with mock_server, patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
+        with mock_server, _patch_dialectic("load_session", new_callable=AsyncMock, return_value=None), \
              mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": "nonexistent",
@@ -1757,7 +1840,7 @@ class TestHandleSubmitSynthesis:
 
         session = _make_session(phase=DialecticPhase.THESIS)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -1786,7 +1869,7 @@ class TestHandleSubmitSynthesis:
         session = _make_session(phase=DialecticPhase.SYNTHESIS)
         session.synthesis_round = 1
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -1813,9 +1896,9 @@ class TestHandleSubmitSynthesis:
         session.synthesis_round = 6  # Over max of 5
         session.max_synthesis_rounds = 5
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)), \
+             _patch_dialectic("beam_resolve", new=AsyncMock(return_value=None)), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session as resolve_session, mock_context_agent:
             resolve_session.return_value = True
@@ -1870,11 +1953,11 @@ class TestHandleSubmitSynthesis:
             "signed_by": ["agent-paused", "agent-reviewer"],
         }
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+             _patch_dialectic("execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True, "resumed": True}), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session, mock_context_agent:
@@ -1919,8 +2002,7 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -1931,17 +2013,12 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=execute,
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
-        ), patch(
-            f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=resolve_row
-        ), patch(
-            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), _patch_dialectic("record_resolution_outcome", new=record_outcome
+        ), _patch_dialectic("beam_resolve", new=AsyncMock(return_value=None)
+        ), _patch_dialectic("pg_resolve_session", new=resolve_row
+        ), _patch_dialectic("_emit_dialectic_event", new=_emit
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -1982,10 +2059,9 @@ class TestHandleSubmitSynthesis:
         resolution = _effect_resolution()
         fallback = AsyncMock(return_value=True)
 
-        with patch(
-            f"{DIALECTIC}.beam_resolve",
+        with _patch_dialectic("beam_resolve",
             new=AsyncMock(side_effect=BeamDialecticSagaInFlight("busy")),
-        ), patch(f"{DIALECTIC}.pg_resolve_session", new=fallback):
+        ), _patch_dialectic("pg_resolve_session", new=fallback):
             result = await _commit_converged_resolution(
                 session,
                 resolution,
@@ -2027,8 +2103,7 @@ class TestHandleSubmitSynthesis:
             order.append("runtime_effect")
             return {"success": True, "applied_conditions": []}
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -2039,14 +2114,10 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=_commit
-        ), patch(
-            f"{DIALECTIC}.execute_resolution", new=_execute
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=AsyncMock()
+        ), _patch_dialectic("beam_resolve", new=AsyncMock(return_value=None)
+        ), _patch_dialectic("pg_resolve_session", new=_commit
+        ), _patch_dialectic("execute_resolution", new=_execute
+        ), _patch_dialectic("record_resolution_outcome", new=AsyncMock()
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
             response = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2094,8 +2165,7 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
 
-        with patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)
         ), patch.object(
             session,
             "submit_synthesis",
@@ -2104,22 +2174,14 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}.beam_resolve", new=_unknown_beam
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=exact_readback
-        ), patch(
-            f"{DIALECTIC}.execute_resolution", new=execute
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
-        ), patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect", new=claim_effect
-        ), patch(
-            f"{DIALECTIC}.discard_receipt_unless_written", new=discard
-        ), patch(
-            f"{DIALECTIC}.pg_update_awaiting_facilitation", new=facilitation
-        ), patch(
-            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), _patch_dialectic("beam_resolve", new=_unknown_beam
+        ), _patch_dialectic("pg_resolve_session", new=exact_readback
+        ), _patch_dialectic("execute_resolution", new=execute
+        ), _patch_dialectic("record_resolution_outcome", new=record_outcome
+        ), _patch_dialectic("pg_claim_resolution_effect", new=claim_effect
+        ), _patch_dialectic("discard_receipt_unless_written", new=discard
+        ), _patch_dialectic("pg_update_awaiting_facilitation", new=facilitation
+        ), _patch_dialectic("_emit_dialectic_event", new=_emit
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
             response = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2171,8 +2233,7 @@ class TestHandleSubmitSynthesis:
         )
         facilitation = AsyncMock()
 
-        with patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        with _patch_dialectic("load_session", new=AsyncMock(return_value=session)
         ), patch.object(
             session,
             "submit_synthesis",
@@ -2181,16 +2242,14 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}._commit_terminal_resolution",
+        ), _patch_dialectic("_commit_terminal_resolution",
             new=AsyncMock(
                 side_effect=BeamDialecticPolicyRefusal(
                     "identity_verification_unavailable",
                     operation="resolve_session",
                 )
             ),
-        ), patch(
-            f"{DIALECTIC}._set_awaiting_facilitation", new=facilitation
+        ), _patch_dialectic("_set_awaiting_facilitation", new=facilitation
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
             response = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2231,10 +2290,8 @@ class TestHandleSubmitSynthesis:
 
         python_writer = AsyncMock()
 
-        with patch(
-            f"{DIALECTIC}.beam_resolve", new=_unknown_beam
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=python_writer
+        with _patch_dialectic("beam_resolve", new=_unknown_beam
+        ), _patch_dialectic("pg_resolve_session", new=python_writer
         ):
             commit = await _commit_converged_resolution(
                 session,
@@ -2275,8 +2332,7 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -2287,23 +2343,18 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=execute,
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
-        ), patch(
-            f"{DIALECTIC}.beam_resolve",
+        ), _patch_dialectic("record_resolution_outcome", new=record_outcome
+        ), _patch_dialectic("beam_resolve",
             new=AsyncMock(return_value={
                 "ok": True,
                 "status": "resolved",
                 "origin": "already_terminal",
                 "saga_id": None,
             }),
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=pg_resolve
-        ), patch(
-            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), _patch_dialectic("pg_resolve_session", new=pg_resolve
+        ), _patch_dialectic("_emit_dialectic_event", new=_emit
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2345,14 +2396,14 @@ class TestHandleSubmitSynthesis:
         execute = AsyncMock(return_value={"success": True})
         facilitation = AsyncMock(return_value=True)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+             _patch_dialectic("agent_pause_is_live", new_callable=AsyncMock,
                    return_value=False), \
-             patch(f"{DIALECTIC}.execute_resolution", execute), \
-             patch(f"{DIALECTIC}.pg_mark_awaiting_facilitation", facilitation), \
+             _patch_dialectic("execute_resolution", execute), \
+             _patch_dialectic("pg_mark_awaiting_facilitation", facilitation), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
              mock_pg_resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2418,16 +2469,16 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **kw):
             emitted.append(event_type)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.agent_pause_is_live", new=pause_live), \
-             patch(f"{DIALECTIC}.execute_resolution", new=execute), \
-             patch(f"{DIALECTIC}._emit_dialectic_event", new=_emit), \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.pg_resolve_session", resolve_row), \
-             patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
+             _patch_dialectic("agent_pause_is_live", new=pause_live), \
+             _patch_dialectic("execute_resolution", new=execute), \
+             _patch_dialectic("_emit_dialectic_event", new=_emit), \
+             _patch_dialectic("pg_update_awaiting_facilitation", new_callable=AsyncMock), \
+             _patch_dialectic("pg_resolve_session", resolve_row), \
+             _patch_dialectic("beam_resolve", new_callable=AsyncMock, return_value=None), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2481,15 +2532,15 @@ class TestHandleSubmitSynthesis:
         outcome = AsyncMock()
         emit = AsyncMock()
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+             _patch_dialectic("agent_pause_is_live", new_callable=AsyncMock,
                    return_value=False), \
-             patch(f"{DIALECTIC}.execute_resolution", execute), \
-             patch(f"{DIALECTIC}.record_resolution_outcome", new=outcome), \
-             patch(f"{DIALECTIC}._emit_dialectic_event", new=emit), \
+             _patch_dialectic("execute_resolution", execute), \
+             _patch_dialectic("record_resolution_outcome", new=outcome), \
+             _patch_dialectic("_emit_dialectic_event", new=emit), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2529,8 +2580,7 @@ class TestHandleSubmitSynthesis:
         resolution = _effect_resolution()
         calibration = AsyncMock(return_value=True)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -2541,13 +2591,11 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}._commit_converged_resolution",
+        ), _patch_dialectic("_commit_converged_resolution",
             new=AsyncMock(return_value=_ResolutionCommitResult(
                 True, False, "python_write"
             )),
-        ), patch(
-            f"{DIALECTIC}._apply_durable_resolution_effect",
+        ), _patch_dialectic("_apply_durable_resolution_effect",
             new=AsyncMock(return_value=_ResolutionEffectResult(
                 "applied",
                 True,
@@ -2560,8 +2608,7 @@ class TestHandleSubmitSynthesis:
                     "status_changed": False,
                 },
             )),
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2595,8 +2642,7 @@ class TestHandleSubmitSynthesis:
         calibration = AsyncMock(return_value=True)
         outcome = AsyncMock()
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -2607,13 +2653,11 @@ class TestHandleSubmitSynthesis:
             session, "finalize_resolution", return_value=resolution
         ), patch.object(
             session, "check_hard_limits", return_value=(True, None)
-        ), patch(
-            f"{DIALECTIC}._commit_converged_resolution",
+        ), _patch_dialectic("_commit_converged_resolution",
             new=AsyncMock(return_value=_ResolutionCommitResult(
                 True, False, "python_write"
             )),
-        ), patch(
-            f"{DIALECTIC}._apply_durable_resolution_effect",
+        ), _patch_dialectic("_apply_durable_resolution_effect",
             new=AsyncMock(return_value=_ResolutionEffectResult(
                 "applied",
                 False,
@@ -2623,10 +2667,8 @@ class TestHandleSubmitSynthesis:
                     "reason": "legacy_unbound_session",
                 },
             )),
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=outcome
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("record_resolution_outcome", new=outcome
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2661,13 +2703,13 @@ class TestHandleSubmitSynthesis:
         mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
         execute = AsyncMock(return_value={"success": True})
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+             _patch_dialectic("agent_pause_is_live", new_callable=AsyncMock,
                    return_value=True), \
-             patch(f"{DIALECTIC}.execute_resolution", execute), \
+             _patch_dialectic("execute_resolution", execute), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2701,11 +2743,11 @@ class TestHandleSubmitSynthesis:
         mock_resolution = MagicMock()
         mock_resolution.to_dict.return_value = {"action": "resume", "conditions": ["Lower threshold"]}
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+             _patch_dialectic("execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True, "resumed": True}), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session as resolve_session, mock_context_agent:
@@ -2747,14 +2789,14 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+        with _patch_dialectic("load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(False, "Bypass safety check")), \
-             patch(f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.update_calibration_from_dialectic_disagreement",
+             _patch_dialectic("beam_resolve", new=AsyncMock(return_value=None)), \
+             _patch_dialectic("update_calibration_from_dialectic_disagreement",
                    new=calibration), \
-             patch(f"{DIALECTIC}._emit_dialectic_event", new=_emit), \
+             _patch_dialectic("_emit_dialectic_event", new=_emit), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
              mock_pg_resolve_session as resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2805,8 +2847,7 @@ class TestHandleSubmitSynthesis:
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
 
-        with patch(
-            f"{DIALECTIC}.load_session",
+        with _patch_dialectic("load_session",
             new_callable=AsyncMock,
             return_value=session,
         ), patch.object(
@@ -2819,16 +2860,12 @@ class TestHandleSubmitSynthesis:
             session,
             "check_hard_limits",
             return_value=(False, "Bypass safety check"),
-        ), patch(
-            f"{DIALECTIC}.beam_resolve",
+        ), _patch_dialectic("beam_resolve",
             new=AsyncMock(side_effect=BeamDialecticSagaInFlight("busy")),
-        ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=fallback
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic_disagreement",
+        ), _patch_dialectic("pg_resolve_session", new=fallback
+        ), _patch_dialectic("update_calibration_from_dialectic_disagreement",
             new=calibration,
-        ), patch(
-            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), _patch_dialectic("_emit_dialectic_event", new=_emit
         ), mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
              mock_context_agent:
             response = await handle_submit_synthesis({
@@ -2874,7 +2911,7 @@ class TestHandleSubmitSynthesis:
         session = _make_session(phase=DialecticPhase.SYNTHESIS)
         session.synthesis_round = 1
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -2930,9 +2967,9 @@ class TestHandleSubmitSynthesis:
             )
             return 1
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             _patch_dialectic("pg_add_message", side_effect=capture_add), \
              mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2975,9 +3012,9 @@ class TestHandleSubmitSynthesis:
             )
             return 1
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             _patch_dialectic("pg_add_message", side_effect=capture_add), \
              mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_thesis({
                 "session_id": session.session_id,
@@ -3019,9 +3056,9 @@ class TestHandleSubmitSynthesis:
             add_called.append(kwargs)
             return None
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             _patch_dialectic("pg_add_message", side_effect=capture_add), \
              mock_pg_update_phase, mock_save_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -3070,7 +3107,7 @@ class TestHandleSubmitSynthesis:
         )
         session.transcript = [prior]
 
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
@@ -3103,7 +3140,7 @@ class TestHandleListDialecticSessions:
             {"session_id": "s2", "phase": "failed", "paused_agent_id": "a2"},
         ]
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=mock_sessions), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({})
@@ -3132,7 +3169,7 @@ class TestHandleListDialecticSessions:
             "resolution": {"reasoning": "x" * 600, "conditions": ["a", "b"]},
             "topic": "y" * 80,
         }]
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=fat), mock_context_agent:
             result = await handle_list_dialectic_sessions({"fields": "compact"})
 
@@ -3157,7 +3194,7 @@ class TestHandleListDialecticSessions:
         fat = [{"session_id": "s1", "phase": "resolved",
                 "resolution": {"reasoning": "keep me"}, "topic": "keep me too"}]
         for args in ({}, {"fields": "nonsense"}):
-            with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+            with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                        return_value=fat), mock_context_agent:
                 result = await handle_list_dialectic_sessions(args)
             sess = parse_result(result)["sessions"][0]
@@ -3177,7 +3214,7 @@ class TestHandleListDialecticSessions:
         long_topic = "word " * 2000
         rows = [{"session_id": "s1", "phase": "resolved", "topic": long_topic},
                 {"session_id": "s2", "phase": "resolved", "topic": "short"}]
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[dict(r) for r in rows]), mock_context_agent:
             result = await handle_list_dialectic_sessions({})
         long_row, short_row = parse_result(result)["sessions"]
@@ -3194,7 +3231,7 @@ class TestHandleListDialecticSessions:
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
         long_topic = "word " * 2000
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[{"session_id": "s1", "topic": long_topic, "transcript": []}]), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({"include_transcript": True})
@@ -3207,7 +3244,7 @@ class TestHandleListDialecticSessions:
         """Returns empty list with helpful tip when no sessions found."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({})
@@ -3222,7 +3259,7 @@ class TestHandleListDialecticSessions:
         """Filters (agent_id, status, limit) are passed to list_all_sessions."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({
@@ -3244,7 +3281,7 @@ class TestHandleListDialecticSessions:
         """Limit is capped at 200 even if larger value provided."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({
@@ -3259,7 +3296,7 @@ class TestHandleListDialecticSessions:
         """Exception during listing returns error response."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    side_effect=Exception("DB error")), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({})
@@ -3274,7 +3311,7 @@ class TestHandleListDialecticSessions:
         """Default limit is 50 when not specified."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({})
@@ -3287,7 +3324,7 @@ class TestHandleListDialecticSessions:
         """Response includes filters_applied for transparency."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[{"session_id": "s1"}]), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({
@@ -3316,7 +3353,7 @@ class TestHandleListDialecticSessions:
         """
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({"limit": bad_limit})
@@ -3332,7 +3369,7 @@ class TestHandleListDialecticSessions:
         """The rejection is a caller-argument problem, not a server fault."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({"limit": -1})
@@ -3347,7 +3384,7 @@ class TestHandleListDialecticSessions:
         """1 is a legitimate limit and must not be swept up by the guard."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             await handle_list_dialectic_sessions({"limit": 1})
@@ -3359,7 +3396,7 @@ class TestHandleListDialecticSessions:
         """MCP transport can deliver ints as strings."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             await handle_list_dialectic_sessions({"limit": "25"})
@@ -3372,7 +3409,7 @@ class TestHandleListDialecticSessions:
         otherwise a caller opting out silently opts in to every transcript."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]) as mock_list, \
              mock_context_agent:
             await handle_list_dialectic_sessions({"include_transcript": "false"})
@@ -3384,7 +3421,7 @@ class TestHandleListDialecticSessions:
         """filters_applied is the same shape whether or not rows came back."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
-        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+        with _patch_dialectic("list_all_sessions", new_callable=AsyncMock,
                    return_value=[]), \
              mock_context_agent:
             result = await handle_list_dialectic_sessions({})
@@ -3418,7 +3455,7 @@ class TestHandleGetDialecticSession:
         arguments = DialecticParams.model_validate({
             "action": "get", "session_id": "projection-session", "fields": fields,
         }).model_dump()
-        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=fast_dict)), \
+        with _patch_dialectic("load_session_as_dict", new=AsyncMock(return_value=fast_dict)), \
              mock_context_agent:
             data = parse_result(await handle_get_dialectic_session(arguments))
 
@@ -3450,8 +3487,8 @@ class TestHandleGetDialecticSession:
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
 
         session = _make_session(phase=DialecticPhase.RESOLVED)
-        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+        with _patch_dialectic("load_session_as_dict", new=AsyncMock(return_value=None)), \
+             _patch_dialectic("load_session", new=AsyncMock(return_value=session)), \
              mock_context_agent:
             data = parse_result(await handle_get_dialectic_session({
                 "session_id": session.session_id, "fields": "compact",
@@ -3476,7 +3513,7 @@ class TestHandleGetDialecticSession:
                     "message_id": 7, "message_type": "thesis",
                     "reasoning": "Large PostgreSQL-only message body. " * 500,
                 }]
-        with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(return_value=rows)), \
+        with _patch_dialectic("pg_get_all_sessions_by_agent", new=AsyncMock(return_value=rows)), \
              mock_context_agent:
             data = parse_result(await handle_get_dialectic_session({
                 "agent_id": "agent-paused", "fields": "compact",
@@ -3493,8 +3530,8 @@ class TestHandleGetDialecticSession:
     async def test_compact_not_found_keeps_error_and_recovery(self, mock_context_agent):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
 
-        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)), \
+        with _patch_dialectic("load_session_as_dict", new=AsyncMock(return_value=None)), \
+             _patch_dialectic("load_session", new=AsyncMock(return_value=None)), \
              mock_context_agent:
             data = parse_result(await handle_get_dialectic_session({
                 "session_id": "missing", "fields": "compact",
@@ -3515,10 +3552,10 @@ class TestHandleGetDialecticSession:
         ACTIVE_SESSIONS[session.session_id] = session
 
         # Mock load_session_as_dict (fast path) and check_reviewer_stuck
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    return_value={"session_id": session.session_id, "phase": "resolved",
                                  "paused_agent_id": "agent-paused"}), \
-             patch(f"{DIALECTIC}.check_reviewer_stuck", new_callable=AsyncMock,
+             _patch_dialectic("check_reviewer_stuck", new_callable=AsyncMock,
                    return_value=False), \
              mock_context_agent:
             result = await handle_get_dialectic_session({
@@ -3546,9 +3583,9 @@ class TestHandleGetDialecticSession:
         """Returns error when session_id not found."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
 
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    return_value=None), \
-             patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+             _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=None), \
              mock_context_agent:
             result = await handle_get_dialectic_session({
@@ -3579,7 +3616,7 @@ class TestHandleGetDialecticSession:
             "reviewer_agent_id": "agent-reviewer",
         }
 
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    return_value=fast_dict), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-reviewer"):
             result = await handle_get_dialectic_session({
@@ -3606,7 +3643,7 @@ class TestHandleGetDialecticSession:
             "reviewer_agent_id": "agent-reviewer",
         }
 
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    return_value=fast_dict), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-active"):
             result = await handle_get_dialectic_session({
@@ -3633,7 +3670,7 @@ class TestHandleGetDialecticSession:
         # Mock check_timeout to return a timeout reason
         with patch.object(session, "check_timeout",
                           return_value="Session timeout - total time exceeded 6 hours"), \
-             patch(f"{DIALECTIC}._commit_terminal_resolution", new=AsyncMock(
+             _patch_dialectic("_commit_terminal_resolution", new=AsyncMock(
                  return_value=SimpleNamespace(commit_unknown=False, terminal_committed=True)
              )), \
              mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound:
@@ -3669,8 +3706,7 @@ class TestHandleGetDialecticSession:
 
         with (
             patch.object(session, "check_timeout", return_value="session timed out"),
-            patch(
-                f"{DIALECTIC}._commit_terminal_resolution",
+            _patch_dialectic("_commit_terminal_resolution",
                 new=AsyncMock(
                     side_effect=BeamDialecticPolicyRefusal(
                         "identity_proof_invalid", operation="resolve_session"
@@ -3699,12 +3735,12 @@ class TestHandleGetDialecticSession:
         ACTIVE_SESSIONS[session.session_id] = session
 
         # check_timeout returns None (not timed out), but reviewer is stuck
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+        with _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              patch.object(session, "check_timeout", return_value=None), \
-             patch(f"{DIALECTIC}.check_reviewer_stuck", new_callable=AsyncMock,
+             _patch_dialectic("check_reviewer_stuck", new_callable=AsyncMock,
                    return_value=True), \
-             patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock,
+             _patch_dialectic("select_reviewer", new_callable=AsyncMock,
                    return_value=None), \
              mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound:
             result = await handle_get_dialectic_session({
@@ -3725,9 +3761,9 @@ class TestHandleGetDialecticSession:
         session.created_at = datetime.now()
 
         # Fast path returns None → falls through to load_session slow path
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    return_value=None), \
-             patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+             _patch_dialectic("load_session", new_callable=AsyncMock,
                    return_value=session), \
              mock_context_agent:
             result = await handle_get_dialectic_session({
@@ -3750,7 +3786,7 @@ class TestHandleGetDialecticSession:
 
         # Mock PG returning the session
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new_callable=AsyncMock,
+             _patch_dialectic("pg_get_all_sessions_by_agent", new_callable=AsyncMock,
                    return_value=[session.to_dict()]):
             result = await handle_get_dialectic_session({
                 "agent_id": "agent-active",
@@ -3766,7 +3802,7 @@ class TestHandleGetDialecticSession:
 
         # PG returns empty list for unknown agent
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new_callable=AsyncMock,
+             _patch_dialectic("pg_get_all_sessions_by_agent", new_callable=AsyncMock,
                    return_value=[]):
             result = await handle_get_dialectic_session({
                 "agent_id": "nonexistent-agent",
@@ -3783,7 +3819,7 @@ class TestHandleGetDialecticSession:
 
         # PG returns empty list
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new_callable=AsyncMock,
+             _patch_dialectic("pg_get_all_sessions_by_agent", new_callable=AsyncMock,
                    return_value=[]):
             result = await handle_get_dialectic_session({
                 "agent_id": "agent-active",
@@ -3798,7 +3834,7 @@ class TestHandleGetDialecticSession:
         """General exceptions are caught and returned as errors."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
 
-        with patch(f"{DIALECTIC}.load_session_as_dict", new_callable=AsyncMock,
+        with _patch_dialectic("load_session_as_dict", new_callable=AsyncMock,
                    side_effect=RuntimeError("boom")), \
              mock_context_agent:
             result = await handle_get_dialectic_session({
@@ -3979,7 +4015,7 @@ class TestAbstentionIsNotAVerdict:
 
         with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, mock_pg_update_reviewer, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+             _patch_dialectic("emit_reviewer_abstained",
                    new_callable=AsyncMock) as emit:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -4055,7 +4091,7 @@ class TestAbstentionIsNotAVerdict:
 
         with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, mock_pg_update_reviewer, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock):
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
@@ -4082,7 +4118,7 @@ class TestAbstentionIsNotAVerdict:
 
         with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, mock_pg_update_reviewer, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock):
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
@@ -4108,7 +4144,7 @@ class TestAbstentionIsNotAVerdict:
 
         with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, mock_pg_update_reviewer, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock):
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
@@ -4132,7 +4168,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": session.paused_agent_id,
@@ -4158,7 +4194,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+             _patch_dialectic("emit_reviewer_abstained",
                    new_callable=AsyncMock, return_value=False) as emit:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -4184,7 +4220,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-active",
@@ -4208,7 +4244,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock):
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
@@ -4237,7 +4273,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_participant_abstained", new_callable=AsyncMock) as emit:
+             _patch_dialectic("emit_participant_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -4260,7 +4296,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
@@ -4288,7 +4324,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+             _patch_dialectic("emit_reviewer_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -4322,7 +4358,7 @@ class TestAbstentionIsNotAVerdict:
 
         with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+             _patch_dialectic("emit_reviewer_abstained",
                    new_callable=AsyncMock) as emit:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -4375,10 +4411,9 @@ class TestDurableResolutionEffect:
                 "reason": "legacy_unbound_session",
             },
         }
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value=effect),
-        ), patch(f"{DIALECTIC}.execute_resolution", new=execute):
+        ), _patch_dialectic("execute_resolution", new=execute):
             result = await _apply_durable_resolution_effect(session, resolution)
 
         assert result.state == "applied"
@@ -4416,12 +4451,9 @@ class TestDurableResolutionEffect:
         async def outcome(*_args, **_kwargs):
             order.append("outcome")
 
-        with patch(f"{DIALECTIC}.pg_claim_resolution_effect", new=claim), patch(
-            f"{DIALECTIC}.execute_resolution", new=execute
-        ), patch(
-            f"{DIALECTIC}.pg_complete_resolution_effect", new=complete
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=outcome
+        with _patch_dialectic("pg_claim_resolution_effect", new=claim), _patch_dialectic("execute_resolution", new=execute
+        ), _patch_dialectic("pg_complete_resolution_effect", new=complete
+        ), _patch_dialectic("record_resolution_outcome", new=outcome
         ):
             result = await _apply_durable_resolution_effect(session, resolution)
 
@@ -4448,22 +4480,18 @@ class TestDurableResolutionEffect:
             "claimed": True,
         }
         outcome = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value=claim),
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=AsyncMock(return_value=execution),
-        ), patch(
-            f"{DIALECTIC}.pg_complete_resolution_effect",
+        ), _patch_dialectic("pg_complete_resolution_effect",
             new=AsyncMock(side_effect=RuntimeError("ack lost")),
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value={
                 "state": "applied",
                 "execution_result_json": execution,
             }),
-        ), patch(f"{DIALECTIC}.record_resolution_outcome", new=outcome):
+        ), _patch_dialectic("record_resolution_outcome", new=outcome):
             result = await _apply_durable_resolution_effect(session, resolution)
 
         assert result.state == "applied"
@@ -4510,22 +4538,18 @@ class TestDurableResolutionEffect:
             return_value=False,
         )
         outcome = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value=claim),
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=AsyncMock(return_value=execution),
-        ), patch(
-            f"{DIALECTIC}.pg_complete_resolution_effect", new=complete
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_complete_resolution_effect", new=complete
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value={
                 "state": "applied",
                 "owner_token": "fenced-owner",
                 "execution_result_json": stored_result,
             }),
-        ), patch(f"{DIALECTIC}.record_resolution_outcome", new=outcome):
+        ), _patch_dialectic("record_resolution_outcome", new=outcome):
             result = await _apply_durable_resolution_effect(session, resolution)
 
         assert result.state == "applied"
@@ -4556,15 +4580,12 @@ class TestDurableResolutionEffect:
         fail = AsyncMock(return_value=True)
         complete = AsyncMock()
         outcome = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value=claim),
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=AsyncMock(return_value={"success": False, "warning": "not paused"}),
-        ), patch(f"{DIALECTIC}.pg_fail_resolution_effect", new=fail), patch(
-            f"{DIALECTIC}.pg_complete_resolution_effect", new=complete
-        ), patch(f"{DIALECTIC}.record_resolution_outcome", new=outcome):
+        ), _patch_dialectic("pg_fail_resolution_effect", new=fail), _patch_dialectic("pg_complete_resolution_effect", new=complete
+        ), _patch_dialectic("record_resolution_outcome", new=outcome):
             result = await _apply_durable_resolution_effect(session, resolution)
 
         assert result.state == "unknown_partial"
@@ -4591,14 +4612,11 @@ class TestDurableResolutionEffect:
         }
         fail = AsyncMock()
         complete = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value=claim),
-        ), patch(
-            f"{DIALECTIC}.execute_resolution",
+        ), _patch_dialectic("execute_resolution",
             new=AsyncMock(side_effect=asyncio.CancelledError),
-        ), patch(f"{DIALECTIC}.pg_fail_resolution_effect", new=fail), patch(
-            f"{DIALECTIC}.pg_complete_resolution_effect", new=complete
+        ), _patch_dialectic("pg_fail_resolution_effect", new=fail), _patch_dialectic("pg_complete_resolution_effect", new=complete
         ):
             with pytest.raises(asyncio.CancelledError):
                 await _apply_durable_resolution_effect(session, resolution)
@@ -4616,8 +4634,7 @@ class TestDurableResolutionEffect:
         resolution = _effect_resolution()
         execute = AsyncMock()
         outcome = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value={
                 "paused_agent_id": session.paused_agent_id,
                 "reviewer_agent_id": session.reviewer_agent_id,
@@ -4628,8 +4645,7 @@ class TestDurableResolutionEffect:
                 "claimed": False,
                 "execution_result_json": {"success": True},
             }),
-        ), patch(f"{DIALECTIC}.execute_resolution", new=execute), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=outcome
+        ), _patch_dialectic("execute_resolution", new=execute), _patch_dialectic("record_resolution_outcome", new=outcome
         ):
             result = await _apply_durable_resolution_effect(session, resolution)
 
@@ -4648,8 +4664,7 @@ class TestDurableResolutionEffect:
         session = self._session()
         resolution = _effect_resolution()
         execute = AsyncMock()
-        with patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect",
+        with _patch_dialectic("pg_claim_resolution_effect",
             new=AsyncMock(return_value={
                 "paused_agent_id": "different",
                 "reviewer_agent_id": session.reviewer_agent_id,
@@ -4659,7 +4674,7 @@ class TestDurableResolutionEffect:
                 "state": "pending",
                 "claimed": False,
             }),
-        ), patch(f"{DIALECTIC}.execute_resolution", new=execute):
+        ), _patch_dialectic("execute_resolution", new=execute):
             result = await _apply_durable_resolution_effect(session, resolution)
 
         assert result.state == "conflict"
@@ -4708,10 +4723,9 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value=self._effect("pending")),
-        ), patch(f"{DIALECTIC}._apply_durable_resolution_effect", new=apply_effect):
+        ), _patch_dialectic("_apply_durable_resolution_effect", new=apply_effect):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1"
             }))
@@ -4736,21 +4750,16 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[self._effect("pending"), applied]),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(
-            f"{DIALECTIC}._apply_durable_resolution_effect",
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("_apply_durable_resolution_effect",
             new=AsyncMock(return_value=_ResolutionEffectResult(
                 "applied", True, {"success": True}
             )),
-        ) as apply_effect, patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=outcome
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+        ) as apply_effect, _patch_dialectic("record_resolution_outcome", new=outcome
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("_emit_dialectic_event", new=emit):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "apply_pending",
@@ -4782,20 +4791,16 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("pending"), self._effect("applied")
             ]),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(
-            f"{DIALECTIC}._apply_durable_resolution_effect",
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("_apply_durable_resolution_effect",
             new=AsyncMock(return_value=_ResolutionEffectResult(
                 "applied", False, {"success": True}
             )),
-        ), patch(
-            f"{DIALECTIC}._record_operator_resolution_telemetry",
+        ), _patch_dialectic("_record_operator_resolution_telemetry",
             new=telemetry,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
@@ -4828,21 +4833,17 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("pending"), self._effect("applied")
             ]),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(
-            f"{DIALECTIC}._apply_durable_resolution_effect",
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("_apply_durable_resolution_effect",
             new=AsyncMock(return_value=_ResolutionEffectResult(
                 "applied", True, execution
             )),
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("_emit_dialectic_event", new=emit):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "apply_pending",
@@ -4864,14 +4865,12 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("applying"),
                 self._effect("unknown_partial"),
             ]),
-        ), patch(
-            f"{DIALECTIC}.pg_quarantine_resolution_effect", new=quarantine
+        ), _patch_dialectic("pg_quarantine_resolution_effect", new=quarantine
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
@@ -4899,18 +4898,14 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("unknown_partial"),
                 self._effect("applied"),
             ]),
-        ), patch(f"{DIALECTIC}.pg_acknowledge_resolution_effect", new=ack), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(f"{DIALECTIC}.record_resolution_outcome", new=outcome), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(
-            f"{DIALECTIC}._emit_dialectic_event", new=emit
+        ), _patch_dialectic("pg_acknowledge_resolution_effect", new=ack), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("record_resolution_outcome", new=outcome), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("_emit_dialectic_event", new=emit
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
@@ -4964,19 +4959,14 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[unknown, applied]),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=AsyncMock(return_value=True),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome", new=outcome
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("record_resolution_outcome", new=outcome
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("_emit_dialectic_event", new=emit):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
@@ -5006,11 +4996,9 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value=self._effect("applying")),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=acknowledge,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
@@ -5033,11 +5021,9 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value=self._effect("unknown_partial")),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=acknowledge,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
@@ -5061,11 +5047,9 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value=self._effect("unknown_partial")),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=acknowledge,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
@@ -5096,11 +5080,9 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=get_effect,
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=acknowledge,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
@@ -5135,22 +5117,17 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("unknown_partial"), self._effect("applied")
             ]),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=AsyncMock(return_value=True),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
-        ), patch(
-            f"{DIALECTIC}.record_resolution_outcome",
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=session)
+        ), _patch_dialectic("record_resolution_outcome",
             new=AsyncMock(side_effect=RuntimeError("telemetry unavailable")),
-        ), patch(
-            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
-        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+        ), _patch_dialectic("update_calibration_from_dialectic", new=calibration
+        ), _patch_dialectic("_emit_dialectic_event", new=emit):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
@@ -5173,16 +5150,13 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(side_effect=[
                 self._effect("unknown_partial"), self._effect("applied")
             ]),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect",
             new=AsyncMock(return_value=True),
-        ), patch(
-            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)
+        ), _patch_dialectic("load_session", new=AsyncMock(return_value=None)
         ):
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
@@ -5206,13 +5180,10 @@ class TestReconcileResolutionEffect:
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
             return_value=True,
-        ), patch(
-            f"{DIALECTIC}.pg_get_resolution_effect",
+        ), _patch_dialectic("pg_get_resolution_effect",
             new=AsyncMock(return_value=self._effect("applied")),
-        ), patch(
-            f"{DIALECTIC}.pg_acknowledge_resolution_effect", new=acknowledge
-        ), patch(
-            f"{DIALECTIC}._record_operator_resolution_telemetry",
+        ), _patch_dialectic("pg_acknowledge_resolution_effect", new=acknowledge
+        ), _patch_dialectic("_record_operator_resolution_telemetry",
             new=telemetry,
         ):
             data = parse_result(await handle_reconcile_resolution_effect({

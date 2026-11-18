@@ -226,9 +226,14 @@ def _check_agent_status(agent_uuid: str, meta: Any) -> Optional[TextContent]:
         # cache status only after both durable copies commit; a retry then flows
         # through the categorizer, which re-pauses genuinely degraded state.
         # See src/mcp_handlers/support/pause_ttl.py.
-        from .pause_ttl import maybe_auto_expire_pause_sync, paused_refusal_recovery
+        from .pause_ttl import (
+            maybe_auto_expire_pause_sync,
+            paused_refusal_recovery,
+            record_paused_refusal,
+        )
         if maybe_auto_expire_pause_sync(agent_uuid, meta):
             return None
+        record_paused_refusal(agent_uuid, meta, "shared_memory_write")
         return error_response(
             "Agent is paused - check-ins and new shared-memory entries are refused",
             error_code="AGENT_PAUSED",
