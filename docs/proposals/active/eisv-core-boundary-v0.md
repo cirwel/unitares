@@ -33,6 +33,19 @@ the standing governed review still govern *how* it is built. Recorded as an
 moves the registered read's data boundary to the first instrument change
 instead; see the dated notes in Sections 9 and 12.1.
 
+**EISV maths freeze, 2026-11-18 (operator).** After an advisory consult (Codex,
+Antigravity and Claude hosts) and a council, the operator answered "proceed
+best" to this recommendation: deploy the merged HU1/SD1/SH1 cutover (#3286)
+once as the final named era, then freeze the EISV maths. From that deploy on,
+no change to the update path, sensor blend, policy thresholds or calibration
+(that is, nothing that needs a new entry in `config/eisv_instrument_eras.json`)
+lands except a correctness fix named as one. The freeze lifts when the stop
+rule's new premise exists: an independent label channel. EISV keeps running
+as optional, per-era telemetry. Remaining effort goes to the core boundary:
+#3294 (risk surface), #3295 (pause refusal audit) and #3296 (record export).
+This replaces the instrument-quality-first ordering of the 2026-10-13
+decision; the 2026-10-10 optional-module decision stands.
+
 **Bounded implementation authorization, 2026-11-02:** the operator's subsequent
 "proceed" applies to the proposed next increment of durable neutral checkpoint
 acceptance. [Section 13.1](#131-bounded-neutral-acceptance-increment-2026-11-02)
