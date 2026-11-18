@@ -39,6 +39,30 @@ APP_ID, APP_ACTOR_ID = 5306351, 342195540
 HEAD = "7d51a443591c576096ca38b967d7461d07910d57"
 SINCE = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
+# GitHub's own rendering (body_html) of every Markdown body the footer tests
+# use, keyed by the body. See the fixture's ``_source`` for how it was made.
+_RENDERED = {
+    case["body"]: case
+    for case in json.loads((FIXTURES / "rendered_bodies.json").read_text())["cases"]
+}
+
+
+def footer_of(body: str | None) -> str | None:
+    """The footer GitHub's rendering of a Markdown body names.
+
+    The observer reads ``body_html``, which only GitHub produces, so a test
+    body needs its recorded rendering in rendered_bodies.json.
+    """
+    if body is None:
+        return ev.agent_uuid_from_body_html(None)
+    case = _RENDERED.get(body)
+    if case is None:
+        raise AssertionError(
+            f"no GitHub rendering recorded for {body!r}: render it with POST /markdown "
+            "(mode=gfm) and add it to tests/fixtures/github_observer/rendered_bodies.json"
+        )
+    return ev.agent_uuid_from_body_html(case["github_html"])
+
 
 def load(name: str):
     return json.loads((FIXTURES / name).read_text())
@@ -108,7 +132,7 @@ def cycle(reader, *, known=frozenset(), trusted_apps=None, writer=None, mark=Non
 
 
 def test_the_footer_names_the_subject(pr_open):
-    assert ev.agent_uuid_from_body(pr_open["body"]) == AGENT
+    assert ev.agent_uuid_from_body_html(pr_open["body_html"]) == AGENT
 
 
 def test_the_last_footer_wins_and_quoted_or_fenced_ones_do_not_count():
@@ -126,18 +150,18 @@ def test_the_last_footer_wins_and_quoted_or_fenced_ones_do_not_count():
             "```",
         ]
     )
-    assert ev.agent_uuid_from_body(body) == AGENT
+    assert footer_of(body) == AGENT
 
 
 @pytest.mark.parametrize(
     "body", [None, "", "no footer here", "UNITARES agent: not-a-uuid", "UNITARES agent: " + "z" * 36]
 )
 def test_a_body_without_a_valid_footer_names_nobody(body):
-    assert ev.agent_uuid_from_body(body) is None
+    assert footer_of(body) is None
 
 
 def test_an_unsigned_pull_request_is_counted_and_skipped(pr_open):
-    unsigned = dict(pr_open, body="Fixes a thing.")
+    unsigned = dict(pr_open, body="Fixes a thing.", body_html="<p>Fixes a thing.</p>")
     counts, events = cycle(FakeReader(pulls=[unsigned]))
     assert events == []
     assert counts["prs_unsigned"] == 1 and counts["prs_read"] == 0
@@ -541,6 +565,8 @@ def test_the_client_only_sends_gets_follows_pages_and_stays_on_its_host():
     def opener(request, timeout):
         seen.append((request.get_method(), request.full_url))
         assert request.get_header("Authorization") == "Bearer secret"
+        # ``full`` is what serves body_html, which the footer is read from.
+        assert request.get_header("Accept") == "application/vnd.github.full+json"
         return pages[request.full_url]
 
     client = obs.GitHubClient("secret", "https://api.example", opener=opener)
@@ -588,12 +614,12 @@ def test_paging_stops_once_a_sorted_page_is_out_of_range():
 def test_a_footer_the_rendered_body_does_not_show_names_nobody(hidden):
     other = "11111111-2222-3333-4444-555555555555"
     body = f"UNITARES agent: {AGENT}\n\n" + hidden.format(other=other, compact=other.replace("-", ""))
-    assert ev.agent_uuid_from_body(body) == AGENT
+    assert footer_of(body) == AGENT
 
 
 def test_a_footer_after_a_closed_comment_or_quote_counts_again():
     body = f"<!-- note -->\n> quote\n\nUNITARES agent: {AGENT.upper()}\n"
-    assert ev.agent_uuid_from_body(body) == AGENT
+    assert footer_of(body) == AGENT
 
 
 def test_a_footer_typed_by_someone_the_deployment_does_not_trust_is_skipped(pr_open):
@@ -909,7 +935,7 @@ def test_an_earlier_attempt_on_a_replaced_head_is_still_read():
 def test_a_footer_inside_a_later_comment_or_hiding_block_names_nobody(hidden):
     other = "11111111-2222-3333-4444-555555555555"
     body = f"UNITARES agent: {AGENT}\n\n" + hidden.format(other=other)
-    assert ev.agent_uuid_from_body(body) == AGENT
+    assert footer_of(body) == AGENT
 
 
 @pytest.mark.parametrize(
@@ -924,12 +950,12 @@ def test_a_footer_inside_a_later_comment_or_hiding_block_names_nobody(hidden):
     ],
 )
 def test_a_footer_after_inline_code_or_a_closed_block_counts(before):
-    assert ev.agent_uuid_from_body(before + f"UNITARES agent: {AGENT}") == AGENT
+    assert footer_of(before + f"UNITARES agent: {AGENT}") == AGENT
 
 
 @pytest.mark.parametrize("indent", [" ", "  ", "   "])
 def test_a_footer_indented_less_than_a_code_block_counts(indent):
-    assert ev.agent_uuid_from_body(f"Body.\n\n{indent}UNITARES agent: {AGENT}") == AGENT
+    assert footer_of(f"Body.\n\n{indent}UNITARES agent: {AGENT}") == AGENT
 
 
 def test_check_runs_are_read_with_every_run_of_each_name():
@@ -953,59 +979,45 @@ _UUID_B = "22222222-2222-4222-8222-222222222222"
 
 
 def test_indented_code_details_example_does_not_hide_the_footer():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"Example:\n\n    <details>\n\n---\nUNITARES agent: {_UUID_A}\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_quoted_pre_example_does_not_hide_the_footer():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"> <pre>\n\n---\nUNITARES agent: {_UUID_A}\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_multiline_code_span_footer_does_not_override_the_author():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = (
         f"---\nUNITARES agent: {_UUID_A}\n\n"
         f"Example: `text\nUNITARES agent: {_UUID_B}\nmore`\n"
     )
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_unclosed_backtick_still_reads_a_later_paragraph_footer():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"A stray ` here\n\n---\nUNITARES agent: {_UUID_A}\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_code_span_closed_before_footer_line_keeps_footer_visible():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"See `a\nb` above\n\n---\nUNITARES agent: {_UUID_A}\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_indented_closing_tag_inside_pre_closes_the_block():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"<pre>\nlog\n    </pre>\n\n---\nUNITARES agent: {_UUID_A}\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_escaped_backtick_opens_no_code_span():
-    from agents.github_observer.events import agent_uuid_from_body
-
     body = f"---\nUNITARES agent: {_UUID_A}\n\nan escaped \\` and <!--\nUNITARES agent: {_UUID_B}\n-->\n"
-    assert agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
-# Issue #3277: the footer is read with a CommonMark tokenizer (markdown-it-py)
-# and the stdlib HTML parser instead of a hand-written line scanner.
+# Issue #3277: the footer is read from GitHub's own rendering of the body
+# (body_html) instead of with a hand-written Markdown line scanner.
 
 
 def test_an_inline_comment_opener_never_closed_in_its_paragraph_is_text():
@@ -1014,7 +1026,7 @@ def test_an_inline_comment_opener_never_closed_in_its_paragraph_is_text():
     # it is literal text, and GitHub shows the later footer (see the
     # rendered_bodies.json fixture).
     body = f"UNITARES agent: {_UUID_A}\n\ntext <!-- a --> b <!-- c\n\nUNITARES agent: {_UUID_B}\n"
-    assert ev.agent_uuid_from_body(body) == _UUID_B
+    assert footer_of(body) == _UUID_B
 
 
 @pytest.mark.parametrize(
@@ -1031,7 +1043,7 @@ def test_an_inline_comment_opener_never_closed_in_its_paragraph_is_text():
     ],
 )
 def test_pre_backticks_and_backslash_parity_follow_commonmark(body):
-    assert ev.agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 @pytest.mark.parametrize(
@@ -1046,40 +1058,23 @@ def test_pre_backticks_and_backslash_parity_follow_commonmark(body):
 )
 def test_a_footer_that_is_not_a_plain_paragraph_line_names_nobody(hidden):
     body = f"---\nUNITARES agent: {_UUID_A}\n\n" + hidden.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 def test_the_end_of_a_quote_closes_a_details_opened_in_it():
     body = f"UNITARES agent: {_UUID_A}\n\n> <details>\n\nUNITARES agent: {_UUID_B}\n"
-    assert ev.agent_uuid_from_body(body) == _UUID_B
+    assert footer_of(body) == _UUID_B
 
 
 def test_a_line_break_ends_a_footer_line():
     body = f"UNITARES agent: {_UUID_A}  \nUNITARES agent: {_UUID_B}<br>more\n"
-    assert ev.agent_uuid_from_body(body) == _UUID_B
+    assert footer_of(body) == _UUID_B
 
 
-def _pick(lines: list[str]) -> str | None:
-    found = None
-    for line in lines:
-        match = ev._FOOTER_RE.fullmatch(line)
-        if match:
-            found = match.group("uuid").lower()
-    return found
-
-
-_RENDERED = json.loads((FIXTURES / "rendered_bodies.json").read_text())["cases"]
-
-
-@pytest.mark.parametrize("case", _RENDERED, ids=[str(i) for i in range(len(_RENDERED))])
-def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
-    # ``expected`` was read by hand from GitHub's HTML when it was recorded
-    # (comments stripped, <pre> annotated, soft breaks turned into <br>), so a
-    # change to the walker cannot move both sides of this comparison at once.
-    from agents.github_observer import footer
-
-    assert ev.agent_uuid_from_body(case["body"]) == case["expected"]
-    assert _pick(footer.lines_of_html(case["github_html"])) == case["expected"]
+@pytest.mark.parametrize("case", list(_RENDERED.values()), ids=[str(i) for i in range(len(_RENDERED))])
+def test_each_recorded_rendering_names_its_checked_footer(case):
+    # ``expected`` was read by hand from GitHub's HTML when it was recorded.
+    assert ev.agent_uuid_from_body_html(case["github_html"]) == case["expected"]
 
 
 @pytest.mark.parametrize(
@@ -1099,7 +1094,7 @@ def test_the_tokenizer_agrees_with_githubs_own_rendering(case):
 )
 def test_a_paragraph_inside_formatting_or_a_split_line_names_nobody(hidden):
     body = f"UNITARES agent: {_UUID_A}\n\n" + hidden.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == _UUID_A
+    assert footer_of(body) == _UUID_A
 
 
 @pytest.mark.parametrize(
@@ -1118,24 +1113,39 @@ def test_a_paragraph_inside_formatting_or_a_split_line_names_nobody(hidden):
 )
 def test_a_comment_or_a_plain_container_does_not_hide_a_footer(visible):
     body = f"UNITARES agent: {_UUID_A}\n\n" + visible.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == _UUID_B
+    assert footer_of(body) == _UUID_B
 
 
 def test_the_rendered_fixture_covers_every_case_the_old_scanner_got_wrong():
-    bodies = {case["body"] for case in _RENDERED}
+    bodies = set(_RENDERED)
     assert f"<pre>\nlog `</pre>` tail\n\n---\nUNITARES agent: {_UUID_A}\n" in bodies
     assert f"Write \\\\`<!--` literally.\n\n---\nUNITARES agent: {_UUID_A}\n" in bodies
 
 
-def test_without_the_tokenizer_the_footer_is_refused_not_guessed(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "html",
+    [
+        f"<p>UNITARES agent: {_UUID_A}</p><!-- x -->",  # GitHub strips comments
+        f"<p>UNITARES agent: {_UUID_A}",  # never closed
+        f"<div><p>UNITARES agent: {_UUID_A}</div></p>",  # misnested
+        f"<details/><p>UNITARES agent: {_UUID_A}</p>",  # self-closing non-void
+        f"<p>UNITARES agent: {_UUID_A}</br></p>",
+        f"<!DOCTYPE html><p>UNITARES agent: {_UUID_A}</p>",
+        f"<p>UNITARES agent: {_UUID_A}</p></span>",  # a stray end tag
+    ],
+)
+def test_html_that_github_did_not_render_is_refused_not_guessed(html):
     from agents.github_observer import footer
 
-    monkeypatch.setattr(footer, "MarkdownIt", None)
-    with pytest.raises(footer.MissingTokenizer):
-        ev.agent_uuid_from_body(f"UNITARES agent: {_UUID_A}")
-    monkeypatch.setenv("GITHUB_TOKEN", "t")
-    assert obs.main(["--repo", REPO, "--dry-run"]) == 2
-    assert "markdown-it-py" in capsys.readouterr().err
+    with pytest.raises(footer.UnrenderedHTML):
+        ev.agent_uuid_from_body_html(html)
+
+
+def test_unrendered_or_missing_body_html_fails_the_pull_request(pr_open):
+    # Either is a failed read, never an unsigned pull request.
+    for broken in (dict(pr_open, body_html="<p>UNITARES agent: x"), {k: v for k, v in pr_open.items() if k != "body_html"}):
+        counts, events = cycle(FakeReader(pulls=[broken]))
+        assert counts["prs_failed"] == 1 and counts["prs_unsigned"] == 0 and events == []
 
 
 @pytest.mark.parametrize(
@@ -1153,7 +1163,7 @@ def test_without_the_tokenizer_the_footer_is_refused_not_guessed(monkeypatch, ca
 )
 def test_strikethrough_follows_gfm_tilde_rules(tildes, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n" + tildes.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == expected
+    assert footer_of(body) == expected
 
 
 @pytest.mark.parametrize(
@@ -1173,7 +1183,7 @@ def test_strikethrough_follows_gfm_tilde_rules(tildes, expected):
 )
 def test_a_block_tag_ends_the_paragraph_it_interrupts(after, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n" + after.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == expected
+    assert footer_of(body) == expected
 
 
 @pytest.mark.parametrize(
@@ -1191,7 +1201,7 @@ def test_a_block_tag_ends_the_paragraph_it_interrupts(after, expected):
 )
 def test_formatting_left_open_carries_into_the_next_paragraph(unclosed, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n{unclosed}\n\nUNITARES agent: {_UUID_B}\n"
-    assert ev.agent_uuid_from_body(body) == expected
+    assert footer_of(body) == expected
 
 
 @pytest.mark.parametrize(
@@ -1211,7 +1221,7 @@ def test_formatting_left_open_carries_into_the_next_paragraph(unclosed, expected
 )
 def test_active_formatting_is_tracked_apart_from_open_elements(body_tail, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n" + body_tail.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == expected
+    assert footer_of(body) == expected
 
 
 @pytest.mark.parametrize(
@@ -1228,5 +1238,40 @@ def test_active_formatting_is_tracked_apart_from_open_elements(body_tail, expect
 )
 def test_formatting_left_open_in_a_table_cell_stays_in_the_cell(body_tail, expected):
     body = f"UNITARES agent: {_UUID_A}\n\n" + body_tail.format(b=_UUID_B)
-    assert ev.agent_uuid_from_body(body) == expected
+    assert footer_of(body) == expected
 
+
+@pytest.mark.parametrize(
+    ("body_tail", "expected"),
+    [
+        # Prose that reads as an unknown tag: GitHub drops the tag (#3245's
+        # `<name>` left a hand-built tree open and its footer unread).
+        ("Fixes List<T> handling.", _UUID_B),
+        ("Text <bdi>x", _UUID_B),
+        ("text <nobr>x\n\nx</nobr>\nUNITARES agent: {b}", _UUID_B),
+        # GitHub moves content out of a table and closes open cells.
+        ("<table><details>\n\nUNITARES agent: {b}\n\n</details></table>", _UUID_A),
+        ("<table><b><tr><td>x</table>\n\nUNITARES agent: {b}", _UUID_A),
+        ("<table><tr><td>a<td>b</td>\n\nUNITARES agent: {b}\n\n</table>", _UUID_B),
+    ],
+)
+def test_github_resolves_unknown_tags_and_tables_before_the_footer_is_read(body_tail, expected):
+    tail = body_tail.format(b=_UUID_B)
+    if "UNITARES agent" not in tail:
+        tail += f"\n\nUNITARES agent: {_UUID_B}"
+    assert footer_of(f"UNITARES agent: {_UUID_A}\n\n{tail}\n") == expected
+
+
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (f"UNITARES agent: {_UUID_B}<img src=x>", _UUID_A),  # a void element on the line
+        (f"UNITARES agent: {_UUID_B}<sub></sub>", _UUID_A),  # an empty element on the line
+        (f"UNITARES agent: {_UUID_B}", _UUID_B),
+    ],
+)
+def test_any_element_on_the_footer_line_makes_it_not_plain(line, expected):
+    html = f"<p>UNITARES agent: {_UUID_A}</p>\n<p>{line}</p>"
+    assert ev.agent_uuid_from_body_html(html) == expected

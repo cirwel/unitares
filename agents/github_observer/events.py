@@ -109,16 +109,19 @@ def run_belongs_to_pr(run: Mapping[str, Any], pr: Mapping[str, Any], shas: Itera
     return run.get("head_sha") in set(shas) or run_names_pr(run, pr)
 
 
-def agent_uuid_from_body(body: str | None) -> str | None:
-    """The agent a pull request body's footer names, or ``None``.
+def agent_uuid_from_body_html(body_html: str | None) -> str | None:
+    """The agent a pull request's footer names, or ``None``.
 
-    The footer is a ``UNITARES agent: <uuid>`` line a reader of the rendered
-    body would see as the author's own (see ``agents.github_observer.footer``).
-    The last one wins: the delivery contract keeps the opening author's
-    signature last, and a successor's above it.
+    Read from GitHub's own rendering of the body (``body_html``, served with
+    the ``application/vnd.github.full+json`` media type). The footer is a
+    ``UNITARES agent: <uuid>`` line a reader of the rendered body sees as the
+    author's own (see ``agents.github_observer.footer``). The last one wins:
+    the delivery contract keeps the opening author's signature last, and a
+    successor's above it. Raises ``footer.UnrenderedHTML`` (a ``ValueError``)
+    for HTML that is not GitHub's balanced output.
     """
     found: str | None = None
-    for line in visible_paragraph_lines(body or ""):
+    for line in visible_paragraph_lines(body_html or ""):
         match = _FOOTER_RE.fullmatch(line)
         if match:
             found = match.group("uuid").lower()

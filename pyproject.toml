@@ -91,14 +91,6 @@ dev = [
     "hypothesis>=6.0.0,<7.0.0",
     "fakeredis>=2.38.0,<3.0.0",
     "Markdown>=3.6.0,<4.0.0",
-    # tests/test_github_observer.py (the observer extra)
-    "markdown-it-py>=3.0.0,<5.0.0",
-]
-# The GitHub outcome observer (agents/github_observer) reads the agent footer
-# of a pull request body with a CommonMark tokenizer. Pure Python; the
-# observer refuses to start without it.
-observer = [
-    "markdown-it-py>=3.0.0,<5.0.0",
 ]
 analysis = [
     "scipy>=1.10.0,<2.0.0",

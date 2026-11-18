@@ -1,5 +1,5 @@
 {
- "_source": "Each body the footer tests parse, rendered by GitHub's own renderer on 2026-11-17 (POST https://api.github.com/markdown with mode=gfm). `expected` is the footer a reader sees in GitHub's HTML, checked by hand when recorded. tests/test_github_observer.py requires the tokenizer to pick `expected` from the body and from GitHub's HTML.",
+ "_source": "GitHub's own rendering of each Markdown body the footer tests use, recorded 2026-11-17/18 with POST https://api.github.com/markdown (mode=gfm), the renderer behind a pull request's body_html. `expected` is the footer a reader sees in GitHub's HTML, checked by hand against each test's own assertion when recorded. To add a case: render the body the same way and append it.",
  "cases": [
   {
    "body": "",
@@ -494,6 +494,271 @@
   {
    "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x<table><tr><td></b>y</td></tr></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
    "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>y</td></tr></tbody></table></markdown-accessiblity-table><p></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<details open>\n<summary>s</summary>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</details>",
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<details open=\"\">\n<summary>s</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</details>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<details/>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<details><summary>Details</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></details>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<textarea>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n&lt;textarea&gt;\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n[link\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n](https://example.com)",
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><a href=\"https://example.com\" rel=\"nofollow\">link<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\n</a></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "---\nUNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~~UNITARES agent: 22222222-2222-4222-8222-222222222222~~",
+   "github_html": "<hr>\n<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>UNITARES agent: 22222222-2222-4222-8222-222222222222</del></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111  \nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>more\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>more</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</b>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>x<div>UNITARES agent: 22222222-2222-4222-8222-222222222222</div></b>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><b>x</b></p><div><b>UNITARES agent: 22222222-2222-4222-8222-222222222222</b></div><p></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<b>x<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><b>x</b></p><div><p></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b></div>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<blockquote><table></blockquote>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<blockquote><p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><markdown-accessiblity-table><table role=\"table\">\n</table></markdown-accessiblity-table></blockquote>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<blockquote><table><tr><td>x</table></blockquote>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<blockquote><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>x</td></tr></tbody></table></markdown-accessiblity-table></blockquote>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<blockquote><td></blockquote>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<blockquote></blockquote>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<del>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</del>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<del>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</del>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<del>x<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</div>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>x</del></p><div><p></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</div>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<div><b>x</div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<div><b>x</b></div><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<div><del>x</div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<div><del>x</del></div>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<div><table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</table></div>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<div><p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><markdown-accessiblity-table><table role=\"table\">\n\n</table></markdown-accessiblity-table></div>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<div>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</div>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<div>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</div>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<table><caption><i>c</caption><tr><td>y</td></tr></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<markdown-accessiblity-table><i>c</i><table role=\"table\"><tbody><tr><td>y</td></tr></tbody></table></markdown-accessiblity-table>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<table><tr><td><b>x</td></tr></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<markdown-accessiblity-table><table role=\"table\"><tbody><tr><td><b>x</b></td></tr></tbody></table></markdown-accessiblity-table>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n> <details>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<blockquote>\n<details><summary>Details</summary>\n</details></blockquote>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<!-- note -->",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<![CDATA[>suffix]]>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222suffix]]&gt;</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<div>suffix</div>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><div>suffix</div><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<hr>suffix",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><hr>suffix<p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222 ",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222 </p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222 x",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222 x</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\na ~~~~x\nUNITARES agent: 22222222-2222-4222-8222-222222222222\ny~~~~",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>a ~~~~x<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\ny~~~~</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nexample&#10;UNITARES agent: 22222222-2222-4222-8222-222222222222&#10;suffix",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>example\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nsuffix</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nnote <?pi?>\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>note <br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nnote\nUNITARES agent: 22222222-2222-4222-8222-222222222222<h2>h</h2>",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>note<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p><h2>h</h2><p></p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nprefix<hr>UNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>prefix</p><hr>UNITARES agent: 22222222-2222-4222-8222-222222222222<p></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <!-- a --> b <!-- c\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text  b &lt;!-- c</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x<hr><table></b></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><hr><markdown-accessiblity-table><table role=\"table\"></table></markdown-accessiblity-table><p></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x<table><tr><td></b>y</td></tr></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>y</td></tr></tbody></table></markdown-accessiblity-table><p></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x<table><tr><td>y</td></tr></table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>y</td></tr></tbody></table></markdown-accessiblity-table><p></p><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x\n\n<blockquote>y</b>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><b>\n</b><blockquote><b>y</b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></blockquote>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <b>x\n\nx</b>\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <b>x</b></p><b>\n</b><p><b>x</b><br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <del>struck\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text <del>struck</del></p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext ~~~example\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nexample~~~",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text ~~~example<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\nexample~~~</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nx~y\nUNITARES agent: 22222222-2222-4222-8222-222222222222\nz~w",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>x<del>y<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\nz</del>w</p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~UNITARES agent: 22222222-2222-4222-8222-222222222222~",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>UNITARES agent: 22222222-2222-4222-8222-222222222222</del></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~~UNITARES agent: 22222222-2222-4222-8222-222222222222~~",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p><del>UNITARES agent: 22222222-2222-4222-8222-222222222222</del></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n~~x\nUNITARES agent: 22222222-2222-4222-8222-222222222222\ny~",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>~~x<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222<br>\ny~</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nFixes List<T> handling.\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Fixes List handling.</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nText <bdi>x\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>Text x</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\ntext <nobr>x\n\nx</nobr>\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>text x</p>\n<p>x<br>\nUNITARES agent: 22222222-2222-4222-8222-222222222222</p>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<table><details>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</details></table>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<details><summary>Details</summary>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p>\n</details><markdown-accessiblity-table><table role=\"table\"></table></markdown-accessiblity-table>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<table><b><tr><td>x</table>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<b></b><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>x</td></tr></tbody></table></markdown-accessiblity-table><b>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p></b>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\n<table><tr><td>a<td>b</td>\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222\n\n</table>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222</p><markdown-accessiblity-table><table role=\"table\"><tbody><tr><td>a</td><td>b</td>\n\n</tr></tbody></table></markdown-accessiblity-table>",
+   "expected": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<img src=\"https://example.com/x.png\" alt=\"\">\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222<a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/f8f6be93d84a7a6dcef2eb3b374fe013f2d4002214ef4014441c3424cb09f32a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/f8f6be93d84a7a6dcef2eb3b374fe013f2d4002214ef4014441c3424cb09f32a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<sub></sub>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222<sub></sub></p>",
+   "expected": "11111111-1111-4111-8111-111111111111"
+  },
+  {
+   "body": "UNITARES agent: 11111111-1111-4111-8111-111111111111\n\nUNITARES agent: 22222222-2222-4222-8222-222222222222<b></b>\n",
+   "github_html": "<p>UNITARES agent: 11111111-1111-4111-8111-111111111111</p>\n<p>UNITARES agent: 22222222-2222-4222-8222-222222222222<b></b></p>",
    "expected": "11111111-1111-4111-8111-111111111111"
   }
  ]
