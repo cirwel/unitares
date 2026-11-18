@@ -37,7 +37,8 @@ def _invalid_export_stem(custom_filename: Any) -> bool:
 
 _FINDING_FIELDS = (
     "id", "type", "summary", "details", "tags", "severity", "status",
-    "response_to_id", "response_type", "closure_class",
+    "response_to_id", "response_type", "closure_class", "closure_evidence",
+    "superseded_by",
     "created_at", "updated_at", "resolved_at",
 )
 _EISV_OUTCOME_KEYS = (
@@ -67,12 +68,38 @@ def _family(rows: list, limit: int, fields: tuple | None = None) -> dict:
     return {"items": items, "returned": len(items), "truncated": len(rows) > limit}
 
 
-async def _read_agent_record(db: Any, agent_id: str, limit: int) -> dict:
+async def _attach_replacements(items: list, graph: Any = None) -> None:
+    """Give each superseded finding its replacement ids as ``superseded_by``.
+
+    The replacement link is not a column on the finding's row: it lives only
+    on the knowledge graph's SUPERSEDES edge, so it is read through the graph
+    backend. Fail-soft: when the graph cannot be read, a superseded finding
+    keeps its status and gets an empty ``superseded_by``.
+    """
+    superseded = [i for i in items if i.get("status") == "superseded" and i.get("id")]
+    if not superseded:
+        return
+    replacements: dict = {}
+    try:
+        if graph is None:
+            from src.knowledge_graph import get_knowledge_graph
+            graph = await get_knowledge_graph()
+        if hasattr(graph, "get_superseded_by"):
+            replacements = await graph.get_superseded_by([i["id"] for i in superseded]) or {}
+    except Exception as e:  # noqa: BLE001 — the link is best-effort in an export
+        logger.debug("export: supersession lookup failed (non-fatal): %s", e)
+    for item in superseded:
+        item["superseded_by"] = list(replacements.get(item["id"]) or [])
+
+
+async def _read_agent_record(db: Any, agent_id: str, limit: int, graph: Any = None) -> dict:
     """One agent's accountability record, read without the EISV estimator.
 
     Each family is read through its owner's storage API: neutral checkpoints,
     knowledge entries the agent authored, and outcome events. Estimator
     values on outcome rows are kept apart under ``eisv`` (None when unset).
+    Findings keep their closure evidence, and a superseded finding names its
+    replacements from the knowledge graph's SUPERSEDES edge.
     """
     fetch = limit + 1
     identity = await db.get_identity(agent_id)
@@ -80,14 +107,15 @@ async def _read_agent_record(db: Any, agent_id: str, limit: int) -> dict:
         await db.list_identity_checkpoints(identity.identity_id, limit=fetch)
         if identity is not None else []
     )
-    findings = await db.kg_query(agent_id=agent_id, limit=fetch)
+    findings = _family(await db.kg_query(agent_id=agent_id, limit=fetch), limit, _FINDING_FIELDS)
+    await _attach_replacements(findings["items"], graph)
     outcomes = _family(await db.list_agent_outcomes(agent_id, limit=fetch), limit)
     for item in outcomes["items"]:
         snapshot = {k[len("eisv_"):]: item.pop(k, None) for k in _EISV_OUTCOME_KEYS}
         item["eisv"] = snapshot if any(v is not None for v in snapshot.values()) else None
     return {
         "checkpoints": _family(checkpoints, limit),
-        "findings": _family(findings, limit, _FINDING_FIELDS),
+        "findings": findings,
         "outcomes": outcomes,
     }
 

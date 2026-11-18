@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "e22e55dca930c46dca3fbf97a428b37438bff1f1914bef4b5a5763d6d4099945",
+  "surface_sha256": "a349023a984f0043b1ca288c8f22e5454059931f749a8a13235bfe84afca2bba",
   "capabilities": [
     {
       "name": "start_session",
@@ -444,7 +444,7 @@
       "name": "export",
       "implementation": "export",
       "kind": "canonical_tool",
-      "input_schema_sha256": "f40fcd2aa53497481a80deab54082fa914c9a79a05eb6037d035ab3553cd3203",
+      "input_schema_sha256": "74a29de3d9555da3c14dce7065504ec1db2b6d62e1c7c07e0371d758c3e2574b",
       "transport_names": {
         "mcp_streamable_http": "export",
         "rest_v1_tools": "export",

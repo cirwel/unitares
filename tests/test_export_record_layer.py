@@ -164,3 +164,39 @@ async def test_agent_without_a_durable_identity_has_no_checkpoints():
 
     db.list_identity_checkpoints.assert_not_awaited()
     assert record["checkpoints"] == {"items": [], "returned": 0, "truncated": False}
+
+
+@pytest.mark.asyncio
+async def test_closed_and_superseded_findings_keep_evidence_and_replacement():
+    evidence = {"kind": "pr", "ref": "cirwel/unitares#1"}
+    findings = [
+        {"id": "f-closed", "status": "closed", "closure_class": "fixed",
+         "closure_evidence": evidence, "summary": "s"},
+        {"id": "f-old", "status": "superseded", "summary": "s"},
+        {"id": "f-open", "status": "open", "summary": "s"},
+    ]
+    graph = MagicMock()
+    graph.get_superseded_by = AsyncMock(return_value={"f-old": ["f-new"]})
+
+    record = await export_mod._read_agent_record(_db(findings=findings), AGENT, 10, graph)
+
+    graph.get_superseded_by.assert_awaited_once_with(["f-old"])
+    items = {i["id"]: i for i in record["findings"]["items"]}
+    assert items["f-closed"]["closure_class"] == "fixed"
+    assert items["f-closed"]["closure_evidence"] == evidence
+    assert items["f-old"]["superseded_by"] == ["f-new"]
+    assert "superseded_by" not in items["f-open"]
+    # The package is JSON on disk: both fields survive serialization.
+    assert json.loads(json.dumps(record))["findings"]["items"][0]["closure_evidence"] == evidence
+
+
+@pytest.mark.asyncio
+async def test_supersession_lookup_failure_keeps_the_finding():
+    graph = MagicMock()
+    graph.get_superseded_by = AsyncMock(side_effect=RuntimeError("graph down"))
+    db = _db(findings=[{"id": "f-old", "status": "superseded"}])
+
+    record = await export_mod._read_agent_record(db, AGENT, 10, graph)
+
+    item = record["findings"]["items"][0]
+    assert item["status"] == "superseded" and item["superseded_by"] == []
