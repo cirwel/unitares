@@ -161,6 +161,29 @@ class TestDeriveConfidenceEISV:
 
 class TestDeriveConfidenceToolTracker:
 
+    @pytest.fixture(autouse=True)
+    def _legacy_jsonl_tracker(self, monkeypatch):
+        """Legacy ToolUsageTracker tests require UNITARES_ACTOR_WORK_TOOL_STATS=0."""
+        monkeypatch.setenv("UNITARES_ACTOR_WORK_TOOL_STATS", "0")
+
+    def test_default_uses_actor_work_tool_stats_without_jsonl_tracker(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_ACTOR_WORK_TOOL_STATS", raising=False)
+        state = _mock_state()
+        actor_stats = {
+            "total_calls": 6,
+            "error_count": 1,
+            "unique_tools": 2,
+            "tools": {"knowledge": {"total_calls": 6, "error_count": 1}},
+        }
+        with patch("src.tool_usage_tracker.get_tool_usage_tracker") as mock_get_tracker:
+            confidence, metadata = derive_confidence(
+                state, agent_id="agent-123", tool_usage_stats=actor_stats
+            )
+        mock_get_tracker.assert_not_called()
+        assert confidence >= 0.05
+        assert metadata["tool_stats"]["total_calls"] == 6
+        assert metadata["reliability"] == "high"
+
     @patch("src.tool_usage_tracker.get_tool_usage_tracker")
     def test_tool_stats_in_metadata(self, mock_get_tracker):
         mock_get_tracker.return_value = _mock_tracker(total_calls=10, success_count=8)

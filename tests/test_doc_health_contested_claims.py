@@ -65,7 +65,7 @@ def test_flags_cold_start_claim_applied_to_all_warmup(
         "During baseline warmup, the live verdict falls back to the cold-start prior.",
     )
     assert any(
-        "cold-start prior owns only check-ins 1–2" in warning for warning in warnings
+        "cold-start prior owns check-ins 1–5" in warning for warning in warnings
     )
 
 
@@ -74,8 +74,8 @@ def test_allows_precise_three_stage_warmup(tmp_path, monkeypatch, doc_health):
         tmp_path,
         monkeypatch,
         doc_health,
-        "Check-ins 1–2 use the cold-start prior; check-ins 3–24 use behavioral "
-        "fixed thresholds; self-relative scoring starts at check-in 25.",
+        "Check-ins 1–5 use the cold-start prior under default HU1; read check-ins 6–27 use behavioral "
+        "fixed thresholds; self-relative scoring starts at check-in 28 (1–2 / 3–24 / 25 when hold is off).",
     )
     assert warnings == []
 

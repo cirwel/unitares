@@ -241,6 +241,11 @@ def _registered_public_tool_names() -> list[str]:
     ]
 
 
+def registered_public_tool_names() -> list[str]:
+    """Return the live public dispatch index used by discovery and gateway."""
+    return _registered_public_tool_names()
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -321,12 +326,13 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     #     direct_resume_if_safe hit exactly that when its broken alias was
     #     removed (2026-08-29).
     from ..tool_stability import list_all_aliases
-    from ..decorators import _TOOL_DEFINITIONS
+    from ..decorators import get_registered_tool_definitions
+    tool_definitions = get_registered_tool_definitions()
     deprecated_aliases = (
         set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
     )
     deprecated_handlers = {
-        name for name, definition in _TOOL_DEFINITIONS.items()
+        name for name, definition in tool_definitions.items()
         if definition.deprecated
     }
     _deprecated = deprecated_aliases | deprecated_handlers
@@ -409,7 +415,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         if tool_name in _deprecated:
             tool_info["deprecated"] = True
             superseded_by = getattr(
-                _TOOL_DEFINITIONS.get(tool_name), "superseded_by", None
+                tool_definitions.get(tool_name), "superseded_by", None
             )
             if superseded_by:
                 tool_info["superseded_by"] = superseded_by
@@ -825,19 +831,24 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     ):
         nested["client_session_id"] = arguments.get("client_session_id")
     from src.mcp_handlers import dispatch_tool
+    from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
     from src.services.tool_usage_recorder import (
         build_tool_usage_payload,
         classify_tool_result,
         record_tool_usage,
+        resolve_audit_agent_id,
+        resolve_dispatch_bound_agent_id,
         resolve_minted_agent_id,
     )
 
+    remove_reserved_dispatch_keys(nested)
     with entered_via("use_tool"):
         usage_payload = build_tool_usage_payload(target, nested)
     started = _time.monotonic()
     try:
         result = await dispatch_tool(target, nested)
     except Exception as exc:
+        caller_id = resolve_dispatch_bound_agent_id(nested) or resolve_audit_agent_id(None)
         record_tool_usage(
             tool_name=target,
             agent_id=nested.get("agent_id"),
@@ -846,9 +857,12 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             latency_ms=int((_time.monotonic() - started) * 1000),
             session_id=nested.get("client_session_id"),
             payload=usage_payload,
+            audit_agent_id=caller_id,
+            actor_verified=bool(caller_id),
         )
         raise
     latency_ms = int((_time.monotonic() - started) * 1000)
+    caller_id = resolve_dispatch_bound_agent_id(nested) or resolve_audit_agent_id(None)
     if result is None:
         record_tool_usage(
             tool_name=target,
@@ -858,6 +872,8 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             latency_ms=latency_ms,
             session_id=nested.get("client_session_id"),
             payload=usage_payload,
+            audit_agent_id=caller_id,
+            actor_verified=bool(caller_id),
         )
         return [error_response(
             f"Capability did not dispatch: {target}",
@@ -866,6 +882,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     success, error_type = classify_tool_result(result)
     actor = resolve_minted_agent_id(target, nested.get("agent_id"), result)
+    final_caller = resolve_minted_agent_id(target, caller_id, result)
     record_tool_usage(
         tool_name=target,
         agent_id=actor,
@@ -874,6 +891,8 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         latency_ms=latency_ms,
         session_id=nested.get("client_session_id"),
         payload=usage_payload,
+        audit_agent_id=final_caller,
+        actor_verified=bool(final_caller),
     )
     return result
 
@@ -932,12 +951,12 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # so point at the router call that reaches the same handler.
         if alias_info is None:
             from .. import TOOL_HANDLERS
-            from ..decorators import _ROUTER_ACTION_HANDLERS
+            from ..decorators import get_router_action_handlers
 
             if tool_name not in TOOL_HANDLERS:
                 routes = [
                     (router, action)
-                    for router, handlers in _ROUTER_ACTION_HANDLERS.items()
+                    for router, handlers in get_router_action_handlers().items()
                     for action, handler in handlers.items()
                     if getattr(handler, "_mcp_tool_name", None) == tool_name
                 ]

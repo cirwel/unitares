@@ -491,8 +491,14 @@ def handler_env(server, graph):
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", server),
         patch(
             "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            new_callable=AsyncMock,
+            return_value=graph,
+        ),
+        patch(
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             new_callable=AsyncMock,
             return_value=graph,
         ),
@@ -632,7 +638,7 @@ async def test_a_reclose_keeps_the_stored_class_and_says_nothing(owner_bound):
 def _as_closer():
     return (
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("closer-b", None),
         ),
         patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
@@ -763,7 +769,7 @@ def test_display_name_hint_names_whose_label_to_set():
     fake_server = MagicMock()
     fake_server.agent_metadata = {"11111111-2222-4333-8444-555555555555": meta}
     with (
-        patch("src.mcp_handlers.knowledge.handlers.mcp_server", fake_server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", fake_server),
         patch(
             "src.mcp_handlers.context.get_context_agent_id",
             return_value="11111111-2222-4333-8444-555555555555",

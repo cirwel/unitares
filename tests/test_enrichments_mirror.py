@@ -31,7 +31,7 @@ async def test_kg_search_times_out_to_empty(monkeypatch):
     the response. KG search is the dominant check-in tail (anyio-amplified I/O);
     surfacing is advisory."""
     import asyncio, time
-    import src.mcp_handlers.updates.enrichments as enr
+    import src.mcp_handlers.updates.enrichment_helpers as enr_helpers
 
     async def _hang(*a, **k):
         await asyncio.sleep(5)  # far exceeds the budget
@@ -41,7 +41,7 @@ async def test_kg_search_times_out_to_empty(monkeypatch):
     graph.semantic_search = _hang
     graph.full_text_search = _hang
 
-    monkeypatch.setattr(enr, "_KG_SEARCH_TIMEOUT", 0.05, raising=False)
+    monkeypatch.setattr(enr_helpers, "_KG_SEARCH_TIMEOUT", 0.05, raising=False)
     import src.knowledge_graph as kg_mod
     monkeypatch.setattr(kg_mod, "get_knowledge_graph", AsyncMock(return_value=graph))
 

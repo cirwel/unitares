@@ -20,6 +20,9 @@ from src.dialectic_protocol import DialecticSession, DialecticPhase
 from tests.helpers import parse_result, successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+PHASE = "src.mcp_handlers.dialectic.phase_submission"
+RES = "src.mcp_handlers.dialectic.resolution_helpers"
+LLM_MOD = "src.mcp_handlers.dialectic.llm_assisted"
 LLM = "src.mcp_handlers.support.llm_delegation"
 
 
@@ -63,7 +66,9 @@ def server_patch():
     server = MagicMock()
     server.agent_metadata = {}
     server.monitors = {}
-    with patch(f"{DIALECTIC}.mcp_server", server):
+    with patch(f"{PHASE}.mcp_server", server), \
+         patch(f"{RES}.mcp_server", server), \
+         patch(f"{LLM_MOD}.mcp_server", server):
         yield server
 
 
@@ -76,14 +81,19 @@ def clear_sessions():
 
 
 def _common_patches(add_message_mock):
+    load = AsyncMock(return_value=None)
+    save = AsyncMock()
     return [
-        patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
+        patch(f"{PHASE}._resolve_dialectic_agent_id",
               new=AsyncMock(return_value=("agent-paused", None))),
-        patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
-        patch(f"{DIALECTIC}.pg_add_message", new=add_message_mock),
+        patch(f"{PHASE}.load_session", new=load),
+        patch(f"{RES}.load_session", new=load),
+        patch(f"{LLM_MOD}.load_session", new=load),
+        patch(f"{RES}.pg_add_message", new=add_message_mock),
         patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
-        patch(f"{DIALECTIC}.pg_resolve_session", new=AsyncMock()),
-        patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
+        patch(f"{RES}.pg_resolve_session", new=AsyncMock()),
+        patch(f"{PHASE}.save_session", new=save),
+        patch(f"{RES}.save_session", new=save),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
     ]
@@ -180,7 +190,7 @@ async def test_external_consult_provenance_lands_on_antithesis_row(server_patch)
         for p in _common_patches(add_message):
             stack.enter_context(p)
         stack.enter_context(patch(
-            f"{DIALECTIC}._resolve_dialectic_agent_id",
+            f"{PHASE}._resolve_dialectic_agent_id",
             new=AsyncMock(return_value=("agent-consulting", None))))
         stack.enter_context(patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)))
         stack.enter_context(patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock()))
@@ -225,7 +235,7 @@ async def test_synthesis_row_persists_consult_provenance(server_patch):
         for p in _common_patches(add_message):
             stack.enter_context(p)
         stack.enter_context(patch(
-            f"{DIALECTIC}._resolve_dialectic_agent_id",
+            f"{PHASE}._resolve_dialectic_agent_id",
             new=AsyncMock(return_value=("agent-reviewer", None))))
         result = await handle_submit_synthesis({
             "session_id": session.session_id,

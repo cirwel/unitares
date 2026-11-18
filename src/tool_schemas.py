@@ -128,10 +128,10 @@ def _is_core_handler(definition) -> bool:
     ``register_extra_schemas()`` then hard-failed this check at startup with a
     message telling the operator to edit governance's own TOOL_ORDER.
     """
-    from src.mcp_handlers.decorators import _is_first_party_module
+    from src.mcp_handlers.decorators import is_first_party_module
 
     module = getattr(definition, "source_module", "") or ""
-    return _is_first_party_module(module)
+    return is_first_party_module(module)
 
 
 def _validate_consolidated_tool_order(
@@ -156,12 +156,15 @@ def _validate_consolidated_tool_order(
     wants a real advertised schema calls ``register_extra_schemas()``, and one
     that does not should not be able to hard-fail server startup.
     """
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, get_tool_registry
+    from src.mcp_handlers.decorators import (
+        get_registered_tool_definitions,
+        get_tool_registry,
+    )
 
     ordered = set(TOOL_ORDER)
     missing = sorted(
         name
-        for name, definition in _TOOL_DEFINITIONS.items()
+        for name, definition in get_registered_tool_definitions().items()
         if not definition.hidden
         and name not in ordered
         and _is_core_handler(definition)
@@ -370,15 +373,16 @@ def get_tool_definitions(
 
     # Auto-discover decorator-defined tools not in TOOL_ORDER
     try:
-        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+        from src.mcp_handlers.decorators import get_registered_tool_definitions
 
+        tool_definitions = get_registered_tool_definitions()
         hardcoded_names = {t.name for t in all_tools}
 
-        for tn in sorted(_TOOL_DEFINITIONS.keys()):
+        for tn in sorted(tool_definitions.keys()):
             if tn in hardcoded_names:
                 continue
 
-            td = _TOOL_DEFINITIONS[tn]
+            td = tool_definitions[tn]
 
             if getattr(td, "hidden", False):
                 continue

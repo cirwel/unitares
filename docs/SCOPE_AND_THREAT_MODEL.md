@@ -37,16 +37,21 @@ drift across steps. The check-in loop makes mid-run state changes inspectable;
 evaluation results and boundaries are tracked in
 [Evidence and limitations](EVIDENCE_AND_LIMITS.md).
 
-**Scoring stages advance by check-in count, not wall-clock time.**
-With the current constants, the cold-start prior owns check-ins 1–2, behavioral
-fixed-threshold scoring owns check-ins 3–24, and self-relative scoring starts at
-check-in 25 against a 30-update baseline target. Absolute safety floors apply in
-every stage. An agent doing dozens of
-units of work — over an hour or a week — reaches self-relative scoring; one
-that does three and exits does not.
+**Scoring stages advance by reading count (and check-in count), not wall-clock time.**
+With the current defaults (`UNITARES_HOLD_UNREAD_AXES=1`), a new agent's first
+three check-ins cannot carry a behavioral sensor reading, so the cold-start prior
+owns check-ins 1–5, behavioral fixed-threshold scoring owns read check-ins 6–27
+once `behavioral.confidence >= 0.3`, and self-relative scoring starts at check-in
+28 against a 30-read baseline target (later if intermediate check-ins carry no
+reading; `1–2`, `3–24`, and `25` when `UNITARES_HOLD_UNREAD_AXES=0`). Absolute
+safety floors apply in every stage **for scored dimensions** — under `HU1`, an
+unscored dimension (never read, or no reading in the last 10 check-ins) trips no
+safety floor. An agent doing dozens of units of work — over an hour or a week —
+reaches self-relative scoring; one that does three and exits does not.
 
 **The EISV instrument is not designed for** short-lived chatbot turns, which
-end before self-relative scoring starts at check-in 25.
+end before self-relative scoring starts (check-in 28 under `HU1`; check-in 25
+when filling is restored).
 
 ## What grounds EISV confidence — and where that boundary fails
 
@@ -68,24 +73,56 @@ it can forge a consistent story. Outcome provenance and integration boundaries
 therefore matter; CI- or operator-authored evidence is stronger than an
 unverified self-report.
 
-From check-in 25 with the current constants, the four numbers are graded against
-the agent's *own* running history rather than only a one-size-fits-all threshold.
-Absolute safety floors still apply on top of that.
+From check-in 28 under default `HU1` (25 read updates, or check-in 25 when
+`UNITARES_HOLD_UNREAD_AXES=0`), the four numbers are graded against the agent's
+*own* running history rather than only a one-size-fits-all threshold.
+Absolute safety floors still apply to scored axes on top of that.
 
-**Before the behavioral channel reaches confidence 0.3** (check-ins 1–2), the
+**Before the behavioral channel reaches confidence 0.3** (check-ins 1–5 under
+default `HU1`; check-ins 1–2 when `UNITARES_HOLD_UNREAD_AXES=0`), the
 verdict comes from the Φ cold-start prior: computed by the
 server from its own state and the drift vector, whose complexity-divergence
 component depends on the complexity the agent reports and whose calibration
 component can depend on the confidence it reports (until the server-wide
 confidence-against-outcome record has enough graded samples), with the
-behavioral signal telemetry-only. A
+behavioral signal telemetry-only.
+
+**Withholding boundary under default `HU1` + `SD1`.** Because agent-local drift
+(`UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1`) emits no drift reading without an
+observed `complexity_divergence` or 10+ fresh verified calibration pairs, and
+unread axes are held (`UNITARES_HOLD_UNREAD_AXES=1`), check-ins that carry no
+sensor-observed base input leave every behavioral axis unread (`E`/`S` receive
+no `complexity_divergence`, no `>= 3` non-echo outcomes exist for `E`/`I`, and no
+recent admissible per-agent calibration exists for `I`/`S`; similarly if every
+previously read axis goes stale after 10 check-ins without a reading). Note that
+omitting `complexity` on repeated authored check-ins does *not* by itself leave
+axes unread: the MCP handler coerces missing or `None` `complexity` to `0.5`
+so `ContinuityLayer.process_update()` measures `|derived_complexity - 0.5|`
+(and when `self_complexity` is `None` on a direct monitor call, it supplies
+`0.2` initially and derived rate-of-change divergence thereafter), so `E` and
+`S` still record readings and reach confidence `0.3` (`behavioral_assessment`)
+at check-in 6 unless `should_exclude_template_divergence` excludes
+`complexity_divergence` on degenerate automatic/rollup check-ins (when both
+`continuity_degenerate` and `is_automatic_or_rollup_checkin` hold) or the
+caller bypasses continuity metrics.
+When all axes remain unread (or go stale), check-ins 1–5 are decided by the Φ
+cold-start prior; from check-in 6 onward, rather than letting the Φ prior decide
+indefinitely, `reading_insufficient` draws **no verdict** (`verdict="safe"`,
+`risk_score=0.0`, `driver="insufficient_reading"`, graded `provisional`), and no
+EISV safety floor fires on unscored axes. An agent cannot use omission to earn a
+clean behavioral bill of health — `safe` under `insufficient_reading` explicitly
+records that nothing was measured — and the independent verification floor
+(`governance_core/verification.py`) plus structural basin/void checks still
+apply. A
 self-reported `ethical_drift` does not enter the drift vector, Φ, or the verdict
 in any phase, on any path: it is never an input. This is a stated rule. MCP
 check-ins still record the report as telemetry (the per-agent profile and the
 response echo); a direct Python call to `UNITARESMonitor.process_update()` does not record it. Whether
 self-reports should ever affect the decision remains an open policy question,
-parked when PR #2372 was closed. Described-behavior semantics don't fully register
-until check-in 3; self-relative scoring still waits until check-in 25.
+parked when PR #2372 was closed. Under `HU1`, behavioral readings begin at
+check-in 4 once three prior decisions exist, behavioral authority reaches `0.3`
+at check-in 6, and self-relative scoring starts at check-in 28 (check-ins 3 and
+25 respectively when `UNITARES_HOLD_UNREAD_AXES=0`).
 
 State lives in PostgreSQL + AGE. **Behavioral assessment owns the
 post-cold-start risk assessment**, using fixed thresholds and, after warmup,
@@ -135,7 +172,7 @@ evidence and controls.
 UNITARES exposes several adversarial boundaries rather than claiming to close
 them. Trusted external outcomes are harder for a monitored agent to forge than
 self-report, but an agent-controlled `record_result()` call is not independent
-evidence. Self-relative scoring removes one universal cut after check-in 25, but
+evidence. Self-relative scoring removes one universal cut after warmup (check-in 28 under default `HU1`; check-in 25 with hold off), but
 a patient actor may still shape or poison its own baseline. Verdicts lean toward
 `proceed`/`guide` over `pause`/`reject` by design because false-positive pauses
 are also costly. Drift (S) is a salience signal, not an ethics label. Interpret

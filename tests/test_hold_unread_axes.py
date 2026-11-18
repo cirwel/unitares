@@ -25,21 +25,17 @@ from src.behavioral_state import (
 
 @pytest.fixture(autouse=True)
 def _hold_on(monkeypatch):
-    """These tests describe era HU1, so they run with the hold switched on.
-
-    The flag ships off (see test_the_hold_ships_off); a test that needs it off
-    sets it again itself.
-    """
+    """Ensure UNITARES_HOLD_UNREAD_AXES stays on even if inherited env overrides it."""
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "1")
 
 
-def test_the_hold_ships_off(monkeypatch):
-    """A routine deploy must not start era HU1: the default leaves filling on."""
+def test_the_hold_is_on_by_default(monkeypatch):
+    """Era HU1 is active by default: unread axes are held rather than filled."""
     monkeypatch.delenv("UNITARES_HOLD_UNREAD_AXES", raising=False)
-    assert hold_unread_axes_enabled() is False
+    assert hold_unread_axes_enabled() is True
     state = BehavioralEISV()
     state.update(0.7, 0.6, 0.2)
-    assert state.hold_unread is False
+    assert state.hold_unread is True
 
 
 def _sensor_inputs(**overrides) -> dict:
@@ -463,6 +459,39 @@ def test_a_state_written_with_the_hold_off_is_not_taken_for_one_written_under_it
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
     restored = BehavioralEISV.from_dict(stored)
     assert not restored.tracks_readings and restored.unscored_dimensions == []
+
+
+def test_hold_off_snapshot_restored_under_hold_resets_reading_counters_and_seeds(monkeypatch):
+    monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
+    legacy = BehavioralEISV()
+    for _ in range(40):
+        legacy.update(0.85, 0.75, 0.30)
+
+    snapshots = (legacy.to_dict_for_persistence(), legacy.to_dict_with_history())
+    monkeypatch.delenv("UNITARES_HOLD_UNREAD_AXES", raising=False)
+
+    for stored in snapshots:
+        assert stored["readings"]["I"] == 40
+        assert stored["hold_unread"] is False
+        assert stored["written_under_hold"] is False
+
+        restored = BehavioralEISV.from_dict(stored)
+        assert restored.hold_unread is True
+        assert restored.written_under_hold is False
+        assert restored.readings == {"E": 0, "I": 0, "S": 0, "V": 0}
+        assert restored.since_reading == {"E": 0, "I": 0, "S": 0, "V": 0}
+        assert restored.unread_dimensions == ["E", "I", "S", "V"]
+        assert restored.unscored_dimensions == ["E", "I", "S", "V"]
+        assert restored.confidence == 0.0
+        assert restored.is_baselined is True
+
+        restored.update(None, 0.10, None)
+        assert restored.I == pytest.approx(0.10)
+        assert restored._baseline_I.count == 1
+        assert restored.confidence == 1.0
+        result = assess_behavioral_state(restored)
+        assert result.unscored_axes == ("E", "S", "V")
+        assert result.components["low_I"] > 0.0
 
 
 def test_trend_bonus_needs_five_readings_on_each_axis():

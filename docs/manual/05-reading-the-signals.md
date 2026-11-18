@@ -97,29 +97,34 @@ observables ──► observation blend ──► EMA state ──► residual /
 
 The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
 
-The current implementation has three stages: check-ins 1–2 use the Φ
-cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
-universal thresholds; and check-in 25 enables per-agent **Welford-baseline**
-z-scores against a 30-update target. Read the state as telemetry against the
-reference available in that stage, not as an outcome judgment. During cold
-start the response marks `action_summary.verdict_confidence: "provisional"`,
-and a cold-start risk estimate does not hard-pause. The exact gates are in
+The current implementation (`HU1`/`SD1`/`SH1` default-ON) has three stages
+counting read check-ins: check-ins 1–5 use the Φ cold-start prior (the first
+three check-ins cannot emit a sensor reading); check-ins 6–27 use the
+behavioral assessment with fixed universal thresholds once `behavioral.confidence
+>= 0.3` (from check-in 6 onward, an unread state draws `safe` / risk `0` /
+`insufficient_reading`); and check-in 28 enables per-agent **Welford-baseline**
+z-scores against a 30-read target (under `UNITARES_HOLD_UNREAD_AXES=0`, these
+boundaries sit at check-ins 1–2, 3–24, and 25). Read the state as telemetry
+against the reference available in that stage, not as an outcome judgment.
+During cold start (or `insufficient_reading`) the response marks
+`action_summary.verdict_confidence: "provisional"`, and a cold-start risk
+estimate does not hard-pause. The exact gates are in
 [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ### The four dimensions
 
 | Coord | What it records | Deployed computation (heuristic) |
 |---|---|---|
-| **E** · Energy | Weighted observations and prior judgments | recent decision scores + legacy controller coherence level + complexity divergence; available outcome, continuity and tool features also contribute |
-| **I** · Integrity | Calibration and consistency features | calibration error + legacy controller coherence trend; available outcome-score consistency, continuity and tool-variety features also contribute |
-| **S** · Entropy | Deviations and activity features | drift-norm + regime transitions + complexity divergence; available continuity and tool features also contribute |
-| **V** · Valence | Direction and persistence of the E/I observation gap | separate EMA of raw `E_obs − I_obs` |
+| **E** · Energy | Weighted divergence, outcome, and tool observations | complexity divergence + non-echo outcome success + caller-bound actor work-tool error rate (`continuity_E_input` and controller/coherence self-loops excluded by default) |
+| **I** · Integrity | Per-agent calibration and consistency features | eligible per-agent tactical calibration accuracy + non-echo outcome-score consistency + `continuity_I_input` (`unique_tools_ratio` and legacy coherence/fleet self-loops excluded by default) |
+| **S** · Entropy | Agent-local deviations and work-tool velocity | agent-local drift norm (`complexity_divergence` + agent tactical calibration error) + complexity divergence + `continuity_S_input` + caller-bound work-tool call velocity (regime and shared fleet drift excluded by default) |
+| **V** · Valence | Direction and persistence of the E/I observation gap | separate EMA of raw `E_obs − I_obs` (steps only when E and I were both read under `HU1`) |
 
 Three things to internalize:
 
-1. **Risk scoring becomes self-relative after warmup; the coordinates remain weighted indices.** Assessment compares them with the agent's own baseline as well as absolute thresholds. A low raw E or I is not itself a measurement of low capacity or false claims.
+1. **Risk scoring becomes self-relative after warmup; the coordinates remain weighted indices.** Assessment compares scored dimensions with the agent's own baseline as well as absolute thresholds. A low raw E or I is not itself a measurement of low capacity or false claims.
 2. **V carries a distinct temporal summary.** Its smoothing rate differs from E's and I's, so it is not generally their current smoothed values subtracted. Positive V records a positive smoothed `E_obs − I_obs` gap; negative V records the reverse. “Running hot” and “running careful” are interpretations to investigate, not facts established by the sign.
-3. **Controller feedback is part of the record.** Prior decisions enter E, so a policy response can change later E even with unchanged task and tool features. That reflects the controller's response without independently confirming its judgment. The blend weights are hand-set engineering parameters; the exact formulas and defaults are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
+3. **Unread axes are held and self-loops are excluded by default.** When an axis has no supplied base term under `UNITARES_HOLD_UNREAD_AXES=1`, it holds its last reading (and drops from scoring after 10 unread check-ins) instead of filling neutral constants, while legacy controller self-loops (`decision_history`, `C(V)`, `regime_instability`) are excluded under `SN1`. The blend weights and rollback flags are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ### Risk components and margin
 

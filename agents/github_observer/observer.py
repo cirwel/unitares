@@ -31,7 +31,7 @@ from typing import Any, Protocol, TextIO
 from agents.github_observer.events import (
     DEFAULT_SKIPPED_CHECKS,
     EVENT_TYPES,
-    agent_uuid_from_body,
+    agent_uuid_from_body_html,
     ci_events,
     ci_fingerprint,
     pr_state_events,
@@ -83,7 +83,9 @@ class GitHubClient:
             method="GET",
             headers={
                 "Authorization": f"Bearer {self._token}",
-                "Accept": "application/vnd.github+json",
+                # ``full`` adds ``body_html``: GitHub's own rendering of a body,
+                # which is what the footer is read from.
+                "Accept": "application/vnd.github.full+json",
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "unitares-github-observer",
             },
@@ -326,7 +328,9 @@ def run_cycle(
             continue
         for pr in pulls:
             try:
-                agent_uuid = agent_uuid_from_body(pr.get("body"))
+                # A missing ``body_html`` (the media type was not honoured) is
+                # a failed read, not an unsigned pull request.
+                agent_uuid = agent_uuid_from_body_html(pr["body_html"])
                 if agent_uuid is None:
                     counts["prs_unsigned"] += 1
                     continue

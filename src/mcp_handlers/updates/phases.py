@@ -442,9 +442,11 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             from ..support.pause_ttl import (
                 maybe_auto_expire_pause_async,
                 paused_refusal_recovery,
+                record_paused_refusal,
             )
             expired = await maybe_auto_expire_pause_async(ctx.agent_uuid, meta)
             if not expired:
+                record_paused_refusal(ctx.agent_uuid, meta, "check_in")
                 return [error_response(
                     "Agent is paused - check-ins and new shared-memory entries are refused",
                     error_code="AGENT_PAUSED",
@@ -804,14 +806,22 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
 
 async def _prepare_behavioral_sensor_inputs(ctx: UpdateContext, mcp_server: Any) -> None:
     """Gather unlocked sensor inputs and compute behavioral observation when warm."""
+    from src.behavioral_sensor import (
+        actor_work_tool_stats_enabled,
+        extract_tool_usage_counts,
+        filter_behavioral_outcomes,
+        neutralize_sensor_self_loops_enabled,
+        populate_behavioral_sensor_state,
+    )
+
+    if actor_work_tool_stats_enabled():
+        from src.audit_db import ensure_actor_work_tool_stats_async
+
+        await ensure_actor_work_tool_stats_async(ctx.agent_id, ctx.agent_state)
+
     if "sensor_eisv" in ctx.agent_state:
         return
     try:
-        from src.behavioral_sensor import (
-            filter_behavioral_outcomes,
-            neutralize_sensor_self_loops_enabled,
-            populate_behavioral_sensor_state,
-        )
         from src.dual_log.continuity import should_exclude_template_divergence
         from src.mcp_handlers.updates.context import get_mean_calibration_error
 
@@ -830,20 +840,25 @@ async def _prepare_behavioral_sensor_inputs(ctx: UpdateContext, mcp_server: Any)
         # Tool usage signals for behavioral sensor
         tool_err, tool_vel, tool_div = None, None, None
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
+            if actor_work_tool_stats_enabled():
+                tu_stats = ctx.agent_state.get("_actor_work_tool_stats")
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
 
-            tu_stats = get_tool_usage_tracker().get_usage_stats(
-                agent_id=ctx.agent_id, window_hours=1
-            )
-            tu_total = tu_stats.get("total_calls", 0)
+                tu_stats = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=ctx.agent_id, window_hours=1
+                )
+            tu_total, tu_failed = extract_tool_usage_counts(tu_stats)
             if tu_total > 0:
-                tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in tu_stats.get("tools", {}).values()
+                raw_unique = (tu_stats or {}).get("unique_tools", 0)
+                unique_tools = (
+                    0
+                    if raw_unique is None or isinstance(raw_unique, bool)
+                    else max(0, int(raw_unique))
                 )
                 tool_err = tu_failed / tu_total
                 tool_vel = tu_total / 60.0  # calls per minute
-                tool_div = tu_stats.get("unique_tools", 0) / tu_total
+                tool_div = unique_tools / tu_total
         except Exception as e:
             logger.debug(f"Tool usage stats unavailable for {ctx.agent_id}: {e}")
 
@@ -1264,16 +1279,21 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         # Collect current signals for anomaly check
         anomaly_signals = {}
         try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            _tu = get_tool_usage_tracker().get_usage_stats(
-                agent_id=ctx.agent_id, window_hours=1,
+            from src.behavioral_sensor import (
+                actor_work_tool_stats_enabled,
+                extract_tool_usage_counts,
             )
-            _tu_total = _tu.get("total_calls", 0)
-            if _tu_total > 0:
-                _tu_failed = sum(
-                    t.get("error_count", 0)
-                    for t in _tu.get("tools", {}).values()
+
+            if actor_work_tool_stats_enabled():
+                _tu = (ctx.agent_state or {}).get("_actor_work_tool_stats") or {}
+            else:
+                from src.tool_usage_tracker import get_tool_usage_tracker
+
+                _tu = get_tool_usage_tracker().get_usage_stats(
+                    agent_id=ctx.agent_id, window_hours=1,
                 )
+            _tu_total, _tu_failed = extract_tool_usage_counts(_tu)
+            if _tu_total > 0:
                 anomaly_signals["tool_error_rate"] = _tu_failed / _tu_total
                 anomaly_signals["tool_call_velocity"] = _tu_total / 60.0
         except Exception:

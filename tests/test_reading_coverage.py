@@ -45,7 +45,7 @@ def _good_outcomes(n: int = 4) -> list[dict]:
     ]
 
 
-def test_only_drift_supplied_leaves_e_and_i_as_defaults():
+def test_only_drift_supplied_leaves_e_and_i_as_defaults(monkeypatch):
     coverage = _coverage(drift_norm=0.3, continuity_E_input=0.3, unique_tools_ratio=0.02)
 
     assert coverage["measured"] == ["S"]
@@ -54,8 +54,13 @@ def test_only_drift_supplied_leaves_e_and_i_as_defaults():
         "I": ["uncalibrated_base_fallback"],
     }
     assert coverage["v_rests_on_defaults"] is True
-    # Carried from the derivation's own unobserved_share, not recomputed.
-    assert coverage["unobserved_share"] == {"E": 0.8, "I": 0.9, "S": 0.0}
+    # Carried from the derivation's own unobserved_share (continuity_E_input and unique_tools_ratio omitted under SH1).
+    assert coverage["unobserved_share"] == {"E": 1.0, "I": 1.0, "S": 0.0}
+
+    monkeypatch.setenv("UNITARES_DROP_CONTINUITY_E_BLEND", "0")
+    monkeypatch.setenv("UNITARES_DROP_UNIQUE_TOOLS_I_BLEND", "0")
+    legacy_coverage = _coverage(drift_norm=0.3, continuity_E_input=0.3, unique_tools_ratio=0.02)
+    assert legacy_coverage["unobserved_share"] == {"E": 0.8, "I": 0.9, "S": 0.0}
 
 
 def test_later_adjustments_alone_do_not_make_an_axis_measured():

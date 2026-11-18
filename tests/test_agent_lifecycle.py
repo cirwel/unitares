@@ -227,8 +227,8 @@ class TestExpectedInterval:
         """Label-based intervals are deployment-local now (UNITARES_CLASS_CALIBRATION
         overlay); inject representative test values so the label-fallback path has
         a map to exercise, without depending on shipped per-resident config."""
-        import src.background_tasks as bt
-        monkeypatch.setattr(bt, "_PERSISTENT_AGENT_INTERVALS",
+        import src.background_resident_monitors as brm
+        monkeypatch.setattr(brm, "_PERSISTENT_AGENT_INTERVALS",
                             {"Vigil": 1800, "Lumen": 300, "Sentinel": 600, "Watcher": 21600})
 
     def test_prefers_cadence_tag_over_label(self):
