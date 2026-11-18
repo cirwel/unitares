@@ -730,7 +730,16 @@ class TestDispatchToolIntegration:
             mock_resolve.side_effect = fake_resolve_identity
             mock_verify.side_effect = fake_verify_trajectory
 
-            yield mock_resolve, mock_verify
+            # Dispatch iterates the registered steps captured at module import.
+            from src.mcp_handlers import middleware
+            from src.mcp_handlers.middleware.identity_step import resolve_identity
+            from src.mcp_handlers.middleware.trajectory_step import verify_trajectory
+
+            replacements = {resolve_identity: mock_resolve, verify_trajectory: mock_verify}
+            with patch.object(middleware, "PRE_DISPATCH_STEPS", [
+                replacements.get(step, step) for step in middleware.PRE_DISPATCH_STEPS
+            ]):
+                yield mock_resolve, mock_verify
 
     @pytest.fixture
     def mock_track_patterns(self):
