@@ -216,6 +216,11 @@ def _verdict_for(score: float) -> str:
     return SAFE
 
 
+def verdict_for(score: float) -> str:
+    """Map a verification floor score in [0, 1] to its verdict band."""
+    return _verdict_for(score)
+
+
 def score_harm_confession(response_text: str) -> VerificationSignal:
     """Score ``response_text`` for *described* adverse actions.
 

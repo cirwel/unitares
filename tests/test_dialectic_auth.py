@@ -217,7 +217,7 @@ class TestForgeryResistance:
 
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
-        DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+        DIALECTIC = "src.mcp_handlers.dialectic.phase_submission"
         attacker, victim = OTHER_UUID, PAUSED_UUID
 
         session = MagicMock()

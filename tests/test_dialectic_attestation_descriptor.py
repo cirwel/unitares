@@ -277,8 +277,11 @@ class TestAttachAttestation:
             / "dialectic"
         )
         total_serving = 0
-        for mod_name in ("handlers.py", "phase_submission.py", "resolution_helpers.py"):
-            lines = (dialectic_dir / mod_name).read_text().split("\n")
+        files = sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py")
+        assert files, f"expected dialectic modules in {dialectic_dir}"
+        for path in files:
+            mod_name = path.name
+            lines = path.read_text().split("\n")
             serving = [
                 i
                 for i, ln in enumerate(lines)
@@ -338,8 +341,11 @@ class TestNoForgeableFallbackKey:
             pathlib.Path(__file__).resolve().parents[1]
             / "src" / "mcp_handlers" / "dialectic"
         )
-        for mod_name in ("handlers.py", "phase_submission.py", "resolution_helpers.py"):
-            for i, line in enumerate((dialectic_dir / mod_name).read_text().splitlines(), 1):
+        files = sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py")
+        assert files, f"expected dialectic modules in {dialectic_dir}"
+        for path in files:
+            mod_name = path.name
+            for i, line in enumerate(path.read_text().splitlines(), 1):
                 if line.lstrip().startswith("#"):
                     continue
                 assert not re.search(r'f"llm-\{agent_uuid', line), (

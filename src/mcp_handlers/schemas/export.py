@@ -26,8 +26,9 @@ class ExportToFileParams(AgentIdentityMixin):
     complete_package: bool = Field(
         default=False,
         description=(
-            "If true, exports metadata + history + validation. Knowledge is "
-            "not included. If false (default), exports history only."
+            "If true, exports metadata, the record (checkpoints, findings the "
+            "agent authored and outcomes, newest 1000 of each), the EISV history "
+            "when readable, and validation. If false (default), exports history only."
         )
     )
 
@@ -63,6 +64,7 @@ class ExportParams(AgentIdentityMixin):
     complete_package: bool = Field(
         False,
         description=(
-            "Export metadata, history, and validation together for action=file"
+            "Export metadata, the record (checkpoints, authored findings, outcomes), "
+            "the EISV history and validation together for action=file"
         ),
     )

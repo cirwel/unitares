@@ -442,9 +442,11 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             from ..support.pause_ttl import (
                 maybe_auto_expire_pause_async,
                 paused_refusal_recovery,
+                record_paused_refusal,
             )
             expired = await maybe_auto_expire_pause_async(ctx.agent_uuid, meta)
             if not expired:
+                record_paused_refusal(ctx.agent_uuid, meta, "check_in")
                 return [error_response(
                     "Agent is paused - check-ins and new shared-memory entries are refused",
                     error_code="AGENT_PAUSED",

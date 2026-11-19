@@ -357,7 +357,8 @@ def test_explain_verdict_is_unchanged_without_the_driver():
     [
         (INSUFFICIENT_READING_DRIVER, False, 0.0, False),
         (INSUFFICIENT_READING_DRIVER, True, 0.0, False),
-        ("behavioral_assessment", True, 0.15, True),
+        # The advisory is reported but never applied to risk_score.
+        ("behavioral_assessment", True, 0.0, True),
     ],
 )
 async def test_trajectory_enrichment_preserves_zero_risk_under_insufficient_reading(

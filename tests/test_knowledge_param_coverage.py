@@ -28,12 +28,8 @@ from src.mcp_handlers.schemas.knowledge import KnowledgeParams
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "src" / "mcp_handlers" / "knowledge"
 HANDLERS = KNOWLEDGE_DIR / "handlers.py"
-HANDLER_MODULES = (
-    KNOWLEDGE_DIR / "handlers.py",
-    KNOWLEDGE_DIR / "mutation_helpers.py",
-    KNOWLEDGE_DIR / "search_helpers.py",
-    KNOWLEDGE_DIR / "validation_helpers.py",
-)
+HANDLER_MODULES = tuple(sorted(p for p in KNOWLEDGE_DIR.glob("*.py") if p.name != "__init__.py"))
+assert HANDLER_MODULES, f"expected knowledge handler modules in {KNOWLEDGE_DIR}"
 
 
 def _read_arg_keys(source: str) -> set[str]:

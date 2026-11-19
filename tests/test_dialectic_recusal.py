@@ -146,10 +146,14 @@ class TestSelfClearRefusalTellsTheTruth:
     def _recovery_text(self):
         from pathlib import Path
 
-        src = (
+        dialectic_dir = (
             Path(__file__).resolve().parents[1]
-            / "src/mcp_handlers/dialectic/handlers.py"
-        ).read_text()
+            / "src/mcp_handlers/dialectic"
+        )
+        src = "\n".join(
+            p.read_text()
+            for p in sorted(p for p in dialectic_dir.glob("*.py") if p.name != "__init__.py")
+        )
         start = src.index('error_code="SELF_CLEAR_REFUSED"')
         return src[start : start + 2200]
 

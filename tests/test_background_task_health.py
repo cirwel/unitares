@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src import background_task_health as health
-from src import background_tasks
+from src import background_resident_monitors, background_tasks
 from src.services.runtime_queries import NO_DATA_YET
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "unitares_doctor.py"
@@ -145,9 +145,9 @@ async def test_partition_maintenance_success_is_recorded(monkeypatch):
 @pytest.mark.asyncio
 async def test_silence_loop_records_both_halves(monkeypatch):
     monkeypatch.setattr(
-        background_tasks, "_silence_check_iteration", AsyncMock(side_effect=KeyError("label"))
+        background_resident_monitors, "_silence_check_iteration", AsyncMock(side_effect=KeyError("label"))
     )
-    monkeypatch.setattr(background_tasks, "_resident_pause_check_iteration", AsyncMock())
+    monkeypatch.setattr(background_resident_monitors, "_resident_pause_check_iteration", AsyncMock())
     calls = {"n": 0}
 
     async def fake_sleep(_seconds):

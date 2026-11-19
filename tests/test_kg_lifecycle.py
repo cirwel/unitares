@@ -104,7 +104,9 @@ def patch_common(mock_mcp_server, mock_graph):
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.mcp_server", mock_mcp_server), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
+         patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"):
         yield mock_mcp_server, mock_graph
 
@@ -686,6 +688,40 @@ class TestGetDiscoveryDetails:
         assert data["success"] is True
         assert "response_chain" in data
         assert "error" in data["response_chain"]
+
+    @pytest.mark.asyncio
+    async def test_get_details_survives_response_chain_concurrency_refusal(
+        self,
+        patch_common,
+    ):
+        """Base discovery details remain available when expansion is refused."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        disc = make_discovery(
+            id="2026-01-01T00:00:00.000000",
+            details="Details remain readable",
+        )
+        mock_graph.get_discovery = AsyncMock(return_value=disc)
+        mock_graph.get_response_chain = AsyncMock(
+            side_effect=RuntimeError(
+                "Response-chain query concurrency limit reached; retry later"
+            )
+        )
+
+        result = await handle_get_discovery_details({
+            "discovery_id": disc.id,
+            "include_response_chain": True,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["discovery"]["id"] == disc.id
+        assert data["discovery"]["details"] == "Details remain readable"
+        assert "concurrency limit" in data["response_chain"]["error"]
+        assert data["response_chain"]["note"] == (
+            "Discovery details still returned successfully"
+        )
 
     @pytest.mark.asyncio
     async def test_get_details_exception_handling(self, patch_common):

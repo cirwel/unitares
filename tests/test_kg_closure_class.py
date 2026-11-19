@@ -339,8 +339,14 @@ def graph():
         patch("src.mcp_handlers.context.get_context_resolved_agent_id", return_value="a-1"),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", server),
         patch(
             "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            new_callable=AsyncMock,
+            return_value=graph,
+        ),
+        patch(
+            "src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph",
             new_callable=AsyncMock,
             return_value=graph,
         ),
@@ -370,7 +376,7 @@ async def test_a_non_owner_classifies_only_in_the_closing_call(graph):
     )
     with (
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("closer-b", None),
         ),
         patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
@@ -404,7 +410,7 @@ async def test_a_non_owner_refusal_separates_owner_fields_from_closing_call_fiel
     )
     with (
         patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            "src.mcp_handlers.knowledge.mutation_helpers.require_registered_agent",
             return_value=("closer-b", None),
         ),
         patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
