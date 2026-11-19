@@ -92,15 +92,20 @@ def test_resolve_era_window_single_eras_never_pool():
     assert rr1.stamp_era is None
     assert eisv_eras.boundaries_crossed(rr1.start, rr1.end, stamp_filtered=False) == []
 
+    # HU1/SD1/SH1 are timed at the shared 2026-11-18T07:55:32Z restart, so SN1
+    # now ends there and the cutover window starts after the ambiguous interval.
+    cutover = datetime(2026, 11, 18, 7, 55, 32, tzinfo=UTC)
     sn1 = reader.resolve_era_window("SN1", as_of=as_of)
     assert sn1.start == datetime(2026, 11, 5, 22, 57, 49, tzinfo=UTC)
-    assert sn1.end == as_of
-    assert sn1.stamp_era == "SN1"
-    assert eisv_eras.boundaries_crossed(sn1.start, sn1.end, stamp_filtered=True) == []
+    assert sn1.end == cutover
+    assert sn1.stamp_era is None
+    assert eisv_eras.boundaries_crossed(sn1.start, sn1.end, stamp_filtered=False) == []
 
     sh1 = reader.resolve_era_window("SH1", as_of=as_of)
-    assert sh1.start == datetime(2026, 11, 5, 22, 57, 49, tzinfo=UTC)
-    assert sh1.stamp_era == "SH1"
+    assert sh1.start == datetime(2026, 11, 18, 8, 11, 3, tzinfo=UTC)
+    assert sh1.end == as_of
+    assert sh1.stamp_era is None
+    assert eisv_eras.boundaries_crossed(sh1.start, sh1.end, stamp_filtered=False) == []
 
 
 def test_resolve_era_window_rejects_unknown_and_label_only():

@@ -719,6 +719,24 @@ def test_sn1_is_timed_and_post_deploy_window_is_single_era():
     sn1 = next(b for b in eisv_eras.load_boundaries() if b.id == "SN1")
     assert sn1.effective_at == _t("2026-11-05T22:56:34")
     assert eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16"), stamp_filtered=True) == []
-    assert [b.id for b in eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16"))] == ["HU1", "SD1", "SH1"]
+    assert eisv_eras.boundaries_crossed(_t("2026-11-06"), _t("2026-11-16")) == []
     assert "SN1" in [b.id for b in eisv_eras.boundaries_crossed(_t("2026-11-01"), _t("2026-11-10"))]
     assert eisv_eras.current_era_id() == "SH1"
+
+
+def test_final_cutover_eras_are_timed_at_the_shared_restart():
+    """HU1, SD1 and SH1 went live together at one governance-mcp restart."""
+    restart = _t("2026-11-18T07:55:32")
+    cutover = [b for b in eisv_eras.load_boundaries() if b.id in ("HU1", "SD1", "SH1")]
+    assert [b.id for b in cutover] == ["HU1", "SD1", "SH1"]
+    for b in cutover:
+        assert b.effective_at == restart, b.id
+        assert b.interval == (restart, _t("2026-11-18T08:11:03")), b.id
+    crossed = eisv_eras.boundaries_crossed(_t("2026-11-17"), _t("2026-11-19"))
+    assert [b.id for b in crossed] == ["HU1", "SD1", "SH1"]
+    pieces = eisv_eras.era_windows(_t("2026-11-18T07:00"), _t("2026-11-18T09:00"))
+    assert pieces == [
+        ("SN1", _t("2026-11-18T07:00"), restart),
+        ("SH1", _t("2026-11-18T08:11:03"), _t("2026-11-18T09:00")),
+    ]
+    assert eisv_eras.current_era_window_start() == (_t("2026-11-18T08:11:03"), None)
