@@ -74,6 +74,36 @@ veto by removing the label.
   message; the PR keeps its queue position.
   Like the PR's `agent/*` family label, the token is a filter and attribution
   aid, not verified model provenance.
+- <a id="detection-record"></a>**A fix PR records who noticed the defect.**
+  The 2026-11-17 census of EISV instrument changes found that the record says
+  what changed and why, but not who noticed that an earlier change was wrong:
+  no commit in the history named a detection, so silence read both as "no
+  defect" and as "not written down". A PR whose body is classified `fix` (every
+  classification it states is `fix`) therefore carries this block directly
+  above its signature (operator ruling 2026-11-18):
+
+  ```
+  Defect-in: <the change that introduced it: #N, a commit, an era id> | unknown
+  Detected-by: operator | agent:<uuid> | check:<name> | external:<who> | unknown
+  Detection-trigger: unprompted | prompted | automated | unknown
+  Detected-at: <YYYY-MM-DD or ISO time> | unknown
+  Detection-record: <shared-memory discovery id> | none
+  ```
+
+  When the trigger is `prompted`, `Prompted-by: operator | agent:<uuid> | unknown`
+  is required as well. Values hold no backticks or angle brackets, which the
+  merge queue leaves out of the merged commit.
+  `unknown` is accepted in every field: the record asks for honesty, not for
+  knowledge the author lacks, and a fixer who did not notice the defect writes
+  what they know. When you notice a defect yourself, also write a
+  `store_finding` (`discovery_type: bug_found`, tag `detection`) at the time,
+  and name its id in `Detection-record:`; when the finding and the PR block
+  disagree, the finding, written when the noticing happened, is the record.
+  The `detection-record` check (`scripts/dev/check_detection_record.py`, run
+  from the base branch) fails a fix PR without a complete block; lines in code
+  fences or block quotes do not count. The merge queue copies each field's last
+  line into the squash body just above the `Model:` / `UNITARES agent:` lines.
+  Like the signature, the values are self-reported, not verified provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to its delivery owner.**
   The opening session is the
   initial delivery owner; a completed handover or adoption transfers delivery
