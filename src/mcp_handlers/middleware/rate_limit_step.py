@@ -35,6 +35,7 @@ _READ_ONLY_TOOLS = call_set(
 
 # Expensive-read loop detection keys: (canonical name, resolved action).
 _EXPENSIVE_READ_CALLS = {("agent", "list")}
+_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET = "response-chain:unbound"
 
 
 def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
@@ -47,6 +48,24 @@ def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
     )
 
 
+def _response_chain_rate_bucket(ctx) -> str:
+    """Return a server-owned budget key for response-chain expansion.
+
+    A bound identity was resolved by the identity middleware, so bound
+    callers are partitioned per identity; this budget is only as strong as
+    identity minting, which is itself rate-limited. An unbound details read
+    has no trusted caller key, so every such expansion shares one aggregate
+    bucket. Caller-supplied ``agent_id`` and transport fingerprints never
+    select this expensive-read budget. The per-traversal ceilings and the
+    deployment-wide advisory lock in get_response_chain bound total AGE work
+    regardless of how many buckets exist.
+    """
+    bound = getattr(ctx, "bound_agent_id", None)
+    if bound:
+        return f"response-chain:bound:{bound}"
+    return _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET
+
+
 def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
     """Return the loop-detection history key for expensive read calls."""
     action = arguments.get("action") or arguments.get("op")
@@ -56,25 +75,20 @@ def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _rate_bucket_key(
-    arguments: Dict[str, Any],
-    ctx,
-    *,
-    trust_agent_argument: bool = True,
-) -> str:
+def _rate_bucket_key(arguments: Dict[str, Any], ctx) -> str:
     """Resolve the rate-limit bucket for this call.
 
     Bound callers are bucketed by agent id. Unbound callers are bucketed
     per transport fingerprint (IP + UA hash) so one anonymous flood — a
     polling dashboard tab, an un-onboarded service — cannot exhaust a
     shared global bucket and lock every other caller out of onboard()
-    (the 2026-06-12 bootstrap-lockout incident). Set trust_agent_argument
-    false when agent_id is target metadata rather than caller identity.
-    The fingerprint is caller-supplied and spoofable; this is runaway
-    protection, not an auth boundary — identity enforcement lives in the
-    #425 gates.
+    (the 2026-06-12 bootstrap-lockout incident). The fingerprint is
+    caller-supplied and spoofable; this is runaway protection, not an
+    auth boundary — identity enforcement lives in the #425 gates.
+    Response-chain expansion does not use this key; see
+    _response_chain_rate_bucket.
     """
-    agent_id = arguments.get('agent_id') if trust_agent_argument else None
+    agent_id = arguments.get('agent_id')
     if agent_id:
         return str(agent_id)
     bound = getattr(ctx, 'bound_agent_id', None)
@@ -203,12 +217,17 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     ) and not response_chain_read:
         return name, arguments, ctx
 
-    # On a pre-onboarding read, agent_id is caller-supplied target metadata,
-    # not authenticated caller identity. It must not select a fresh bucket.
-    bucket = _rate_bucket_key(
-        arguments,
-        ctx,
-        trust_agent_argument=not response_chain_read,
+    # Response-chain expansion uses only server-resolved identity. On a
+    # pre-onboarding read, agent_id is caller-supplied target metadata, not
+    # authenticated caller identity, and the transport fingerprint is
+    # spoofable. Unbound callers therefore share a fixed aggregate bucket, so
+    # rotating either cannot mint a fresh unbound expansion budget. Bound
+    # callers are budgeted per resolved identity. Ordinary details reads and
+    # onboarding retain their existing exemptions and per-caller buckets.
+    bucket = (
+        _response_chain_rate_bucket(ctx)
+        if response_chain_read
+        else _rate_bucket_key(arguments, ctx)
     )
     rate_limiter = get_rate_limiter()
     allowed, error_msg = rate_limiter.check_rate_limit(bucket)

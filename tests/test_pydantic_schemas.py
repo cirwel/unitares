@@ -335,6 +335,47 @@ class TestPydanticSchemas:
         assert unrelated.offset is None
         assert unrelated.length is None
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("max_chain_depth", 33),
+            ("response_chain_limit", 201),
+            ("response_chain_offset", 10_001),
+        ],
+    )
+    def test_knowledge_response_chain_schema_rejects_excessive_bounds(
+        self,
+        field,
+        value,
+    ):
+        """Traversal complexity above server ceilings fails validation."""
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        with pytest.raises(ValidationError):
+            KnowledgeParams(
+                action="details",
+                discovery_id="disc-1",
+                include_response_chain=True,
+                **{field: value},
+            )
+
+    def test_knowledge_response_chain_schema_accepts_ceiling_values(self):
+        """The largest supported response-chain page remains available."""
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        model = KnowledgeParams(
+            action="details",
+            discovery_id="disc-1",
+            include_response_chain=True,
+            max_chain_depth=32,
+            response_chain_limit=200,
+            response_chain_offset=10_000,
+        )
+
+        assert model.max_chain_depth == 32
+        assert model.response_chain_limit == 200
+        assert model.response_chain_offset == 10_000
+
     def test_leave_note_accepts_s22_h5_agent_knowable_fields(self):
         """Quick notes must preserve the same S22 diagnostic fields as store."""
         from src.mcp_handlers.schemas.knowledge import LeaveNoteParams

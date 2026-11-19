@@ -7,6 +7,20 @@
 [`eisv-outcome-grounding-stop-rule-v0.md`](../registered/eisv-outcome-grounding-stop-rule-v0.md)
 (#1425; read fixed for 2026-12-01, status unresolved). This roadmap predates it and
 does not otherwise cite it.
+**Freeze, 2026-11-18 (operator).** After an advisory consult (Codex,
+Antigravity and Claude hosts) and a council, the operator answered "proceed
+best" to this recommendation: deploy the merged HU1/SD1/SH1 cutover (#3286)
+once as the final named era, then freeze the EISV maths. From that deploy on,
+no change to the update path, sensor blend, policy thresholds or calibration
+(that is, nothing that needs a new entry in `config/eisv_instrument_eras.json`)
+lands except a correctness fix named as one. The freeze lifts when the stop
+rule's new premise exists: an independent label channel. Every fresh
+accepted check-in still runs the estimator, so EISV keeps producing per-era
+telemetry; making it an optional module remains the staged target of the
+2026-10-10 decision, which stands. Remaining effort goes to the core boundary:
+#3294 (risk surface), #3295 (pause refusal audit) and #3296 (record export).
+This replaces the instrument-quality-first ordering of the 2026-10-13
+decision.
 **Method:** starts from design **values**, translates them into maths, and
 sequences reversible moves. The values are the operator's; the translation and
 the layer-tagging are the engineering. Where a decision is a value, it is held

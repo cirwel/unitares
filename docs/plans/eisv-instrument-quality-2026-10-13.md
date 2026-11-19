@@ -2,8 +2,10 @@
 
 **Decision date:** 2026-10-13
 
-**Status:** operator-authorized priority; implementation and study gates below
-remain separate.
+**Status:** superseded on 2026-11-18. The operator froze the EISV maths after
+the HU1/SD1/SH1 cutover (#3286) deploys; see the freeze note in
+[`eisv-maths-roadmap-v0.md`](../proposals/active/eisv-maths-roadmap-v0.md).
+The sequence below is kept as the record of what was prioritized and why.
 
 ## Direction
 
