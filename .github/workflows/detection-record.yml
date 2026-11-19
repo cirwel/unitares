@@ -9,6 +9,10 @@ name: Detection Record
 # checker) and reads only the PR body from the event, passed through the
 # environment, never interpolated into the script. No step runs anything from
 # the PR head. `edited` re-runs it when the body changes.
+#
+# The run's check lands on the PR's head commit, as Review Gate's `gate` job
+# does (also pull_request_target), so the merge queue sees a failure here like
+# any other failing check on the head and does not arm the PR.
 
 on:
   pull_request_target:

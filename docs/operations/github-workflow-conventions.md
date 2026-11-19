@@ -91,7 +91,8 @@ veto by removing the label.
   ```
 
   When the trigger is `prompted`, `Prompted-by: operator | agent:<uuid> | unknown`
-  is required as well.
+  is required as well. Values hold no backticks or angle brackets, which the
+  merge queue leaves out of the merged commit.
   `unknown` is accepted in every field: the record asks for honesty, not for
   knowledge the author lacks, and a fixer who did not notice the defect writes
   what they know. When you notice a defect yourself, also write a

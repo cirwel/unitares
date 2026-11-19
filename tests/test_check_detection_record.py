@@ -67,6 +67,8 @@ def test_accepted_values(line):
     "Detection-trigger: someone asked",
     "Detected-at: last week",
     "Detection-record: two words",
+    "Defect-in: `abc123`",
+    "Detected-by: external:Reporter <reporter@example.org>",
 ])
 def test_rejected_values(line):
     name = line.split(":", 1)[0]

@@ -16,6 +16,8 @@ directly above its provenance signature:
     Detection-record: <shared-memory discovery id> | none
     Prompted-by: operator | agent:<uuid> | unknown     (required when prompted)
 
+Values hold no backticks or angle brackets, which the merge queue's squash
+copy leaves out, so every accepted value lands in the merged commit.
 `unknown` is always accepted: the check asks for an honest record, not for
 knowledge the author lacks. Lines inside fenced code blocks and block quotes
 do not count, so a quoted example cannot satisfy it. The values are
@@ -45,9 +47,9 @@ _UUID = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f
 _TOKEN = r"[A-Za-z0-9][A-Za-z0-9._/+:@#-]{0,99}"
 
 _VALID = {
-    "defect-in": re.compile(r"^(?!\s)[^\r\n]{1,200}$"),
+    "defect-in": re.compile(r"^(?!\s)[^\r\n`<>]{1,200}$"),
     "detected-by": re.compile(
-        rf"^(?:operator|unknown|agent:{_UUID}|check:{_TOKEN}|external:(?!\s)[^\r\n]{{1,100}})$", re.IGNORECASE),
+        rf"^(?:operator|unknown|agent:{_UUID}|check:{_TOKEN}|external:(?!\s)[^\r\n`<>]{{1,100}})$", re.IGNORECASE),
     "detection-trigger": re.compile(r"^(?:unprompted|prompted|automated|unknown)$", re.IGNORECASE),
     "detected-at": re.compile(
         r"^(?:unknown|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)$",
@@ -57,8 +59,8 @@ _VALID = {
 }
 
 _HINT = {
-    "defect-in": "a PR (#N), commit, era id, or `unknown`",
-    "detected-by": "`operator`, `agent:<uuid>`, `check:<name>`, `external:<who>`, or `unknown`",
+    "defect-in": "a PR (#N), commit, era id, or `unknown` (no backticks or angle brackets)",
+    "detected-by": "`operator`, `agent:<uuid>`, `check:<name>`, `external:<who>` (no backticks or angle brackets), or `unknown`",
     "detection-trigger": "`unprompted`, `prompted`, `automated`, or `unknown`",
     "detected-at": "a date (YYYY-MM-DD), an ISO time, or `unknown`",
     "detection-record": "a shared-memory discovery id, `none`, or `unknown`",
