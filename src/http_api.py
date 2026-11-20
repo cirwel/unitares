@@ -197,6 +197,7 @@ def register_http_routes(
     mount_route_packs: bool = True,
     oauth_provider=None,
     oauth_settings=None,
+    oauth_setup_failed: bool = False,
 ):
     """
     Register all HTTP REST endpoints on the given Starlette ``app``.
@@ -236,6 +237,7 @@ def register_http_routes(
                 state["oauth_provider"] = oauth_provider
                 state["oauth_issuer"] = getattr(oauth_settings, "issuer_url", "")
                 state["oauth_resource"] = getattr(oauth_settings, "resource_server_url", "")
+                state["oauth_setup_failed"] = bool(oauth_setup_failed)
             await self.app(scope, receive, send)
 
     app.add_middleware(_ConnectorContextMiddleware)
