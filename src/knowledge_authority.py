@@ -40,10 +40,11 @@ PROMOTION_SCHEMA = "unitares.knowledge_promotion.v1"
 PROMOTION_TAG = "authority-governed"
 
 AUTHORITY_MULTIPLIERS = {
-    # Operator decision 2026-11-20: relaxed from 0.55 -> 0.85 after live bge-m3
-    # ablation (doubled memory retrieval_gold r@5 18.2% -> 36.4% while keeping
-    # native labels.json r@1 at 72.7% / MRR 0.801; close contests still prefer
-    # native findings).
+    # Operator decision 2026-11-20 (KG 2026-11-20T07:55:29.151367+00:00):
+    # relaxed from 0.55 -> 0.85 after live snapshot ablation on local Postgres +
+    # Ollama bge-m3 (KG 2026-11-20T05:44:43.941727+00:00; retrieval_gold.json
+    # n=11 r@5 18.2% -> 36.4%, labels.json n=22 r@1 72.7% / MRR 0.801; close
+    # contests still prefer native findings).
     IMPORTED_CONTEXT: 0.85,
     # Operator decision 2026-09-27: close-contest down-rank for coordination
     # chatter; nothing is excluded.

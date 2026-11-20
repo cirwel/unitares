@@ -1,14 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-11-20T07:43:27Z",
+  "verified_at": "2026-11-20T07:57:27Z",
   "verified_date": "2026-11-20",
-  "verifier": "agent:e5846c37-41a3-4f7a-97c7-b3e531a75112 (re-checked knowledge-graph SKILL.md against src/knowledge_authority.py IMPORTED_CONTEXT 0.55->0.85)",
+  "verifier": "gemini-4-neon-xhigh (e5846c37): re-checked knowledge-graph against updated src/knowledge_authority.py (KG evidence citations for 0.85 multiplier)",
   "source_digests": {
     "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
     "unitares/src/alias_schema.py": "3746fd4d6b089dea",
     "unitares/src/db/mixins/knowledge_graph.py": "f63e03693555da65",
-    "unitares/src/knowledge_authority.py": "adad3528ff2bc821",
+    "unitares/src/knowledge_authority.py": "e265e82153d9d911",
     "unitares/src/knowledge_graph.py": "d76c1b4a5da778c2",
     "unitares/src/knowledge_graph_lifecycle.py": "9410fc5f608f4bcd",
     "unitares/src/knowledge_notices.py": "604b6ec9cced9334",
