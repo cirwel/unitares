@@ -1,4 +1,4 @@
-"""Per-agent REST tokens admit one agent's check-ins and nothing else.
+"""Per-agent REST tokens authorize only granted scopes for one agent UUID.
 
 See src/http_agent_tokens.py. The token authorizes; it never binds. Every test
 below drives the real /v1/tools/call route with a public source address, so
