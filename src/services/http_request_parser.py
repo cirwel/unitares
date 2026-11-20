@@ -107,7 +107,11 @@ async def read_bounded_asgi_body(
     transport and client registration). Raises the 413 ``HttpToolRequestError``
     as soon as the declared or counted length passes the cap, so at most the
     cap plus one server-delivered message is held. A disconnect mid-body
-    ends the read early and is replayed unchanged.
+    ends the read early and is replayed after the body received so far.
+
+    The body is coalesced as it arrives and replayed as one message, so
+    holding and replaying it costs time and memory linear in its bytes, not
+    in how many messages it came in.
     """
     limit = MAX_HTTP_TOOL_REQUEST_SIZE if max_bytes is None else max_bytes
     for key, value in scope.get("headers") or ():
@@ -119,22 +123,42 @@ async def read_bounded_asgi_body(
             if declared > limit:
                 raise _body_too_large(limit)
             break
-    pending: list[Any] = []
-    received = 0
+    body = bytearray()
+    saw_body = False
+    terminal: Any = None
     while True:
         message = await receive()
-        pending.append(message)
         if message.get("type") != "http.request":
+            terminal = message
             break
-        received += len(message.get("body", b""))
-        if received > limit:
+        saw_body = True
+        body += message.get("body", b"")
+        if len(body) > limit:
             raise _body_too_large(limit)
         if not message.get("more_body", False):
             break
 
+    pending: list[Any] = []
+    if saw_body:
+        pending.append(
+            {
+                "type": "http.request",
+                "body": bytes(body),
+                "more_body": terminal is not None,
+            }
+        )
+    if terminal is not None:
+        pending.append(terminal)
+    del body
+    position = 0
+
     async def replay() -> Any:
-        if pending:
-            return pending.pop(0)
+        nonlocal position
+        if position < len(pending):
+            message = pending[position]
+            pending[position] = None
+            position += 1
+            return message
         return await receive()
 
     return replay

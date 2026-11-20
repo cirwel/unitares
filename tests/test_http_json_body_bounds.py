@@ -145,3 +145,59 @@ def test_tool_route_payload_keeps_megabyte_field():
             str(parser.MAX_HTTP_TOOL_REQUEST_SIZE + 1)
         )
     assert exc_info.value.payload["max_size_mb"] == 10
+
+
+# --- raw ASGI bodies are held and replayed in time linear in their bytes -----
+
+
+def _asgi_receive(messages):
+    queue = list(messages)
+    reads = {"n": 0}
+
+    async def receive():
+        reads["n"] += 1
+        if queue:
+            return queue.pop(0)
+        return {"type": "http.disconnect"}
+
+    return receive, reads
+
+
+@pytest.mark.asyncio
+async def test_asgi_body_in_many_messages_replays_as_one():
+    count = 5000
+    messages = [
+        {"type": "http.request", "body": b"x", "more_body": i < count - 1}
+        for i in range(count)
+    ]
+    receive, _ = _asgi_receive(messages)
+
+    replay = await parser.read_bounded_asgi_body({"headers": []}, receive)
+
+    first = await replay()
+    assert first == {"type": "http.request", "body": b"x" * count, "more_body": False}
+    # Anything after the body comes from the live receive.
+    assert (await replay())["type"] == "http.disconnect"
+
+
+@pytest.mark.asyncio
+async def test_asgi_disconnect_mid_body_replays_the_partial_body_then_disconnect():
+    messages = [
+        {"type": "http.request", "body": b"ab", "more_body": True},
+        {"type": "http.request", "body": b"cd", "more_body": True},
+        {"type": "http.disconnect"},
+    ]
+    receive, reads = _asgi_receive(messages)
+
+    replay = await parser.read_bounded_asgi_body({"headers": []}, receive)
+
+    assert await replay() == {"type": "http.request", "body": b"abcd", "more_body": True}
+    assert await replay() == {"type": "http.disconnect"}
+    assert reads["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_asgi_disconnect_before_any_body_is_replayed_alone():
+    receive, _ = _asgi_receive([{"type": "http.disconnect"}])
+    replay = await parser.read_bounded_asgi_body({"headers": []}, receive)
+    assert await replay() == {"type": "http.disconnect"}
