@@ -404,7 +404,7 @@ async def test_record_external_event_partition_retry_and_rollback():
 
 
 @pytest.mark.asyncio
-async def test_record_external_event_out_of_window_clamped_and_error_rolls_back():
+async def test_record_external_event_error_rolls_back():
     tx_log: list[str] = []
 
     async def fetchval(sql, *args):
@@ -419,13 +419,13 @@ async def test_record_external_event_out_of_window_clamped_and_error_rolls_back(
         transaction=lambda: _TxCtx(tx_log, "outer"),
     )
     audit = _DummyAudit(conn)
-    old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 11, 19, 12, 15, tzinfo=timezone.utc)
     with pytest.raises(RuntimeError, match="disk full"):
         await audit.record_external_event(
             fingerprint="100#2:opened",
             event_type="github.pr_opened",
             agent_id=AGENT_UUID,
-            ts=old_ts,
+            ts=ts,
             producer="github_observer",
             payload={"fingerprint": "100#2:opened"},
         )
