@@ -173,3 +173,116 @@ def test_flag_off_is_noop_even_without_grant():
     # no grant, but binding disabled → not vetoed on §8 grounds; tier still ok
     assert j["binding_ok"] is True
     assert j["vetoed"] is False
+
+
+# ── nonce-ledger purge: bounded, rate-limited, never changes the outcome ─────
+
+class _RecordingConn(_FakeConn):
+    def __init__(self, purge_exc=None):
+        super().__init__(None, "INSERT 0 1", None)
+        self.statements = []
+        self._purge_exc = purge_exc
+
+    async def execute(self, sql, *args, **_k):
+        self.statements.append(sql)
+        if "DELETE" in sql and self._purge_exc:
+            raise self._purge_exc
+        return "INSERT 0 1"
+
+
+def _post_with_conn(conn, body):
+    db = _FakeDB()
+    db._conn = conn
+    with patch("src.db.get_db", return_value=db):
+        app = Starlette(routes=[Route("/v1/effect-veto", http_effect_veto, methods=["POST"])])
+        return TestClient(app, client=("127.0.0.1", 50000)).post(
+            "/v1/effect-veto", json=body
+        )
+
+
+@pytest.fixture
+def _purge_due(monkeypatch):
+    from src.http_routes import effects as effects_mod
+
+    monkeypatch.setattr(effects_mod, "_last_nonce_purge", 0.0)
+    return effects_mod
+
+
+def test_purge_runs_after_consume_and_is_rate_limited(_purge_due):
+    conn = _RecordingConn()
+    assert _post_with_conn(conn, _body()).json()["binding_ok"] is True
+    assert _post_with_conn(conn, _body()).json()["binding_ok"] is True
+    deletes = [s for s in conn.statements if "DELETE" in s]
+    assert len(deletes) == 1
+    assert "LIMIT" in deletes[0]
+
+
+def test_purge_failure_does_not_veto(_purge_due):
+    conn = _RecordingConn(purge_exc=RuntimeError("purge failed"))
+    j = _post_with_conn(conn, _body()).json()
+    assert j["binding_ok"] is True
+    assert j["vetoed"] is False
+
+
+@pytest.mark.asyncio
+async def test_purge_sql_keeps_live_nonces_against_real_db():
+    """Expired-past-margin and unmintable far-future rows go; live rows stay,
+    and a replay of a live nonce is still refused after the purge."""
+    from tests.test_db_utils import (
+        TEST_DB_URL,
+        can_connect_to_test_db,
+        ensure_test_database_schema,
+    )
+
+    if not can_connect_to_test_db():
+        pytest.skip("governance_test database not available")
+
+    import asyncpg
+
+    from src.http_routes.effects import _purge_consumed_nonces
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    prefix = "purge-test-"
+    try:
+        exists = await conn.fetchval("SELECT to_regclass('effects.consumed_nonces')")
+        if exists is None:
+            pytest.skip("effects.consumed_nonces not present in governance_test")
+        await conn.execute(
+            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", prefix + "%"
+        )
+        rows = {
+            "old": "now() - interval '10 minutes'",
+            "just-expired": "now() - interval '5 seconds'",
+            "live": "now() + interval '120 seconds'",
+            "far-future": "now() + interval '3650 days'",
+        }
+        for name, exp_sql in rows.items():
+            await conn.execute(
+                f"INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
+                f"VALUES ($1, {exp_sql})",
+                prefix + name,
+            )
+
+        await _purge_consumed_nonces(conn)
+
+        left = {
+            r["nonce"][len(prefix):]
+            for r in await conn.fetch(
+                "SELECT nonce FROM effects.consumed_nonces WHERE nonce LIKE $1",
+                prefix + "%",
+            )
+        }
+        assert left == {"just-expired", "live"}
+
+        replay = await conn.execute(
+            "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
+            "VALUES ($1, now() + interval '120 seconds') ON CONFLICT (nonce) DO NOTHING",
+            prefix + "live",
+        )
+        assert replay.split()[-1] == "0"
+    finally:
+        await conn.execute(
+            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", prefix + "%"
+        )
+        await conn.close()
