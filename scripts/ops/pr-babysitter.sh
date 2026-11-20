@@ -95,8 +95,8 @@
 #   - 24 hours have passed since the current approval label went on. That is
 #     the operator's veto window: removing the label is the veto, and
 #     re-labelling starts the 24 hours again.
-# A PR waiting on any of these is skipped, not waited for, so it never holds
-# the slot. The manifest, its checker and its CI workflow stay hand-merge only
+# A PR waiting on its effect line or its window is skipped, not waited for,
+# so it never holds the slot. The manifest, its checker and its CI workflow stay hand-merge only
 # (HAND_MERGE_ONLY_PATHS), and anything the queue cannot read (the manifest,
 # the diff, the review policy, the label time, a matched file with no patch)
 # is hand-merge too. PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule:
@@ -937,7 +937,13 @@ review_waived() {
   runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
     && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
     || { echo "its review check could not be read"; return 0; }
-  title=$(jq -r '[.check_runs[] | select(.name == "review")] | sort_by(.completed_at // "") | last | .output.title // ""' <<<"$runs")
+  # The run that decides, chosen as `rollup` chooses it: skipped runs (a
+  # workflow that also fires on `labeled` adds one) never count, and the
+  # newest of the rest by start time wins. One still running has no verdict
+  # to read; the required checks report it as pending.
+  title=$(jq -r '[.check_runs[] | select(.name == "review" and (.conclusion // "") != "skipped")]
+                 | sort_by([(.started_at // .completed_at // ""), (.completed_at // "")]) | last
+                 | if . == null or (.status // "completed") != "completed" then "" else (.output.title // "") end' <<<"$runs")
   grep -qi 'waived' <<<"$title" && { echo "its review passed on an operator waiver, not on two model families"; return 0; }
   return 1
 }
@@ -1363,15 +1369,13 @@ while read -r labelled_at n head; do
     case " $unmet" in
       # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
       # an unreviewed PR): wait rather than let a later PR jump the order.
-      *=MISSING*|*=PENDING*)
-        # A delegated sensitive PR never holds the order: its review may be
-        # missing for as long as nobody runs one, and it has already waited a
-        # day, so later PRs go ahead of it.
-        if [ -n "$delegated" ]; then
-          log "#$n waiting on $unmet (must pass before arming); skipped, as a governance-sensitive PR does not hold the queue"
-          continue
-        fi
-        log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
+      # A delegated sensitive PR waits here like any other. This state is
+      # short: a PR nobody reviewed reads NEUTRAL and is skipped below, so
+      # MISSING or PENDING means the check is being evaluated, usually on the
+      # merge commit this queue just made by updating the branch. Skipping it
+      # then would let the next PR land first, move the base again, and send
+      # this one round the update loop for good.
+      *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
       *)
         log "#$n: $unmet (must pass before arming); skipped"
         notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."

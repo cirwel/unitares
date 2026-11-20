@@ -2197,14 +2197,42 @@ def test_an_unreadable_label_time_at_arming_fails_closed(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("review", [None, "PENDING"])
-def test_a_sensitive_pr_awaiting_review_does_not_hold_the_queue(tmp_path: Path, review: str | None) -> None:
-    # Past its window with no review yet: an ordinary auth PR would hold the
-    # order here, but nobody may ever review this one, so the next PR lands.
+def test_a_sensitive_pr_whose_review_is_still_being_evaluated_keeps_its_place(tmp_path: Path, review: str | None) -> None:
+    # Past its window, review not yet reported on this head (the usual state
+    # just after the queue updated its branch). It waits like any PR: letting
+    # #2 land first would move the base and send #1 round the update loop.
     pr, timeline = _delegable(tmp_path, review=review)
     calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
                       compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == [_arm(2, "bbb")]
-    assert "does not hold the queue" in out
+    assert calls == []
+    assert f"#1 waiting on review={review or 'MISSING'}" in out
+
+
+def test_a_skipped_or_running_review_run_does_not_hide_or_fake_a_waiver(tmp_path: Path) -> None:
+    waived = "second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny"
+    for sub_dir, runs, expected in (
+        # A later skipped run (the workflow also fires on `labeled`) must not mask the waiver.
+        ("skipped", [{"name": "review", "status": "completed", "conclusion": "success",
+                      "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+                      "output": {"title": waived}},
+                     {"name": "review", "status": "completed", "conclusion": "skipped",
+                      "started_at": "2026-01-02T00:00:00Z", "completed_at": "2026-01-02T00:00:01Z",
+                      "output": {"title": None}}], []),
+        # A superseded waived run under a newer two-family pass is not a waiver.
+        ("superseded", [{"name": "review", "status": "completed", "conclusion": "success",
+                         "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+                         "output": {"title": waived}},
+                        {"name": "review", "status": "completed", "conclusion": "success",
+                         "started_at": "2026-01-02T00:00:00Z", "completed_at": "2026-01-02T00:01:00Z",
+                         "output": {"title": "clean (codex, antigravity)"}}], [_arm(1, "aaa")]),
+    ):
+        d = tmp_path / sub_dir
+        d.mkdir()
+        pr, timeline = _delegable(d)
+        (d / "gh").mkdir()
+        (d / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
+        calls, _ = _run(d, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE}, PR_QUEUE_REQUIRED_CHECKS="")
+        assert calls == expected, sub_dir
 
 
 def _review_title(tmp_path: Path, title: str | None, sha: str = "aaa") -> None:
