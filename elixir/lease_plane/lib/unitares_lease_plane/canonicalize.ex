@@ -277,8 +277,17 @@ defmodule UnitaresLeasePlane.Canonicalize do
     end
   end
 
+  # A trailing slash makes `lstat` resolve through the link (and report the
+  # dangling target as absent), while `Path.dirname/1` and `Path.basename/1`
+  # ignore the slash. Inspect the entry itself, without trailing slashes.
   defp dangling_symlink?(path) do
-    match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path))
+    entry =
+      case String.trim_trailing(path, "/") do
+        "" -> "/"
+        trimmed -> trimmed
+      end
+
+    match?({:ok, %File.Stat{type: :symlink}}, File.lstat(entry))
   end
 
   # Strip trailing / except for root, then case-fold if FS is case-insensitive.

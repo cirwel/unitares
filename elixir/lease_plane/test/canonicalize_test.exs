@@ -368,6 +368,17 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
       assert {:error, :dangling_symlink} = Canonicalize.canonicalize("file://" <> link)
     end
 
+    test "a dangling symlink leaf named with trailing slashes is refused too", ctx do
+      outside = Path.join(ctx.root, "outside/never-created.txt")
+      link = Path.join(ctx.root, "out.txt")
+      File.ln_s!(outside, link)
+
+      for suffix <- ["/", "//"] do
+        assert {:error, :dangling_symlink} =
+                 Canonicalize.canonicalize("file://" <> link <> suffix)
+      end
+    end
+
     test "a dangling symlink inside the missing tail is refused", ctx do
       link_dir = Path.join(ctx.root, "linkdir")
       File.ln_s!(Path.join(ctx.root, "nowhere"), link_dir)
