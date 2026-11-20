@@ -450,6 +450,10 @@ async def test_knowledge_store_scope_is_append_only_and_low_medium_severity(
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "severity": "critical"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "severity": "LOW"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "architectural_decision"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "learning"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "pattern"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "root_cause_analysis"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "migration"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "topic_rollup"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discoveries": []}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "response_to": {"discovery_id": "1"}}),
@@ -457,6 +461,10 @@ async def test_knowledge_store_scope_is_append_only_and_low_medium_severity(
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_id": "custom"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "status": "resolved"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["permanent"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["foundational"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["architecture"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": [" Decision "]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["source-claude-memory"]}),
     ]
     for tool_name, args in bad_calls:
         prebinds_before = route["prebinds"]
@@ -464,6 +472,11 @@ async def test_knowledge_store_scope_is_append_only_and_low_medium_severity(
         assert res_bad.status_code == 403, f"expected 403 for {tool_name} {args}"
         assert route["prebinds"] == prebinds_before
     route["execute"].assert_not_awaited()
+
+    from src.knowledge_graph_lifecycle import PERMANENT_TAGS, PERMANENT_TYPES
+
+    assert http_agent_tokens._KNOWLEDGE_STORE_ALLOWED_TYPES.isdisjoint(PERMANENT_TYPES)
+    assert {t.lower() for t in PERMANENT_TAGS} <= http_agent_tokens._KNOWLEDGE_STORE_RESERVED_TAGS
 
 
 @pytest.mark.asyncio

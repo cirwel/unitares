@@ -26,10 +26,13 @@ append-only knowledge writes):
   normal REST path using the body's explicit ``client_session_id``; the token
   only admits a call that resolves to its own agent. It is never a binding
   proof.
-- Enforces flat top-level argument allowlists per scope: refuses wrapper keys
-  (``kwargs``, ``arguments``, ``params``), identity-selecting arguments
+- Enforces flat top-level argument allowlists per scope with an explicit
+  ``client_session_id`` in the body (including default ``checkin`` tokens):
+  wrapper keys (``kwargs``, ``arguments``, ``params``), ``X-Session-ID``-only
+  injection without body ``client_session_id``, identity-selecting arguments
   (``agent_id``, ``agent_uuid``, ``continuity_token``), ``X-Agent-Id``, and
-  ``X-Unitares-Operator``. ``identity`` and ``onboard`` remain forbidden.
+  ``X-Unitares-Operator`` are refused. ``identity`` and ``onboard`` remain
+  forbidden.
 - A malformed entry disables every agent token (fail closed) and logs an
   error. It does not stop the server, so a typo cannot take down the shared
   check-in path for everyone else.
@@ -48,6 +51,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
+from src.knowledge_graph_lifecycle import PERMANENT_TAGS, PERMANENT_TYPES
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -89,20 +93,22 @@ _KNOWLEDGE_STORE_ALLOWED_KEYS: FrozenSet[str] = frozenset(
     }
 )
 _KNOWLEDGE_STORE_ALLOWED_SEVERITIES: FrozenSet[str] = frozenset({"low", "medium"})
-_KNOWLEDGE_STORE_ALLOWED_TYPES: FrozenSet[str] = frozenset(
-    {
-        "observation",
-        "insight",
-        "learning",
-        "note",
-        "pattern",
-        "exploration",
-        "question",
-        "experiment",
-    }
+_KNOWLEDGE_STORE_ALLOWED_TYPES: FrozenSet[str] = (
+    frozenset(
+        {
+            "observation",
+            "insight",
+            "note",
+            "exploration",
+            "question",
+            "experiment",
+        }
+    )
+    - PERMANENT_TYPES
 )
-_KNOWLEDGE_STORE_RESERVED_TAGS: FrozenSet[str] = frozenset(
-    {"permanent", "source-claude-memory"}
+_KNOWLEDGE_STORE_RESERVED_TAGS: FrozenSet[str] = (
+    frozenset(tag.strip().lower() for tag in PERMANENT_TAGS)
+    | frozenset({"source-claude-memory"})
 )
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
