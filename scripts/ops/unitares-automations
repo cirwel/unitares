@@ -1206,6 +1206,110 @@ DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
 NON_HOOK_FILENAMES = {"__init__.py"}
 SYSTEM_BIN_DIRS = {"/bin", "/usr/bin", "/sbin", "/usr/sbin"}
+_INTERPRETER_INLINE_FLAGS: dict[str, set[str]] = {
+    "sh": {"c", "s"},
+    "bash": {"c", "s"},
+    "zsh": {"c", "s"},
+    "dash": {"c", "s"},
+    "ksh": {"c", "s"},
+    "python": {"c", "m"},
+    "python3": {"c", "m"},
+    "osascript": {"e"},
+    "ruby": {"e"},
+    "perl": {"e"},
+    "node": {"e", "p"},
+}
+_INTERPRETER_ARG_FLAGS: dict[str, set[str]] = {
+    "sh": {"-o", "+o"},
+    "bash": {"-o", "+o"},
+    "zsh": {"-o", "+o"},
+    "dash": {"-o", "+o"},
+    "ksh": {"-o", "+o"},
+    "python": {"-W", "-X"},
+    "python3": {"-W", "-X"},
+    "osascript": {"-l", "-s"},
+}
+_WRAPPER_ARG_FLAGS: dict[str, set[str]] = {
+    "env": {"-u", "--unset", "-C", "--chdir"},
+    "nice": {"-n", "--adjustment"},
+}
+_WRAPPER_COMMANDS = {"env", "nohup", "nice", "command"}
+
+
+def _unwrap_command_index(tokens: list[str], idx: int, name: str | None) -> int:
+    """Advance past wrapper launchers (e.g. `env`, `nice -n 1`) to the real command."""
+    while idx < len(tokens):
+        cur_name = name if name is not None else Path(tokens[idx]).name.lower()
+        name = None
+        if cur_name not in _WRAPPER_COMMANDS:
+            return idx
+        arg_flags = _WRAPPER_ARG_FLAGS.get(cur_name, set())
+        idx += 1
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if not tok or tok in {";", "&&", "||", "|"}:
+                return idx
+            if tok == "--":
+                idx += 1
+                break
+            if cur_name == "command" and tok in {"-v", "-V"}:
+                return len(tokens)
+            if tok in arg_flags:
+                idx += 2
+                continue
+            if cur_name == "env" and re.match(r"^[A-Za-z_]\w*=", tok):
+                idx += 1
+                continue
+            if tok.startswith("-"):
+                idx += 1
+                continue
+            break
+    return idx
+
+
+def _missing_interpreter_operand(
+    tokens: list[str], sys_idx: int, sys_path: str, plugin_root: str | None,
+) -> bool:
+    """Return True when a system interpreter command names a missing script operand."""
+    cmd_idx = _unwrap_command_index(tokens, sys_idx, Path(sys_path).name.lower())
+    if cmd_idx >= len(tokens) or tokens[cmd_idx] in {";", "&&", "||", "|"}:
+        return False
+    sys_name = Path(tokens[cmd_idx]).name.lower()
+    if sys_name not in _INTERPRETER_INLINE_FLAGS:
+        return False
+    inline_chars = _INTERPRETER_INLINE_FLAGS[sys_name]
+    arg_flags = _INTERPRETER_ARG_FLAGS.get(sys_name, set())
+    idx = cmd_idx + 1
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if not tok or tok in {";", "&&", "||", "|"}:
+            break
+        if tok == "--":
+            idx += 1
+            break
+        if tok in arg_flags:
+            idx += 2
+            continue
+        if tok.startswith("-") and not tok.startswith("--"):
+            if any(ch in inline_chars for ch in tok[1:]):
+                return False
+            idx += 1
+            continue
+        if tok.startswith(("-", "+")):
+            idx += 1
+            continue
+        break
+    else:
+        return False
+    if idx >= len(tokens) or tokens[idx] in {";", "&&", "||", "|"}:
+        return False
+    tok = tokens[idx]
+    expanded = os.path.expanduser(tok)
+    if Path(expanded).exists():
+        return False
+    if plugin_root and (Path(plugin_root) / tok).exists():
+        return False
+    return True
 
 
 _SHELL_KEYWORDS = {
@@ -1258,12 +1362,16 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     text = text.replace('"', "").replace("'", "")
     tokens = [t.strip(";,") for t in text.split()]
     found: list[str] = []
+    system_bins: list[tuple[int, str]] = []
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
         if "/" not in tok:
             continue
+        if tok.startswith("-") or "://" in tok or any(ch in tok for ch in "<>"):
+            continue
         expanded = os.path.expanduser(tok)
+        is_system_bin = str(Path(expanded).parent) in SYSTEM_BIN_DIRS
         if any(ch in expanded for ch in "*?["):
             matches = sorted(glob_module.glob(expanded))
             if not matches:
@@ -1273,15 +1381,14 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             if not Path(expanded).exists():
                 continue
             resolved = Path(expanded).resolve()
+        if is_system_bin or str(resolved.parent) in SYSTEM_BIN_DIRS:
+            system_bins.append((idx, str(resolved)))
+            continue
         found.append(str(resolved))
         if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
             dispatcher_idx = idx
             dispatcher_path = resolved
     if dispatcher_idx is not None and dispatcher_path is not None:
-        # Exclude helper system binaries (e.g. /usr/bin/grep in #122 wrapper)
-        # once a plugin dispatcher is resolved, without discarding standalone
-        # system-command hooks.
-        found = [p for p in found if str(Path(p).parent) not in SYSTEM_BIN_DIRS]
         # Keep scanning candidates until one actually exists, rather than
         # stopping at the first syntactically-plausible word.
         for tok in tokens[dispatcher_idx + 1:]:
@@ -1292,7 +1399,14 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             if target.exists():
                 found.append(str(target.resolve()))
                 break
-    return found
+    if found:
+        return found
+    if not system_bins:
+        return []
+    first_idx, first_sys = system_bins[0]
+    if _missing_interpreter_operand(tokens, first_idx, first_sys, plugin_root):
+        return []
+    return [path for _, path in system_bins]
 
 
 def _dispatched_label(scripts: list[str], command: str) -> str:
