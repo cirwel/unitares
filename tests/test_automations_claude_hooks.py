@@ -589,3 +589,24 @@ def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypat
     assert len(items) == 1
     assert items[0].status == "wired"
     assert items[0].name == "Stop: true"
+
+
+def test_interpreter_with_missing_script_is_flagged_missing(census_mod, tmp_path, monkeypatch):
+    """`/bin/bash /missing/hook.sh` must report missing, not wired to bash."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    missing = home / ".claude/hooks/does-not-exist.sh"
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": f"/bin/bash {missing}"}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert len(items) == 1
+    assert items[0].status == "missing"
+    assert "attention:script_not_found_on_disk" in items[0].notes
+    assert any("no resolvable script" in w for w in warnings)
