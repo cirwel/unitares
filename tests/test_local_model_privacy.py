@@ -1182,3 +1182,94 @@ def test_the_bridge_reads_the_repo_wide_endpoint_as_the_server_does(monkeypatch)
     for value in ("http://gpu:11434", "gpu:11434", "http://gpu:11434/", "http://gpu:11434/v1"):
         monkeypatch.setenv("UNITARES_MODEL_BASE_URL", value)
         assert base(value) == env.model_base_url() == "http://gpu:11434/v1"
+
+
+# --- credentials in the endpoint URL never reach a caller ---------------------
+
+SECRET_BASE = "http://user:key@10.0.0.5:8000/v1?api_key=sekret#frag"
+
+
+def _assert_no_endpoint_secret(text: str) -> None:
+    assert "user:key" not in text
+    assert "key@" not in text
+    assert "sekret" not in text
+
+
+def test_display_url_drops_query_and_fragment():
+    assert env.display_url("http://gpu:8000/v1?api_key=k#f") == "http://gpu:8000/v1"
+    assert env.display_url(SECRET_BASE) == "http://10.0.0.5:8000/v1"
+    assert env.display_url("http://gpu:8000/v1") == "http://gpu:8000/v1"
+
+
+def test_redact_url_credentials_scrubs_the_endpoint_and_any_userinfo():
+    text = f"failed at {SECRET_BASE}; also https://a:b@other.example/x"
+    redacted = env.redact_url_credentials(text, SECRET_BASE)
+    _assert_no_endpoint_secret(redacted)
+    assert "a:b@" not in redacted
+    assert "http://10.0.0.5:8000/v1" in redacted
+    assert "https://other.example/x" in redacted
+
+
+async def _failed_call(monkeypatch, model_inference):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", SECRET_BASE)
+    fake = MagicMock()
+    fake.return_value.chat.completions.create = AsyncMock(
+        side_effect=RuntimeError(f"upstream refused request to {SECRET_BASE}/chat/completions")
+    )
+    fake.return_value.close = AsyncMock()
+    monkeypatch.setattr(model_inference, "OpenAI", fake)
+    monkeypatch.setattr(model_inference, "_configured_endpoint_is_ollama", lambda: False)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_failed_inference_keeps_endpoint_credentials_out_of_the_outcome(monkeypatch):
+    from src.mcp_handlers.support import model_inference
+
+    fake = await _failed_call(monkeypatch, model_inference)
+    outcome = await model_inference.run_model_inference(
+        model_inference.CallModelRequest(
+            prompt="hi", requesting_agent_uuid=None, provider="ollama", privacy="local"
+        )
+    )
+
+    assert fake.called, "the request must have been attempted"
+    assert not outcome.ok
+    _assert_no_endpoint_secret(outcome.failure.message)
+    _assert_no_endpoint_secret(str(outcome.failure.details))
+    _assert_no_endpoint_secret(str(outcome.failure.recovery))
+    assert outcome.failure.details["base_url"] == "http://10.0.0.5:8000/v1"
+
+
+@pytest.mark.asyncio
+async def test_call_model_error_response_carries_no_endpoint_credentials(monkeypatch):
+    from src.mcp_handlers.support import model_inference
+
+    await _failed_call(monkeypatch, model_inference)
+    monkeypatch.setattr(model_inference, "record_inference_call", lambda *a, **k: None)
+    result = await model_inference.handle_call_model(
+        {"prompt": "hi", "provider": "ollama", "privacy": "local"}
+    )
+
+    text = "".join(item.text for item in result)
+    assert '"success": false' in text
+    _assert_no_endpoint_secret(text)
+
+
+def test_error_response_scrubs_url_userinfo_from_message_and_details():
+    from src.mcp_handlers.error_handling import error_response
+
+    content = error_response(
+        "could not reach http://user:key@10.0.0.5:8000/v1",
+        details={
+            "endpoint": "https://user:key@models.example/v1",
+            "other": "http://user:p@ss@gpu:8000/v1",
+            "count": 1,
+        },
+    )
+
+    _assert_no_endpoint_secret(content.text)
+    assert "p@ss" not in content.text and "ss@gpu" not in content.text
+    assert "http://gpu:8000/v1" in content.text
+    assert "http://10.0.0.5:8000/v1" in content.text
+    assert "https://models.example/v1" in content.text

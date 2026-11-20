@@ -564,16 +564,32 @@ def require_local_model(model: str | None = None) -> str:
 
 
 def display_url(url: str) -> str:
-    """``url`` without any ``user:password@`` part, for text an agent or a log
-    reader sees: a base URL can carry credentials in its userinfo."""
+    """``url`` without any ``user:password@`` part, query or fragment, for text
+    an agent or a log reader sees: a base URL can carry credentials in its
+    userinfo or as a query parameter such as ``?api_key=``."""
     parts = urlsplit(url)
-    if parts.username is None and parts.password is None:
+    has_userinfo = parts.username is not None or parts.password is not None
+    if not has_userinfo and not parts.query and not parts.fragment:
         return url
-    host = parts.hostname or ""
-    netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
-    if parts.port:
-        netloc += f":{parts.port}"
-    return urlunsplit(parts._replace(netloc=netloc))
+    netloc = parts.netloc
+    if has_userinfo:
+        host = parts.hostname or ""
+        netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
+        if parts.port:
+            netloc += f":{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc, query="", fragment=""))
+
+
+_URL_USERINFO_RE = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]+@")
+
+
+def redact_url_credentials(text: str, url: str | None = None) -> str:
+    """``text`` with ``url`` shown as :func:`display_url` shows it, and the
+    userinfo of any other ``scheme://user:pass@`` URL removed. For provider
+    error text, which may quote the endpoint it failed to reach."""
+    if url:
+        text = text.replace(url, display_url(url))
+    return _URL_USERINFO_RE.sub(r"\1", text)
 
 
 def require_local_endpoint(url: str | None = None) -> EndpointPrivacy:
