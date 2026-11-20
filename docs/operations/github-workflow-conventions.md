@@ -57,6 +57,14 @@ veto by removing the label.
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
   than holding a fix. Reserved auth, identity, scientific and
   governance-sensitive gates are unchanged.
+- A PR that records an operator decision also carries it to the open issues it
+  touches. Before readiness, the owner lists in the PR body each open issue the
+  decision parks, supersedes or unblocks, and posts a short note on each one
+  that links the PR and states the new status and what would reopen it. A
+  decision recorded only in a document leaves those issues reading as live
+  work: the 2026-11-18 EISV maths freeze (#3297) parked #2818 and #2610, and
+  neither said so until a later session was asked to look. If the decision
+  touches no open issue, the PR body says that.
 - End an agent-authored PR body with the provenance signature described in the
   shared global contract: `Model: <actual model identifier>` followed by
   `UNITARES agent: <uuid>`. GitHub keeps PR labels after merge, but labels are
