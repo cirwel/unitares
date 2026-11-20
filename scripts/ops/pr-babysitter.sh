@@ -84,6 +84,25 @@
 # says: nobody is watching, so an unreviewed draft must not slide through. A
 # push after the declaration lapses it until the label is removed and re-added.
 #
+# Governance-sensitive diffs (operator ruling, 2026-11-16). A diff matching
+# scripts/dev/governance_sensitivity_manifest.tsv, or a PR labelled
+# governance-sensitive, used to be left for the operator to merge by hand. The
+# operator no longer merges, so the queue may land one once all of these hold:
+#   - the diff touches a review_policy.json second_family_paths file and its
+#     `review` check has passed on the current head (two model families),
+#   - the PR body has an `Expected effect:` line stating the expected effect on
+#     pause and verdict rates,
+#   - 24 hours have passed since the current approval label went on. That is
+#     the operator's veto window: removing the label is the veto, and
+#     re-labelling starts the 24 hours again.
+# A PR waiting on any of these is skipped, not waited for, so it never holds
+# the slot. The manifest, its checker and its CI workflow stay hand-merge only
+# (HAND_MERGE_ONLY_PATHS), and anything the queue cannot read (the manifest,
+# the diff, the review policy, the label time, a matched file with no patch)
+# is hand-merge too. PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule:
+# never armed. Like the pin above, the veto window is a convention among
+# cooperating agents, not a boundary against one that shares the login.
+#
 # Deliberately out of scope — these stay human or session judgment:
 #   - readying a draft its owner has not declared (the draft→ready mark is the
 #     authorized delivery owner's gate; silence, age and green checks are not it),
@@ -129,9 +148,20 @@ PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-}"
 # PRs carrying any of these labels are never armed: the operator merges them
 # by hand. `governance-sensitive` is what CI applies to a PR touching an
-# enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
-# merge gate as the control for exactly those diffs.
+# enforcement constant. It is the one exception: while delegation is on
+# (below), that label marks the PR sensitive, as a manifest match does, and
+# sensitive_verdict decides whether the queue may land it.
 OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
+SENSITIVE_LABEL="governance-sensitive"
+# 1 (default): the queue may land a governance-sensitive PR under the
+# conditions in the header. 0: it never arms one, as before 2026-11-16.
+SENSITIVE_DELEGATED="${PR_QUEUE_SENSITIVE_DELEGATED:-1}"
+# The operator's veto window, counted from the current approval label.
+VETO_WINDOW_MIN=1440
+# Never delegated: the sensitivity inventory, its detector and its CI wiring.
+# A diff touching one of these is hand-merge only, whatever else holds, and
+# whether or not the manifest on the base still lists it.
+HAND_MERGE_ONLY_PATHS="scripts/dev/governance_sensitivity_manifest.tsv scripts/dev/check_governance_sensitivity.sh .github/workflows/governance-sensitivity.yml"
 # An arm on a PR carrying this label is the operator's, and the queue leaves
 # it alone (it still holds the slot). Every other arm the queue did not make
 # is disarmed.
@@ -146,6 +176,8 @@ operator_only() {  # <pr-json> -> why only the operator may merge it, if so
   jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null \
     && { echo "$OPERATOR_ARMED_LABEL"; return 0; }
   for l in $OPERATOR_ONLY_LABELS; do
+    # Delegated: the label is judged with the diff, by sensitive_verdict.
+    [ "$SENSITIVE_DELEGATED" != "0" ] && [ "$l" = "$SENSITIVE_LABEL" ] && continue
     jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
   done
   return 1
@@ -478,10 +510,14 @@ load_review_policy() {
 auth_path() {  # <head-sha> -> prints the auth path it touches; fails when none
   [ "$auth_state" = "off" ] && return 1
   [ "$auth_state" = "ok" ] || { echo "the review policy could not be read"; return 0; }
-  local cmp file glob
+  local cmp
   cmp=$(gh api "repos/$REPO/compare/${tick_base_sha:-$BASE}...$1" 2>/dev/null) \
     && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
     || { echo "its diff could not be checked"; return 0; }
+  second_family_file "$cmp"
+}
+second_family_file() {  # <compare-json> -> prints the first file on the policy's globs; fails when none
+  local file glob
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     while IFS= read -r glob; do
@@ -489,7 +525,7 @@ auth_path() {  # <head-sha> -> prints the auth path it touches; fails when none
       # shellcheck disable=SC2053
       [ -n "$glob" ] && [[ "$file" == $glob ]] && { echo "$file"; return 0; }
     done <<<"$auth_globs"
-  done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$cmp")
+  done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$1")
   return 1
 }
 
@@ -498,11 +534,12 @@ auth_path() {  # <head-sha> -> prints the auth path it touches; fails when none
 # (scripts/dev/check_governance_sensitivity.sh's --diff rules), read from
 # GitHub's compare of base...<head>. It fails closed: no manifest, an
 # unreadable or possibly truncated compare, or a matched file with no patch to
-# inspect all count as sensitive.
+# inspect all count as sensitive, and as hand-merge only.
 # The manifest is read from the base branch through GitHub, not from this
 # script's checkout: the deploy tree can lag master, and CI judges against
 # master's manifest. PR_QUEUE_SENSITIVITY_MANIFEST names a local file instead
-# (tests; "" disables the check). Read once per tick.
+# (tests; "" disables the manifest match, though while delegation is on the
+# label and the hand-merge-only files are still judged). Read once per tick.
 MANIFEST_PATH_IN_REPO="scripts/dev/governance_sensitivity_manifest.tsv"
 manifest_rows=""
 manifest_state=""  # "", "ok" or "unreadable"
@@ -521,23 +558,91 @@ load_manifest() {
       && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
   fi
 }
-sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when it is not
+# <pr-json> -> "<class><TAB><why>"; fails when the PR is not sensitive.
+#   hand        the operator merges it by hand: delegation is off, or something
+#               could not be read
+#   reserved    it touches a HAND_MERGE_ONLY_PATHS file
+#   unreviewed  the review policy does not put this diff under two-family
+#               review, so a passing `review` would not show two families
+#   delegable   the queue may land it once delegation_blocker clears
+# Every manifest row is read before deciding, so one matched file with no
+# patch fails the whole diff closed even when another row matched first.
+sensitive_verdict() {
+  local label="" cmp path symbol why file patch hit=""
+  case " $OPERATOR_ONLY_LABELS " in
+    *" $SENSITIVE_LABEL "*)
+      jq -e --arg l "$SENSITIVE_LABEL" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && label=1 ;;
+  esac
   load_manifest
-  [ "$manifest_state" = "off" ] && return 1
-  [ "$manifest_state" = "ok" ] || { echo "the sensitivity manifest could not be read"; return 0; }
-  local cmp path symbol why file patch
-  cmp=$(gh api "repos/$REPO/compare/${base_sha:-$BASE}...$1" 2>/dev/null) \
+  if [ "$manifest_state" = "off" ]; then
+    # The manifest check is disabled. With delegation off nothing is left to
+    # judge; with it on, the label and the hand-merge-only files still count.
+    [ "$SENSITIVE_DELEGATED" = "0" ] && return 1
+  elif [ "$manifest_state" != "ok" ]; then
+    printf 'hand\tthe sensitivity manifest could not be read\n'; return 0
+  fi
+  cmp=$(gh api "repos/$REPO/compare/${base_sha:-$BASE}...$(jq -r .headRefOid <<<"$1")" 2>/dev/null) \
     && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
-    || { echo "its diff could not be checked"; return 0; }
-  while IFS=$'\t' read -r path symbol why; do
-    [ -n "$path" ] || continue
-    file=$(jq -c --arg p "$path" 'first(.files[] | select(.filename == $p or .previous_filename == $p)) // empty' <<<"$cmp")
-    [ -n "$file" ] || continue
-    [ "$symbol" = "-" ] && { echo "$path"; return 0; }
-    patch=$(jq -r '.patch // empty' <<<"$file")
-    [ -n "$patch" ] || { echo "$path (no patch to check)"; return 0; }
-    grep -E '^[+-][^+-]' <<<"$patch" | grep -Eq -- "$symbol" && { echo "$path"; return 0; }
-  done < <(grep -v '^#' <<<"$manifest_rows" | grep -v '^[[:space:]]*$')
+    || { printf 'hand\tits diff could not be checked\n'; return 0; }
+  if [ "$manifest_state" = "ok" ]; then
+    while IFS=$'\t' read -r path symbol why; do
+      [ -n "$path" ] || continue
+      file=$(jq -c --arg p "$path" 'first(.files[] | select(.filename == $p or .previous_filename == $p)) // empty' <<<"$cmp")
+      [ -n "$file" ] || continue
+      if [ "$symbol" = "-" ]; then
+        [ -n "$hit" ] || hit="$path"
+        continue
+      fi
+      patch=$(jq -r '.patch // empty' <<<"$file")
+      [ -n "$patch" ] || { printf 'hand\t%s (no patch to check)\n' "$path"; return 0; }
+      if grep -E '^[+-][^+-]' <<<"$patch" | grep -Eq -- "$symbol"; then
+        [ -n "$hit" ] || hit="$path"
+      fi
+    done < <(grep -v '^#' <<<"$manifest_rows" | grep -v '^[[:space:]]*$')
+  fi
+  if [ "$SENSITIVE_DELEGATED" = "0" ]; then
+    # The old rule. The label never reaches here: operator_only took it.
+    [ -n "$hit" ] || return 1
+    printf 'hand\t%s\n' "$hit"; return 0
+  fi
+  for path in $HAND_MERGE_ONLY_PATHS; do
+    jq -e --arg p "$path" 'any(.files[]; .filename == $p or .previous_filename == $p)' <<<"$cmp" >/dev/null \
+      && { printf 'reserved\t%s\n' "$path"; return 0; }
+  done
+  [ -n "$hit" ] || [ -z "$label" ] || hit="labelled $SENSITIVE_LABEL"
+  [ -n "$hit" ] || return 1
+  [ "$auth_state" = "ok" ] && second_family_file "$cmp" >/dev/null \
+    || { printf 'unreviewed\t%s\n' "$hit"; return 0; }
+  printf 'delegable\t%s\n' "$hit"
+}
+
+# <pr-json> -> the effect on pause and verdict rates the body states; fails
+# when it states none. A line starting `Expected effect:` with at least 20
+# characters of text that is not a placeholder (an angle-bracketed template
+# slot, TBD, TODO, n/a, unknown); the last such line wins.
+expected_effect() {
+  jq -er '[(.body // "") | splits("\\r?\\n")
+           | capture("^Expected effect:[ \\t]*(?<v>.*?)[ \\t]*$"; "i") | .v
+           | select(length >= 20
+                    and (test("^<|^[\\[({`*_ ]*(tbd|todo|n/?a|fill|placeholder|unknown|\\.\\.\\.)"; "i") | not))]
+          | last // empty' <<<"$1"
+}
+
+# <pr-json> <labelled-at> -> "<key><TAB><what is missing>" while a delegable PR
+# may not land yet; fails once the body states its effect and the veto window
+# has passed. `review` is required separately, where the checks are read. A
+# label time that cannot be read as a past time counts as a window still open.
+delegation_blocker() {
+  local held ends
+  expected_effect "$1" >/dev/null || { printf 'effect\tits body has no Expected effect: line\n'; return 0; }
+  held=$(minutes_since "$2" 2>/dev/null) || held=""
+  case "$held" in
+    ''|*[!0-9]*) printf 'unread\tthe time of its %s label could not be read\n' "$LABEL"; return 0 ;;
+  esac
+  if [ "$held" -lt "$VETO_WINDOW_MIN" ]; then
+    ends=$(jq -rn --arg d "$2" --argjson m "$VETO_WINDOW_MIN" '(($d | fromdateiso8601) + $m * 60) | todate')
+    printf 'window\tits veto window is open until %s\n' "$ends"; return 0
+  fi
   return 1
 }
 
@@ -547,7 +652,7 @@ latest_label_time() {
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
 
-load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
+load_manifest  # once per tick, in this shell (sensitive_verdict runs in subshells)
 load_review_policy  # likewise for auth_path
 
 # --- 0. declared readiness ------------------------------------------------------
@@ -597,9 +702,13 @@ while read -r pr; do
     notify "$n" declared-operator-only "$head" "not promoted: this PR is $held_by, so \`$READY_LABEL\` does not apply to it and the operator handles it by hand."
     continue
   fi
-  if why=$(sensitive_path "$head"); then
+  # Delegation does not reach this route. A sensitive diff enters the queue
+  # only when its owner, present to see validation pass, marks it ready and
+  # applies the approval; an advance declaration is never promoted into it.
+  if verdict=$(sensitive_verdict "$pr"); then
+    why="${verdict#*$'\t'}"
     log "#$n declared ready but touches a governance-sensitive surface ($why); skipped"
-    notify "$n" declared-sensitive "$head" "not promoted: this diff touches a governance-sensitive surface (\`$why\`), which the operator readies and merges by hand, so \`$READY_LABEL\` does not apply to it."
+    notify "$n" declared-sensitive "$head" "not promoted: this diff touches a governance-sensitive surface (\`$why\`), so \`$READY_LABEL\` does not apply to it. Its owner marks it ready and applies \`$LABEL\` once validation has passed (docs/dev/GOVERNANCE_SENSITIVITY.md)."
     continue
   fi
   hold=""
@@ -816,6 +925,22 @@ armed_by_script() {  # <pr> <enabledAt>
   jq -en --arg a "$at" --arg b "$2" '(($a | fromdateiso8601) - ($b | fromdateiso8601)) | (if . < 0 then -. else . end) <= 120' >/dev/null
 }
 
+# <pr> <pr-json> <verdict> -> why an armed sensitive PR must be disarmed; fails
+# when it is delegable and still meets the body and veto-window conditions.
+armed_sensitive_reason() {
+  local class="${3%%$'\t'*}" why="${3#*$'\t'}" at blocker
+  case "$class" in
+    delegable) ;;
+    reserved) echo "it touches $why, which stays hand-merge only"; return 0 ;;
+    unreviewed) echo "it touches a governance-sensitive surface ($why) outside two-family review, which only the operator merges"; return 0 ;;
+    *) echo "it touches a governance-sensitive surface ($why), which only the operator merges"; return 0 ;;
+  esac
+  at=$(latest_label_time "$1") && [ -n "$at" ] \
+    || { echo "it touches a governance-sensitive surface ($why) and its $LABEL label time could not be read"; return 0; }
+  blocker=$(delegation_blocker "$2" "$at") || return 1
+  echo "it touches a governance-sensitive surface ($why) and ${blocker#*$'\t'}"
+}
+
 armed=$(q -c --arg b "$BASE" \
   'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null)) | .[]' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
@@ -833,6 +958,7 @@ while read -r pr; do
   reason=""
   hand_notice=""
   opaque_stall=""
+  verdict=""
   # The queue owns arming. An arm it did not make is disarmed, whoever made
   # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
   # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
@@ -852,9 +978,11 @@ while read -r pr; do
     reason="it is labelled $held_by, which only the operator merges"
   elif held_by=$(held "$pr"); then
     reason="it is labelled $held_by, an explicit hold"
-  elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then
+  elif verdict=$(sensitive_verdict "$pr") && sens_reason=$(armed_sensitive_reason "$n" "$pr" "$verdict"); then
     # Also for arms made before this check existed, or before the diff grew.
-    reason="it touches a governance-sensitive surface ($why), which only the operator merges"
+    # A delegated arm that still meets its conditions falls through with
+    # $verdict set, which makes `review` a required check below.
+    reason="$sens_reason"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif subject_issue=$(arm_subject_issue "$n" "$pr"); then
@@ -869,7 +997,7 @@ while read -r pr; do
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
     reason="its head changed since the approval"
-  elif unmet=$(unmet_required_checks "$pr") && [ -n "$unmet" ]; then
+  elif unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS${verdict:+ review}" unmet_required_checks "$pr") && [ -n "$unmet" ]; then
     # Anything but SUCCESS disarms: review is not a branch-protection check,
     # so an armed PR would otherwise merge without it (NEUTRAL means
     # unreviewed). MISSING/PENDING is usual for about a minute after a base
@@ -1062,7 +1190,7 @@ dependency_open() {
   return 1
 }
 
-while read -r _ n head; do
+while read -r labelled_at n head; do
   [ -n "${n:-}" ] || continue
   pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
 
@@ -1078,12 +1206,40 @@ while read -r _ n head; do
     continue
   fi
 
-  # Before any wait (mergeability, review): a sensitive PR is never armed, so
-  # waiting on it would hold the order for a PR the queue will not take.
-  if why=$(sensitive_path "$head"); then
-    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
-    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
-    continue
+  # Before any wait (mergeability, review): a sensitive PR the queue will not
+  # take yet is skipped, so it never holds the order. That covers a hand-merge
+  # PR, one whose body lacks its effect line, and one inside its veto window.
+  delegated=""
+  if verdict=$(sensitive_verdict "$pr"); then
+    class="${verdict%%$'\t'*}"
+    why="${verdict#*$'\t'}"
+    case "$class" in
+      delegable) ;;
+      reserved)
+        log "#$n touches $why, which stays hand-merge only; the operator merges it by hand; skipped"
+        notify "$n" sensitive-reserved "$head" "not armed: this diff touches \`$why\`. The sensitivity manifest, its checker and its CI workflow stay hand-merge only, so the operator merges it by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."
+        continue ;;
+      unreviewed)
+        log "#$n touches a governance-sensitive surface ($why) outside two-family review; the operator merges it by hand; skipped"
+        notify "$n" sensitive-unreviewed "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`), and scripts/dev/review_policy.json on the base does not put any file in it under two-family review, so the operator merges it by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."
+        continue ;;
+      *)
+        log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
+        notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+        continue ;;
+    esac
+    if blocker=$(delegation_blocker "$pr" "$labelled_at"); then
+      log "#$n touches a governance-sensitive surface ($why): ${blocker#*$'\t'}; skipped"
+      case "${blocker%%$'\t'*}" in
+        effect)
+          notify "$n" sensitive-no-effect "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`), and the PR body has no \`Expected effect:\` line. The queue lands such a PR only when the body states the expected effect on pause and verdict rates on one line starting \`Expected effect:\` (docs/dev/GOVERNANCE_SENSITIVITY.md). The 24-hour veto window runs from the \`$LABEL\` label; the queue has moved on to the next PR." ;;
+        window)
+          # Keyed by the label time, so a renewed label gets a fresh notice.
+          notify "$n" "sensitive-veto-window-$labelled_at" "$head" "veto window open: this diff touches a governance-sensitive surface (\`$why\`). ${blocker#*$'\t'} (24 hours after the \`$LABEL\` label at $labelled_at). Removing \`$LABEL\` before then vetoes it; re-adding the label starts the 24 hours again. After that the queue arms it once its \`review\` check has passed on this head. Stated effect: $(expected_effect "$pr" | cut -c1-300)" ;;
+      esac
+      continue
+    fi
+    delegated=" review"
   fi
 
   if dep=$(dependency_open "$pr"); then
@@ -1175,7 +1331,9 @@ while read -r _ n head; do
     continue
   fi
 
-  unmet=$(unmet_required_checks "$pr")
+  # A delegated sensitive PR needs `review` to have passed, stated here and
+  # not left to the auth-path rule that normally implies it.
+  unmet=$(REQUIRED_CHECKS="$REQUIRED_CHECKS$delegated" unmet_required_checks "$pr")
   if [ -n "$unmet" ]; then
     case " $unmet" in
       # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
@@ -1216,6 +1374,13 @@ while read -r _ n head; do
   # A hold put on since the tick began counts as one that was there.
   if held_by=$(held "$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$live")"); then
     log "#$n was labelled $held_by since this tick began; not armed"
+    continue
+  fi
+  # So does a veto: a delegated PR whose approval came off since the snapshot
+  # could otherwise merge before the next tick disarms it.
+  if [ -n "$delegated" ] && ! jq -e --argjson n "$n" --arg l "$LABEL" \
+       'any(.[]; .number == $n and any(.labels[]?; .name == $l))' <<<"$live" >/dev/null; then
+    log "#$n lost $LABEL since this tick began (a veto); not armed"
     continue
   fi
   for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
