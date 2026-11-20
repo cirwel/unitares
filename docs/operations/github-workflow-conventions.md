@@ -55,8 +55,13 @@ veto by removing the label.
   friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
   freeze was lifted by the operator on 2026-10-15 (KG decision
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
-  than holding a fix. Reserved auth, identity, scientific and
-  governance-sensitive gates are unchanged.
+  than holding a fix. Scientific and governance-sensitive gates are unchanged.
+  An auth or identity-enforcement diff is no longer held as a draft for the
+  operator (operator ruling, 2026-11-20): its gate is the two-family `review`
+  check on `second_family_paths`, and its owner marks it ready and labels it
+  once that passes. The operator reviews, merges and authors no PR, so a rule
+  that parks a PR for the operator to read parks it for good; #3222 stayed a
+  draft for 13 days while each reviewer repeated that it was reserved.
 - End an agent-authored PR body with the provenance signature described in the
   shared global contract: `Model: <actual model identifier>` followed by
   `UNITARES agent: <uuid>`. GitHub keeps PR labels after merge, but labels are
@@ -139,7 +144,21 @@ veto by removing the label.
   naming the successor by UNITARES agent UUID and stating separately whether
   branch writing (commits and pushes), readiness, and queue-entry are
   authorized. Record the owner's request, the operator grant's
-  source and scope, and the successor's acceptance on the PR. A shared GitHub
+  source and scope, and the successor's acceptance on the PR.
+
+  **One author family on a second-family diff** (operator ruling, 2026-11-20).
+  On a PR whose diff touches a `review_policy.json` `second_family_paths` file,
+  every committer must come from one model family. There are three families
+  and the gate needs two outside the authors, so a second author family leaves
+  one eligible reviewer, and the PR then cannot pass without an
+  [operator waiver](#second-family-review). On #3222 an OpenAI-authored auth
+  PR received commits from Google-family successors, which left Anthropic as
+  the only reviewer and the PR in draft for 13 days. A successor from another
+  family therefore takes delivery only: readiness, the queue label, finding
+  dispositions and the PR text, with no commit. Committing would also make
+  that successor's family an author and cancel any review it had given. If a
+  commit from another family is unavoidable, say on the PR first that it costs
+  a reviewer family, so the waiver is asked for once and early. A shared GitHub
   login, PR comment or UUID footer alone does not verify the request or transfer
   authority. If your own push is rejected because the remote has commits you
   did not author, somebody else is on your branch: keep your work on a local
@@ -207,7 +226,14 @@ veto by removing the label.
   named successor by UNITARES agent UUID. A direct readiness override must be
   recorded in a PR comment with its source and scope; it does not authorize
   queue entry. The grant must separately state branch-writing, readiness, and
-  queue-entry authority; one scope does not imply another. It can arrive as a
+  queue-entry authority; one scope does not imply another. One form states all
+  three at once (operator ruling, 2026-11-20): a direct operator instruction to
+  a session to handle, land, finish or take over a named PR grants
+  branch-writing, readiness and queue entry for that PR. Before this, four
+  successive successors on #3222 each held a partial or ambiguous grant and
+  stopped. The instruction grants no operator waiver and no deployment; those
+  are asked and recorded separately. A narrower instruction ("mark #N ready",
+  "fix CI on #N") grants only what it names. It can arrive as a
   verified operator instruction on the PR or a direct instruction in that successor's operator
   session. The successor must establish operator origin from that direct
   instruction or an independently established operator-only channel. GitHub
