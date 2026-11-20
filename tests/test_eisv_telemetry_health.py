@@ -287,3 +287,69 @@ def test_calibration_era_report_defaults_to_the_state_window():
 
     report = _era_crossing(7, [])
     assert report["calibration"]["window_start"] == report["window_start"]
+
+
+def test_state_health_sql_drops_wide_json_columns_before_downstream_scans():
+    """Keep state_rows detoasted once and normalized narrow across downstream CTEs."""
+    state_rows_sql, rest = EISV_TELEMETRY_STATE_HEALTH_SQL.split("extracted AS", 1)
+    assert "s.state_json,\n" not in state_rows_sql
+    assert "s.state_json->>'verdict' AS state_verdict" in state_rows_sql
+    assert rest.lstrip().startswith("NOT MATERIALIZED (")
+
+    normalized_sql = EISV_TELEMETRY_STATE_HEALTH_SQL.split("normalized AS MATERIALIZED (", 1)[1]
+    normalized_header = normalized_sql.split("array_remove(", 1)[0]
+    assert "*" not in normalized_header
+
+
+@pytest.mark.asyncio
+async def test_http_endpoint_coalesces_concurrent_misses_per_window(monkeypatch):
+    import asyncio
+    from starlette.requests import Request
+
+    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+    _eisv_telemetry_health_cache.clear()
+    monkeypatch.setattr("src.db.get_db", lambda: _DB())
+
+    started_30 = asyncio.Event()
+    release_30 = asyncio.Event()
+    calls: list[int] = []
+
+    async def fake_query(_conn, *, window_days: int):
+        calls.append(window_days)
+        if window_days == 30:
+            started_30.set()
+            await release_30.wait()
+        return {
+            "success": True,
+            "schema": EISV_TELEMETRY_HEALTH_SCHEMA,
+            "window_days": window_days,
+            "summary": {"states": window_days},
+        }
+
+    monkeypatch.setattr("src.eisv_telemetry_health.query_eisv_telemetry_health", fake_query)
+
+    def _req(days: int) -> Request:
+        return Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/eisv/telemetry-health",
+            "query_string": f"days={days}".encode(),
+            "headers": [],
+            "client": ("127.0.0.1", 50000),
+        })
+
+    try:
+        first_30 = asyncio.create_task(http_eisv_telemetry_health(_req(30)))
+        await started_30.wait()
+        second_30 = asyncio.create_task(http_eisv_telemetry_health(_req(30)))
+        # A different window (days=1) must not block behind the in-flight days=30 scan.
+        resp_1 = await asyncio.wait_for(http_eisv_telemetry_health(_req(1)), timeout=1.0)
+        assert resp_1.status_code == 200
+        release_30.set()
+        resp_30_a, resp_30_b = await asyncio.gather(first_30, second_30)
+        assert resp_30_a.status_code == 200
+        assert resp_30_b.status_code == 200
+        assert calls.count(30) == 1
+        assert calls.count(1) == 1
+    finally:
+        _eisv_telemetry_health_cache.clear()

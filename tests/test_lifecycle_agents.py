@@ -469,6 +469,102 @@ class TestListAgentsFull:
             assert data["summary"]["limit"] == 3
 
     @pytest.mark.asyncio
+    async def test_full_mode_trust_tier_batches_provisional_and_runs_after_pagination(self, server):
+        """Trust-tier resolution runs after pagination and batches provisional lineage checks."""
+        server.agent_metadata = {
+            f"a{i}": make_agent_meta(
+                status="active",
+                label=f"Agent{i}",
+                total_updates=10 - i,
+                notes="",
+                last_update=f"2026-11-20T00:0{9 - i}:00+00:00",
+                trust_tier=None,
+            )
+            for i in range(5)
+        }
+        health_status = MagicMock()
+        health_status.value = "healthy"
+        server.health_checker = MagicMock()
+        server.health_checker.get_health_status.return_value = (health_status, {})
+        server.monitors = {}
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+        mock_db = MagicMock()
+        mock_db.acquire = MagicMock(return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_conn),
+            __aexit__=AsyncMock(return_value=False),
+        ))
+        mock_db.get_all_latest_agent_states = AsyncMock(return_value={})
+        mock_db.get_identities_batch = AsyncMock(side_effect=lambda ids: {
+            aid: SimpleNamespace(metadata={"trust_tier_anchor": True})
+            for aid in ids
+        })
+        mock_db.get_provisional_lineage_set = AsyncMock(return_value={"a0"})
+        mock_db.is_lineage_provisional = AsyncMock(
+            side_effect=AssertionError("per-agent is_lineage_provisional N+1 must not run")
+        )
+
+        with patch_lifecycle_server(server), patch("src.db.get_db", return_value=mock_db):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "lite": False,
+                "grouped": False,
+                "include_metrics": False,
+                "limit": 2,
+                "offset": 0,
+            })
+            data = _parse(result)
+
+        assert data["summary"]["total"] == 5
+        assert data["summary"]["returned"] == 2
+        mock_db.get_identities_batch.assert_awaited_once_with(["a0", "a1"])
+        mock_db.get_provisional_lineage_set.assert_awaited_once_with(["a0", "a1"])
+        mock_db.is_lineage_provisional.assert_not_called()
+        by_id = {a["agent_id"]: a for a in data["agents"]}
+        assert by_id["a0"]["trust_tier"] == "provisional"
+        assert by_id["a1"]["trust_tier"] != "provisional"
+        assert server.agent_metadata["a0"].trust_tier == "provisional"
+        assert server.agent_metadata["a2"].trust_tier is None
+
+    @pytest.mark.asyncio
+    async def test_full_mode_summary_only_skips_trust_tier_db_lookups(self, server):
+        """summary_only returns only aggregates and must not query DB for trust tiers."""
+        server.agent_metadata = {
+            "a1": make_agent_meta(status="active", label="One", total_updates=5, notes="", trust_tier=None),
+            "a2": make_agent_meta(status="active", label="Two", total_updates=2, notes="", trust_tier=None),
+        }
+        health_status = MagicMock()
+        health_status.value = "healthy"
+        server.health_checker = MagicMock()
+        server.health_checker.get_health_status.return_value = (health_status, {})
+        server.monitors = {}
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+        mock_db = MagicMock()
+        mock_db.acquire = MagicMock(return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_conn),
+            __aexit__=AsyncMock(return_value=False),
+        ))
+        mock_db.get_all_latest_agent_states = AsyncMock(return_value={})
+        mock_db.get_identities_batch = AsyncMock(return_value={})
+        mock_db.get_provisional_lineage_set = AsyncMock(return_value=set())
+
+        with patch_lifecycle_server(server), patch("src.db.get_db", return_value=mock_db):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "lite": False,
+                "summary_only": True,
+                "include_metrics": False,
+            })
+            data = _parse(result)
+
+        assert data["total"] == 2
+        mock_db.get_identities_batch.assert_not_awaited()
+        mock_db.get_provisional_lineage_set.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_full_mode_exposes_lineage_fields(self, server):
         """Full mode agent_info must surface parent_agent_id + spawn_reason."""
         server.agent_metadata = {

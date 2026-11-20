@@ -2837,3 +2837,68 @@ async def test_ambiguous_thorough_hosts_allow_requested_local_degradation(monkey
     assert parsed["status"] == "degraded"
     assert parsed["degradation"]["reason_code"] == "CONSULT_HOST_SELECTION_REQUIRED"
     thorough.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_antigravity_thorough_attempt_gets_extended_timeout_budget(monkeypatch):
+    seen_timeouts: dict[str, int] = {}
+
+    async def fake_delegated(request):
+        seen_timeouts[request.host_id] = request.timeout_s
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake_delegated)
+    monkeypatch.setattr(co, "host_adapter_available", lambda _hid: True)
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "q",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+        "host_ids": ["codex:host-adapter", "antigravity:host-adapter"],
+    }))
+    assert parsed["success"] is True
+    assert seen_timeouts == {
+        "codex:host-adapter": 240,
+        "antigravity:host-adapter": 360,
+    }
+
+
+@pytest.mark.asyncio
+async def test_failover_budget_uses_next_host_timeout_without_polluting_skips(monkeypatch):
+    seen: list[tuple[str, int]] = []
+
+    async def fake_delegated(request):
+        seen.append((request.host_id, request.timeout_s))
+        if request.host_id == "codex:host-adapter":
+            return _quota_failure()
+        return _served_by("antigravity:host-adapter")
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake_delegated)
+    monkeypatch.setattr(
+        co,
+        "get_session_signals",
+        lambda: SessionSignals(reported_harness_type="claude-code"),
+    )
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid in _ALL_HOSTS)
+
+    # 120s elapsed + 360s antigravity attempt > 450s budget -> refuse failover.
+    clock_tight = iter([0.0, 120.0])
+    monkeypatch.setattr(co, "_clock", lambda: next(clock_tight))
+    tight = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert tight["success"] is False
+    assert seen == [("codex:host-adapter", 240)]
+
+    # 30s elapsed + 360s antigravity attempt <= 450s budget -> failover with 360s.
+    seen.clear()
+    clock_ok = iter([0.0, 30.0])
+    monkeypatch.setattr(co, "_clock", lambda: next(clock_ok))
+    ok = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert ok["success"] is True
+    assert seen == [
+        ("codex:host-adapter", 240),
+        ("antigravity:host-adapter", 360),
+    ]
