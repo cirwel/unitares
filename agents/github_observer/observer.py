@@ -1,11 +1,14 @@
 """Read agent-signed pull requests from GitHub and report what happened to them.
 
     python3 -m agents.github_observer --repo OWNER/NAME --dry-run
+    python3 -m agents.github_observer --repo OWNER/NAME
 
 The dry run prints one JSON event per line on stdout, exactly the object a
 write would store, and a one-line summary on stderr. It writes nothing: not to
-UNITARES, and not to the fingerprint store. Writing waits on the route the
-operator chose for it (see the package docstring).
+UNITARES, and not to the fingerprint store. Without ``--dry-run``, it posts
+new events to ``POST /v1/external/events`` (authenticated with
+``UNITARES_OPERATOR_TOKEN``) and records persisted fingerprints in the durable
+SQLite store.
 
 GitHub is read with GET requests only, using ``GITHUB_TOKEN`` (or
 ``GH_TOKEN``). The token needs to read the repository and nothing else.
@@ -39,9 +42,10 @@ from agents.github_observer.events import (
     run_belongs_to_pr,
     trusted_pr_author,
 )
-from agents.github_observer.store import read_only_fingerprints
+from agents.github_observer.store import FingerprintStore, read_only_fingerprints
 
 DEFAULT_API_URL = "https://api.github.com"
+DEFAULT_UNITARES_URL = "http://127.0.0.1:8767"
 DEFAULT_SINCE_DAYS = 7
 MAX_PAGES = 10
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -270,7 +274,7 @@ def collect_pr_events(
 
 
 class Writer(Protocol):
-    def write(self, event: dict) -> bool: ...
+    def write(self, event: dict) -> bool | str: ...
 
 
 class DryRunWriter:
@@ -284,6 +288,59 @@ class DryRunWriter:
         return True
 
 
+def _validate_http_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"URL must use http or https with a host, got {url!r}")
+    return url.rstrip("/")
+
+
+class UnitaresEventWriter:
+    """Post events to ``POST /v1/external/events`` with operator credentials."""
+
+    def __init__(
+        self,
+        base_url: str,
+        operator_token: str,
+        *,
+        producer: str = "github_observer",
+        opener: Callable[..., Any] = _DEFAULT_OPENER,
+    ):
+        self._endpoint = _validate_http_url(base_url) + "/v1/external/events"
+        self._operator_token = operator_token
+        self._producer = producer
+        self._opener = opener
+
+    def write(self, event: dict) -> str:
+        payload = json.dumps({**event, "producer": self._producer}).encode("utf-8")
+        request = urllib.request.Request(
+            self._endpoint,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Unitares-Operator": self._operator_token,
+                "User-Agent": "unitares-github-observer",
+            },
+        )
+        try:
+            with self._opener(request, timeout=30) as response:
+                status = getattr(response, "status", None)
+                if status is None and hasattr(response, "getcode"):
+                    status = response.getcode()
+                if status in (None, 200, 201):
+                    return "written"
+                return "failed"
+        except urllib.error.HTTPError as exc:
+            if exc.code == 409:
+                return "duplicate"
+            if exc.code == 404:
+                return "unknown_agent"
+            return "failed"
+        except (OSError, http.client.HTTPException, ValueError):
+            return "failed"
+
+
 COUNTS = (
     "repos_failed",
     "prs_read",
@@ -292,6 +349,7 @@ COUNTS = (
     "prs_failed",
     "events_new",
     "events_known",
+    "events_unknown_agent",
     "markers_untrusted",
     "writes_failed",
 )
@@ -359,9 +417,15 @@ def run_cycle(
                     counts["events_known"] += 1
                     continue
                 this_cycle.add(fingerprint)
-                if writer.write(event):
+                outcome = writer.write(event)
+                if outcome is True or outcome == "written":
                     mark(fingerprint, event["type"])
                     counts["events_new"] += 1
+                elif outcome == "duplicate":
+                    mark(fingerprint, event["type"])
+                    counts["events_known"] += 1
+                elif outcome == "unknown_agent":
+                    counts["events_unknown_agent"] += 1
                 else:
                     counts["writes_failed"] += 1
     return counts
@@ -393,6 +457,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since-days", type=int, default=DEFAULT_SINCE_DAYS)
     parser.add_argument("--state-path", type=Path, default=None)
     parser.add_argument(
+        "--unitares-url",
+        default=os.environ.get("UNITARES_URL") or DEFAULT_UNITARES_URL,
+        help="base URL of the UNITARES governance server (default: UNITARES_URL or http://127.0.0.1:8767)",
+    )
+    parser.add_argument(
         "--trusted-app",
         action="append",
         default=[],
@@ -412,17 +481,23 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--repo must be OWNER/NAME, got {repo!r}")
     if args.since_days < 1:
         parser.error("--since-days must be at least 1")
-    if not args.dry_run:
-        print(
-            "github_observer: only --dry-run is available in this build; the write path "
-            "(POST /v1/external/events) lands with that route.",
-            file=sys.stderr,
-        )
-        return 2
+    try:
+        unitares_url = _validate_http_url(args.unitares_url)
+    except ValueError as exc:
+        parser.error(f"--unitares-url: {exc}")
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         print("github_observer: set GITHUB_TOKEN (read access to the repository)", file=sys.stderr)
         return 2
+    operator_token: str | None = None
+    if not args.dry_run:
+        operator_token = os.environ.get("UNITARES_OPERATOR_TOKEN")
+        if not operator_token:
+            print(
+                "github_observer: set UNITARES_OPERATOR_TOKEN to post events (or pass --dry-run)",
+                file=sys.stderr,
+            )
+            return 2
     try:
         trusted_apps = parse_trusted_apps(
             [*args.trusted_app, os.environ.get("GITHUB_OBSERVER_TRUSTED_APPS", "")]
@@ -430,9 +505,22 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    state_path = args.state_path or default_state_path()
+    store: FingerprintStore | None = None
     try:
-        known = read_only_fingerprints(args.state_path or default_state_path())
-    except sqlite3.Error:
+        if args.dry_run:
+            known = read_only_fingerprints(state_path)
+            seen_fn = known.__contains__
+            mark_fn = lambda fingerprint, event_type: None
+            writer: Writer = DryRunWriter(sys.stdout)
+        else:
+            store = FingerprintStore(state_path)
+            seen_fn = store.has
+            mark_fn = store.add
+            writer = UnitaresEventWriter(unitares_url, operator_token or "")
+    except (sqlite3.Error, OSError):
+        if store is not None:
+            store.close()
         print("github_observer: the fingerprint store could not be read", file=sys.stderr)
         return 2
     reader = GitHubReader(
@@ -442,9 +530,9 @@ def main(argv: list[str] | None = None) -> int:
         counts = run_cycle(
             reader,
             args.repo,
-            DryRunWriter(sys.stdout),
-            seen=known.__contains__,
-            mark=lambda fingerprint, event_type: None,
+            writer,
+            seen=seen_fn,
+            mark=mark_fn,
             since=datetime.now(timezone.utc) - timedelta(days=args.since_days),
             trusted_apps=trusted_apps,
             skipped_checks=DEFAULT_SKIPPED_CHECKS | set(args.skip_check),
@@ -452,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
     except GitHubError as exc:
         print(f"github_observer: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({"dry_run": True, **counts}, sort_keys=True), file=sys.stderr)
-    # A poll that could not read something is not a clean poll.
-    return 1 if counts["repos_failed"] or counts["prs_failed"] else 0
+    finally:
+        if store is not None:
+            store.close()
+    print(json.dumps({"dry_run": bool(args.dry_run), **counts}, sort_keys=True), file=sys.stderr)
+    # A poll that could not read or write something is not a clean poll.
+    return 1 if counts["repos_failed"] or counts["prs_failed"] or counts["writes_failed"] else 0

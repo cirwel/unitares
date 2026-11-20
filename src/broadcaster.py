@@ -137,6 +137,8 @@ class EISVBroadcaster:
         event_type: str,
         agent_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        *,
+        persist: bool = True,
     ):
         """Broadcast a typed governance event.
 
@@ -155,6 +157,9 @@ class EISVBroadcaster:
         }
         self.event_history.append(event)
         await self._send_to_clients(event)
+
+        if not persist:
+            return
 
         # Fire-and-forget persist to audit.events so dashboard survives restarts
         try:

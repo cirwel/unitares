@@ -15,6 +15,7 @@
     "src/agent_identity_auth.py",
     "src/effect_grant.py",
     "src/http_routes/effects.py",
+    "src/http_routes/external_events.py",
     "src/lease_attestation.py",
     "src/http_routes/lease_identity.py",
     "src/identity/*",
