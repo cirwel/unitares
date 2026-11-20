@@ -48,6 +48,51 @@ defmodule UnitaresLeasePlane.HTTPRouter.HealthTest do
     assert body["protocol_version"] == HTTPRouter.protocol_version()
   end
 
+  test "GET /v1/health reports the identity-binding posture and any warning" do
+    previous_mode = Application.get_env(:lease_plane, :identity_binding_mode)
+    previous_kinds = Application.get_env(:lease_plane, :identity_bound_surface_kinds)
+
+    on_exit(fn ->
+      for {key, value} <- [
+            identity_binding_mode: previous_mode,
+            identity_bound_surface_kinds: previous_kinds
+          ] do
+        if is_nil(value),
+          do: Application.delete_env(:lease_plane, key),
+          else: Application.put_env(:lease_plane, key, value)
+      end
+    end)
+
+    Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+    Application.put_env(:lease_plane, :identity_bound_surface_kinds, MapSet.new(["agent"]))
+
+    binding = health_identity_binding()
+    assert binding["mode"] == "enforce"
+    assert binding["bound_surface_kinds"] == ["agent"]
+    assert binding["warning"] =~ "enforces only surface kinds [agent]"
+
+    Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+    binding = health_identity_binding()
+    assert binding["bound_surface_kinds"] == "all"
+    assert binding["warning"] == nil
+
+    Application.delete_env(:lease_plane, :identity_binding_mode)
+    binding = health_identity_binding()
+    assert binding["mode"] == "log"
+    assert binding["warning"] =~ "mode is log"
+  end
+
+  defp health_identity_binding do
+    resp =
+      :get
+      |> conn("/v1/health")
+      |> authed()
+      |> HTTPRouter.call(@opts)
+
+    assert resp.status == 200
+    parsed(resp)["identity_binding"]
+  end
+
   test "GET /v1/health without bearer returns 401" do
     # Auth plug runs before route matching — same gating as every other path.
     resp =
