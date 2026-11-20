@@ -1258,14 +1258,14 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     text = text.replace('"', "").replace("'", "")
     tokens = [t.strip(";,") for t in text.split()]
     found: list[str] = []
+    system_bins: list[str] = []
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
         if "/" not in tok:
             continue
         expanded = os.path.expanduser(tok)
-        if str(Path(expanded).parent) in SYSTEM_BIN_DIRS:
-            continue
+        is_system_bin = str(Path(expanded).parent) in SYSTEM_BIN_DIRS
         if any(ch in expanded for ch in "*?["):
             matches = sorted(glob_module.glob(expanded))
             if not matches:
@@ -1275,7 +1275,8 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             if not Path(expanded).exists():
                 continue
             resolved = Path(expanded).resolve()
-        if str(resolved.parent) in SYSTEM_BIN_DIRS:
+        if is_system_bin or str(resolved.parent) in SYSTEM_BIN_DIRS:
+            system_bins.append(str(resolved))
             continue
         found.append(str(resolved))
         if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
@@ -1292,7 +1293,7 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             if target.exists():
                 found.append(str(target.resolve()))
                 break
-    return found
+    return found or system_bins
 
 
 def _dispatched_label(scripts: list[str], command: str) -> str:

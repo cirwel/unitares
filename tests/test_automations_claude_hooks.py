@@ -569,3 +569,23 @@ def test_codex_and_antigravity_user_hooks_are_discovered(
         ("antigravity-settings", "Stop: post-stop"),
         ("codex-settings", "SessionStart: agent-presence"),
     ]
+
+
+def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch):
+    """Valid hooks running standalone system binaries (e.g. /usr/bin/true) stay wired."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": "/usr/bin/true"}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    assert items[0].name == "Stop: true"
