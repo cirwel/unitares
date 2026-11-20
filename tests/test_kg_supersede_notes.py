@@ -30,7 +30,7 @@ _NOW = "2026-09-28T00:00:00.000001+00:00"
 @pytest.fixture(autouse=True)
 def _fixed_clock():
     with (
-        patch("src.mcp_handlers.knowledge.handlers._utc_now_iso", return_value=_NOW),
+        patch("src.mcp_handlers.knowledge.validation_helpers._utc_now_iso", return_value=_NOW),
         patch("src.mcp_handlers.knowledge.mutation_helpers._utc_now_iso", return_value=_NOW),
     ):
         yield

@@ -1279,12 +1279,12 @@ GRAPHS = {"postgres": _pg_graph, "age": _age_graph}
 
 
 async def _search(graph, arguments: dict) -> dict:
-    from src.mcp_handlers.knowledge import handlers as kg_handlers
+    from src.mcp_handlers.knowledge import handlers as kg_handlers, search_helpers
 
     with patch.object(kg_handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
          patch.object(kg_handlers, "_broadcast_knowledge_read", AsyncMock()), \
          patch.object(
-             kg_handlers,
+             search_helpers,
              "_resolve_agent_display",
              MagicMock(side_effect=lambda agent_id: {"display_name": agent_id}),
          ):
@@ -1588,9 +1588,10 @@ async def test_a_windowed_semantic_read_failure_degrades_instead_of_failing_the_
     with patch("src.embeddings.embeddings_available", return_value=True), \
          patch("src.embeddings.get_embeddings_service", AsyncMock(return_value=emb)):
         assert await graph.semantic_search("coherence gate", created_after=after) == []
+        from src.mcp_handlers.knowledge import search_helpers
         with patch.object(kg_handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
              patch.object(kg_handlers, "_broadcast_knowledge_read", AsyncMock()), \
-             patch.object(kg_handlers, "_resolve_agent_display",
+             patch.object(search_helpers, "_resolve_agent_display",
                           MagicMock(side_effect=lambda a: {"display_name": a})):
             result = await kg_handlers.handle_search_knowledge_graph({
                 "action": "search", "query": "coherence gate",

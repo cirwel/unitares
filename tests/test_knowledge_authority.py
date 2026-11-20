@@ -519,8 +519,10 @@ async def test_semantic_fallback_pool_is_ranked_before_the_page_is_cut():
     graph.full_text_search = AsyncMock(return_value=[*channel, native])
     request = handlers._parse_knowledge_search_request({"query": "review", "limit": 2})
     state = handlers._KnowledgeSearchState(request=request, graph=graph)
+    from src.mcp_handlers.knowledge import search_helpers
+
     with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+         patch.object(search_helpers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
         await handlers._execute_knowledge_search(state)
     assert state.search_mode == "semantic_fallback_fts"
     assert [row.id for row in state.results][0] == "finding-1"
@@ -549,7 +551,7 @@ async def test_semantic_fallback_skips_excluded_writers_before_ranking():
     # Review on #2537 after the rebase onto #2517: the widened fallback pool
     # let an excluded writer's native row be promoted into the page and then
     # removed, leaving it short.
-    from src.mcp_handlers.knowledge import handlers
+    from src.mcp_handlers.knowledge import handlers, search_helpers
 
     channel = [
         _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(2)
@@ -565,7 +567,7 @@ async def test_semantic_fallback_skips_excluded_writers_before_ranking():
     })
     state = handlers._KnowledgeSearchState(request=request, graph=graph)
     with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+         patch.object(search_helpers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
         await handlers._execute_knowledge_search(state)
     assert [row.id for row in state.results] == ["m0", "m1"]
 

@@ -109,7 +109,7 @@ def patch_common(mock_mcp_server, mock_graph):
          patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
          patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
-         patch("src.mcp_handlers.knowledge.handlers.record_recall_event", recall_event_recorder), \
+         patch("src.mcp_handlers.knowledge.search_helpers.record_recall_event", recall_event_recorder), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"):
         mock_mcp_server.recall_event_recorder = recall_event_recorder
         yield mock_mcp_server, mock_graph
@@ -2322,7 +2322,7 @@ class TestSearchKnowledgeGraphAdditional:
         discoveries = [make_discovery(id=f"d-{i}", summary=f"Item {i}") for i in range(5)]
         mock_graph.query = AsyncMock(return_value=discoveries)
 
-        with patch("src.mcp_handlers.knowledge.handlers.synthesize_results",
+        with patch("src.mcp_handlers.knowledge.search_helpers.synthesize_results",
                     new_callable=AsyncMock,
                     return_value={"summary": "Synthesized results"}):
             result = await handle_search_knowledge_graph({
