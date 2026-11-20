@@ -324,17 +324,17 @@ def test_an_edit_made_while_its_scan_is_running_is_scanned_again(tmp_path):
 
     env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
     env["UNITARES_WATCHER_SWEEP_MAX"] = "1"
-    target = root / "a.py"
-    target.write_text("a = 1\n")
+    (root / "a.py").write_text("a = 1\n")
     (root / "b.py").write_text("b = 1\n")
-    # A scan that takes a moment, during which its own target is edited.
+    # The first scan takes a moment, and its own target is edited meanwhile.
+    # `find` order differs by platform, so whichever file comes first.
     Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" >> "{calls}"\n'
         'case "$*" in\n'
         f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
-        f'  "{agent} --file {target}"*)\n'
-        f'    if [ ! -e "{tmp_path}/edited" ]; then sleep 1.2; echo "a = 2" > "{target}"; : > "{tmp_path}/edited"; fi ;;\n'
+        f'  "{agent} --file "*)\n'
+        f'    if [ ! -e "{tmp_path}/edited" ]; then sleep 1.2; echo "x = 2" > "$3"; : > "{tmp_path}/edited"; fi ;;\n'
         "esac\n"
         "exit 0\n"
     )
@@ -348,4 +348,22 @@ def test_an_edit_made_while_its_scan_is_running_is_scanned_again(tmp_path):
     sweep()
 
     scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
-    assert scanned == [str(target), str(target)], scanned
+    assert len(scanned) == 2 and scanned[0] == scanned[1], scanned
+
+
+def test_a_fresh_hook_lock_still_skips_the_file(tmp_path):
+    """The hook-lock check compares mtimes with `-nt`. It used `stat -f %m`,
+    which is BSD-only: under GNU stat the comparison aborted the sweep."""
+    env, calls, agent, log, root, _state = _scanning_env(tmp_path)
+    (root / "a.py").write_text("a = 1\n")
+
+    subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
+    (root / "a.py").write_text("a = 2\n")
+    time.sleep(1.1)
+    for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
+        lock.touch()  # the hook scanned this edit
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert len(_scan_calls(calls, agent)) == 1
+    assert "1 already covered by hook" in log.read_text()

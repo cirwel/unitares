@@ -227,14 +227,12 @@ while IFS= read -r FILE_PATH; do
     FILE_HASH=$(printf '%s' "$FILE_PATH" | shasum -a 256 | cut -c1-16)
     LOCK_FILE="${LOCK_DIR}/${FILE_HASH}.lock"
     DONE_FILE="${DONE_DIR}/${FILE_HASH}"
-    if [[ -f "$LOCK_FILE" ]]; then
-        LOCK_MTIME=$(stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)
-        FILE_MTIME=$(stat -f %m "$FILE_PATH" 2>/dev/null || echo 0)
-        if [[ "$LOCK_MTIME" -ge "$FILE_MTIME" ]]; then
-            SKIPPED_HOOK=$(( SKIPPED_HOOK + 1 ))
-            touch "$DONE_FILE"
-            continue
-        fi
+    # `-nt`, not `stat -f %m`: that form is BSD-only, and on GNU stat it
+    # prints filesystem text that the numeric comparison then aborts on.
+    if [[ -f "$LOCK_FILE" && ! "$FILE_PATH" -nt "$LOCK_FILE" ]]; then
+        SKIPPED_HOOK=$(( SKIPPED_HOOK + 1 ))
+        touch "$DONE_FILE"
+        continue
     fi
 
     # --- Did an earlier sweep in this window already scan this edit? ---
