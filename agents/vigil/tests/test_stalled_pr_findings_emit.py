@@ -53,7 +53,7 @@ def test_opened_pr_posts_one_finding_naming_the_owner(posts):
     calls, _ = posts
     state = {"stalled_pr_open": {KEY: _entry()}, "stalled_pr_opened": [KEY],
              "stalled_pr_resolved": []}
-    assert _emit(state) == {"opened": 1, "resolved": 0, "failed": 0}
+    assert _emit(state) == {"opened": 1, "resolved": 0, "failed": 0, "deferred": 0}
     (call,) = calls
     assert call["event_type"] == "vigil_finding" and call["severity"] == "warning"
     assert KEY in call["message"] and UUID_A in call["message"]
@@ -89,7 +89,7 @@ def test_resolved_pr_posts_a_closure_paired_to_its_stall(posts):
 
     state = {"stalled_pr_open": {}, "stalled_pr_opened": [],
              "stalled_pr_resolved": [{**_entry(), "outcome": "merged", "open_hours": 41.5}]}
-    assert _emit(state) == {"opened": 0, "resolved": 1, "failed": 0}
+    assert _emit(state) == {"opened": 0, "resolved": 1, "failed": 0, "deferred": 0}
     (call,) = calls
     assert call["event_type"] == "vigil_resolution_finding" and call["severity"] == "info"
     assert call["extra"]["stall_fingerprint"] == stall_fp
@@ -111,7 +111,7 @@ def test_failed_open_is_dropped_so_it_reopens_next_cycle(posts):
     outcome["value"] = FAILED
     state = {"stalled_pr_open": {KEY: _entry()}, "stalled_pr_opened": [KEY],
              "stalled_pr_resolved": []}
-    assert _emit(state) == {"opened": 0, "resolved": 0, "failed": 1}
+    assert _emit(state) == {"opened": 0, "resolved": 0, "failed": 1, "deferred": 0}
     assert KEY not in state["stalled_pr_open"]
 
 
@@ -129,5 +129,51 @@ def test_failed_closure_is_put_back_so_it_is_retried(posts):
                          "stalled_pr_opened": ["missing"], "stalled_pr_resolved": ["junk"]}])
 def test_malformed_state_does_not_raise_or_post(posts, state):
     calls, _ = posts
-    assert _emit(state) == {"opened": 0, "resolved": 0, "failed": 0}
+    assert _emit(state) == {"opened": 0, "resolved": 0, "failed": 0, "deferred": 0}
     assert calls == []
+
+
+def _many(n: int) -> dict:
+    keys = [f"acmeco/unitares#{i}" for i in range(1, n + 1)]
+    return {
+        "stalled_pr_open": {k: _entry(number=i) for i, k in enumerate(keys, 1)},
+        "stalled_pr_opened": list(keys),
+        "stalled_pr_resolved": [],
+    }
+
+
+def test_first_failed_post_stops_the_pass_and_undoes_the_rest(posts):
+    """Governance down: one attempt, not one slow attempt per stalled PR."""
+    calls, outcome = posts
+    outcome["value"] = FAILED
+    state = _many(15)
+    counts = _emit(state)
+    assert len(calls) == 1
+    assert counts == {"opened": 0, "resolved": 0, "failed": 1, "deferred": 14}
+    assert state["stalled_pr_open"] == {}  # all re-open next cycle
+
+
+def test_emit_budget_defers_what_does_not_fit(posts, monkeypatch):
+    from agents.vigil import agent as vigil_mod
+
+    calls, _ = posts
+    clock = {"t": 0.0}
+    monkeypatch.setattr(vigil_mod, "STALLED_PR_EMIT_BUDGET", 10.0)
+    monkeypatch.setattr(vigil_mod.time, "monotonic", lambda: clock["t"])
+    real = vigil_mod.post_finding_result
+
+    def slow_post(**kwargs):
+        clock["t"] += 6.0
+        return real(**kwargs)
+
+    monkeypatch.setattr(vigil_mod, "post_finding_result", slow_post)
+    state = _many(5)
+    state["stalled_pr_resolved"] = [
+        {**_entry(number=99), "outcome": "merged", "open_hours": 2.0}
+    ]
+    counts = _emit(state)
+    assert len(calls) == 2
+    assert counts["opened"] == 2 and counts["deferred"] == 4 and counts["failed"] == 0
+    assert sorted(state["stalled_pr_open"]) == [
+        "acmeco/unitares#1", "acmeco/unitares#2", "acmeco/unitares#99",
+    ]
