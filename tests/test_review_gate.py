@@ -6585,6 +6585,16 @@ def test_cmd_review_round_cap_exemption_uses_independent_families(monkeypatch):
     assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="claude")) == rg.UNREVIEWED
     assert not ran
 
+    # Author-only pass with empty independent set must also let an un-attempted independent reviewer join past cap.
+    ran.clear()
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic"})
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == 0
+    assert ran == ["antigravity"]
+
+    ran.clear()
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="claude")) == rg.UNREVIEWED
+    assert not ran
+
     # Unknown authorship cannot use the round-cap exemption either.
     monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set())
     monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})

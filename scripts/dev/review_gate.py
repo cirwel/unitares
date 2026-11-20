@@ -68,7 +68,7 @@ Cost
 The CI side reads comments with GITHUB_TOKEN and calls no model. Native Codex is operator opt-in (`git config review.native true`), with a
 bounded wait and local fallback. Otherwise the review runs through a CLI the operator already has (`codex`,
 `claude`, or `agy` for Antigravity when installed, each on its own subscription login); `record` takes any review text, so a contributor with no model at
-all can satisfy the gate with a human review. No metered API is on the
+all can satisfy the gate on non-sensitive diffs with a human review (diffs on `second_family_paths` require two classified model families outside the PR authors). No metered API is on the
 required path (AGENTS.md, execution-cost policy).
 """
 
@@ -1958,12 +1958,20 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     return families
 
 
+_UNKNOWN_AUTHORS_GUIDANCE = (
+    "no classified Model signature or claude/codex/gemini branch prefix; "
+    "identify the authoring model family in the PR provenance signature, or "
+    "request an operator decision for human/unclassified authorship"
+)
+
+
 def independent_families(families: set[str], authors: set[str]) -> set[str]:
     """Review families provably outside PR authorship.
 
-    Unknown authorship fails closed (empty set), matching waiver semantics
-    so stripping a provenance signature never lets a self-review count as
-    independent."""
+    Unknown authorship intentionally fails closed on `second_family_paths`
+    (empty set), matching `#3280` waiver semantics per operator ruling
+    (`KG 2026-11-20T03:10:05.454623+00:00`) so stripping a provenance signature
+    cannot turn a self-review into an independent one."""
     if not authors:
         return set()
     return set(families) - set(authors)
@@ -1999,9 +2007,8 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
         have = ", ".join(sorted(families)) or "none"
         return ("action_required",
                 f"security-sensitive path {sensitive[0]}{more}: PR author families are unknown "
-                "(no provenance signature or branch prefix); cannot verify independent "
-                f"two-family review coverage (have: {have}; authors: unknown); "
-                "add a Model + UNITARES agent provenance signature to the PR body")
+                f"({_UNKNOWN_AUTHORS_GUIDANCE}); cannot verify independent two-family review "
+                f"coverage (have: {have}; authors: unknown)")
     have = ", ".join(sorted(independent)) or "none"
     missing = "two model families" if not independent else "a second model family"
     wrote = ", ".join(sorted(authors))
@@ -3462,7 +3469,7 @@ def cmd_review(args) -> int:
                 )
                 missing_required_family = bool(
                     sensitive and family and authors and family not in authors
-                    and 1 <= len(independent) < 2 and family not in independent
+                    and families and len(independent) < 2 and family not in independent
                     and not already_attempted
                     and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head,
                                               authors)
@@ -3629,10 +3636,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     have = ", ".join(sorted(independent)) or "none"
     note = f"; excluded author family: {', '.join(excluded)}" if excluded else ""
     if not authors:
-        next_step = ("PR author families are unknown (no provenance signature or branch prefix); "
-                     "add a Model + UNITARES agent provenance signature to the PR body so "
-                     "independent coverage can be verified")
-    elif candidates:
+        print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and PR author "
+              f"families are unknown ({_UNKNOWN_AUTHORS_GUIDANCE}; have: {have}).")
+        return NEEDS_SECOND_FAMILY
+    if candidates:
         runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
         next_step = f"run one of: {runs}"
     elif not eligible_families(authors, independent):
