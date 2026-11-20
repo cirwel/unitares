@@ -8,16 +8,69 @@ the deployed enforcement posture more than any amount of runtime gaming
 would. This file makes that list explicit instead of tacit.
 
 **No instance of a governance-weakening diff is known; the claim is
-structural.** The human merge gate remains the real control: the merge queue,
-which lands other PRs on their owning agent's `approved-to-merge` label, never
-arms a governance-sensitive PR, so the operator merges it by hand. It checks
-the diff against this manifest itself rather than trusting the label alone,
-which CI applies best-effort, and it never arms a PR from a fork.
+structural.** Until 2026-11-16 the control was a human merge gate: the merge
+queue never armed a governance-sensitive PR, and the operator merged it by
+hand. The operator no longer merges PRs, and ruled on 2026-11-16 that the
+queue may land these under the conditions in [How a sensitive PR
+lands](#how-a-sensitive-pr-lands). Approval became a veto window.
 What this inventory adds is conspicuousness: a PR touching any entry gets a
 `governance-sensitive` label and one advisory comment asking the author to
 state the expected effect on pause/verdict rates. The check never blocks —
 a gate that fights the maintainer gets routed around, which reproduces the
 problem one layer up.
+
+## How a sensitive PR lands
+
+A PR is governance-sensitive when its diff matches the manifest or it carries
+the `governance-sensitive` label. The merge queue
+(`scripts/ops/pr-babysitter.sh`) checks the diff against the manifest on the
+base branch itself, since CI applies the label best-effort. It arms such a PR
+only when all of these hold:
+
+1. **Two-family review, passed on the final head.** The diff touches a file
+   on `scripts/dev/review_policy.json` `second_family_paths`, and the PR's
+   `review` check is `SUCCESS` on the current head. Every manifest file is on
+   that list, whole-file, so the review gate requires two model families
+   before `review` passes. A sensitive diff with no file on the list is not
+   delegated. Neither is one whose `review` passed on an operator waiver of
+   the second family: the check is green there on one family, the queue
+   reads that from the check's title, and the PR is a hand merge.
+2. **A stated effect.** The PR body has a line starting `Expected effect:`
+   that says what the change is expected to do to pause and verdict rates.
+   The queue requires at least 20 characters that are not a placeholder; it
+   does not judge whether the statement is right.
+3. **A 24-hour veto window.** 24 hours have passed since the current
+   `approved-to-merge` label was applied. Removing the label is the veto.
+   Re-adding it starts the 24 hours again, and so does the renewal a later
+   push requires.
+
+The delivery owner marks the PR ready and applies `approved-to-merge` as for
+any other PR. `ready-when-validated` does not apply to a sensitive diff: a
+declared draft on one is not promoted. While a PR waits on any condition the
+queue skips it and keeps landing the PRs behind it. It posts one notice per
+head: the veto window is open and when it ends, the body has no
+`Expected effect:` line, or the diff is hand-merge only. An armed PR is
+checked again on every tick and disarmed if a condition stops holding.
+
+**Hand-merge only.** A diff touching
+`scripts/dev/governance_sensitivity_manifest.tsv`,
+`scripts/dev/check_governance_sensitivity.sh` or
+`.github/workflows/governance-sensitivity.yml` is never armed by the queue,
+whatever else holds, and whether or not the manifest still lists that file.
+The operator merges it by hand. So does anything the queue cannot read: the
+manifest, the diff (or one long enough to be truncated), the review policy,
+the label's time, or a matched file whose patch GitHub does not return. A PR
+from a fork is never armed either.
+
+`PR_QUEUE_SENSITIVE_DELEGATED=0` in the queue's environment restores the
+earlier rule: no governance-sensitive PR is armed.
+
+**What the veto window is not.** It is a convention among cooperating agents,
+not a security boundary. Agents can act under the operator's GitHub login, so
+nothing technical stops one from labelling early, arming a PR itself, or
+editing the queue. Two-family review shows that two independent model
+families read the diff, not that a person did, and a window that passes in
+silence shows that nobody objected, not that the operator looked.
 
 ## Mechanism
 
@@ -55,7 +108,9 @@ problem one layer up.
 
 Add an entry when a new constant or pattern table materially gates
 pause/verdict behavior; remove one only with a stated reason in the PR body
-(that PR will flag itself, which is the point). Keep the manifest, this
-table, and the threat-model subsection telling the same story;
+(that PR will flag itself, which is the point). Add the new path to `scripts/dev/review_policy.json`
+`second_family_paths` in the same PR: without it a diff on that path stays a
+hand merge, and `tests/test_pr_babysitter_queue.py` fails. Keep the manifest,
+this table, and the threat-model subsection telling the same story;
 `tests/test_doc_contract_mirrors.py` fails when this table's paths and
 symbols differ from the manifest's.

@@ -787,3 +787,48 @@ async def test_request_connector_cache_not_inherited_by_spawned_tasks():
         assert calls == 2
     finally:
         _REQUEST_CONNECTOR_CACHE.reset(token)
+
+
+def test_connectors_route_distinguishes_oauth_startup_failure_from_unconfigured(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.testclient import TestClient
+
+    from src import http_api
+    from src.services.mcp_transport_service import McpAuthConfig, _register_application_routes
+
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", "synthetic-operator-token")
+    headers = {"X-Unitares-Operator": "synthetic-operator-token"}
+
+    unconfigured_app = Starlette()
+    http_api.register_http_routes(
+        unconfigured_app,
+        server_ready_fn=lambda: True,
+        server_start_time=0,
+        server_version="test",
+        has_streamable_http=True,
+        mount_route_packs=False,
+        oauth_provider=None,
+        oauth_settings=None,
+        oauth_setup_failed=False,
+    )
+    r_unconfigured = TestClient(unconfigured_app).get("/auth/connectors", headers=headers)
+    assert r_unconfigured.status_code == 503
+    assert "OAuth is not configured on this server" in r_unconfigured.json()["error"]
+
+    failed_app = Starlette()
+    _register_application_routes(
+        failed_app,
+        mcp=SimpleNamespace(name="unitares"),
+        session_manager=SimpleNamespace(handle_request=lambda *_a, **_k: None),
+        auth_config=McpAuthConfig(oauth_provider=None, auth_settings=None, gate_unavailable=True),
+        server_ready_fn=lambda: True,
+        server_start_time=0,
+        server_version="test",
+        server_build_sha="test",
+    )
+    r_failed = TestClient(failed_app).get("/auth/connectors", headers=headers)
+    assert r_failed.status_code == 503
+    err = r_failed.json()["error"]
+    assert "OAuth startup failed on this server" in err
+    assert "not configured" not in err
+    assert "unitares_connector_" not in err

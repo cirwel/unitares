@@ -36,6 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measured reading is not shown. Full mode always carries it. Measurement-only: it restates
   the component record and changes no value, verdict or policy input.
 
+### Fixed
+- **Watcher: the scheduled sweep no longer stalls, and the open queue is bounded.**
+  `watcher-sweep.sh` tested its candidate list for emptiness with a bash pattern
+  substitution that is quadratic in bash 3.2 (34 seconds on 100 paths), so a sweep
+  with 1,500 candidates never finished. It now counts lines. A watermark more
+  than `UNITARES_WATCHER_SWEEP_MAX_WINDOW_H` hours old (default 48) is moved up to
+  that age, so a held watermark cannot grow the window without limit. A sweep
+  that hits its file cap now resumes where it stopped: it had been scanning the
+  same first files every interval, because the hook deletes the lock files that
+  recorded them. The sweep runs the pattern scan only; the free-form review scan is opt-in with
+  `UNITARES_WATCHER_SWEEP_REVIEW=1`. An `open` or `surfaced` finding on a file
+  that still exists now ages out 21 days after detection without adjudication
+  (`resolution_reason: live_path_unadjudicated`), as one on a deleted path
+  already did; the row is kept and stays adjudicable by fingerprint.
+
 ---
 
 ## [4.0.0] - 2026-11-06

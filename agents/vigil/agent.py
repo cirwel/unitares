@@ -32,6 +32,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # Add project root to path
@@ -42,6 +43,7 @@ sys.path.insert(0, str(project_root))
 from agents.common.config import GOV_MCP_URL
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
+from unitares_sdk.errors import GovernanceToolRefused
 from unitares_sdk.utils import notify
 from agents.common.findings import (
     REACHED_GOVERNANCE,
@@ -581,12 +583,29 @@ def post_archive_digest(
     )
 
 
-async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, str]:
+def _is_high_sev_permission_denial(error_code: Optional[str], message: str) -> bool:
+    """True when the server refused archiving a non-owned high-severity entry."""
+    if error_code == "PERMISSION_DENIED":
+        return True
+    if error_code == "AUTH_REQUIRED":
+        return False
+    low = (message or "").lower()
+    return "high-severity" in low and "authentication required" not in low
+
+
+async def archive_kg_entry(
+    client: GovernanceClient,
+    eid: str,
+    *,
+    resolution_notes: Optional[str] = None,
+) -> Tuple[bool, str]:
     """Archive one KG entry; high-severity entries fall back to ``closed``.
 
     Shared by auto-archive and the operator review path so both use the same
     server call and the same fallback. Returns (ok, error). Never raises.
     """
+    high_sev_refused = False
+    first_err = "unknown"
     try:
         raw = await asyncio.wait_for(
             client.call_tool("knowledge", {
@@ -596,27 +615,49 @@ async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, st
             }),
             timeout=5.0,
         )
-        # Defense: server should always return a dict, but call_tool
-        # could return None or a primitive on a malformed response.
-        # Don't attempt the high-sev fallback in that case.
+        # Defense: server should always return a dict, but mocked/malformed
+        # call_tool could return None or a primitive. Don't attempt fallback.
         if not isinstance(raw, dict):
             return False, "non-dict response"
         if raw.get("success"):
             return True, ""
-        if (raw.get("error_code") == "PERMISSION_DENIED"
-                or "high-severity" in (raw.get("error") or "").lower()):
-            raw2 = await asyncio.wait_for(
-                client.call_tool("knowledge", {
-                    "action": "update",
-                    "discovery_id": eid,
-                    "status": "closed",
-                }),
-                timeout=5.0,
-            )
-            if isinstance(raw2, dict) and raw2.get("success"):
-                return True, ""
-            return False, "high-sev close failed"
-        return False, (raw.get("error") or "unknown")[:80]
+        first_err = (raw.get("error") or "unknown")[:80]
+        high_sev_refused = _is_high_sev_permission_denial(
+            raw.get("error_code"), raw.get("error") or ""
+        )
+    except GovernanceToolRefused as exc:
+        # GovernanceClient.call_tool raises GovernanceToolRefused on any
+        # structured {"success": false} response; inspect the refusal before
+        # giving up so the high-severity -> status="closed" fallback actually
+        # runs in production (previously dead code behind `except Exception`).
+        first_err = str(exc)[:80]
+        high_sev_refused = _is_high_sev_permission_denial(exc.error_code, str(exc))
+    except Exception as e:
+        return False, type(e).__name__
+
+    if not high_sev_refused:
+        return False, first_err
+
+    fallback_notes = (
+        resolution_notes
+        or "Closed by Vigil (high-severity non-owner fallback)."
+    )
+    try:
+        raw2 = await asyncio.wait_for(
+            client.call_tool("knowledge", {
+                "action": "update",
+                "discovery_id": eid,
+                "status": "closed",
+                "closure_class": "obsolete",
+                "resolution_notes": fallback_notes,
+            }),
+            timeout=5.0,
+        )
+        if isinstance(raw2, dict) and raw2.get("success"):
+            return True, ""
+        return False, "high-sev close failed"
+    except GovernanceToolRefused:
+        return False, "high-sev close failed"
     except Exception as e:
         return False, type(e).__name__
 
@@ -718,9 +759,12 @@ class VigilAgent(GovernanceAgent):
         }
 
         try:
-            audit_result = await client.audit_knowledge(scope="open", top_n=10)
+            max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
+            audit_top_n = max(20, max_per_cycle * 3) if self.with_hygiene else 10
+            audit_result = await client.audit_knowledge(scope="open", top_n=audit_top_n)
             if audit_result.success:
                 summary["audit_run"] = True
+                summary["_audit_result"] = audit_result
                 # Server returns audit payload under `audit`, not `results`.
                 # Iterating `.results` stays empty and leaves stale_found=0 —
                 # the silent failure that hid 127 archive candidates for months.
@@ -827,7 +871,10 @@ class VigilAgent(GovernanceAgent):
         return summary
 
     async def _run_aged_candidate_archive(
-        self, client: GovernanceClient,
+        self,
+        client: GovernanceClient,
+        *,
+        audit_result: Any = None,
     ) -> Dict[str, Any]:
         """Auto-archive KG entries that have sat in candidate_for_archive too long.
 
@@ -879,21 +926,27 @@ class VigilAgent(GovernanceAgent):
         threshold_days = int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90"))
         max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
 
-        try:
-            result = await asyncio.wait_for(
-                client.audit_knowledge(scope="open", top_n=max_per_cycle * 3),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            summary["errors"].append("audit_timeout")
-            log("auto-archive: audit timed out after 15s; skipping cycle")
-            return summary
-        except Exception as e:
-            summary["errors"].append(f"audit_failed: {type(e).__name__}")
-            log(f"auto-archive: audit failed ({type(e).__name__}: {e}); skipping cycle")
-            return summary
+        if audit_result is not None:
+            result = audit_result
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=max_per_cycle * 3),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                summary["errors"].append("audit_timeout")
+                log("auto-archive: audit timed out after 15s; skipping cycle")
+                return summary
+            except Exception as e:
+                summary["errors"].append(f"audit_failed: {type(e).__name__}")
+                log(f"auto-archive: audit failed ({type(e).__name__}: {e}); skipping cycle")
+                return summary
 
         if not getattr(result, "success", False):
+            err = getattr(result, "error", None)
+            if isinstance(err, str) and err.startswith(("audit_timeout", "audit_failed")):
+                summary["errors"].append(err)
             return summary
 
         audit_data = getattr(result, "audit", None) or {}
@@ -915,7 +968,14 @@ class VigilAgent(GovernanceAgent):
             eid = entry.get("id")
             if not eid:
                 continue
-            archived_ok, err = await archive_kg_entry(client, eid)
+            archived_ok, err = await archive_kg_entry(
+                client,
+                eid,
+                resolution_notes=(
+                    "Auto-closed by Vigil aged-candidate sweep "
+                    "(high-severity non-owner fallback)."
+                ),
+            )
             if not archived_ok:
                 summary["errors"].append(f"{eid[:24]}: {err}")
 
@@ -935,7 +995,11 @@ class VigilAgent(GovernanceAgent):
         return summary
 
     async def _run_stale_opens_sweep(
-        self, client: GovernanceClient, top_n: int = 20,
+        self,
+        client: GovernanceClient,
+        top_n: int = 20,
+        *,
+        audit_result: Any = None,
     ) -> List[Dict[str, Any]]:
         """KG hygiene v1: propose-only sweep of oldest stale-open KG entries.
 
@@ -952,17 +1016,20 @@ class VigilAgent(GovernanceAgent):
         if not self.with_hygiene:
             return []
 
-        try:
-            result = await asyncio.wait_for(
-                client.audit_knowledge(scope="open", top_n=top_n),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            log("stale-opens sweep timed out after 15s; continuing cycle")
-            return []
-        except Exception as e:
-            log(f"stale-opens sweep failed ({e}); continuing cycle")
-            return []
+        if audit_result is not None:
+            result = audit_result
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=top_n),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                log("stale-opens sweep timed out after 15s; continuing cycle")
+                return []
+            except Exception as e:
+                log(f"stale-opens sweep failed ({e}); continuing cycle")
+                return []
 
         if not getattr(result, "success", False):
             return []
@@ -1172,8 +1239,33 @@ class VigilAgent(GovernanceAgent):
             if sentinel_force_audit and not self.with_audit:
                 findings.append("Groundskeeper forced by Sentinel coordination")
 
+        # Reuse groundskeeper's open-scope audit when cleanup changed nothing
+        # so a single heartbeat cycle makes 1 knowledge(audit) call instead of 3.
+        cached_audit = groundskeeper_summary.pop("_audit_result", None)
+        shared_audit = (
+            cached_audit if groundskeeper_summary.get("archived", 0) == 0 else None
+        )
+        if shared_audit is None and self.with_hygiene:
+            max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
+            try:
+                shared_audit = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=max(20, max_per_cycle * 3)),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                log("hygiene shared audit timed out after 15s; skipping stale-opens and auto-archive")
+                shared_audit = SimpleNamespace(success=False, error="audit_timeout")
+            except Exception as e:
+                log(
+                    f"hygiene shared audit failed ({type(e).__name__}: {e}); "
+                    "skipping stale-opens and auto-archive"
+                )
+                shared_audit = SimpleNamespace(
+                    success=False, error=f"audit_failed: {type(e).__name__}"
+                )
+
         # --- 4.5. KG hygiene v1: stale-opens propose-only sweep (optional) ---
-        stale_opens = await self._run_stale_opens_sweep(client)
+        stale_opens = await self._run_stale_opens_sweep(client, audit_result=shared_audit)
         cycle_now = datetime.now(timezone.utc)
         stale_lines, stale_state = stale_opens_report(stale_opens, prev_state, cycle_now)
         findings.extend(stale_lines)
@@ -1208,7 +1300,7 @@ class VigilAgent(GovernanceAgent):
         # that follow.
         try:
             auto_archive = await asyncio.wait_for(
-                self._run_aged_candidate_archive(client),
+                self._run_aged_candidate_archive(client, audit_result=shared_audit),
                 timeout=60.0,
             )
         except asyncio.TimeoutError:
@@ -1472,7 +1564,14 @@ class VigilAgent(GovernanceAgent):
                 eid = e.get("id")
                 if not eid:
                     continue
-                ok, err = await archive_kg_entry(client, eid)
+                ok, err = await archive_kg_entry(
+                    client,
+                    eid,
+                    resolution_notes=(
+                        "Closed via Vigil operator review --apply "
+                        "(high-severity non-owner fallback)."
+                    ),
+                )
                 if ok:
                     archived += 1
                     log(f"OPERATOR_ARCHIVE: {eid} (age={e.get('last_activity_days')}d)")

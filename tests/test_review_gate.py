@@ -788,6 +788,254 @@ def test_a_merge_of_a_branch_not_on_the_base_does_not_carry(carry_repo):
     assert rg.base_merge_equivalents("master", "HEAD") == []  # ...but no walk past it
 
 
+# ---- carrying a review across a commit that only adds skill attestations ----
+
+_ATTESTED_AT = "2026-11-18T18:35:35Z"
+_ATTESTATION_NAME = "20261118T183535474214Z-8c598012.json"
+
+
+def _attestation(skill="demo", **over) -> dict:
+    record = {"schema": "unitares.skill_attestation.v1", "skill": skill,
+              "verified_at": _ATTESTED_AT, "verified_date": "2026-11-18",
+              "verifier": "model-x (agent 1234): re-checked demo after the base merge",
+              "source_digests": {"unitares/src/a.py#symbol": "95d7d8a248ee2c31"},
+              "skill_digest": "789148a2dc55a729",
+              "superseded_digests": {"unitares/src/a.py#symbol": ["ad9d23e2f1018ca1"]}}
+    record.update(over)
+    return {k: v for k, v in record.items() if v is not None}
+
+
+def _add_skill(r: Path, skill="demo") -> None:
+    (r / "skills" / skill).mkdir(parents=True, exist_ok=True)
+    (r / "skills" / skill / "SKILL.md").write_text("# demo\n")
+    _git(r, "add", "skills")
+    _git(r, "commit", "-q", "-m", f"add skill {skill}")
+
+
+def _restamp(r: Path, text: str | None = None, skill="demo", name=_ATTESTATION_NAME,
+             message="restamp") -> None:
+    d = r / "skills" / ".attestations" / skill
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(_attestation(skill)) if text is None else text)
+    _git(r, "add", "skills")
+    _git(r, "commit", "-q", "-m", message)
+
+
+def test_a_restamp_commit_carries_the_review(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    assert rg.diff_key("master", "HEAD") != reviewed_key  # the #3222 failure
+    assert rg.base_merge_equivalents("master", "HEAD") == [(reviewed_key, reviewed_head)]
+    rec, carried = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN"
+    assert carried == {"reviewed": reviewed_head}
+
+
+def test_a_restamp_carries_an_open_finding_too(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    rec, _ = _decide([_record(reviewed_key, "FINDINGS", 2)])
+    assert (rec.verdict, rec.findings, rec.disposed) == ("FINDINGS", 2, False)
+
+
+def test_a_restamp_carries_on_a_second_family_diff_but_a_base_merge_still_does_not(
+        carry_repo, monkeypatch):
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    _add_skill(carry_repo)
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    merged_head = _git(carry_repo, "rev-parse", "HEAD")
+    merged_key = rg.diff_key("master", "HEAD")
+    assert rg.base_merge_equivalents("master", "HEAD") == []  # 2026-09-28 rule, unchanged
+    _restamp(carry_repo)
+    # The restamp is stepped over; the base merge under it still ends the walk.
+    assert rg.base_merge_equivalents("master", "HEAD") == [(merged_key, merged_head)]
+
+
+def _master_edits_an_unrelated_file(r: Path) -> None:
+    _git(r, "checkout", "-q", "master")
+    (r / "other.txt").write_text("x on master\n")
+    _git(r, "commit", "-q", "-am", "master edits a file the PR does not touch")
+    _git(r, "checkout", "-q", "feature")
+
+
+@pytest.mark.parametrize("restamp_first", [True, False])
+def test_a_base_merge_that_keeps_the_key_does_not_cut_a_restamp_off_on_a_second_family_diff(
+        carry_repo, monkeypatch, restamp_first):
+    # Found in review of #3309: stopping at every base merge on a sensitive
+    # diff dropped the records under one that had not moved the key at all.
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    _add_skill(carry_repo)
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_an_unrelated_file(carry_repo)
+    if restamp_first:
+        _restamp(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    else:
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        assert rg.diff_key("master", "HEAD") == reviewed_key  # the merge kept the key
+        _restamp(carry_repo)
+    equivalents = rg.base_merge_equivalents("master", "HEAD")
+    assert (reviewed_key, reviewed_head) in equivalents
+    rec, carried = _decide([_record(reviewed_key)])
+    # Several commits share the reviewed key here; which one is named is not the point.
+    assert rec.verdict == "CLEAN" and carried["reviewed"] in {commit for _, commit in equivalents}
+
+
+def test_a_restamp_on_top_of_a_base_merge_carries_both_on_an_ordinary_diff(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    merged_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    assert [k for k, _ in rg.base_merge_equivalents("master", "HEAD")] == [merged_key, reviewed_key]
+    rec, _ = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN"
+
+
+def test_a_restamp_that_also_edits_code_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    (carry_repo / "other.txt").write_text("slipped in\n")
+    _git(carry_repo, "add", "other.txt")
+    _restamp(carry_repo)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps(_attestation(note="extra field")),
+    json.dumps(_attestation(verifier="two\nlines")),
+    json.dumps(_attestation(verifier="bidi ‮ override")),
+    json.dumps(_attestation(verifier="x" * 601)),
+    json.dumps(_attestation(skill_digest="not-a-digest")),
+    json.dumps(_attestation(source_digests={"../../etc/passwd": "95d7d8a248ee2c31"})),
+    json.dumps(_attestation(source_digests={})),
+    json.dumps(_attestation(verified_at="2026-11-18T18:35:36Z")),   # disagrees with the file name
+    json.dumps(_attestation(verified_date="2026-11-19")),
+    json.dumps(_attestation(schema="unitares.skill_attestation.v2")),
+    json.dumps(_attestation(skill_digest=None)),                     # required field missing
+    json.dumps(_attestation(superseded_digests={"unitares/src/a.py": "ad9d23e2f1018ca1"})),
+    '{"schema": "unitares.skill_attestation.v1", "schema": "unitares.skill_attestation.v1"}',
+    json.dumps(_attestation()).replace('"789148a2dc55a729"', "NaN"),
+    json.dumps([_attestation()]),
+    "not json",
+    json.dumps(_attestation(verifier="y" * 500)) + " " * (17 * 1024),
+])
+def test_a_malformed_attestation_does_not_carry(carry_repo, text):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, text)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_an_attestation_for_another_or_unknown_skill_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, json.dumps(_attestation("other")))          # record names another skill
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    _git(carry_repo, "reset", "-q", "--hard", "HEAD~1")
+    _restamp(carry_repo, json.dumps(_attestation("ghost")), skill="ghost")  # no skills/ghost/SKILL.md
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+@pytest.mark.parametrize("name", ["notes.json", "20261118T183535474214Z-8c598012.txt",
+                                  "20261118T183535Z-8c598012.json"])
+def test_a_file_that_is_not_named_like_an_attestation_does_not_carry(carry_repo, name):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, name=name)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_changing_or_swapping_an_attestation_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo)
+    path = carry_repo / "skills" / ".attestations" / "demo" / _ATTESTATION_NAME
+    path.write_text(json.dumps(_attestation(verifier="someone else")))
+    _git(carry_repo, "commit", "-q", "-am", "edit the attestation")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    _git(carry_repo, "rm", "-q", str(path))
+    _restamp(carry_repo, name="20261118T183535999999Z-00000000.json", message="swap")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_too_many_attestations_in_one_commit_do_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    d = carry_repo / "skills" / ".attestations" / "demo"
+    d.mkdir(parents=True)
+    for n in range(rg.ATTESTATION_MAX_FILES + 1):
+        (d / f"20261118T183535{n:06d}Z-8c598012.json").write_text(json.dumps(_attestation()))
+    _git(carry_repo, "add", "skills")
+    _git(carry_repo, "commit", "-q", "-m", "many restamps")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_a_branch_made_only_of_attestations_has_no_earlier_key(carry_repo):
+    _git(carry_repo, "checkout", "-q", "master")
+    _add_skill(carry_repo)
+    _git(carry_repo, "checkout", "-q", "-b", "restamp-only")
+    _restamp(carry_repo)
+    # Stepping onto master would yield the key of an empty diff.
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_a_waiver_is_not_carried_across_a_restamp(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    key = rg.diff_key("master", "HEAD")
+    waiver = {"author_association": "OWNER", "user": {"type": "User"}, "html_url": "waiver",
+              "body": f"<!-- {rg.WAIVER_MARKER} key={reviewed_key} authors=openai -->\n"
+                      "### waived\n\nReason: help string only; no auth decision changes\n"}
+    comments, carried = rg.carry_records([waiver, _record(reviewed_key)], key,
+                                         rg.base_merge_equivalents("master", "HEAD"))
+    assert "waiver" not in carried and f"key={reviewed_key}" in comments[0]["body"]
+    assert rg.active_waiver(comments, key, rg.waiver_policy()) is None
+
+
+def test_the_shape_check_agrees_with_the_attestations_the_stamp_tool_wrote():
+    # The carry is only as good as its agreement with the real producer
+    # (scripts/client/_check_freshness.py --stamp). The carry is deliberately
+    # narrower in one way: the producer accepts any verifier text, the carry
+    # only bounded printable ASCII. Such a record is still a valid
+    # attestation; it is reviewed like any other change. So this must never
+    # fail merely because a valid attestation is not carryable.
+    root = Path(__file__).resolve().parents[1] / "skills" / ".attestations"
+    carryable = 0
+    for f in sorted(root.glob("*/*.json")):
+        verifier = json.loads(f.read_text()).get("verifier")
+        if not (isinstance(verifier, str) and 0 < len(verifier) <= rg.ATTESTATION_MAX_VERIFIER
+                and all(" " <= ch <= "~" for ch in verifier)):
+            continue
+        m = rg.ATTESTATION_PATH_RE.fullmatch(f"skills/.attestations/{f.parent.name}/{f.name}")
+        assert m is not None, f.name
+        assert rg.wellformed_attestation(f.read_bytes(), m["skill"], m["stamp"]), f.name
+        carryable += 1
+    assert carryable
+
+
+def test_a_valid_attestation_with_a_unicode_verifier_is_reviewed_not_carried(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, json.dumps(_attestation(verifier="Jos\u00e9 (re-checked skill)"),
+                                    ensure_ascii=False))
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_the_held_check_names_the_waiver_route_when_no_family_is_left():
+    _, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
+                                     {"anthropic"}, {"google", "openai"})
+    assert "no family outside the authors is left" in desc
+    assert "waiver with a line allowance" in desc and "none of the gate's own files" in desc
+    _, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
+                                     {"anthropic"}, {"openai"})
+    assert "eligible to review: google" in desc and "waiver" not in desc
+
+
 def test_the_carry_walks_through_several_base_merges(carry_repo):
     reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
     reviewed_key = rg.diff_key("master", "HEAD")
@@ -3697,15 +3945,15 @@ def test_passing_families_counts_trusted_passing_records_only():
 
 def test_a_sensitive_diff_needs_two_families_before_the_check_passes():
     held = rg.second_family_check("success", "clean (antigravity)",
-                                  ["src/oauth_provider.py", "x"], {"google"})
+                                  ["src/oauth_provider.py", "x"], {"google"}, {"openai"})
     assert held[0] == "action_required"
     assert "src/oauth_provider.py (+1 more)" in held[1] and "have: google" in held[1]
     assert rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
-                                  {"google", "anthropic"}) == ("success", "clean")
-    assert rg.second_family_check("success", "clean", [], {"google"}) == ("success", "clean")
+                                  {"google", "anthropic"}, {"openai"}) == ("success", "clean")
+    assert rg.second_family_check("success", "clean", [], {"google"}, {"openai"}) == ("success", "clean")
     # Never upgrades a failing or pending check.
     assert rg.second_family_check("action_required", "findings", ["src/oauth_provider.py"],
-                                  set()) == ("action_required", "findings")
+                                  set(), {"openai"}) == ("action_required", "findings")
 
 
 def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
@@ -3746,12 +3994,14 @@ def test_ci_registers_the_carry_before_reading_native_evidence(monkeypatch):
     assert seen == [("k", [("old", "c0ffee")])]
 
 
-def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity")):
+def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity"),
+                       authors=("anthropic",)):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: changed)
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: rg.second_family_paths())
     monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     monkeypatch.setattr(rg, "passing_families", lambda *a: set(families))
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set(authors))
     monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: list(candidates))
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
     # The notice never starts a review: fail loudly if anything tries.
@@ -3776,7 +4026,7 @@ def test_the_notice_lists_only_eligible_other_family_providers(monkeypatch, caps
     """Claude on #2504 (P3): the real candidate filter, with an assertion that
     fails if a same-family, cooling or exhausted provider is offered."""
     _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
-                       candidates=("claude", "codex", "antigravity"))
+                       candidates=("claude", "codex", "antigravity"), authors=("google",))
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: "quota" if p == "antigravity" else None)
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -3894,13 +4144,22 @@ def test_review_sh_never_starts_a_review_and_names_the_next_step(monkeypatch, ca
     the second reviewer. It returns NEEDS_SECOND_FAMILY (exit 3) so review.sh
     cannot read as done while CI still blocks."""
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
-                             families={"google"}, candidates=("codex", "claude"))
+                             families=set(), candidates=("codex", "claude"), authors=("google",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex", "claude"])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
-    assert "have: google" in out
+    assert "have: none" in out
     assert "./scripts/dev/review.sh --fresh --reviewer codex; ./scripts/dev/review.sh --fresh --reviewer claude" in out
+
+    # When one independent family passed and the author is Anthropic, only codex is offered.
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                       families={"google"}, candidates=("codex", "claude"), authors=("anthropic",))
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex", "claude"])
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "have: google" in out
+    assert "./scripts/dev/review.sh --fresh --reviewer codex" in out and "--reviewer claude" not in out
 
 
 def test_two_families_passed_means_nothing_to_report(monkeypatch, capsys):
@@ -3919,7 +4178,8 @@ def test_the_notice_follows_the_base_refs_policy(monkeypatch):
 
 
 def test_the_notice_says_when_no_provider_is_eligible(monkeypatch, capsys):
-    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"})
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
+                       authors=("google",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -3967,7 +4227,7 @@ def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
 def test_locally_an_unreadable_path_list_is_sensitive_too(monkeypatch, capsys):
     """Claude on #2504 (P3): CI treats unreadable paths as sensitive; the
     local notice must not report done in the same state."""
-    _second_family_env(monkeypatch, changed=None, families={"google"})
+    _second_family_env(monkeypatch, changed=None, families={"google"}, authors=("openai",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["claude"])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -4098,9 +4358,9 @@ def test_a_disposed_antigravity_review_counts_by_its_models_family():
 
 
 def test_the_ci_message_asks_for_two_families_when_none_passed():
-    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], set())
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], set(), {"openai"})
     assert concl == "action_required" and "two model families" in desc
-    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"})
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"}, {"openai"})
     assert "a second model family" in desc
 
 
@@ -4129,6 +4389,7 @@ def test_cmd_review_exits_3_on_a_sensitive_diff_with_one_family(monkeypatch, cap
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, r: r)
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: {"google"})
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
     # No real lock: git is faked, so the lock path would land in the cwd.
     class _Held:
@@ -4154,7 +4415,7 @@ def test_a_malformed_agy_model_is_never_written_into_a_marker(monkeypatch):
     assert back.reviewer == "antigravity" and rg.record_family(back) is None
 
 
-def _sensitive_manual(monkeypatch, comments):
+def _sensitive_manual(monkeypatch, comments, authors=("anthropic",)):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/x"))
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
@@ -4162,13 +4423,14 @@ def _sensitive_manual(monkeypatch, comments):
     monkeypatch.setattr(rg, "post_record", lambda *a: None)
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set(authors))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
 
 
 def test_record_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_path, capsys):
     """Native Codex on #2504 (P2): record and dispose returned 0 directly, so
     the author saw success while CI held the PR for a missing family."""
-    _sensitive_manual(monkeypatch, comments=[])
+    _sensitive_manual(monkeypatch, comments=[], authors=("google",))
     review = tmp_path / "review.txt"
     review.write_text("Examined the OAuth token exchange end to end.\nVERDICT: CLEAN\n")
     args = SimpleNamespace(independent=True, emit=False, file=str(review),
@@ -4480,6 +4742,7 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
     if "antigravity" not in configured:
         expected = 0
     pr = _pr(3)
+    pr["headRefName"] = "claude/x"
     pr["labels"] = [{"name": "review-requested"}] if requested else []
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
@@ -5082,7 +5345,7 @@ def test_cli_and_ci_accept_same_sensitive_followup(repo, reviewed_followup, monk
     _git(repo, 'update-ref', 'refs/remotes/origin/master', fix.base)
     real_git = rg.git
     monkeypatch.setattr(rg, 'git', lambda *a, **kw: '' if a[0] == 'fetch' else real_git(*a, **kw))
-    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head},
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head, 'ref': 'gemini/x'},
                                                 'base': {'ref': 'master'}})
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
@@ -5262,6 +5525,7 @@ def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followu
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # POST not yet visible
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     args = SimpleNamespace(base=fix.base, completed_followup=fix)
     assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
 
@@ -5274,6 +5538,7 @@ def test_dispose_followup_preserves_families_during_api_read_lag(repo, reviewed_
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # fresh POST remains unreadable
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     posted = []
     monkeypatch.setattr(rg, 'post_comment', lambda pr, body: posted.append(body))
     disposition = repo / 'disposition.txt'
@@ -5913,6 +6178,7 @@ def test_missing_second_family_on_sensitive_path_is_not_blocked_by_round_cap(rep
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['src/oauth_provider.py'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['src/oauth_provider.py'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     # Three prior full cycles by openai, then a scope=fix follow-up at fix.head.
     rounds = rg.CodexRounds(3, cycles=[rg.ReviewCycle('1' * 40, 'old1', {'openai'}),
                                        rg.ReviewCycle('2' * 40, 'old2', {'openai'}),
@@ -6014,7 +6280,7 @@ def test_main_accepts_agy_model_and_rejects_malformed_agy_model(monkeypatch):
 def test_second_family_pass_judges_printed_candidates_without_one_shot_agy_model_override(monkeypatch, capsys):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
     _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set(),
-                       candidates=("antigravity",))
+                       candidates=("antigravity",), authors=("openai",))
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30,
                            agy_model="claude-opus-5-5-high", completed_by="antigravity",
                            failed_providers={"antigravity"})
@@ -6095,12 +6361,15 @@ def test_a_waiver_is_bound_to_the_authorship_it_was_granted_against():
                            {"google", "openai"})[0] == "success"
 
 
-def test_the_held_message_names_the_facts_and_no_command():
+def test_the_held_message_names_the_facts_and_the_route_but_no_command():
     held = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"anthropic"},
                                   {"google", "openai"})
     assert held[0] == "action_required"
     assert "authors: google, openai" in held[1] and "needs an operator decision" in held[1]
-    assert "review.sh" not in held[1] and "waive" not in held[1]
+    # It says which decision (operator ruling 2026-11-20: two successors on
+    # #3222 read "operator decision" as "no route exists"), in words only:
+    # nothing here can be pasted and run.
+    assert "review.sh" not in held[1] and "--" not in held[1] and "waive " not in held[1]
     open_ = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"}, {"anthropic"})
     assert "eligible to review: openai" in open_[1]
 
@@ -6172,3 +6441,200 @@ def test_local_suggestions_skip_author_families_under_the_cleared_model_override
         == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
     assert "--reviewer antigravity" in out and "--reviewer claude" not in out
+
+
+def test_independent_and_eligible_families_exclude_authors_and_fail_closed_when_unknown():
+    assert rg.independent_families({"anthropic", "openai"}, {"anthropic"}) == {"openai"}
+    assert rg.independent_families({"anthropic", "openai", "google"}, {"anthropic", "openai"}) == {"google"}
+    assert rg.independent_families({"openai", "google"}, set()) == set()
+    assert rg.eligible_families(set(), set()) == []
+    assert rg.eligible_families({"anthropic"}, {"openai"}) == ["google"]
+
+
+def test_second_family_check_excludes_author_families_and_fails_closed_on_unknown_authors():
+    held = rg.second_family_check("success", "clean", _PATHS, {"anthropic", "openai"}, {"anthropic"})
+    assert held[0] == "action_required"
+    assert "have: openai" in held[1]
+    assert "excluded author family: anthropic" in held[1]
+    assert "eligible to review: google" in held[1]
+
+    assert rg.second_family_check(
+        "success", "clean", _PATHS, {"anthropic", "openai", "google"}, {"anthropic"}
+    ) == ("success", "clean")
+
+    unknown = rg.second_family_check("success", "clean", _PATHS, {"openai", "google"}, set())
+    assert unknown[0] == "action_required"
+    assert "authors: unknown" in unknown[1] and "unknown" in unknown[1]
+
+    handover = rg.second_family_check(
+        "success", "clean", _PATHS, {"anthropic", "google"}, {"anthropic", "openai"}
+    )
+    assert handover[0] == "action_required"
+    assert "have: google" in handover[1]
+    assert "excluded author family: anthropic" in handover[1]
+    assert "no family outside the authors is left" in handover[1]
+
+
+def test_apply_waiver_reports_only_independent_reviewed_families():
+    k = "c" * 64
+    out = rg.apply_waiver(
+        _HELD, [_waiver_with(k, authors="anthropic")], k, _PATHS, _PATHS,
+        {"anthropic", "openai"}, 2, _POLICY, {"anthropic"},
+    )
+    assert out[0] == "success"
+    assert "have: openai)" in out[1]
+    assert "anthropic" not in out[1]
+    assert rg.apply_waiver(
+        _HELD, [_waiver_with(k, authors="")], k, _PATHS, _PATHS,
+        {"openai", "google"}, 2, _POLICY, set(),
+    ) == _HELD
+
+
+def test_ci_fails_closed_on_unsigned_pr_and_excludes_author_family_reviews(monkeypatch):
+    def run_ci(body, comments, branch="topic/fix"):
+        monkeypatch.setattr(rg, "gh_json", lambda *a: {
+            "state": "open", "head": {"sha": "h", "ref": branch},
+            "base": {"ref": "master"}, "body": body,
+        })
+        monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+        monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+        monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+        monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+        monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+        monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+        posted = []
+        monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
+        assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+        return posted[0]
+
+    both = [
+        _comment(full_record("k", "CLEAN", 0, False, "codex")),
+        _comment(full_record("k", "CLEAN", 0, False, "claude")),
+    ]
+    res_unknown = run_ci("No provenance signature.", both)
+    assert res_unknown[3] == "action_required" and "authors: unknown" in res_unknown[4]
+
+    res_self = run_ci(_SIGNED_BODY, both)
+    assert res_self[3] == "action_required"
+    assert "excluded author family: anthropic" in res_self[4]
+    assert "eligible to review: google" in res_self[4]
+
+    independent_two = [
+        _comment(full_record("k", "CLEAN", 0, False, "codex")),
+        _comment(full_record("k", "CLEAN", 0, False, "antigravity", model="gemini-4-argon-high")),
+    ]
+    assert run_ci(_SIGNED_BODY, independent_two)[3] == "success"
+
+
+def test_second_family_pass_excludes_authors_and_unknown_authorship(monkeypatch, capsys):
+    _second_family_env(
+        monkeypatch, changed=_PATHS, families={"anthropic", "openai"},
+        candidates=("claude", "codex", "antigravity"), authors=("anthropic",),
+    )
+    args = SimpleNamespace(base="origin/master", branch="b", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "have: openai; excluded author family: anthropic" in out
+    assert "--reviewer antigravity" in out
+    assert "--reviewer claude" not in out and "--reviewer codex" not in out
+
+    # Passing the third (second independent) family completes the gate.
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0, passed_family="google") == 0
+
+    # Unknown authorship fails closed even when two reviewer families passed.
+    _second_family_env(
+        monkeypatch, changed=_PATHS, families={"openai", "google"},
+        candidates=("claude",), authors=(),
+    )
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    unknown_out = capsys.readouterr().out
+    assert "unknown" in unknown_out and "--reviewer" not in unknown_out
+
+
+def test_cmd_review_round_cap_exemption_uses_independent_families(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "k", "claude/x"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic", "openai"})
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: {"anthropic"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    rounds = rg.CodexRounds(3, cycles=[
+        rg.ReviewCycle("1" * 40, "old1", {"openai"}),
+        rg.ReviewCycle("2" * 40, "old2", {"openai"}),
+        rg.ReviewCycle("3" * 40, "old3", {"openai"}),
+    ])
+    monkeypatch.setattr(rg, "pr_rounds", lambda *a: rounds)
+    class _Held:
+        held = True
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(rg, "review_lock", lambda key: _Held())
+    ran = []
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *a: ran.append(a[3]) or 0)
+    monkeypatch.setattr(rg, "second_family_pass", lambda *a: 0)
+
+    # Only 1 independent family (openai) passed: google may still join past the round cap.
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == 0
+    assert ran == ["antigravity"]
+
+    # Author family cannot use the sensitive-path round-cap exemption.
+    ran.clear()
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="claude")) == rg.UNREVIEWED
+    assert not ran
+
+    # Author-only pass with empty independent set must also let an un-attempted independent reviewer join past cap.
+    ran.clear()
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic"})
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == 0
+    assert ran == ["antigravity"]
+
+    ran.clear()
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="claude")) == rg.UNREVIEWED
+    assert not ran
+
+    # Unknown authorship cannot use the round-cap exemption either.
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set())
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == rg.UNREVIEWED
+    assert not ran
+
+
+def test_cmd_sweep_keeps_dispatching_when_only_one_independent_family_passed(monkeypatch, tmp_path):
+    pr = _pr(3)
+    pr["headRefName"] = "claude/x"
+    pr["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: full_record("k", "CLEAN", 1, False, "codex"))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda *a: _PATHS)
+    # Anthropic (author self-review) + OpenAI passed: still only 1 independent family, so sweep runs agy.
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic", "openai"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a: ["claude", "antigravity"])
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == 1 and calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
+
+    # Unknown authorship on sensitive PRs must NOT dispatch endlessly in sweep (matches cmd_review/CI),
+    # even when passing_families currently has 1 passing family.
+    calls.clear()
+    pr_unknown = _pr(4)
+    pr_unknown["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr_unknown])
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert calls == []
