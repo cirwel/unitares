@@ -4742,6 +4742,7 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
     if "antigravity" not in configured:
         expected = 0
     pr = _pr(3)
+    pr["headRefName"] = "claude/x"
     pr["labels"] = [{"name": "review-requested"}] if requested else []
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
@@ -6626,3 +6627,12 @@ def test_cmd_sweep_keeps_dispatching_when_only_one_independent_family_passed(mon
     assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
                                         dry_run=False, worktree=str(tmp_path / "wt"))) == 0
     assert len(calls) == 1 and calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
+
+    # Unknown authorship on sensitive PRs must NOT dispatch endlessly in sweep (matches cmd_review/CI).
+    calls.clear()
+    pr_unknown = _pr(4)
+    pr_unknown["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr_unknown])
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert calls == []

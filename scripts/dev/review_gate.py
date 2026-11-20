@@ -1960,8 +1960,9 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
 
 _UNKNOWN_AUTHORS_GUIDANCE = (
     "no classified Model signature or claude/codex/gemini branch prefix; "
-    "identify the authoring model family in the PR provenance signature, or "
-    "request an operator decision for human/unclassified authorship"
+    "if written by Anthropic, OpenAI, or Google, record its Model in the PR "
+    "provenance signature; unattributable authorship cannot pass this check or an "
+    "automated waiver"
 )
 
 
@@ -4361,12 +4362,14 @@ def cmd_sweep(args) -> int:
             if sensitive:
                 native = read_native(repo, n, key, head, comments)
                 families = passing_families(comments, key, native.records)
-                check_families = independent_families(families, authored_by) if authored_by else families
-                if len(check_families) < 2:
+                if not authored_by:
+                    print(f"[sweep] PR #{n}: authorship unknown on sensitive path; "
+                          "skipping second-family dispatch until PR provenance identifies authors")
+                elif len(independent := independent_families(families, authored_by)) < 2:
                     waived = waiver_reason_for(comments, key, changed, sensitive, families,
                                                f"origin/{base}", head, authored_by)
                     eligible = ([] if waived else second_family_candidates(
-                        p["headRefName"], check_families, comments, key))
+                        p["headRefName"], independent, comments, key))
                     selected = next((p for p in choices if p in eligible
                                      and not _skips_author_family(p, authored_by)), None)
                     if selected:
