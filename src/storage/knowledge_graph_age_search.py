@@ -1408,14 +1408,19 @@ class KnowledgeGraphAGESearchMixin:
             created_after=created_after, created_before=created_before,
             filters=filters, before=before,
         )
-        # Hydrate via get_discovery so edge/response metadata is consistent
-        # with what the rest of AGE returns. Row count is small (<= limit).
+        # Hydrate directly from the canonical SQL rows returned by
+        # kg_full_text_search (just like semantic_search's batched SQL fetch),
+        # instead of issuing N sequential per-row AGE Cypher get_discovery()
+        # scans (~150ms each -> ~8s for 50 rows). Fall back to get_discovery()
+        # only if a caller/stub returned an id-only dict.
         results: List[DiscoveryNode] = []
         for row in rows:
-            doc = await self.get_discovery(row["id"])
+            if "agent_id" in row and "summary" in row:
+                doc = self._dict_to_discovery(row)
+            else:
+                doc = await self.get_discovery(row["id"])
             if doc is not None:
-                # Carry the query rank across the re-hydration, which otherwise
-                # discards the row it came from. Same contract as the Postgres
+                # Carry the query rank across hydration, matching the Postgres
                 # backend: consumers read `.relevance` off a returned node.
                 rank = row.get("rank")
                 if isinstance(rank, (int, float)):

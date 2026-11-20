@@ -392,6 +392,8 @@ async def test_critical_silence_files_kg_finding(isolated_silence_state, monkeyp
     assert note.severity == "critical"
     assert note.status == "open"
     assert "resident-silence" in note.tags
+    assert "auto-filed" in note.tags
+    assert "ephemeral" in note.tags
     assert "sentinel" in note.tags  # lowercased label tag
     assert "Sentinel" in note.summary
 

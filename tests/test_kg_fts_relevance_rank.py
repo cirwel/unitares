@@ -244,3 +244,39 @@ class TestCheckinSearchRevives:
         floor gates the semantic producer on the AGE backend, where post-blend
         scores this weak are real — the guard must still drop them."""
         assert self._run(self._node(0.02)) == []
+
+
+class TestAgeFullTextSearchHydratesWithoutNPlusOne:
+    """KnowledgeGraphAGE.full_text_search must hydrate full SQL rows directly
+    instead of issuing N sequential get_discovery() AGE Cypher scans."""
+
+    @pytest.mark.asyncio
+    async def test_sql_rows_hydrate_directly_and_carry_rank(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        db = AsyncMock()
+        db.kg_full_text_search = AsyncMock(return_value=[_row("d1", 0.81), _row("d2", 0.42)])
+        backend._get_db = AsyncMock(return_value=db)
+        backend.get_discovery = AsyncMock(side_effect=AssertionError("must not call N+1 get_discovery"))
+
+        nodes = await backend.full_text_search("coherence gate", operator="OR")
+        assert [n.id for n in nodes] == ["d1", "d2"]
+        assert [n.relevance for n in nodes] == pytest.approx([0.81, 0.42])
+        backend.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_id_only_stub_falls_back_to_get_discovery(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        db = AsyncMock()
+        db.kg_full_text_search = AsyncMock(return_value=[{"id": "stub-1", "rank": 0.6}])
+        backend._get_db = AsyncMock(return_value=db)
+        stub_node = DiscoveryNode(id="stub-1", agent_id="a", type="note", summary="hydrated")
+        backend.get_discovery = AsyncMock(return_value=stub_node)
+
+        nodes = await backend.full_text_search("coherence gate")
+        assert [n.id for n in nodes] == ["stub-1"]
+        assert nodes[0].relevance == pytest.approx(0.6)
+        backend.get_discovery.assert_awaited_once_with("stub-1")

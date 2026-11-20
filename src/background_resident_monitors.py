@@ -366,7 +366,9 @@ async def _log_resident_silence_finding(
             return  # already filed and still open
 
         label = getattr(meta, "label", None) or agent_id[:12]
-        tags = ["resident-silence", "auto-filed"]
+        # Tag ephemeral so resolved silence blips auto-archive after 7 days
+        # instead of accumulating in default search results for 30 days.
+        tags = ["resident-silence", "auto-filed", "ephemeral"]
         if getattr(meta, "label", None):
             tags.append(meta.label.lower())
 
