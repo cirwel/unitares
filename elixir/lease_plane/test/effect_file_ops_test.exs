@@ -89,6 +89,9 @@ defmodule UnitaresLeasePlane.EffectFileOpsTest do
   test "a non-regular leaf is refused without opening it", %{tmp_dir: dir} do
     fifo = Path.join(dir, "out.txt")
     {_, 0} = System.cmd("mkfifo", [fifo])
+    # tmp_dir is kept after the run; a FIFO left there blocks any tool that
+    # later opens every file under the checkout.
+    on_exit(fn -> File.rm(fifo) end)
 
     # Opening a FIFO for reading blocks until a writer appears; a refusal that
     # returns at all shows the leaf was never opened.
