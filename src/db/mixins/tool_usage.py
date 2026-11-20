@@ -385,6 +385,26 @@ class ToolUsageMixin:
             )
             return {"status": "error", "error": str(last_exc)}
 
+    async def list_agent_outcomes(self, agent_id: str, *, limit: int) -> List[Dict[str, Any]]:
+        """Newest-first outcome events for one agent, unfiltered, for export.
+
+        Unlike ``get_recent_outcomes`` this applies no provenance filter or
+        time window: it reads the record, not an input to the estimator.
+        """
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT outcome_id::text AS outcome_id, ts, outcome_type, outcome_score, "
+                "is_bad, verification_source, detail, "
+                "eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, "
+                "eisv_coherence, eisv_regime "
+                "FROM audit.outcome_events WHERE agent_id = $1 "
+                "ORDER BY ts DESC LIMIT $2",
+                agent_id, limit,
+            )
+        return [dict(r) for r in rows]
+
     async def get_recent_outcomes(
         self,
         agent_id: str,

@@ -298,15 +298,36 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
 # The subject holds only the model. The squash body ends with the PR's final
 # `Model:` and `UNITARES agent:` lines as trailers, so the landed commit names
 # both together whatever its branch commits said. Same self-reported values;
-# an unusable Model line is left out. Empty for an unsigned PR, which keeps
-# GitHub's default body.
+# an unusable Model line is left out. A fix PR's detection record (who noticed
+# the defect: scripts/dev/check_detection_record.py) goes just above them, each
+# field's last line in a fixed order, so the landed commit keeps it too. Empty
+# for a PR with neither, which keeps GitHub's default body.
 squash_signature() {  # <pr-json> -> trailer lines, or empty
   jq -r '
     [(.body // "") | splits("\\r?\\n")] as $lines
+    # Detection lines count only outside fenced code and block quotes, by the
+    # same rules as scripts/dev/check_detection_record.py, so a quoted example
+    # cannot replace the record the check accepted.
+    | (reduce $lines[] as $l ({fence: "", out: []};
+        ([$l | capture("^ {0,3}(?<m>`{3,}|~{3,})(?<rest>.*)$")] | first) as $run
+        | if $run != null then
+            if .fence == "" then
+              (if ($run.m[0:1] == "`" and ($run.rest | contains("`"))) then . else .fence = $run.m end)
+            elif ($run.m[0:1] == .fence[0:1] and ($run.m | length) >= (.fence | length)
+                  and ($run.rest | test("^\\s*$"))) then .fence = ""
+            else . end
+          elif .fence != "" or ($l | test("^\\s*>")) then .
+          else .out += [$l] end) | .out) as $plain
+    | [ "Defect-in", "Detected-by", "Detection-trigger", "Prompted-by", "Detected-at", "Detection-record" ]
+      as $fields
+    | [ $fields[] as $f
+        | ([$plain[] | capture("^\($f):[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v
+            | select(test("^[^`<>]{1,200}$"))] | last) as $v
+        | select($v != null) | "\($f): \($v)" ] as $detection
     | ([$lines[] | capture("^Model:[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v] | last // "") as $model
     | ([$lines[] | capture("^UNITARES agent:[ \\t]*(?<v>[0-9A-Fa-f-]{36})[ \\t]*$"; "i") | .v]
        | last // "") as $agent
-    | [ (if ($model | ascii_downcase) == "unavailable" then "Model: unavailable"
+    | $detection + [ (if ($model | ascii_downcase) == "unavailable" then "Model: unavailable"
          elif ($model | test("^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,127}$")) then "Model: \($model)"
          else empty end),
         (if $agent != "" then "UNITARES agent: \($agent)" else empty end) ]

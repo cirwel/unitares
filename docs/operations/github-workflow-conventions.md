@@ -74,6 +74,36 @@ veto by removing the label.
   message; the PR keeps its queue position.
   Like the PR's `agent/*` family label, the token is a filter and attribution
   aid, not verified model provenance.
+- <a id="detection-record"></a>**A fix PR records who noticed the defect.**
+  The 2026-11-17 census of EISV instrument changes found that the record says
+  what changed and why, but not who noticed that an earlier change was wrong:
+  no commit in the history named a detection, so silence read both as "no
+  defect" and as "not written down". A PR whose body is classified `fix` (every
+  classification it states is `fix`) therefore carries this block directly
+  above its signature (operator ruling 2026-11-18):
+
+  ```
+  Defect-in: <the change that introduced it: #N, a commit, an era id> | unknown
+  Detected-by: operator | agent:<uuid> | check:<name> | external:<who> | unknown
+  Detection-trigger: unprompted | prompted | automated | unknown
+  Detected-at: <YYYY-MM-DD or ISO time> | unknown
+  Detection-record: <shared-memory discovery id> | none
+  ```
+
+  When the trigger is `prompted`, `Prompted-by: operator | agent:<uuid> | unknown`
+  is required as well. Values hold no backticks or angle brackets, which the
+  merge queue leaves out of the merged commit.
+  `unknown` is accepted in every field: the record asks for honesty, not for
+  knowledge the author lacks, and a fixer who did not notice the defect writes
+  what they know. When you notice a defect yourself, also write a
+  `store_finding` (`discovery_type: bug_found`, tag `detection`) at the time,
+  and name its id in `Detection-record:`; when the finding and the PR block
+  disagree, the finding, written when the noticing happened, is the record.
+  The `detection-record` check (`scripts/dev/check_detection_record.py`, run
+  from the base branch) fails a fix PR without a complete block; lines in code
+  fences or block quotes do not count. The merge queue copies each field's last
+  line into the squash body just above the `Model:` / `UNITARES agent:` lines.
+  Like the signature, the values are self-reported, not verified provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to its delivery owner.**
   The opening session is the
   initial delivery owner; a completed handover or adoption transfers delivery
@@ -638,19 +668,36 @@ the changed paths cannot be read, it requires the second family.
 
 **Operator waiver of the second family.** For a small change to a sensitive
 path (a help string, a renamed symbol), the operator can run
-`review.sh waive --reason "<why>" --operator-approved`. It is bounded: one
-family must already have passed this exact diff, so a waiver never replaces the
-first review; it is tied to the diff key, so any push that changes the diff
-voids it; the gate counts the changed lines on the sensitive paths from git and
-refuses past 20 (`waiver.max_changed_lines` in the policy file, read from the
-base ref); a PR carries at most 2 (`waiver.max_per_pr`); and the gate's own
-files (`review_gate.py`, `review_policy.json`, `review.sh`,
-`review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
-behavioural change on a sensitive path can be waived too, so read the hunks
-before you waive. The comment shows the waived hunks and
-the reason. Bot comments are excluded; cloud agents using the operator's
-account remain indistinguishable from the operator, so an agent runs `waive`
-only when the operator says to and never through the App runner.
+`review.sh waive --reason "<why>" --operator-approved`. It is bounded:
+
+- **One independent review stays.** A family that is *not* one of the PR's
+  author families (read from its provenance signatures, or its branch prefix)
+  must already have passed this exact diff. A self-review does not count, and
+  a PR whose authorship cannot be read cannot be waived at all.
+- **It is tied to the diff and the authorship.** Any push that changes the
+  diff voids it, and so does an edit to the PR body that changes the author
+  families recorded in the waiver.
+- **Size.** The gate counts the changed lines on the sensitive paths from git
+  and refuses past 20 (`waiver.max_changed_lines` in the policy file, read from
+  the base ref). For a larger change the operator can raise the cap for that
+  one diff with `--allow-lines N` (N at least the changed lines). That is for
+  the case two families cannot cover, typically a PR co-written by two
+  families, where only one family is left to review independently; it is a
+  deliberate operator act, recorded in the waiver, never a rule the gate
+  applies by itself.
+- A PR carries at most 2 waivers (`waiver.max_per_pr`), and the gate's own
+  files (`review_gate.py`, `review_policy.json`, `review.sh`,
+  `review-gate.yml`) can never be waived, whatever the allowance.
+
+The gate bounds the size of the change, not its meaning: a small behavioural
+change on a sensitive path can be waived too, so read the hunks before you
+waive. The comment shows the waived hunks, the author families, the
+independent family that passed, any raised allowance and the reason. When a
+sensitive diff is held, the `review` check names who passed, who wrote it and
+which families could still review, and says when none is left. It does not
+print a waive command. Bot comments are excluded; cloud agents using the
+operator's account remain indistinguishable from the operator, so an agent
+runs `waive` only when the operator says to and never through the App runner.
 
 `review.sh` never starts the second review itself. When a sensitive diff has
 only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)

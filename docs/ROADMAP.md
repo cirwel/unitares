@@ -5,10 +5,18 @@
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
 
-## Now — EISV instrument quality and independent core evidence
+## Now — the core record, with the EISV maths frozen
 
-The operator prioritized EISV instrument repair and evaluation on 2026-10-13,
-while retaining the optional-module direction adopted on 2026-10-10. EISV stays
+On 2026-11-18 the operator froze the EISV maths after the HU1/SD1/SH1 cutover
+(#3286) deploys: no further instrument change lands except a named correctness
+fix, until the stop rule's new premise (an independent label channel) exists.
+Work moves to the core boundary, opened as #3294 (the agent-visible risk stops
+carrying the trajectory adjustment), #3295 (pause refusals are audited) and
+#3296 (the export carries the record without the estimator). Freeze note:
+[`eisv-maths-roadmap-v0.md`](proposals/active/eisv-maths-roadmap-v0.md).
+
+Before that, the operator prioritized EISV instrument repair and evaluation on
+2026-10-13, while retaining the optional-module direction adopted on 2026-10-10. EISV stays
 a supported, visible instrument with an active research track. Its runtime
 dependency boundary, research priority, and intervention authority are separate
 decisions. The operator lifted the feature freeze on 2026-10-15; the
@@ -17,8 +25,9 @@ Since 2026-10-15 they gate live-path changes through a data boundary rather
 than a freeze: a change lands once its PR records the instrument-change time
 ([stop-rule amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)).
 
-- **EISV instrument quality.** Start with the
-  [instrument quality plan](plans/eisv-instrument-quality-2026-10-13.md):
+- **EISV instrument quality (superseded by the 2026-11-18 freeze).** The
+  [instrument quality plan](plans/eisv-instrument-quality-2026-10-13.md) set the
+  earlier sequence:
   reproduce S's intervention responses, specify the follow-up validation before
   collecting new results, and repair the evidence inputs and feedback loops in
   E and I within the preservation constraints. Keep readings and their sources
