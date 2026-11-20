@@ -9,7 +9,9 @@ import globals from 'globals';
 // in Node/ESM and get their own block.
 export default [
     {
-        ignores: ['node_modules/**', 'dist/**'],
+        // redesign/vendor/ holds third-party builds kept byte-identical to
+        // their npm release (tests/test_dashboard_vendored_scripts.py pins them).
+        ignores: ['node_modules/**', 'dist/**', 'redesign/vendor/**'],
     },
     js.configs.recommended,
     {
