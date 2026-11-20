@@ -53,10 +53,31 @@ Honest scope notes (no silent caps):
   * Three distinct bounds are counted and reported separately: the search
     limit, the per-cycle inspection cap, and the wall-clock deadline. A PR that
     could not be read is never counted as read.
-  * Transition-emit means one page per healthy -> unhealthy edge, so a *second*
-    PR going stalled while a first is already stalled does not re-page. The
-    count stays live in ``detail`` and in the summary; only the notification is
-    deduplicated.
+  * Each stalled PR is its own finding with its own lifetime. The check keeps
+    an open set in Vigil's state (``stalled_pr_open``): a PR enters it the
+    first cycle it is seen stalled and leaves it only when a direct read of
+    that PR shows why it is no longer stalled (merged, closed, marked ready,
+    CI green, or CI re-run). ``agent.py`` posts one ``vigil_finding`` when a PR
+    enters and one ``vigil_resolution_finding`` when it leaves, so a second PR
+    stalling while a first is already stalled is reported, and how long each
+    stall lasted is on record. Before this, the check posted once on the
+    aggregate healthy -> unhealthy edge and never again: ``fleet-ops#171`` sat
+    red for 135h in November 2026 behind a single post about a different PR.
+  * A PR that merely dropped out of the sweep (inspection cap, wall-clock
+    budget, unreadable, ``gh`` down) is never treated as closed. It stays in
+    the open set until it can be read.
+  * The PR body's ``UNITARES agent:`` / ``Model:`` signature is read and
+    carried on the finding as the *author*. That is who wrote the change, not
+    necessarily who must act: after a recorded handover the delivery owner is
+    someone else, and the opening author's signature stays last by house rule.
+    This check does not resolve handovers. A PR without a signature is
+    reported with no author; nothing is guessed from the branch or the login.
+  * A closure whose post did not reach governance is kept in
+    ``stalled_pr_pending_closures`` and re-sent, apart from the open set. It
+    is a fact about a finished episode, so it must not depend on what the PR
+    does next: put back on the open list, a ``retriggered`` PR that went red
+    again would be read as the same stall continuing, and both the closure
+    and the new stall would be lost.
   * ``service_key`` is listed in ``agent.CONDITION_SERVICE_KEYS`` so the
     ``{svc}_healthy`` flag drives transition dedup *without* being mistaken for
     a reachable service. Without that, ``detect_changes`` would write
@@ -69,6 +90,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from typing import Any, List, Optional, Tuple
 
@@ -90,6 +112,13 @@ MAX_INSPECT = int(os.environ.get("VIGIL_STALLED_PR_MAX_INSPECT", "15"))
 GH_TIMEOUT = float(os.environ.get("VIGIL_STALLED_PR_GH_TIMEOUT", "20"))
 BUDGET = float(os.environ.get("VIGIL_STALLED_PR_BUDGET", "25"))
 CONCURRENCY = int(os.environ.get("VIGIL_STALLED_PR_CONCURRENCY", "4"))
+# Closure checks: PRs in the open set that the sweep no longer reports stalled
+# are each read directly. This runs after the sweep on its own small budget so
+# a slow closure read cannot eat the sweep's time or Vigil's cycle.
+MAX_RESOLVE = int(os.environ.get("VIGIL_STALLED_PR_MAX_RESOLVE", "5"))
+RESOLVE_BUDGET = float(os.environ.get("VIGIL_STALLED_PR_RESOLVE_BUDGET", "8"))
+# Bound on the open set itself, so a state file cannot grow without limit.
+MAX_OPEN = int(os.environ.get("VIGIL_STALLED_PR_MAX_OPEN", "100"))
 
 # Check-run conclusions that mean "this PR is not going anywhere on its own".
 FAILING_CONCLUSIONS = {"FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED"}
@@ -227,6 +256,149 @@ def red_since(rollup: Any) -> Optional[float]:
     return max(stamps) if stamps else None
 
 
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# `\r?` before `$`: GitHub returns CRLF line endings for bodies written in its
+# web editor, and under re.MULTILINE `$` matches before `\n` only.
+_AUTHOR_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*\r?$", re.MULTILINE)
+_AUTHOR_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*\r?$", re.MULTILINE)
+
+
+def parse_author(body: Any) -> dict:
+    """Pure: the authorship signature of a PR body, as ``{agent_uuid, model}``.
+
+    The fleet's convention ends an agent-authored PR body with ``Model:`` and
+    ``UNITARES agent:`` lines. The last occurrence wins, because a body can
+    quote an earlier signature above its own. Missing lines yield empty
+    strings: an unsigned PR has no recorded author, and none is inferred.
+    """
+    if not isinstance(body, str):
+        return {"agent_uuid": "", "model": ""}
+    uuids = _AUTHOR_UUID_RE.findall(body)
+    models = _AUTHOR_MODEL_RE.findall(body)
+    return {
+        "agent_uuid": uuids[-1].lower() if uuids else "",
+        "model": models[-1].strip() if models else "",
+    }
+
+
+def pr_key(repo: Any, number: Any) -> str:
+    """Pure: the open-set key for one PR."""
+    return f"{repo}#{number}"
+
+
+def classify_closure(view: Any, *, now: float, stale_hours: float) -> Optional[str]:
+    """Pure: why a previously stalled PR is no longer stalled, or None.
+
+    ``view`` is a direct ``gh pr view`` of that PR. None means "still stalled,
+    or cannot tell": the PR stays in the open set. Outcomes:
+
+      * ``merged`` / ``closed``: the PR is gone.
+      * ``ready``: no longer a draft, so the merge queue and its own gates now
+        own it. This check only ever covered drafts.
+      * ``green``: still a draft, and nothing is failing.
+      * ``retriggered``: still a draft and failing, but the newest failing run
+        completed inside the window, so someone or something re-ran CI. If it
+        then sits red again it re-enters the open set as a new stall.
+    """
+    if not isinstance(view, dict):
+        return None
+    state = str(view.get("state") or "").upper()
+    if state == "MERGED":
+        return "merged"
+    if state == "CLOSED":
+        return "closed"
+    if state != "OPEN":
+        return None
+    is_draft = view.get("isDraft")
+    if is_draft is False:
+        return "ready"
+    if is_draft is not True:
+        return None
+    rollup = view.get("statusCheckRollup")
+    if not isinstance(rollup, list):
+        # A draft whose checks cannot be read is not known to be green.
+        return None
+    if not failing_nodes(rollup):
+        return "green"
+    since = red_since(rollup)
+    if since is None:
+        return None
+    if (now - since) / 3600.0 <= stale_hours:
+        return "retriggered"
+    return None
+
+
+def reconcile(
+    prev_open: Any,
+    stalled: List[dict],
+    closures: dict,
+    *,
+    now: float,
+    max_open: int,
+) -> Tuple[dict, List[str], List[dict]]:
+    """Pure: advance the open set by one cycle.
+
+    ``closures`` maps an open-set key to a ``classify_closure`` outcome for the
+    PRs that were read directly this cycle. Returns ``(open, opened, resolved)``:
+    the new open set, the keys that entered it this cycle, and one row per PR
+    that left it. A PR that is neither stalled now nor in ``closures`` is held
+    unchanged, which is what keeps a truncated sweep from closing anything.
+    """
+    prev = prev_open if isinstance(prev_open, dict) else {}
+    new_open: dict = {}
+    opened: List[str] = []
+    resolved: List[dict] = []
+
+    for row in stalled:
+        key = pr_key(row["repo"], row["number"])
+        held = prev.get(key) if isinstance(prev.get(key), dict) else None
+        entry = {
+            "repo": row["repo"],
+            "number": row["number"],
+            "url": row.get("url", ""),
+            "failing": list(row.get("failing") or []),
+            "red_hours": row["red_hours"],
+            "author_agent_uuid": row.get("author_agent_uuid", ""),
+            "author_model": row.get("author_model", ""),
+            "first_seen": held.get("first_seen", now) if held else now,
+            # False until agent.py has delivered this episode's opening
+            # finding. It stays with the entry so a failed post is retried
+            # under the same episode identity instead of a fresh one.
+            "announced": bool(held.get("announced", True)) if held else False,
+        }
+        if held and "last_closure_check" in held:
+            entry["last_closure_check"] = held["last_closure_check"]
+        if held is None:
+            opened.append(key)
+        new_open[key] = entry
+
+    for key, entry in prev.items():
+        if key in new_open or not isinstance(entry, dict):
+            continue
+        outcome = closures.get(key)
+        if outcome is None:
+            new_open[key] = entry
+            continue
+        first_seen = entry.get("first_seen")
+        open_hours = (
+            round(max(0.0, now - first_seen) / 3600.0, 2)
+            if isinstance(first_seen, (int, float))
+            else None
+        )
+        resolved.append({**entry, "outcome": outcome, "open_hours": open_hours})
+
+    if len(new_open) > max_open:
+        # Keep the longest-open entries; a newly opened one that does not fit
+        # is not announced, so it can be opened on a later cycle instead of
+        # being announced and then forgotten.
+        keep = sorted(new_open, key=lambda k: new_open[k].get("first_seen", now))[:max_open]
+        dropped = set(new_open) - set(keep)
+        new_open = {k: new_open[k] for k in keep}
+        opened = [k for k in opened if k not in dropped]
+
+    return new_open, opened, resolved
+
+
 def assess(
     stalled: List[dict],
     *,
@@ -241,6 +413,11 @@ def assess(
     indeterminate: bool = False,
     indeterminate_reason: str = "",
     prev_ok: bool = True,
+    open_set: Optional[dict] = None,
+    opened: Optional[List[str]] = None,
+    resolved: Optional[List[dict]] = None,
+    held: int = 0,
+    pending_closures: Optional[List[dict]] = None,
 ) -> CheckResult:
     """Pure: turn the sweep into a CheckResult.
 
@@ -259,6 +436,10 @@ def assess(
         caveats.append(f"{unreadable} draft(s) could not be status-checked (gh error)")
     if deadline_skipped:
         caveats.append(f"{deadline_skipped} draft(s) dropped at the wall-clock budget")
+    if held:
+        caveats.append(
+            f"{held} carried from an earlier cycle and not re-read in this sweep"
+        )
     caveat_str = f" [{'; '.join(caveats)}]" if caveats else ""
 
     # Every branch emits the same key set. _collect_health_state merges detail
@@ -280,6 +461,14 @@ def assess(
             "stalled_pr_search_truncated": search_truncated,
             "stalled_pr_unexamined": cap_skipped + unreadable + deadline_skipped,
             "stalled_pr_indeterminate": indeterminate,
+            # Lifetime tracking. `stalled_pr_open` is the state carried between
+            # cycles; `opened` and `resolved` are this cycle's edges only.
+            "stalled_pr_open": dict(open_set or {}),
+            "stalled_pr_opened": list(opened or []),
+            "stalled_pr_resolved": list(resolved or []),
+            # Closures not yet delivered. The check only carries this through;
+            # agent.emit_stalled_pr_findings owns what goes in and out.
+            "stalled_pr_pending_closures": list(pending_closures or []),
         }
 
     if indeterminate:
@@ -393,7 +582,7 @@ async def gather(
                 raise asyncio.TimeoutError
             view = await _gh_json(
                 ["pr", "view", str(pr["number"]), "-R", pr["repo"],
-                 "--json", "statusCheckRollup"],
+                 "--json", "statusCheckRollup,body"],
                 min(timeout, remaining),
             )
             if not isinstance(view, dict):
@@ -427,6 +616,7 @@ async def gather(
                 unreadable += 1
                 continue
             red_h = (now - since) / 3600.0
+            owner = parse_author(view.get("body"))
             if red_h > stale_hours:
                 stalled.append({
                     "repo": pr["repo"],
@@ -434,6 +624,8 @@ async def gather(
                     "red_hours": round(red_h, 2),
                     "failing": names,
                     "url": pr.get("url", ""),
+                    "author_agent_uuid": owner["agent_uuid"],
+                    "author_model": owner["model"],
                 })
         deadline_skipped = len(pending)
     else:
@@ -450,6 +642,67 @@ async def gather(
     }
 
 
+async def read_closures(
+    keys: List[str],
+    prev_open: dict,
+    *,
+    now: float,
+    stale_hours: float,
+    timeout: float,
+    budget: float,
+    max_resolve: int,
+) -> Tuple[dict, List[str]]:
+    """Read previously stalled PRs directly and say which ones closed.
+
+    Returns ``(closures, attempted)``. ``closures`` is ``{key: outcome}`` for
+    the PRs that are verifiably no longer stalled; anything that could not be
+    read, was not reached inside the budget, or is still stalled is absent
+    from it, and so stays open. ``attempted`` lists every key a read was
+    started for, whatever came of it.
+
+    Least recently attempted first (never-attempted before all, then longest
+    open). The caller stamps ``last_closure_check`` on what was attempted, so
+    the cap rotates through the open set: five PRs that stay unreadable cannot
+    keep a sixth, already merged, from ever being read.
+    """
+    deadline = time.monotonic() + budget
+
+    def _order(k: str) -> Tuple[float, float]:
+        e = prev_open[k]
+        last = e.get("last_closure_check")
+        seen = e.get("first_seen")
+        return (
+            float(last) if isinstance(last, (int, float)) else 0.0,
+            float(seen) if isinstance(seen, (int, float)) else now,
+        )
+
+    ordered = sorted(
+        (k for k in keys if isinstance(prev_open.get(k), dict)), key=_order
+    )[: max(0, max_resolve)]
+    out: dict = {}
+    attempted: List[str] = []
+    for key in ordered:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        entry = prev_open[key]
+        attempted.append(key)
+        try:
+            view = await _gh_json(
+                ["pr", "view", str(entry["number"]), "-R", str(entry["repo"]),
+                 "--json", "state,isDraft,statusCheckRollup"],
+                min(timeout, remaining),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            continue
+        outcome = classify_closure(view, now=now, stale_hours=stale_hours)
+        if outcome is not None:
+            out[key] = outcome
+    return out, attempted
+
+
 class StalledDraftPR:
     name = "stalled_draft_pr"
     # Distinct from service-health keys so _collect_health_state gives this
@@ -458,6 +711,9 @@ class StalledDraftPR:
     # also listed in agent.CONDITION_SERVICE_KEYS so detect_changes does not
     # read that flag as "GitHub is unreachable" and write outage notes.
     service_key = "github"
+    # agent.py posts this check's findings per PR from `detail`, not from the
+    # aggregate healthy -> unhealthy edge it uses for every other check.
+    emits_own_findings = True
 
     async def run(self, prev_state: dict | None = None) -> CheckResult:
         # Re-read module-level config so test monkeypatching takes effect,
@@ -465,6 +721,11 @@ class StalledDraftPR:
         from . import stalled_draft_pr as _this
 
         prev_ok = bool((prev_state or {}).get("github_healthy", True))
+        prev_open = (prev_state or {}).get("stalled_pr_open")
+        if not isinstance(prev_open, dict):
+            prev_open = {}
+        pending = (prev_state or {}).get("stalled_pr_pending_closures")
+        pending = [r for r in pending if isinstance(r, dict)] if isinstance(pending, list) else []
         common = dict(
             stale_hours=_this.STALE_HOURS,
             search_limit=_this.SEARCH_LIMIT,
@@ -475,7 +736,7 @@ class StalledDraftPR:
                 [], drafts_read=0, cap_skipped=0, unreadable=0, deadline_skipped=0,
                 search_truncated=False, indeterminate=True,
                 indeterminate_reason="VIGIL_STALLED_PR_OWNER is not configured",
-                prev_ok=prev_ok, **common,
+                prev_ok=prev_ok, open_set=prev_open, pending_closures=pending, **common,
             )
         try:
             res = await _this.gather(
@@ -497,11 +758,69 @@ class StalledDraftPR:
                 [], drafts_read=0, cap_skipped=0, unreadable=0, deadline_skipped=0,
                 search_truncated=False, indeterminate=True,
                 indeterminate_reason=f"{type(e).__name__}: {e}", prev_ok=prev_ok,
-                **common,
+                open_set=prev_open, pending_closures=pending, **common,
             )
 
+        now = time.time()
+        stalled_keys = {pr_key(r["repo"], r["number"]) for r in res["stalled"]}
+        to_verify = [k for k in prev_open if k not in stalled_keys]
+        closures: dict = {}
+        attempted: List[str] = []
+        if to_verify:
+            try:
+                closures, attempted = await _this.read_closures(
+                    to_verify,
+                    prev_open,
+                    now=now,
+                    stale_hours=_this.STALE_HOURS,
+                    timeout=_this.GH_TIMEOUT,
+                    budget=_this.RESOLVE_BUDGET,
+                    max_resolve=_this.MAX_RESOLVE,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A failed closure pass closes nothing; the sweep's own result
+                # still stands.
+                closures, attempted = {}, []
+        open_set, opened, resolved = _this.reconcile(
+            prev_open, res["stalled"], closures, now=now, max_open=_this.MAX_OPEN,
+        )
+        for key in attempted:
+            if isinstance(open_set.get(key), dict):
+                # Held after a read: send it to the back of the closure queue.
+                open_set[key] = {**open_set[key], "last_closure_check": now}
+
+        # The verdict covers the whole open set, not just this sweep. A PR
+        # that fell out of the sweep but is still on the open list is still
+        # stalled as far as anyone knows; reporting "no stalled draft PRs"
+        # while holding it would flip the health flag to a recovery that did
+        # not happen.
+        held_rows = [
+            {
+                "repo": e["repo"],
+                "number": e["number"],
+                "red_hours": e.get("red_hours") or 0.0,
+                "failing": list(e.get("failing") or []),
+                "url": e.get("url", ""),
+            }
+            for k, e in open_set.items()
+            if k not in stalled_keys
+            and isinstance(e, dict)
+            and e.get("repo") and e.get("number") is not None
+        ]
+        rows = sorted(
+            list(res["stalled"]) + held_rows,
+            key=lambda r: r["red_hours"], reverse=True,
+        )
+
         return _this.assess(
-            res["stalled"],
+            rows,
+            held=len(held_rows),
+            pending_closures=pending,
+            open_set=open_set,
+            opened=opened,
+            resolved=resolved,
             drafts_read=res["drafts_read"],
             cap_skipped=res["cap_skipped"],
             unreadable=res["unreadable"],

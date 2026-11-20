@@ -427,6 +427,9 @@ async def _maybe_recover_via_x_agent_id(
     identity_result: Dict[str, Any],
     x_agent_id_header: Optional[str],
     session_key: str,
+    *,
+    signals: Any = None,
+    token_agent_uuid: Optional[str] = None,
 ) -> Optional[str]:
     """PATH 2.75: rebind a freshly-created session to an existing UUID supplied
     via the ``X-Agent-Id`` header (reconnection when the session key changed,
@@ -442,6 +445,15 @@ async def _maybe_recover_via_x_agent_id(
     pass through untouched, so legitimate Pi/Lumen reconnection over UDS is
     unaffected; only the same-host copyable-header exfiltration path is denied.
 
+    The header names an agent; it proves nothing about the caller. A rebind
+    also needs proof of ownership: a verified continuity token for the named
+    agent (``token_agent_uuid``), or a UDS peer whose substrate attestation for
+    that agent is accepted (``verify_substrate_at_resume``, the check the
+    identity handler runs). A UDS peer alone is not proof: an agent with no
+    substrate claim, or a peer the attestation rejects, still needs the token.
+    Without proof the freshly-created identity stays and no binding is cached,
+    since a cached binding would later resolve as the caller's own session.
+
     Mutates ``identity_result`` in place on a successful rebind and returns the
     (possibly rebound) bound agent UUID. On refusal or any error it leaves the
     freshly-created identity in place — the safe denial — and never raises.
@@ -452,10 +464,35 @@ async def _maybe_recover_via_x_agent_id(
     is_uuid = len(x_agent_id_header) == 36 and x_agent_id_header.count("-") == 4
     if not is_uuid:
         return bound_agent_id
+    _peer_pid = getattr(signals, "peer_pid", None) if signals else None
+    _uds_peer = (
+        getattr(signals, "transport", None) == "uds" and isinstance(_peer_pid, int)
+    ) if signals else False
+    _token_proof = bool(token_agent_uuid) and token_agent_uuid == x_agent_id_header
+    if not (_uds_peer or _token_proof):
+        logger.warning(
+            "[DISPATCH] X-Agent-Id recovery refused: the header carries no proof "
+            "of ownership (no matching continuity token, no UDS peer); keeping "
+            "the freshly-created identity."
+        )
+        return bound_agent_id
     try:
         from ..identity.handlers import _agent_exists_in_postgres, _cache_session
         if not await _agent_exists_in_postgres(x_agent_id_header):
             return bound_agent_id
+        if not _token_proof:
+            # UDS peer without a token: only an accepted substrate attestation
+            # for the named agent proves ownership. None means the agent has
+            # no substrate claim (or the lookup failed), so there is no proof.
+            from src.substrate.handler_gate import verify_substrate_at_resume
+            _attestation = await verify_substrate_at_resume(x_agent_id_header, _peer_pid)
+            if _attestation is None or not _attestation.accepted:
+                logger.warning(
+                    "[DISPATCH] X-Agent-Id recovery refused: UDS peer without a "
+                    "matching continuity token and no accepted substrate "
+                    "attestation; keeping the freshly-created identity."
+                )
+                return bound_agent_id
         # Substrate-over-HTTP gate — same one PATH 1/2 apply.
         from ..identity.resolution import _substrate_http_reject
         if await _substrate_http_reject(
@@ -1155,7 +1192,8 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
         # PATH 2.75: X-Agent-Id UUID recovery (substrate-over-HTTP gated, #802).
         bound_agent_id = await _maybe_recover_via_x_agent_id(
-            identity_result, x_agent_id_header, session_key
+            identity_result, x_agent_id_header, session_key,
+            signals=signals, token_agent_uuid=_token_agent_uuid,
         )
 
         # Mark dispatch-created identities as ephemeral

@@ -33,6 +33,7 @@ from .inference_registry import (
 from src.local_inference_env import (
     DEFAULT_OLLAMA_BASE,
     display_url,
+    redact_url_credentials,
     is_ollama_endpoint,
     ollama_base_url,
     normalize_ollama_base,
@@ -803,8 +804,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         )
         
     except Exception as e:
-        # Provide helpful error message
-        error_msg = str(e)
+        # Provide helpful error message. Provider text can quote the
+        # endpoint, and the endpoint can carry credentials.
+        error_msg = redact_url_credentials(str(e), base_url)
         provider_unavailable = None
         # Use the HTTP status, not arbitrary exception text: only a response
         # from the HF router establishes account unavailability. Model access
@@ -901,7 +903,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             category="system_error",
             details={
                 "model_requested": model,
-                "base_url": base_url,
+                "base_url": display_url(base_url) if base_url else base_url,
                 "task_type": task_type,
                 **route_details,
                 **({"provider_unavailable": provider_unavailable} if provider_unavailable else {}),
