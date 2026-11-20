@@ -26,13 +26,14 @@ append-only knowledge writes):
   normal REST path using the body's explicit ``client_session_id``; the token
   only admits a call that resolves to its own agent. It is never a binding
   proof.
-- Enforces flat top-level argument allowlists per scope with an explicit
-  ``client_session_id`` in the body (including default ``checkin`` tokens):
-  wrapper keys (``kwargs``, ``arguments``, ``params``), ``X-Session-ID``-only
-  injection without body ``client_session_id``, identity-selecting arguments
-  (``agent_id``, ``agent_uuid``, ``continuity_token``), ``X-Agent-Id``, and
-  ``X-Unitares-Operator`` are refused. ``identity`` and ``onboard`` remain
-  forbidden.
+- Enforces flat top-level arguments with an explicit ``client_session_id`` in
+  the body across all scopes (including default ``checkin`` tokens), and
+  enforces per-tool argument allowlists on ``outcome`` and ``knowledge_store``.
+  Wrapper keys (``kwargs``, ``arguments``, ``params``),
+  ``X-Session-ID``-only injection without body ``client_session_id``,
+  identity-selecting arguments (``agent_id``, ``agent_uuid``,
+  ``continuity_token``), ``X-Agent-Id``, and ``X-Unitares-Operator`` are
+  refused. ``identity`` and ``onboard`` remain forbidden.
 - A malformed entry disables every agent token (fail closed) and logs an
   error. It does not stop the server, so a typo cannot take down the shared
   check-in path for everyone else.
@@ -322,8 +323,10 @@ def call_refusal(
         if tags is not None:
             if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
                 return "tags must be a list of strings"
+            from src.knowledge_graph import normalize_tags
+
             reserved = [
-                t for t in tags if t.strip().lower() in _KNOWLEDGE_STORE_RESERVED_TAGS
+                t for t in normalize_tags(tags) if t in _KNOWLEDGE_STORE_RESERVED_TAGS
             ]
             if reserved:
                 return f"agent token forbids reserved tag(s): {', '.join(reserved)}"

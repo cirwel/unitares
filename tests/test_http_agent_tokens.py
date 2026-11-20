@@ -461,10 +461,16 @@ async def test_knowledge_store_scope_is_append_only_and_low_medium_severity(
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_id": "custom"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "status": "resolved"}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["permanent"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["#permanent"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["permanent!"]}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["foundational"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["Foundational."]}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["architecture"]}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": [" Decision "]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["-decision-"]}),
         ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["source-claude-memory"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["source_claude_memory"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["Source Claude Memory"]}),
     ]
     for tool_name, args in bad_calls:
         prebinds_before = route["prebinds"]
