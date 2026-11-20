@@ -1342,16 +1342,19 @@ def _dispatched_label(scripts: list[str], command: str) -> str:
     return Path(scripts[0]).name if scripts else command.split()[0]
 
 
-def _iter_declared_hooks(data: Any, scheduler: str) -> list[tuple[str, str | None, dict[str, Any]]]:
-    """Yield ``(event, matcher, hook_dict)`` across Claude/Codex and Antigravity hook files."""
+def _iter_declared_hooks(
+    data: Any, scheduler: str,
+) -> list[tuple[str | None, str, str | None, dict[str, Any]]]:
+    """Yield ``(namespace, event, matcher, hook_dict)`` across Claude/Codex and Antigravity hook files."""
     if not isinstance(data, dict):
         return []
-    out: list[tuple[str, str | None, dict[str, Any]]] = []
+    out: list[tuple[str | None, str, str | None, dict[str, Any]]] = []
     if scheduler == "antigravity-settings":
         # ~/.gemini/config/hooks.json maps plugin_name -> {event -> [hook_or_group]}.
-        for plugin_hooks in data.values():
+        for plugin_name, plugin_hooks in data.items():
             if not isinstance(plugin_hooks, dict):
                 continue
+            namespace = str(plugin_name)
             for event, entries in plugin_hooks.items():
                 if not isinstance(entries, list):
                     continue
@@ -1362,9 +1365,9 @@ def _iter_declared_hooks(data: Any, scheduler: str) -> list[tuple[str, str | Non
                         matcher = entry.get("matcher")
                         for hook in entry["hooks"]:
                             if isinstance(hook, dict):
-                                out.append((str(event), matcher, hook))
+                                out.append((namespace, str(event), matcher, hook))
                     else:
-                        out.append((str(event), entry.get("matcher"), entry))
+                        out.append((namespace, str(event), entry.get("matcher"), entry))
         return out
 
     hooks = data.get("hooks")
@@ -1379,7 +1382,7 @@ def _iter_declared_hooks(data: Any, scheduler: str) -> list[tuple[str, str | Non
             matcher = group.get("matcher")
             for hook in group.get("hooks") or []:
                 if isinstance(hook, dict):
-                    out.append((str(event), matcher, hook))
+                    out.append((None, str(event), matcher, hook))
     return out
 
 
@@ -1404,7 +1407,7 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
             if emit:
                 warnings.append(f"claude-hooks: failed to parse {short_path(settings_path)}: {exc}")
             continue
-        for event, matcher, hook in _iter_declared_hooks(data, scheduler):
+        for namespace, event, matcher, hook in _iter_declared_hooks(data, scheduler):
             command = str(hook.get("command") or "")
             if hook.get("type") != "command" or not command:
                 continue
@@ -1414,6 +1417,8 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
                 continue
             label = _dispatched_label(scripts, command)
             notes = [f"event={event}"]
+            if namespace is not None:
+                notes.append(f"plugin={namespace}")
             if matcher:
                 notes.append(f"matcher={matcher}")
             if not scripts:
@@ -1421,9 +1426,14 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
                 warnings.append(
                     f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
                 )
+            id_seed = (
+                f"{settings_path}:{event}:{matcher}:{command}:{namespace}"
+                if namespace is not None
+                else f"{settings_path}:{event}:{matcher}:{command}"
+            )
             results.append(
                 Automation(
-                    id=stable_id("claude-hook", f"{settings_path}:{event}:{matcher}:{command}"),
+                    id=stable_id("claude-hook", id_seed),
                     name=f"{event}: {label}",
                     source="claude-hooks",
                     kind="hook",

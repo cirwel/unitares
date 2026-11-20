@@ -571,16 +571,22 @@ def test_codex_and_antigravity_user_hooks_are_discovered(
     ]
 
 
-@pytest.mark.parametrize("command,expected_label", [
-    ("/usr/bin/true", "Stop: true"),
-    ("/usr/bin/osascript -e 'beep'", "Stop: osascript"),
-    ("/bin/bash -ec 'exit 0'", "Stop: bash"),
-    ("/bin/bash -eo pipefail -c 'exit 0'", "Stop: bash"),
-    ("/bin/bash -c 'echo /does/not/exist'", "Stop: bash"),
+@pytest.mark.parametrize("command_template,expected_label", [
+    ("{sysbin}/true", "Stop: true"),
+    ("{sysbin}/osascript -e 'beep'", "Stop: osascript"),
+    ("{sysbin}/bash -ec 'exit 0'", "Stop: bash"),
+    ("{sysbin}/bash -eo pipefail -c 'exit 0'", "Stop: bash"),
+    ("{sysbin}/bash -c 'echo /does/not/exist'", "Stop: bash"),
 ])
-def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch, command, expected_label):
-    """Valid standalone/inline system-command hooks stay wired."""
+def test_standalone_system_command_hook_is_wired(
+    census_mod, tmp_path, monkeypatch, command_template, expected_label,
+):
+    """Valid standalone/inline system-command hooks stay wired across platforms."""
     home = tmp_path / "home"
+    sysbin = tmp_path / "sysbin"
+    for name in ("true", "osascript", "bash"):
+        _exe(sysbin / name)
+    command = command_template.format(sysbin=sysbin)
     (home / ".claude").mkdir(parents=True)
     (home / ".claude/settings.json").write_text(json.dumps({
         "hooks": {
@@ -590,6 +596,7 @@ def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypat
         }
     }))
     monkeypatch.setattr(census_mod, "HOME", home)
+    monkeypatch.setattr(census_mod, "SYSTEM_BIN_DIRS", {str(sysbin), str(sysbin.resolve())})
 
     items, warnings = _collect(census_mod)
     assert warnings == []
@@ -600,18 +607,52 @@ def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypat
 
 def test_interpreter_wrapped_hook_prefers_script_label(census_mod, tmp_path, monkeypatch):
     home = tmp_path / "home"
+    sysbin = tmp_path / "sysbin"
+    bash = _exe(sysbin / "bash")
     hook = _exe(home / ".claude/hooks/custom-stop.sh")
     (home / ".claude/settings.json").write_text(json.dumps({
         "hooks": {
             "Stop": [{
-                "hooks": [{"type": "command", "command": f"/bin/bash {hook}"}],
+                "hooks": [{"type": "command", "command": f"{bash} {hook}"}],
             }]
         }
     }))
     monkeypatch.setattr(census_mod, "HOME", home)
+    monkeypatch.setattr(census_mod, "SYSTEM_BIN_DIRS", {str(sysbin), str(sysbin.resolve())})
 
     items, warnings = _collect(census_mod)
     assert warnings == []
     assert len(items) == 1
     assert items[0].status == "wired"
     assert items[0].name == "Stop: custom-stop.sh"
+
+
+def test_antigravity_hooks_preserve_plugin_namespace_in_id(census_mod, tmp_path, monkeypatch):
+    """Identical hooks registered under distinct Antigravity plugins must have distinct IDs."""
+    home = tmp_path / "home"
+    presence = _exe(home / "bin/agent-presence")
+    command = f"{presence} hook --harness agy"
+    (home / ".gemini/config").mkdir(parents=True)
+    (home / ".gemini/config/hooks.json").write_text(json.dumps({
+        "plugin-alpha": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{"type": "command", "command": command}],
+            }],
+        },
+        "plugin-beta": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{"type": "command", "command": command}],
+            }],
+        },
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 2
+    assert len({item.id for item in items}) == 2
+    assert {
+        note for item in items for note in item.notes if note.startswith("plugin=")
+    } == {"plugin=plugin-alpha", "plugin=plugin-beta"}
