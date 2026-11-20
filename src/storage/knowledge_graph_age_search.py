@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.logging_utils import get_logger
@@ -41,6 +41,26 @@ _BACKFILL_STALE_HINT = (
     "its previous vector, if any, stays in place "
     "(python scripts/migration/reembed_corpus.py --rebuild rewrites it)"
 )
+
+
+def _discovery_age_days(ts: str, now_utc: datetime) -> float:
+    """Age in days of an ISO timestamp, never negative.
+
+    Discovery timestamps come in two shapes: offset-aware (``...Z`` or
+    ``+00:00``) and naive local time (``datetime.now().isoformat()``, the
+    default this module stamps). An aware stamp is compared in UTC. A naive one
+    is compared against naive local time, the clock it was written with.
+
+    The earlier code stripped ``+00:00`` and subtracted from naive local now,
+    which shifted every UTC stamp by the host's UTC offset, and raised on any
+    other offset so that row silently got no decay.
+    """
+    created = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if created.tzinfo is None:
+        delta = now_utc.astimezone().replace(tzinfo=None) - created
+    else:
+        delta = now_utc - created
+    return max(0.0, delta.total_seconds() / 86400)
 
 
 class KnowledgeGraphAGESearchMixin:
@@ -1341,7 +1361,7 @@ class KnowledgeGraphAGESearchMixin:
         discovery_ids = [d.id for d, _ in raw_results]
         connectivity_scores = await self.get_connectivity_scores_batch(discovery_ids)
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Blend scores
         blended_results = []
@@ -1365,8 +1385,7 @@ class KnowledgeGraphAGESearchMixin:
                 try:
                     ts = discovery.timestamp
                     if ts:
-                        created = datetime.fromisoformat(ts.replace("Z", "+00:00").replace("+00:00", ""))
-                        age_days = max(0, (now - created).total_seconds() / 86400)
+                        age_days = _discovery_age_days(ts, now)
                         decay = 1.0 / (1.0 + age_days / half_life_days)
                         score *= decay
                 except (ValueError, TypeError):
