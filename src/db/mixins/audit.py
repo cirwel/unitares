@@ -480,3 +480,45 @@ async def query_audit_volume_summary(*, floor: int = 300) -> List[Dict[str, Any]
         async with conn.transaction(isolation="repeatable_read", readonly=True):
             await conn.execute(AUDIT_VOLUME_STATEMENT_TIMEOUT_SQL)
             return await fetch_audit_volume_summary(conn, floor=floor)
+
+
+async def fetch_pause_divergence_summary(
+    conn: Any,
+    *,
+    days: int,
+) -> tuple[Any, Any, list[Any]]:
+    """Fetch pause-verdict vs delivered-pause divergence aggregates from `audit.events`."""
+    totals = await conn.fetchrow(
+        """
+        SELECT
+          count(*) FILTER (WHERE event_type = 'auto_attest'
+                             AND payload->>'decision' = 'pause') AS produced,
+          count(*) FILTER (WHERE event_type = 'auto_attest'
+                             AND payload->>'decision' = 'pause'
+                             AND payload->>'gap_suppressed' = 'true') AS gap_suppressed,
+          count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+        FROM audit.events
+        WHERE ts > now() - make_interval(days => $1)
+          AND event_type IN ('auto_attest', 'lifecycle_paused')
+        """,
+        days,
+    )
+    last_row = await conn.fetchrow(
+        "SELECT max(ts) AS last_delivered FROM audit.events "
+        "WHERE event_type = 'lifecycle_paused'"
+    )
+    weekly = await conn.fetch(
+        """
+        SELECT to_char(date_trunc('week', ts), 'MM-DD') AS week,
+               count(*) FILTER (WHERE event_type = 'auto_attest'
+                                  AND payload->>'decision' = 'pause') AS produced,
+               count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+        FROM audit.events
+        WHERE ts > now() - make_interval(days => $1)
+          AND event_type IN ('auto_attest', 'lifecycle_paused')
+        GROUP BY date_trunc('week', ts)
+        ORDER BY date_trunc('week', ts)
+        """,
+        days,
+    )
+    return totals, last_row, weekly
