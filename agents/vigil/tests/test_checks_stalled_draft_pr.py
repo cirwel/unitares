@@ -580,29 +580,29 @@ UUID_A = "11111111-2222-3333-4444-555555555555"
 BODY_SIGNED = f"Fix the thing.\n\n---\nModel: claude-test-1\nUNITARES agent: {UUID_A}\n"
 
 
-def test_parse_owner_reads_the_signature():
-    from agents.vigil.checks.stalled_draft_pr import parse_owner
+def test_parse_author_reads_the_signature():
+    from agents.vigil.checks.stalled_draft_pr import parse_author
 
-    assert parse_owner(BODY_SIGNED) == {"agent_uuid": UUID_A, "model": "claude-test-1"}
+    assert parse_author(BODY_SIGNED) == {"agent_uuid": UUID_A, "model": "claude-test-1"}
 
 
-def test_parse_owner_takes_the_last_signature():
+def test_parse_author_takes_the_last_signature():
     """A body can quote an earlier signature above its own."""
-    from agents.vigil.checks.stalled_draft_pr import parse_owner
+    from agents.vigil.checks.stalled_draft_pr import parse_author
 
     other = "99999999-8888-7777-6666-555555555555"
     body = f"> Model: old-model\n> UNITARES agent: {other}\n\nModel: old-model\nUNITARES agent: {other}\n\n{BODY_SIGNED}"
-    assert parse_owner(body)["agent_uuid"] == UUID_A
+    assert parse_author(body)["agent_uuid"] == UUID_A
 
 
 @pytest.mark.parametrize("body", [None, 42, "", "no signature here", "UNITARES agent: not-a-uuid"])
-def test_parse_owner_never_guesses(body):
-    from agents.vigil.checks.stalled_draft_pr import parse_owner
+def test_parse_author_never_guesses(body):
+    from agents.vigil.checks.stalled_draft_pr import parse_author
 
-    assert parse_owner(body)["agent_uuid"] == ""
+    assert parse_author(body)["agent_uuid"] == ""
 
 
-def test_gather_carries_the_owner_on_a_stalled_row(monkeypatch):
+def test_gather_carries_the_author_on_a_stalled_row(monkeypatch):
     async def fake_gh(args, timeout):
         if args[0] == "search":
             return [_pr(1)]
@@ -610,8 +610,8 @@ def test_gather_carries_the_owner_on_a_stalled_row(monkeypatch):
         return {"statusCheckRollup": [_run("smoke", "FAILURE", 30.0)], "body": BODY_SIGNED}
 
     res = asyncio.run(_gather(monkeypatch, fake_gh))
-    assert res["stalled"][0]["owner_agent_uuid"] == UUID_A
-    assert res["stalled"][0]["owner_model"] == "claude-test-1"
+    assert res["stalled"][0]["author_agent_uuid"] == UUID_A
+    assert res["stalled"][0]["author_model"] == "claude-test-1"
 
 
 @pytest.mark.parametrize(
@@ -646,7 +646,7 @@ def test_classify_closure(view, expected):
 def _open_entry(number: int, first_seen: float, repo: str = "acmeco/unitares") -> dict:
     return {
         "repo": repo, "number": number, "url": "", "failing": ["smoke"],
-        "red_hours": 20.0, "owner_agent_uuid": UUID_A, "owner_model": "m",
+        "red_hours": 20.0, "author_agent_uuid": UUID_A, "author_model": "m",
         "first_seen": first_seen,
     }
 
@@ -719,7 +719,7 @@ def test_run_opens_then_closes_a_stall(monkeypatch):
     first = _run_check(monkeypatch, red)
     assert first.ok is False
     assert first.detail["stalled_pr_opened"] == ["acmeco/unitares#7"]
-    assert first.detail["stalled_pr_open"]["acmeco/unitares#7"]["owner_agent_uuid"] == UUID_A
+    assert first.detail["stalled_pr_open"]["acmeco/unitares#7"]["author_agent_uuid"] == UUID_A
 
     async def merged(args, timeout):
         if args[0] == "search":
@@ -756,11 +756,11 @@ def test_a_pr_that_drops_out_of_the_sweep_is_not_closed(monkeypatch):
     assert result.detail["stalled_pr_count"] == 1
 
 
-def test_parse_owner_reads_a_crlf_body():
+def test_parse_author_reads_a_crlf_body():
     """GitHub's web editor stores CRLF; `$` alone does not match before \\r\\n."""
-    from agents.vigil.checks.stalled_draft_pr import parse_owner
+    from agents.vigil.checks.stalled_draft_pr import parse_author
 
-    assert parse_owner(BODY_SIGNED.replace("\n", "\r\n")) == {
+    assert parse_author(BODY_SIGNED.replace("\n", "\r\n")) == {
         "agent_uuid": UUID_A, "model": "claude-test-1",
     }
 
@@ -843,3 +843,23 @@ def test_check_opts_out_of_the_aggregate_edge_post():
     from agents.vigil.checks.stalled_draft_pr import StalledDraftPR
 
     assert StalledDraftPR.emits_own_findings is True
+
+
+def test_pending_closures_are_carried_through_every_branch(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    row = {**_open_entry(9, NOW - HOUR), "outcome": "merged", "open_hours": 1.0}
+    prev = {"stalled_pr_pending_closures": [row, "junk"]}
+
+    async def fake_gh(args, timeout):
+        return [] if args[0] == "search" else {}
+
+    assert _run_check(monkeypatch, fake_gh, prev_state=prev).detail[
+        "stalled_pr_pending_closures"] == [row]
+
+    # The indeterminate branch (gh unavailable) must carry it through too.
+    async def down(args, timeout):
+        raise mod.GhUnavailable("down")
+
+    assert _run_check(monkeypatch, down, prev_state=prev).detail[
+        "stalled_pr_pending_closures"] == [row]

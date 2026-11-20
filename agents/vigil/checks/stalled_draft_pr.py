@@ -67,8 +67,17 @@ Honest scope notes (no silent caps):
     budget, unreadable, ``gh`` down) is never treated as closed. It stays in
     the open set until it can be read.
   * The PR body's ``UNITARES agent:`` / ``Model:`` signature is read and
-    carried on the finding as the owner. A PR without one is reported with no
-    owner; nothing is guessed from the branch name or the GitHub login.
+    carried on the finding as the *author*. That is who wrote the change, not
+    necessarily who must act: after a recorded handover the delivery owner is
+    someone else, and the opening author's signature stays last by house rule.
+    This check does not resolve handovers. A PR without a signature is
+    reported with no author; nothing is guessed from the branch or the login.
+  * A closure whose post did not reach governance is kept in
+    ``stalled_pr_pending_closures`` and re-sent, apart from the open set. It
+    is a fact about a finished episode, so it must not depend on what the PR
+    does next: put back on the open list, a ``retriggered`` PR that went red
+    again would be read as the same stall continuing, and both the closure
+    and the new stall would be lost.
   * ``service_key`` is listed in ``agent.CONDITION_SERVICE_KEYS`` so the
     ``{svc}_healthy`` flag drives transition dedup *without* being mistaken for
     a reachable service. Without that, ``detect_changes`` would write
@@ -250,22 +259,22 @@ def red_since(rollup: Any) -> Optional[float]:
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 # `\r?` before `$`: GitHub returns CRLF line endings for bodies written in its
 # web editor, and under re.MULTILINE `$` matches before `\n` only.
-_OWNER_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*\r?$", re.MULTILINE)
-_OWNER_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*\r?$", re.MULTILINE)
+_AUTHOR_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*\r?$", re.MULTILINE)
+_AUTHOR_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*\r?$", re.MULTILINE)
 
 
-def parse_owner(body: Any) -> dict:
-    """Pure: the provenance signature of a PR body, as ``{agent_uuid, model}``.
+def parse_author(body: Any) -> dict:
+    """Pure: the authorship signature of a PR body, as ``{agent_uuid, model}``.
 
     The fleet's convention ends an agent-authored PR body with ``Model:`` and
     ``UNITARES agent:`` lines. The last occurrence wins, because a body can
     quote an earlier signature above its own. Missing lines yield empty
-    strings: an unsigned PR has no recorded owner, and none is inferred.
+    strings: an unsigned PR has no recorded author, and none is inferred.
     """
     if not isinstance(body, str):
         return {"agent_uuid": "", "model": ""}
-    uuids = _OWNER_UUID_RE.findall(body)
-    models = _OWNER_MODEL_RE.findall(body)
+    uuids = _AUTHOR_UUID_RE.findall(body)
+    models = _AUTHOR_MODEL_RE.findall(body)
     return {
         "agent_uuid": uuids[-1].lower() if uuids else "",
         "model": models[-1].strip() if models else "",
@@ -349,8 +358,8 @@ def reconcile(
             "url": row.get("url", ""),
             "failing": list(row.get("failing") or []),
             "red_hours": row["red_hours"],
-            "owner_agent_uuid": row.get("owner_agent_uuid", ""),
-            "owner_model": row.get("owner_model", ""),
+            "author_agent_uuid": row.get("author_agent_uuid", ""),
+            "author_model": row.get("author_model", ""),
             "first_seen": held.get("first_seen", now) if held else now,
         }
         if held is None:
@@ -402,6 +411,7 @@ def assess(
     opened: Optional[List[str]] = None,
     resolved: Optional[List[dict]] = None,
     held: int = 0,
+    pending_closures: Optional[List[dict]] = None,
 ) -> CheckResult:
     """Pure: turn the sweep into a CheckResult.
 
@@ -450,6 +460,9 @@ def assess(
             "stalled_pr_open": dict(open_set or {}),
             "stalled_pr_opened": list(opened or []),
             "stalled_pr_resolved": list(resolved or []),
+            # Closures not yet delivered. The check only carries this through;
+            # agent.emit_stalled_pr_findings owns what goes in and out.
+            "stalled_pr_pending_closures": list(pending_closures or []),
         }
 
     if indeterminate:
@@ -597,7 +610,7 @@ async def gather(
                 unreadable += 1
                 continue
             red_h = (now - since) / 3600.0
-            owner = parse_owner(view.get("body"))
+            owner = parse_author(view.get("body"))
             if red_h > stale_hours:
                 stalled.append({
                     "repo": pr["repo"],
@@ -605,8 +618,8 @@ async def gather(
                     "red_hours": round(red_h, 2),
                     "failing": names,
                     "url": pr.get("url", ""),
-                    "owner_agent_uuid": owner["agent_uuid"],
-                    "owner_model": owner["model"],
+                    "author_agent_uuid": owner["agent_uuid"],
+                    "author_model": owner["model"],
                 })
         deadline_skipped = len(pending)
     else:
@@ -705,6 +718,8 @@ class StalledDraftPR:
         prev_open = (prev_state or {}).get("stalled_pr_open")
         if not isinstance(prev_open, dict):
             prev_open = {}
+        pending = (prev_state or {}).get("stalled_pr_pending_closures")
+        pending = [r for r in pending if isinstance(r, dict)] if isinstance(pending, list) else []
         common = dict(
             stale_hours=_this.STALE_HOURS,
             search_limit=_this.SEARCH_LIMIT,
@@ -715,7 +730,7 @@ class StalledDraftPR:
                 [], drafts_read=0, cap_skipped=0, unreadable=0, deadline_skipped=0,
                 search_truncated=False, indeterminate=True,
                 indeterminate_reason="VIGIL_STALLED_PR_OWNER is not configured",
-                prev_ok=prev_ok, open_set=prev_open, **common,
+                prev_ok=prev_ok, open_set=prev_open, pending_closures=pending, **common,
             )
         try:
             res = await _this.gather(
@@ -737,7 +752,7 @@ class StalledDraftPR:
                 [], drafts_read=0, cap_skipped=0, unreadable=0, deadline_skipped=0,
                 search_truncated=False, indeterminate=True,
                 indeterminate_reason=f"{type(e).__name__}: {e}", prev_ok=prev_ok,
-                open_set=prev_open, **common,
+                open_set=prev_open, pending_closures=pending, **common,
             )
 
         now = time.time()
@@ -796,6 +811,7 @@ class StalledDraftPR:
         return _this.assess(
             rows,
             held=len(held_rows),
+            pending_closures=pending,
             open_set=open_set,
             opened=opened,
             resolved=resolved,

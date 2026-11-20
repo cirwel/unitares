@@ -19,7 +19,7 @@ def _entry(**kw) -> dict:
     base = {
         "repo": "acmeco/unitares", "number": 7, "url": "https://example.test/7",
         "failing": ["smoke", "lint"], "red_hours": 30.0,
-        "owner_agent_uuid": UUID_A, "owner_model": "claude-test-1",
+        "author_agent_uuid": UUID_A, "author_model": "claude-test-1",
         "first_seen": 1_000_000.0,
     }
     base.update(kw)
@@ -49,7 +49,7 @@ def _emit(state):
     return emit_stalled_pr_findings(state)
 
 
-def test_opened_pr_posts_one_finding_naming_the_owner(posts):
+def test_opened_pr_posts_one_finding_naming_the_author(posts):
     calls, _ = posts
     state = {"stalled_pr_open": {KEY: _entry()}, "stalled_pr_opened": [KEY],
              "stalled_pr_resolved": []}
@@ -57,18 +57,18 @@ def test_opened_pr_posts_one_finding_naming_the_owner(posts):
     (call,) = calls
     assert call["event_type"] == "vigil_finding" and call["severity"] == "warning"
     assert KEY in call["message"] and UUID_A in call["message"]
-    assert call["extra"]["owner_agent_uuid"] == UUID_A
+    assert call["extra"]["author_agent_uuid"] == UUID_A
     assert call["extra"]["finding_type"] == "stalled_draft_pr"
     assert call["extra"]["stall_fingerprint"] == call["fingerprint"]
 
 
-def test_unsigned_pr_is_reported_with_no_owner(posts):
+def test_unsigned_pr_is_reported_with_no_author(posts):
     calls, _ = posts
-    state = {"stalled_pr_open": {KEY: _entry(owner_agent_uuid="", owner_model="")},
+    state = {"stalled_pr_open": {KEY: _entry(author_agent_uuid="", author_model="")},
              "stalled_pr_opened": [KEY], "stalled_pr_resolved": []}
     _emit(state)
     assert "no agent signature" in calls[0]["message"]
-    assert calls[0]["extra"]["owner_agent_uuid"] == ""
+    assert calls[0]["extra"]["author_agent_uuid"] == ""
 
 
 def test_still_open_pr_is_not_posted_again(posts):
@@ -115,14 +115,42 @@ def test_failed_open_is_dropped_so_it_reopens_next_cycle(posts):
     assert KEY not in state["stalled_pr_open"]
 
 
-def test_failed_closure_is_put_back_so_it_is_retried(posts):
+def test_failed_closure_is_kept_pending_and_resent(posts):
+    """Review finding: a failed closure must not go back on the open list,
+    where a PR that went red again would swallow it."""
+    calls, outcome = posts
+    outcome["value"] = FAILED
+    row = {**_entry(), "outcome": "retriggered", "open_hours": 3.0}
+    state = {"stalled_pr_open": {}, "stalled_pr_opened": [], "stalled_pr_resolved": [row]}
+    assert _emit(state)["failed"] == 1
+    assert state["stalled_pr_open"] == {}
+    assert state["stalled_pr_pending_closures"] == [row]
+
+    # Next cycle: the PR has stalled again as a new episode, governance is back.
+    outcome["value"] = DELIVERED
+    calls.clear()
+    again = _entry(first_seen=1_050_000.0)
+    state = {"stalled_pr_open": {KEY: again}, "stalled_pr_opened": [KEY],
+             "stalled_pr_resolved": [], "stalled_pr_pending_closures": [row]}
+    counts = _emit(state)
+    assert counts["opened"] == 1 and counts["resolved"] == 1
+    assert state["stalled_pr_pending_closures"] == []
+    kinds = [(c["event_type"], c["change_token"]) for c in calls]
+    assert ("vigil_finding", "open:1050000.0") in kinds
+    assert ("vigil_resolution_finding", "resolved:1000000.0") in kinds
+    assert state["stalled_pr_open"][KEY]["first_seen"] == 1_050_000.0
+
+
+def test_pending_closures_are_bounded(posts, monkeypatch):
+    from agents.vigil import agent as vigil_mod
+
     _, outcome = posts
     outcome["value"] = FAILED
-    state = {"stalled_pr_open": {}, "stalled_pr_opened": [],
-             "stalled_pr_resolved": [{**_entry(), "outcome": "merged", "open_hours": 3.0}]}
-    assert _emit(state)["failed"] == 1
-    assert state["stalled_pr_open"][KEY]["first_seen"] == 1_000_000.0
-    assert "outcome" not in state["stalled_pr_open"][KEY]
+    monkeypatch.setattr(vigil_mod, "STALLED_PR_MAX_PENDING_CLOSURES", 2)
+    rows = [{**_entry(number=n), "outcome": "merged", "open_hours": 1.0} for n in (1, 2, 3)]
+    state = {"stalled_pr_open": {}, "stalled_pr_opened": [], "stalled_pr_resolved": rows}
+    _emit(state)
+    assert [r["number"] for r in state["stalled_pr_pending_closures"]] == [2, 3]
 
 
 @pytest.mark.parametrize("state", [{}, {"stalled_pr_open": None}, {"stalled_pr_open": {},
@@ -174,6 +202,5 @@ def test_emit_budget_defers_what_does_not_fit(posts, monkeypatch):
     counts = _emit(state)
     assert len(calls) == 2
     assert counts["opened"] == 2 and counts["deferred"] == 4 and counts["failed"] == 0
-    assert sorted(state["stalled_pr_open"]) == [
-        "acmeco/unitares#1", "acmeco/unitares#2", "acmeco/unitares#99",
-    ]
+    assert sorted(state["stalled_pr_open"]) == ["acmeco/unitares#1", "acmeco/unitares#2"]
+    assert [r["number"] for r in state["stalled_pr_pending_closures"]] == [99]

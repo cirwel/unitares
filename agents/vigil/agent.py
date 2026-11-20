@@ -84,6 +84,8 @@ CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
 # Wall-clock bound on posting stalled-draft-PR findings in one cycle. What does
 # not fit is retried next cycle; see emit_stalled_pr_findings.
 STALLED_PR_EMIT_BUDGET = float(os.getenv("VIGIL_STALLED_PR_EMIT_BUDGET", "15"))
+# Undelivered closures kept for retry. Past this the oldest are dropped, logged.
+STALLED_PR_MAX_PENDING_CLOSURES = int(os.getenv("VIGIL_STALLED_PR_MAX_PENDING_CLOSURES", "100"))
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
@@ -224,11 +226,11 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
     return notes
 
 
-def _stalled_pr_owner(entry: Dict[str, Any]) -> str:
-    uuid = entry.get("owner_agent_uuid") or ""
+def _stalled_pr_author(entry: Dict[str, Any]) -> str:
+    uuid = entry.get("author_agent_uuid") or ""
     if not uuid:
         return "no agent signature on the PR"
-    model = entry.get("owner_model") or ""
+    model = entry.get("author_model") or ""
     return f"agent {uuid} ({model})" if model else f"agent {uuid}"
 
 
@@ -241,11 +243,15 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
     ``stall_fingerprint`` so a stall can be paired with its closure, and the
     closure carries ``outcome`` and ``open_hours``.
 
-    A post that did not reach governance is undone in ``health_state`` so the
-    next cycle tries again: a failed open is dropped from the open set (it
-    re-opens), a failed closure is put back (it is re-verified and re-posted).
-    Without that, a governance blip would leave a stall recorded as announced
-    that nobody was told about, or closed with no closure on record.
+    A post that did not reach governance is kept for the next cycle: a failed
+    open is dropped from the open set, so the PR re-opens and is announced
+    then; a failed closure goes to ``stalled_pr_pending_closures`` and is
+    re-sent as it stands. Closures are not put back on the open list: the
+    closure already happened, and a PR that went red again in the meantime
+    would otherwise be read as the same stall continuing, losing both the
+    closure and the new stall. Without any of this, a governance blip would
+    leave a stall recorded as announced that nobody was told about, or closed
+    with no closure on record.
 
     Posting is synchronous and each post can take several seconds against a
     struggling governance, so the whole pass is bounded: after the first post
@@ -290,7 +296,7 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             )
             message = (
                 f"Stalled draft PR: {key} red for {float(entry.get('red_hours') or 0):.0f}h "
-                f"with no new run ({shown}). Owner: {_stalled_pr_owner(entry)}. "
+                f"with no new run ({shown}). Author: {_stalled_pr_author(entry)}. "
                 "Nothing will merge it — re-run CI or push a fix"
             )
             outcome = _send(
@@ -308,8 +314,8 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
                     "repo": entry.get("repo"),
                     "number": entry.get("number"),
                     "url": entry.get("url", ""),
-                    "owner_agent_uuid": entry.get("owner_agent_uuid", ""),
-                    "owner_model": entry.get("owner_model", ""),
+                    "author_agent_uuid": entry.get("author_agent_uuid", ""),
+                    "author_model": entry.get("author_model", ""),
                 },
             )
             if outcome in REACHED_GOVERNANCE:
@@ -318,7 +324,10 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             else:
                 open_set.pop(key, None)
 
-        for row in list(health_state.get("stalled_pr_resolved") or []):
+        carried = health_state.get("stalled_pr_pending_closures")
+        carried = list(carried) if isinstance(carried, list) else []
+        still_pending: List[Dict[str, Any]] = []
+        for row in carried + list(health_state.get("stalled_pr_resolved") or []):
             if not isinstance(row, dict):
                 continue
             key = f"{row.get('repo')}#{row.get('number')}"
@@ -350,15 +359,19 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
                     "url": row.get("url", ""),
                     "outcome": row.get("outcome"),
                     "open_hours": hours,
-                    "owner_agent_uuid": row.get("owner_agent_uuid", ""),
-                    "owner_model": row.get("owner_model", ""),
+                    "author_agent_uuid": row.get("author_agent_uuid", ""),
+                    "author_model": row.get("author_model", ""),
                 },
             )
             if outcome in REACHED_GOVERNANCE:
                 counts["resolved"] += 1
             else:
-                held = {k: v for k, v in row.items() if k not in ("outcome", "open_hours")}
-                open_set[key] = held
+                still_pending.append(row)
+        if len(still_pending) > STALLED_PR_MAX_PENDING_CLOSURES:
+            dropped = len(still_pending) - STALLED_PR_MAX_PENDING_CLOSURES
+            still_pending = still_pending[dropped:]
+            log(f"stalled-PR closures: dropped {dropped} oldest undelivered closure(s) at the cap")
+        health_state["stalled_pr_pending_closures"] = still_pending
     except Exception as e:  # pragma: no cover - defensive, cycle must survive
         log(f"stalled-PR finding emit failed: {type(e).__name__}: {e}")
     return counts
