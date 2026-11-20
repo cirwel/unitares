@@ -572,3 +572,298 @@ async def test_unconfigured_owner_does_not_query_or_claim_recovery(monkeypatch):
     assert not result.ok
     assert result.detail["stalled_pr_indeterminate"]
     assert "not configured" in result.summary
+
+
+# --- per-PR lifetimes: open set, closure, owner -------------------------------
+
+UUID_A = "11111111-2222-3333-4444-555555555555"
+BODY_SIGNED = f"Fix the thing.\n\n---\nModel: claude-test-1\nUNITARES agent: {UUID_A}\n"
+
+
+def test_parse_author_reads_the_signature():
+    from agents.vigil.checks.stalled_draft_pr import parse_author
+
+    assert parse_author(BODY_SIGNED) == {"agent_uuid": UUID_A, "model": "claude-test-1"}
+
+
+def test_parse_author_takes_the_last_signature():
+    """A body can quote an earlier signature above its own."""
+    from agents.vigil.checks.stalled_draft_pr import parse_author
+
+    other = "99999999-8888-7777-6666-555555555555"
+    body = f"> Model: old-model\n> UNITARES agent: {other}\n\nModel: old-model\nUNITARES agent: {other}\n\n{BODY_SIGNED}"
+    assert parse_author(body)["agent_uuid"] == UUID_A
+
+
+@pytest.mark.parametrize("body", [None, 42, "", "no signature here", "UNITARES agent: not-a-uuid"])
+def test_parse_author_never_guesses(body):
+    from agents.vigil.checks.stalled_draft_pr import parse_author
+
+    assert parse_author(body)["agent_uuid"] == ""
+
+
+def test_gather_carries_the_author_on_a_stalled_row(monkeypatch):
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return [_pr(1)]
+        assert "statusCheckRollup,body" in args
+        return {"statusCheckRollup": [_run("smoke", "FAILURE", 30.0)], "body": BODY_SIGNED}
+
+    res = asyncio.run(_gather(monkeypatch, fake_gh))
+    assert res["stalled"][0]["author_agent_uuid"] == UUID_A
+    assert res["stalled"][0]["author_model"] == "claude-test-1"
+
+
+@pytest.mark.parametrize(
+    "view, expected",
+    [
+        ({"state": "MERGED", "isDraft": False}, "merged"),
+        ({"state": "CLOSED", "isDraft": True}, "closed"),
+        ({"state": "OPEN", "isDraft": False, "statusCheckRollup": []}, "ready"),
+        ({"state": "OPEN", "isDraft": True, "statusCheckRollup": []}, "green"),
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [_run("smoke", "SUCCESS", 1.0)]}, "green"),
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [_run("smoke", "FAILURE", 2.0)]}, "retriggered"),
+        # Still red past the window: not closed.
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [_run("smoke", "FAILURE", 30.0)]}, None),
+        # Cannot tell: not closed.
+        ({"state": "OPEN", "isDraft": True}, None),
+        ({"state": "OPEN", "isDraft": True, "statusCheckRollup": "junk"}, None),
+        ({"state": "OPEN"}, None),
+        ({}, None),
+        ("junk", None),
+        (None, None),
+    ],
+)
+def test_classify_closure(view, expected):
+    from agents.vigil.checks.stalled_draft_pr import classify_closure
+
+    assert classify_closure(view, now=NOW, stale_hours=12.0) == expected
+
+
+def _open_entry(number: int, first_seen: float, repo: str = "acmeco/unitares") -> dict:
+    return {
+        "repo": repo, "number": number, "url": "", "failing": ["smoke"],
+        "red_hours": 20.0, "author_agent_uuid": UUID_A, "author_model": "m",
+        "first_seen": first_seen,
+    }
+
+
+def _reconcile(prev, stalled, closures, **kw):
+    from agents.vigil.checks.stalled_draft_pr import reconcile
+
+    return reconcile(prev, stalled, closures, now=NOW, max_open=kw.get("max_open", 100))
+
+
+def test_reconcile_opens_a_new_stall_once():
+    open_set, opened, resolved = _reconcile({}, [_stalled(1, 20.0)], {})
+    assert opened == ["acmeco/unitares#1"] and resolved == []
+    assert open_set["acmeco/unitares#1"]["first_seen"] == NOW
+
+    assert open_set["acmeco/unitares#1"]["announced"] is False
+
+    # Next cycle, still stalled: not opened again, first_seen kept, and the
+    # undelivered-announcement mark survives the rebuild.
+    open_2, opened_2, _ = _reconcile(open_set, [_stalled(1, 20.5)], {})
+    assert open_2["acmeco/unitares#1"]["announced"] is False
+    assert opened_2 == []
+    assert open_2["acmeco/unitares#1"]["first_seen"] == NOW
+    assert open_2["acmeco/unitares#1"]["red_hours"] == 20.5
+
+
+def test_reconcile_reports_a_second_pr_while_the_first_is_still_stalled():
+    """The gap this closes: fleet-ops#171 sat 135h behind one post about another PR."""
+    prev = {"acmeco/unitares#1": _open_entry(1, NOW - 10 * HOUR)}
+    _, opened, _ = _reconcile(prev, [_stalled(1, 30.0), _stalled(2, 13.0)], {})
+    assert opened == ["acmeco/unitares#2"]
+
+
+def test_reconcile_closes_only_on_a_verified_outcome():
+    prev = {
+        "acmeco/unitares#1": _open_entry(1, NOW - 10 * HOUR),
+        "acmeco/unitares#2": _open_entry(2, NOW - 4 * HOUR),
+    }
+    open_set, opened, resolved = _reconcile(prev, [], {"acmeco/unitares#1": "merged"})
+    assert opened == []
+    assert [(r["number"], r["outcome"], r["open_hours"]) for r in resolved] == [(1, "merged", 10.0)]
+    # #2 dropped out of the sweep with no direct read: held, not closed.
+    assert list(open_set) == ["acmeco/unitares#2"]
+
+
+def test_reconcile_tolerates_a_junk_state_file():
+    for junk in (None, [], "x", {"k": "not-a-dict"}):
+        open_set, opened, resolved = _reconcile(junk, [_stalled(1, 20.0)], {})
+        assert opened == ["acmeco/unitares#1"] and resolved == []
+        assert "acmeco/unitares#1" in open_set
+
+
+def test_reconcile_bounds_the_open_set_without_announcing_what_it_drops():
+    prev = {"acmeco/unitares#1": _open_entry(1, NOW - 10 * HOUR)}
+    open_set, opened, _ = _reconcile(prev, [_stalled(1, 30.0), _stalled(2, 13.0)], {}, max_open=1)
+    assert list(open_set) == ["acmeco/unitares#1"]
+    assert opened == []
+
+
+def _run_check(monkeypatch, fake_gh, prev_state=None):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh)
+    monkeypatch.setattr(mod.time, "time", lambda: NOW)
+    return asyncio.run(mod.StalledDraftPR().run(prev_state=prev_state))
+
+
+def test_run_opens_then_closes_a_stall(monkeypatch):
+    async def red(args, timeout):
+        if args[0] == "search":
+            return [_pr(7)]
+        return {"statusCheckRollup": [_run("smoke", "FAILURE", 30.0)], "body": BODY_SIGNED}
+
+    first = _run_check(monkeypatch, red)
+    assert first.ok is False
+    assert first.detail["stalled_pr_opened"] == ["acmeco/unitares#7"]
+    assert first.detail["stalled_pr_open"]["acmeco/unitares#7"]["author_agent_uuid"] == UUID_A
+
+    async def merged(args, timeout):
+        if args[0] == "search":
+            return []  # merged PRs leave the open-draft search
+        assert "state,isDraft,statusCheckRollup" in args
+        return {"state": "MERGED", "isDraft": False, "statusCheckRollup": []}
+
+    second = _run_check(monkeypatch, merged, prev_state={"github_healthy": False, **first.detail})
+    assert second.ok is True
+    assert second.detail["stalled_pr_open"] == {}
+    assert second.detail["stalled_pr_opened"] == []
+    assert [r["outcome"] for r in second.detail["stalled_pr_resolved"]] == ["merged"]
+
+
+def test_a_pr_that_drops_out_of_the_sweep_is_not_closed(monkeypatch):
+    """Still draft and still red past the window, but past the inspection cap."""
+    prev = {"github_healthy": False,
+            "stalled_pr_open": {"acmeco/unitares#7": _open_entry(7, NOW - 5 * HOUR)}}
+
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return []
+        return {"state": "OPEN", "isDraft": True,
+                "statusCheckRollup": [_run("smoke", "FAILURE", 40.0)]}
+
+    result = _run_check(monkeypatch, fake_gh, prev_state=prev)
+    assert list(result.detail["stalled_pr_open"]) == ["acmeco/unitares#7"]
+    assert result.detail["stalled_pr_resolved"] == []
+    # Review finding: holding it open while reporting "no stalled draft PRs"
+    # would flip the health flag to a recovery that did not happen.
+    assert result.ok is False
+    assert "acmeco/unitares#7" in result.summary
+    assert "carried from an earlier cycle" in result.summary
+    assert result.detail["stalled_pr_count"] == 1
+
+
+def test_parse_author_reads_a_crlf_body():
+    """GitHub's web editor stores CRLF; `$` alone does not match before \\r\\n."""
+    from agents.vigil.checks.stalled_draft_pr import parse_author
+
+    assert parse_author(BODY_SIGNED.replace("\n", "\r\n")) == {
+        "agent_uuid": UUID_A, "model": "claude-test-1",
+    }
+
+
+def test_an_unreadable_closure_check_holds_the_pr_open(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    prev = {"github_healthy": False,
+            "stalled_pr_open": {"acmeco/unitares#7": _open_entry(7, NOW - 5 * HOUR)}}
+
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return []
+        raise mod.GhUnavailable("boom")
+
+    result = _run_check(monkeypatch, fake_gh, prev_state=prev)
+    assert list(result.detail["stalled_pr_open"]) == ["acmeco/unitares#7"]
+    assert result.detail["stalled_pr_resolved"] == []
+
+
+def test_gh_outage_holds_the_open_set(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    prev = {"github_healthy": False,
+            "stalled_pr_open": {"acmeco/unitares#7": _open_entry(7, NOW - 5 * HOUR)}}
+    monkeypatch.setattr(mod, "GH_BIN", "/nonexistent/gh-binary-for-tests")
+    result = asyncio.run(mod.StalledDraftPR().run(prev_state=prev))
+    assert list(result.detail["stalled_pr_open"]) == ["acmeco/unitares#7"]
+    assert result.detail["stalled_pr_opened"] == []
+    assert result.detail["stalled_pr_resolved"] == []
+
+
+def test_closure_reads_are_capped_oldest_first(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    monkeypatch.setattr(mod, "MAX_RESOLVE", 2)
+    prev_open = {f"acmeco/unitares#{n}": _open_entry(n, NOW - n * HOUR) for n in (1, 2, 3)}
+    seen = []
+
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return []
+        seen.append(int(args[2]))
+        return {"state": "MERGED"}
+
+    result = _run_check(monkeypatch, fake_gh,
+                        prev_state={"github_healthy": False, "stalled_pr_open": prev_open})
+    assert sorted(seen) == [2, 3]  # the two open longest
+    assert list(result.detail["stalled_pr_open"]) == ["acmeco/unitares#1"]
+    assert len(result.detail["stalled_pr_resolved"]) == 2
+
+
+def test_closure_reads_rotate_past_prs_that_stay_unreadable(monkeypatch):
+    """Review finding: the same oldest PRs must not hold the cap forever while
+    a newer, already merged PR is never read."""
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    monkeypatch.setattr(mod, "MAX_RESOLVE", 2)
+    state = {"github_healthy": False, "stalled_pr_open": {
+        f"acmeco/unitares#{n}": _open_entry(n, NOW - (10 - n) * HOUR) for n in (1, 2, 3)
+    }}
+
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return []
+        if int(args[2]) in (1, 2):  # the two open longest never become readable
+            raise mod.GhUnavailable("403")
+        return {"state": "MERGED"}
+
+    first = _run_check(monkeypatch, fake_gh, prev_state=state)
+    assert first.detail["stalled_pr_resolved"] == []
+    assert first.detail["stalled_pr_open"]["acmeco/unitares#1"]["last_closure_check"] == NOW
+
+    second = _run_check(monkeypatch, fake_gh,
+                        prev_state={"github_healthy": False, **first.detail})
+    assert [r["number"] for r in second.detail["stalled_pr_resolved"]] == [3]
+
+
+def test_check_opts_out_of_the_aggregate_edge_post():
+    from agents.vigil.checks.stalled_draft_pr import StalledDraftPR
+
+    assert StalledDraftPR.emits_own_findings is True
+
+
+def test_pending_closures_are_carried_through_every_branch(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    row = {**_open_entry(9, NOW - HOUR), "outcome": "merged", "open_hours": 1.0}
+    prev = {"stalled_pr_pending_closures": [row, "junk"]}
+
+    async def fake_gh(args, timeout):
+        return [] if args[0] == "search" else {}
+
+    assert _run_check(monkeypatch, fake_gh, prev_state=prev).detail[
+        "stalled_pr_pending_closures"] == [row]
+
+    # The indeterminate branch (gh unavailable) must carry it through too.
+    async def down(args, timeout):
+        raise mod.GhUnavailable("down")
+
+    assert _run_check(monkeypatch, down, prev_state=prev).detail[
+        "stalled_pr_pending_closures"] == [row]
