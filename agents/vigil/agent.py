@@ -219,6 +219,126 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
     return notes
 
 
+def _stalled_pr_owner(entry: Dict[str, Any]) -> str:
+    uuid = entry.get("owner_agent_uuid") or ""
+    if not uuid:
+        return "no agent signature on the PR"
+    model = entry.get("owner_model") or ""
+    return f"agent {uuid} ({model})" if model else f"agent {uuid}"
+
+
+def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
+    """Post one finding per stalled draft PR opened or closed this cycle.
+
+    Reads the edges the stalled-draft-PR check left in ``health_state`` and
+    posts a ``vigil_finding`` for each PR that entered the open set and a
+    ``vigil_resolution_finding`` for each that left it. The two share
+    ``stall_fingerprint`` so a stall can be paired with its closure, and the
+    closure carries ``outcome`` and ``open_hours``.
+
+    A post that did not reach governance is undone in ``health_state`` so the
+    next cycle tries again: a failed open is dropped from the open set (it
+    re-opens), a failed closure is put back (it is re-verified and re-posted).
+    Without that, a governance blip would leave a stall recorded as announced
+    that nobody was told about, or closed with no closure on record.
+
+    MUST NOT raise: it runs inside the heartbeat cycle.
+    """
+    counts = {"opened": 0, "resolved": 0, "failed": 0}
+    try:
+        open_set = health_state.get("stalled_pr_open")
+        if not isinstance(open_set, dict):
+            return counts
+
+        for key in list(health_state.get("stalled_pr_opened") or []):
+            entry = open_set.get(key)
+            if not isinstance(entry, dict):
+                continue
+            failing = list(entry.get("failing") or [])
+            shown = ", ".join(str(f) for f in failing[:3])
+            if len(failing) > 3:
+                shown += f", +{len(failing) - 3} more"
+            stall_fp = compute_fingerprint(
+                ["vigil", "stalled_draft_pr", entry.get("repo"), entry.get("number")]
+            )
+            message = (
+                f"Stalled draft PR: {key} red for {float(entry.get('red_hours') or 0):.0f}h "
+                f"with no new run ({shown}). Owner: {_stalled_pr_owner(entry)}. "
+                "Nothing will merge it — re-run CI or push a fix"
+            )
+            outcome = post_finding_result(
+                event_type="vigil_finding",
+                severity="warning",
+                message=message,
+                agent_id="vigil",
+                agent_name="Vigil",
+                fingerprint=stall_fp,
+                # One post per stall episode, however long it lasts.
+                change_token=f"open:{entry.get('first_seen')}",
+                extra={
+                    "finding_type": "stalled_draft_pr",
+                    "stall_fingerprint": stall_fp,
+                    "repo": entry.get("repo"),
+                    "number": entry.get("number"),
+                    "url": entry.get("url", ""),
+                    "owner_agent_uuid": entry.get("owner_agent_uuid", ""),
+                    "owner_model": entry.get("owner_model", ""),
+                },
+            )
+            if outcome in REACHED_GOVERNANCE:
+                counts["opened"] += 1
+                notify("Vigil", message)
+            else:
+                counts["failed"] += 1
+                open_set.pop(key, None)
+
+        for row in list(health_state.get("stalled_pr_resolved") or []):
+            if not isinstance(row, dict):
+                continue
+            key = f"{row.get('repo')}#{row.get('number')}"
+            stall_fp = compute_fingerprint(
+                ["vigil", "stalled_draft_pr", row.get("repo"), row.get("number")]
+            )
+            hours = row.get("open_hours")
+            lasted = f"{hours:.0f}h" if isinstance(hours, (int, float)) else "an unknown time"
+            outcome = post_finding_result(
+                event_type="vigil_resolution_finding",
+                severity="info",
+                message=(
+                    f"Stalled draft PR closed: {key} is {row.get('outcome')} "
+                    f"after {lasted} on Vigil's open list"
+                ),
+                agent_id="vigil",
+                agent_name="Vigil",
+                # Its own fingerprint: sharing the stall's would let the
+                # server's per-fingerprint dedup swallow one of the pair.
+                fingerprint=compute_fingerprint(
+                    ["vigil", "stalled_draft_pr", "resolved", row.get("repo"), row.get("number")]
+                ),
+                change_token=f"resolved:{row.get('first_seen')}",
+                extra={
+                    "finding_type": "stalled_draft_pr",
+                    "stall_fingerprint": stall_fp,
+                    "repo": row.get("repo"),
+                    "number": row.get("number"),
+                    "url": row.get("url", ""),
+                    "outcome": row.get("outcome"),
+                    "open_hours": hours,
+                    "owner_agent_uuid": row.get("owner_agent_uuid", ""),
+                    "owner_model": row.get("owner_model", ""),
+                },
+            )
+            if outcome in REACHED_GOVERNANCE:
+                counts["resolved"] += 1
+            else:
+                counts["failed"] += 1
+                held = {k: v for k, v in row.items() if k not in ("outcome", "open_hours")}
+                open_set[key] = held
+    except Exception as e:  # pragma: no cover - defensive, cycle must survive
+        log(f"stalled-PR finding emit failed: {type(e).__name__}: {e}")
+    return counts
+
+
 def _collect_health_state(
     check_results: List[Tuple[Any, Any]],
     prev_state: Dict[str, Any],
@@ -1167,6 +1287,9 @@ class VigilAgent(GovernanceAgent):
         for check, result in check_results:
             svc = check.service_key
             was_healthy = prev_state.get(f"{svc}_healthy", True)
+            if getattr(check, "emits_own_findings", False):
+                # Per-item lifetimes, posted from the check's detail below.
+                continue
             if not result.ok and was_healthy and result.fingerprint_key:
                 notify("Vigil", result.summary)
                 post_finding(
@@ -1178,6 +1301,9 @@ class VigilAgent(GovernanceAgent):
                     fingerprint=compute_fingerprint(["vigil", result.fingerprint_key]),
                     extra={"finding_type": result.fingerprint_key},
                 )
+
+        # --- Stalled draft PRs: one finding per PR, opened and closed ---
+        emit_stalled_pr_findings(health_state)
 
         # --- 2.5. Read Sentinel findings since last cycle, route to action ---
         # First actual coordination arc: Sentinel observes fleet-level anomalies
