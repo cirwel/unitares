@@ -360,6 +360,18 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 
     return success_response(response_data)
 
+
+def _pair_similarity(val1: float, val2: float, mean_val: float) -> float:
+    """Similarity of two metric values in [0, 1], relative to the group mean.
+
+    The scale is the magnitude of the mean. V is signed (range [-1, 1]), so
+    dividing by the signed mean reported similarities above 1 for a negative
+    mean and divided by zero at a mean of -0.001.
+    """
+    similarity = 1.0 - abs(val1 - val2) / (abs(mean_val) + 0.001)
+    return float(min(1.0, max(0.0, similarity)))
+
+
 @mcp_tool("compare_agents", timeout=15.0, register=False)
 async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compare governance patterns across multiple agents"""
@@ -495,7 +507,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
                     similarities.append({
                         "agents": [id1, id2],
                         "metric": metric,
-                        "similarity": 1.0 - abs(val1 - val2) / (mean_val + 0.001),
+                        "similarity": _pair_similarity(val1, val2, mean_val),
                         "description": f"Both show similar {metric} patterns"
                     })
         

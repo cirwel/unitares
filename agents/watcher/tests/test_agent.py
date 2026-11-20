@@ -190,7 +190,11 @@ def _finding(watcher_module, **overrides):
         line=47,
         hint="fire-and-forget",
         severity="high",
-        detected_at="2026-04-11T00:00:00Z",
+        # One day old: an open finding ages out at PATH_GONE_EXPIRY_DAYS,
+        # on a live path too, so a fixed date would expire in the first sweep.
+        detected_at=(datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
         model_used="gemma4:latest",
     )
     defaults.update(overrides)
@@ -1014,11 +1018,18 @@ def _make_raw_entry(
     file: str = str(Path(__file__).resolve()),
     line: int = 10,
     status: str = "open",
-    detected_at: str = "2026-04-11T00:00:00Z",
+    detected_at: str | None = None,
     severity: str = "high",
     hint: str = "mutation before persistence",
     line_content_hash: str | None = None,
 ) -> dict:
+    # Fresh by default. An open finding now ages out once it is
+    # PATH_GONE_EXPIRY_DAYS old, on a live path too, so a fixed date here
+    # would expire every fixture in the sweep that surface_pending runs first.
+    if detected_at is None:
+        detected_at = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
     # Distinct fingerprints get distinct content hashes by default. These
     # fixtures share one file and line, so a shared hash would make every row
     # a copy of the same code and the listing would group them into one entry.
