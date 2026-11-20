@@ -345,7 +345,7 @@ class UnitaresEventWriter:
                 except (OSError, UnicodeDecodeError, ValueError):
                     data = None
                 if isinstance(data, dict) and data.get("error") == "untrusted pr_author":
-                    return "rejected"
+                    return "untrusted_author"
             return "failed"
         except (OSError, http.client.HTTPException, ValueError):
             return "failed"
@@ -360,6 +360,7 @@ COUNTS = (
     "events_new",
     "events_known",
     "events_unknown_agent",
+    "events_untrusted_author",
     "events_rejected",
     "markers_untrusted",
     "writes_failed",
@@ -437,6 +438,9 @@ def run_cycle(
                     counts["events_known"] += 1
                 elif outcome == "unknown_agent":
                     counts["events_unknown_agent"] += 1
+                elif outcome == "untrusted_author":
+                    # Server/observer allowlist mismatch may be fixed in config; do not mark locally.
+                    counts["events_untrusted_author"] += 1
                 elif outcome == "rejected":
                     mark(fingerprint, event["type"])
                     counts["events_rejected"] += 1
