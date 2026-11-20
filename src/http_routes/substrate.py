@@ -17,6 +17,11 @@ from src.dashboard_auth import (
 )
 
 from src.http_routes import access
+from src.services.http_request_parser import (
+    MAX_HTTP_INGEST_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 logger = get_logger(__name__)
 
@@ -28,7 +33,9 @@ async def http_record_bridge_event(request):
         return access._http_unauthorized()
     try:
         try:
-            payload = await request.json()
+            payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
+        except HttpToolRequestError as exc:
+            return JSONResponse(exc.payload, status_code=exc.status_code)
         except Exception:
             return JSONResponse({"success": False, "error": "Invalid JSON"}, status_code=400)
 
@@ -106,7 +113,9 @@ async def http_substrate_observe(request):
         return access._http_unauthorized()
     try:
         try:
-            payload = await request.json()
+            payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
+        except HttpToolRequestError as exc:
+            return JSONResponse(exc.payload, status_code=exc.status_code)
         except Exception:
             return JSONResponse({"success": False, "error": "Invalid JSON"}, status_code=400)
         if not isinstance(payload, dict):
@@ -167,7 +176,9 @@ async def http_runtime_observe(request):
         return access._http_unauthorized()
     try:
         try:
-            payload = await request.json()
+            payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
+        except HttpToolRequestError as exc:
+            return JSONResponse(exc.payload, status_code=exc.status_code)
         except Exception:
             return JSONResponse(
                 {"success": False, "error": "Invalid JSON"}, status_code=400
@@ -320,7 +331,9 @@ async def http_harness_outcome(request):
             status_code=403,
         )
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
 
