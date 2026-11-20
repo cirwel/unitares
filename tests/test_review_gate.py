@@ -6628,10 +6628,12 @@ def test_cmd_sweep_keeps_dispatching_when_only_one_independent_family_passed(mon
                                         dry_run=False, worktree=str(tmp_path / "wt"))) == 0
     assert len(calls) == 1 and calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
 
-    # Unknown authorship on sensitive PRs must NOT dispatch endlessly in sweep (matches cmd_review/CI).
+    # Unknown authorship on sensitive PRs must NOT dispatch endlessly in sweep (matches cmd_review/CI),
+    # even when passing_families currently has 1 passing family.
     calls.clear()
     pr_unknown = _pr(4)
     pr_unknown["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
     monkeypatch.setattr(rg, "open_prs", lambda *a: [pr_unknown])
     assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
                                         dry_run=False, worktree=str(tmp_path / "wt"))) == 0

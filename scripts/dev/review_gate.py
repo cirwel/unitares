@@ -1961,8 +1961,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
 _UNKNOWN_AUTHORS_GUIDANCE = (
     "no classified Model signature or claude/codex/gemini branch prefix; "
     "if written by Anthropic, OpenAI, or Google, record its Model in the PR "
-    "provenance signature; unattributable authorship cannot pass this check or an "
-    "automated waiver"
+    "provenance signature; unattributable authorship cannot pass this check or a "
+    "waiver"
 )
 
 
