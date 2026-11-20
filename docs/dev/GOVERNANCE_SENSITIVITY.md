@@ -32,7 +32,9 @@ only when all of these hold:
    `review` check is `SUCCESS` on the current head. Every manifest file is on
    that list, whole-file, so the review gate requires two model families
    before `review` passes. A sensitive diff with no file on the list is not
-   delegated.
+   delegated. Neither is one whose `review` passed on an operator waiver of
+   the second family: the check is green there on one family, the queue
+   reads that from the check's title, and the PR is a hand merge.
 2. **A stated effect.** The PR body has a line starting `Expected effect:`
    that says what the change is expected to do to pause and verdict rates.
    The queue requires at least 20 characters that are not a placeholder; it

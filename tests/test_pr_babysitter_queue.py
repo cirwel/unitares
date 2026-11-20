@@ -79,6 +79,12 @@ if [ "$1" = "api" ]; then
       fi
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
       exit 0 ;;
+    */check-runs*)
+      sha=$(sed -E 's#.*commits/([^/]+)/check-runs.*#\1#' <<<"$*")
+      [ -f "$d/checkruns_$sha.fail" ] && exit 1
+      cat "$d/checkruns_$sha.json" 2>/dev/null \
+        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}'
+      exit 0 ;;
     */commits/*)
       # A later read in the same tick may see master moved (base_moved).
       if [ -f "$d/base_moved" ] && [ -f "$d/base_read_once" ]; then cat "$d/base_moved"; else cat "$d/base_date"; fi
@@ -2199,6 +2205,37 @@ def test_a_sensitive_pr_awaiting_review_does_not_hold_the_queue(tmp_path: Path, 
                       compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
     assert calls == [_arm(2, "bbb")]
     assert "does not hold the queue" in out
+
+
+def _review_title(tmp_path: Path, title: str | None, sha: str = "aaa") -> None:
+    d = tmp_path / "gh"
+    d.mkdir(exist_ok=True)
+    if title is None:
+        (d / f"checkruns_{sha}.fail").write_text("")
+    else:
+        (d / f"checkruns_{sha}.json").write_text(json.dumps({"check_runs": [
+            {"name": "review", "completed_at": "2026-01-01T00:00:00Z", "output": {"title": "clean (codex)"}},
+            {"name": "review", "completed_at": "2026-01-02T00:00:00Z", "output": {"title": title}}]}))
+
+
+@pytest.mark.parametrize("title, why", [
+    ("second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny",
+     "its review passed on an operator waiver, not on two model families"),
+    (None, "its review check could not be read"),
+])
+def test_a_review_that_passed_on_a_waiver_is_not_two_families(tmp_path: Path, title, why) -> None:
+    # `review` is green either way; only its title says one family was waived.
+    pr, timeline = _delegable(tmp_path)
+    _review_title(tmp_path, title)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(2, "bbb")]
+    assert why in out and "the operator merges it by hand" in out
+
+
+def test_the_waiver_wording_the_queue_looks_for_is_the_gates(tmp_path: Path) -> None:
+    gate = (Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py").read_text()
+    assert 'return ("success", f"second family waived by the operator (' in gate
 
 
 def test_a_delegated_arm_that_still_meets_its_conditions_is_left_armed(tmp_path: Path) -> None:

@@ -925,6 +925,23 @@ armed_by_script() {  # <pr> <enabledAt>
   jq -en --arg a "$at" --arg b "$2" '(($a | fromdateiso8601) - ($b | fromdateiso8601)) | (if . < 0 then -. else . end) <= 120' >/dev/null
 }
 
+# <head-sha> -> why this head's `review` does not show two model families;
+# fails when it does, or when there is no `review` check yet (the required
+# checks report that). The review gate turns `review` green on ONE family when
+# an operator waiver covers the second, and says so in the check's title
+# ("second family waived by the operator", review_gate.py apply_waiver). The
+# ruling asks for two families, and a waiver of the second review is not a
+# waiver of that, so a waived head is a hand merge. Unreadable: the same.
+review_waived() {
+  local runs title
+  runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
+    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
+    || { echo "its review check could not be read"; return 0; }
+  title=$(jq -r '[.check_runs[] | select(.name == "review")] | sort_by(.completed_at // "") | last | .output.title // ""' <<<"$runs")
+  grep -qi 'waived' <<<"$title" && { echo "its review passed on an operator waiver, not on two model families"; return 0; }
+  return 1
+}
+
 # <pr> <pr-json> <verdict> -> why an armed sensitive PR must be disarmed; fails
 # when it is delegable and still meets the body and veto-window conditions.
 armed_sensitive_reason() {
@@ -937,8 +954,11 @@ armed_sensitive_reason() {
   esac
   at=$(latest_label_time "$1") && [ -n "$at" ] \
     || { echo "it touches a governance-sensitive surface ($why) and its $LABEL label time could not be read"; return 0; }
-  blocker=$(delegation_blocker "$2" "$at") || return 1
-  echo "it touches a governance-sensitive surface ($why) and ${blocker#*$'\t'}"
+  if blocker=$(delegation_blocker "$2" "$at"); then
+    echo "it touches a governance-sensitive surface ($why) and ${blocker#*$'\t'}"; return 0
+  fi
+  blocker=$(review_waived "$(jq -r .headRefOid <<<"$2")") || return 1
+  echo "it touches a governance-sensitive surface ($why) and $blocker"
 }
 
 armed=$(q -c --arg b "$BASE" \
@@ -1237,6 +1257,11 @@ while read -r labelled_at n head; do
           # Keyed by the label time, so a renewed label gets a fresh notice.
           notify "$n" "sensitive-veto-window-$labelled_at" "$head" "veto window open: this diff touches a governance-sensitive surface (\`$why\`). ${blocker#*$'\t'} (24 hours after the \`$LABEL\` label at $labelled_at). Removing \`$LABEL\` before then vetoes it; re-adding the label starts the 24 hours again. After that the queue arms it once its \`review\` check has passed on this head. Stated effect: $(expected_effect "$pr" | cut -c1-300)" ;;
       esac
+      continue
+    fi
+    if waived=$(review_waived "$head"); then
+      log "#$n touches a governance-sensitive surface ($why): $waived; the operator merges it by hand; skipped"
+      notify "$n" sensitive-waived "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`), and $waived. The queue lands such a PR only on two reviewing families, so the operator merges this one by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."
       continue
     fi
     delegated=" review"
