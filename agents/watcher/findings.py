@@ -59,6 +59,17 @@ PATH_GONE_EXPIRY_DAYS = 21
 # resolution_reason stamped by that expiry. ``compact_findings`` keeps rows
 # that still carry it: they are unadjudicated evidence, not resolved labels.
 PATH_GONE_EXPIRY_REASON = "path_gone_unadjudicated"
+# The same bound, for a finding whose file still exists. #3199 left these open
+# at any age, which kept the same hole on the other side: while nobody
+# adjudicates, the only exits are a deleted file or an edited line, and most
+# flagged files are neither. Measured 2026-11-20 on one deployment: 507 open,
+# 453 of them on files that still exist, one adjudication in three weeks. A
+# file that is edited again is scanned again, and by then the dedup entry
+# (FINDINGS_TTL_DAYS) has lapsed, so a construct that is still there comes
+# back as a new row.
+LIVE_PATH_EXPIRY_REASON = "live_path_unadjudicated"
+# Rows carrying either reason left the open set without a label.
+UNADJUDICATED_EXPIRY_REASONS = frozenset({PATH_GONE_EXPIRY_REASON, LIVE_PATH_EXPIRY_REASON})
 
 VALID_FINDING_STATUSES = ("open", "surfaced", "confirmed", "dismissed", "aged_out")
 MIN_FINGERPRINT_PREFIX = 4  # users can type the first N chars instead of all 16
@@ -628,8 +639,19 @@ def _sweep_stale_counts() -> tuple[int, int]:
     dropped = 0
     newly_marked = 0
     expired = 0
+    expired_live = 0
     for f in findings:
         if _finding_target_exists(f):
+            if f.get("status", "open") in ("open", "surfaced") and _detected_before(
+                f, expiry_cutoff
+            ):
+                f = {
+                    **f,
+                    "status": "aged_out",
+                    "aged_out_at": now_iso,
+                    "resolution_reason": LIVE_PATH_EXPIRY_REASON,
+                }
+                expired_live += 1
             kept.append(f)
         elif f.get("line_content"):
             # The path is gone, but this finding carries its own evidence, so
@@ -669,16 +691,17 @@ def _sweep_stale_counts() -> tuple[int, int]:
     # the early return has to consider all three. Returning on `dropped == 0`
     # alone would leave them unwritten until some later sweep happened to drop
     # something — the exact class of silent staleness this function exists for.
-    if dropped == 0 and newly_marked == 0 and expired == 0:
+    if dropped == 0 and newly_marked == 0 and expired == 0 and expired_live == 0:
         return 0, 0
 
     _write_findings_atomic(kept)
     log(
         f"sweep_stale_findings (auto): dropped {dropped} findings for missing "
         f"files, retained {newly_marked} with a source snapshot, aged out "
-        f"{expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
+        f"{expired + expired_live} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d "
+        f"({expired} on a deleted path, {expired_live} on a file that still exists)"
     )
-    return dropped, expired
+    return dropped, expired + expired_live
 
 
 def sweep_stale_findings() -> int:
@@ -689,8 +712,9 @@ def sweep_stale_findings() -> int:
 
     This is the "the file got deleted or renamed" cleanup — we don't want
     the surface hook to keep nagging you about a file that isn't there
-    anymore. Open/surfaced findings get aged_out via this path too because
-    there's no code to evaluate.
+    anymore. It also ages out an open/surfaced finding that has gone
+    PATH_GONE_EXPIRY_DAYS without adjudication, whether or not its file still
+    exists; the row stays on disk and remains adjudicable by fingerprint.
     """
     findings = _iter_findings_raw()
     if not findings:
@@ -704,7 +728,7 @@ def sweep_stale_findings() -> int:
         return 0
     print(
         f"ok: dropped {dropped} finding(s) with missing target files, kept {total - dropped}; "
-        f"aged out {expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
+        f"aged out {expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d"
     )
     return 0
 
@@ -1479,7 +1503,7 @@ def compact_findings(max_age_days: int = 7, now: datetime | None = None) -> int:
             # open/surfaced — always keep
             kept.append(f)
             continue
-        if status == "aged_out" and f.get("resolution_reason") == PATH_GONE_EXPIRY_REASON:
+        if status == "aged_out" and f.get("resolution_reason") in UNADJUDICATED_EXPIRY_REASONS:
             # Expired from the open set unadjudicated, not resolved: the
             # snapshot is the only remaining evidence and can still become a
             # label by fingerprint. Deleting it here would repeat the #1631
