@@ -706,7 +706,9 @@ class KnowledgeGraphAGESearchMixin:
             references_files=d.get("references_files", []),
             resolved_at=d.get("resolved_at"),
             updated_at=d.get("updated_at"),
+            confidence=d.get("confidence"),
             provenance=d.get("provenance"),
+            provenance_chain=d.get("provenance_chain"),
             closure_class=d.get("closure_class"),
             closure_evidence=closure_evidence_from_stored(d.get("closure_evidence")),
         )
@@ -1427,20 +1429,87 @@ class KnowledgeGraphAGESearchMixin:
             created_after=created_after, created_before=created_before,
             filters=filters, before=before,
         )
-        # Hydrate via get_discovery so edge/response metadata is consistent
-        # with what the rest of AGE returns. Row count is small (<= limit).
+        # Hydrate directly from the canonical SQL rows returned by
+        # kg_full_text_search (just like semantic_search's batched SQL fetch),
+        # instead of issuing N sequential per-row AGE Cypher get_discovery()
+        # scans (~150ms each -> ~8s for 50 rows). Fall back to get_discovery()
+        # only if a caller/stub returned an id-only dict, and run ONE batched
+        # AGE metadata overlay for AGE-only lineage fields (confidence and
+        # historical provenance_chain) so include_provenance=true stays lossless.
         results: List[DiscoveryNode] = []
+        sql_hydrated: List[DiscoveryNode] = []
         for row in rows:
-            doc = await self.get_discovery(row["id"])
+            if "agent_id" in row and "summary" in row:
+                doc = self._dict_to_discovery(row)
+                if doc is not None:
+                    sql_hydrated.append(doc)
+            else:
+                doc = await self.get_discovery(row["id"])
             if doc is not None:
-                # Carry the query rank across the re-hydration, which otherwise
-                # discards the row it came from. Same contract as the Postgres
+                # Carry the query rank across hydration, matching the Postgres
                 # backend: consumers read `.relevance` off a returned node.
                 rank = row.get("rank")
                 if isinstance(rank, (int, float)):
                     doc.relevance = float(rank)
                 results.append(doc)
+        if sql_hydrated:
+            await self._overlay_age_metadata(db, sql_hydrated)
         return results
+
+    async def _overlay_age_metadata(self, db: Any, docs: List[DiscoveryNode]) -> None:
+        """Overlay AGE-only metadata fields (confidence, provenance_chain) in one query.
+
+        SQL ``knowledge.discoveries`` has no ``confidence`` column, and rows stored
+        before ``_persist_discovery_row`` wrote ``provenance_chain`` keep their
+        lineage chain solely on the AGE vertex metadata JSON. Fetching those in one
+        batched Cypher ``IN`` query (~30-40 ms) preserves full parity with per-row
+        ``get_discovery()`` without paying the N+1 scan cost.
+        """
+        need = {
+            doc.id: doc
+            for doc in docs
+            if doc.confidence is None or doc.provenance_chain is None
+        }
+        if not need:
+            return
+        if not callable(getattr(db, "graph_available", None)) or not callable(
+            getattr(db, "graph_query", None)
+        ):
+            return
+        try:
+            if not await db.graph_available():
+                return
+            cypher = """
+                MATCH (d:Discovery)
+                WHERE d.id IN ${ids}
+                RETURN {id: d.id, metadata: d.metadata}
+            """
+            age_rows = await db.graph_query(cypher, {"ids": list(need.keys())})
+            if not isinstance(age_rows, list):
+                return
+            for item in age_rows:
+                if not isinstance(item, dict) or "error" in item:
+                    continue
+                disc_id = item.get("id", "")
+                if isinstance(disc_id, str):
+                    disc_id = disc_id.strip('"')
+                doc = need.get(disc_id)
+                if doc is None:
+                    continue
+                metadata = item.get("metadata")
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except Exception:
+                        continue
+                if not isinstance(metadata, dict):
+                    continue
+                if doc.confidence is None and "confidence" in metadata:
+                    doc.confidence = metadata["confidence"]
+                if doc.provenance_chain is None and metadata.get("provenance_chain"):
+                    doc.provenance_chain = metadata["provenance_chain"]
+        except Exception as e:
+            logger.debug(f"Batched AGE metadata overlay skipped: {e}")
 
 
     async def semantic_search(
