@@ -74,4 +74,65 @@ defmodule UnitaresLeasePlane.EffectFileOpsTest do
     assert {:error, :enoent} = EffectFileOps.rm(missing)
     assert {:error, :enoent} = EffectFileOps.write(Path.join(dir, "no/such/dir.txt"), "x")
   end
+
+  test "a hard-linked leaf is refused and the other name's file is unchanged", %{tmp_dir: dir} do
+    other = Path.join(dir, "operator-owned.txt")
+    File.write!(other, "keep\n")
+    leased = Path.join(dir, "out.txt")
+    File.ln!(other, leased)
+
+    assert {:error, :hardlinked_leaf} = EffectFileOps.write(leased, "x")
+    assert {:error, :hardlinked_leaf} = EffectFileOps.read(leased)
+    assert File.read!(other) == "keep\n"
+  end
+
+  test "a non-regular leaf is refused without opening it", %{tmp_dir: dir} do
+    fifo = Path.join(dir, "out.txt")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+
+    # Opening a FIFO for reading blocks until a writer appears; a refusal that
+    # returns at all shows the leaf was never opened.
+    task = Task.async(fn -> {EffectFileOps.read(fifo), EffectFileOps.write(fifo, "x")} end)
+
+    assert {{:error, :not_regular_file}, {:error, :not_regular_file}} =
+             Task.await(task, 5_000)
+  end
+
+  test "a leaf swapped for a link after the check is not overwritten", %{tmp_dir: dir} do
+    leased = Path.join(dir, "out.txt")
+    File.write!(leased, "leased\n")
+    {:ok, checked} = File.lstat(leased)
+
+    other = Path.join(dir, "operator-owned.txt")
+    File.write!(other, "keep\n")
+    File.rm!(leased)
+    File.ln_s!(other, leased)
+
+    assert {:error, :path_changed} = EffectFileOps.overwrite_if_unchanged(leased, checked, "x")
+    assert File.read!(other) == "keep\n"
+  end
+
+  test "a parent swapped for a link after the check is not overwritten", %{tmp_dir: dir} do
+    work = Path.join(dir, "work")
+    File.mkdir_p!(work)
+    leased = Path.join(work, "out.txt")
+    File.write!(leased, "leased\n")
+    {:ok, checked} = File.lstat(leased)
+
+    elsewhere = Path.join(dir, "elsewhere")
+    File.mkdir_p!(elsewhere)
+    File.write!(Path.join(elsewhere, "out.txt"), "keep\n")
+    File.rename!(work, Path.join(dir, "work.old"))
+    File.ln_s!(elsewhere, work)
+
+    assert {:error, :path_changed} = EffectFileOps.overwrite_if_unchanged(leased, checked, "x")
+    assert File.read!(Path.join(elsewhere, "out.txt")) == "keep\n"
+  end
+
+  test "a nil pre-image is refused and creates nothing", %{tmp_dir: dir} do
+    path = Path.join(dir, "out.txt")
+
+    assert {:error, :no_pre_image} = EffectFileOps.write(path, nil)
+    refute File.exists?(path)
+  end
 end

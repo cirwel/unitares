@@ -3,10 +3,10 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   Filesystem operations for the `file_write` executor, behind a seam so the live
   commit AND every step of the in-process compensation (rollback) can be
   fault-injected in tests — the hard precondition the slice-2 dialectic review
-  set for the live-write path. The default delegates to `File`; tests swap in a
-  fake via `Application.put_env(:lease_plane, :effect_file_ops, FakeFileOps)`.
+  set for the live-write path. The default works on the real filesystem; tests
+  swap in a fake via `Application.put_env(:lease_plane, :effect_file_ops, FakeFileOps)`.
 
-  ## Symbolic links are refused at use time
+  ## Only the leased file is touched
 
   The executor receives the canonical path of a leased `file://` surface.
   Canonicalization resolves every existing component with `realpath`, so no
@@ -15,13 +15,23 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   remove a file the lease never named. Every operation therefore `lstat`s each
   existing component first and refuses with `{:error, :symlink_in_path}`.
 
-  A new file is created with `O_CREAT|O_EXCL` (`:exclusive`), which fails on
-  any directory entry already present, a dangling link included, so a link
-  planted between the check and the create is not followed. Overwriting an
-  existing regular file still goes through `File.write/2`; a swap of that file
-  for a link between the check and the open is a narrower window this module
-  does not close (closing it needs `openat`/`O_NOFOLLOW`, which `:file` does
-  not expose).
+  `read/1` and `write/2` accept only a regular file with a single link at the
+  leaf. A hard-linked leaf (`:hardlinked_leaf`) shares its inode with a file the
+  lease does not name, and a FIFO, socket or device (`:not_regular_file`) could
+  block the executor while it holds custody.
+
+  An existing file is opened without truncation, and its inode and device are
+  compared with the `lstat` result through the open descriptor before any byte
+  is read, truncated or written. A leaf or parent swapped in between resolves to
+  a different inode and is refused (`:path_changed`) with the other file left
+  unchanged. A new file is created with `O_CREAT|O_EXCL` (`:exclusive`), which
+  fails on any entry already present, a dangling link included.
+
+  `:file` exposes no `O_NOFOLLOW` or `openat`, so two narrow cases remain. The
+  non-truncating open still carries `O_CREAT`: a leaf swapped for a dangling
+  link between the check and the open can create an empty file at the link's
+  target before the inode comparison refuses the write. A parent directory
+  swapped between the walk and an exclusive create is not detected.
   """
 
   @callback read(path :: String.t()) :: {:ok, binary()} | {:error, term()}
@@ -32,17 +42,25 @@ defmodule UnitaresLeasePlane.EffectFileOps do
 
   @impl true
   def read(path) do
-    with {:ok, _leaf} <- lstat_without_symlinks(path), do: File.read(path)
-  end
-
-  @impl true
-  def write(path, bytes) do
     case lstat_without_symlinks(path) do
-      {:ok, :absent} -> create_exclusive(path, bytes)
-      {:ok, %File.Stat{}} -> File.write(path, bytes)
+      {:ok, :absent} -> {:error, :enoent}
+      {:ok, %File.Stat{} = stat} -> read_if_unchanged(path, stat)
       {:error, _} = error -> error
     end
   end
+
+  @impl true
+  def write(path, bytes) when is_binary(bytes) do
+    case lstat_without_symlinks(path) do
+      {:ok, :absent} -> create_exclusive(path, bytes)
+      {:ok, %File.Stat{} = stat} -> overwrite_if_unchanged(path, stat, bytes)
+      {:error, _} = error -> error
+    end
+  end
+
+  # Compensation passes `nil` when the pre-image could not be read. Refuse it
+  # before any open, so an absent leaf is not created empty.
+  def write(_path, _bytes), do: {:error, :no_pre_image}
 
   @impl true
   def rm(path) do
@@ -79,9 +97,72 @@ defmodule UnitaresLeasePlane.EffectFileOps do
     |> elem(1)
   end
 
+  @doc false
+  # Overwrite `path` only if the descriptor opened on it is the regular,
+  # single-link file `expected` (from the component walk) describes. Public only
+  # so tests can swap the leaf between the walk and the open.
+  @spec overwrite_if_unchanged(String.t(), File.Stat.t(), binary()) :: :ok | {:error, term()}
+  def overwrite_if_unchanged(path, %File.Stat{} = expected, bytes) do
+    with :ok <- check_leaf(expected) do
+      # [:read, :write] opens without O_TRUNC; nothing is truncated until the
+      # descriptor is known to be the expected file.
+      with_verified_fd(path, [:read, :write, :binary, :raw], expected, fn fd ->
+        with {:ok, 0} <- :file.position(fd, 0),
+             :ok <- :file.truncate(fd) do
+          :file.write(fd, bytes)
+        end
+      end)
+    end
+  end
+
+  defp read_if_unchanged(path, expected) do
+    with :ok <- check_leaf(expected) do
+      with_verified_fd(path, [:read, :binary, :raw], expected, &read_all(&1, []))
+    end
+  end
+
+  defp check_leaf(%File.Stat{type: :regular, links: 1}), do: :ok
+  defp check_leaf(%File.Stat{type: :regular}), do: {:error, :hardlinked_leaf}
+  defp check_leaf(%File.Stat{}), do: {:error, :not_regular_file}
+
+  defp with_verified_fd(path, modes, expected, fun) do
+    case :file.open(path, modes) do
+      {:ok, fd} ->
+        try do
+          with :ok <- same_file(fd, expected), do: fun.(fd)
+        after
+          :file.close(fd)
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp same_file(fd, %File.Stat{inode: inode, major_device: device}) do
+    case :file.read_file_info(fd, [{:time, :posix}]) do
+      {:ok, info} ->
+        case File.Stat.from_record(info) do
+          %File.Stat{type: :regular, links: 1, inode: ^inode, major_device: ^device} -> :ok
+          _ -> {:error, :path_changed}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp read_all(fd, acc) do
+    case :file.read(fd, 65_536) do
+      {:ok, data} -> read_all(fd, [acc | data])
+      :eof -> {:ok, IO.iodata_to_binary(acc)}
+      {:error, _} = error -> error
+    end
+  end
+
   # O_CREAT|O_EXCL: refuses any entry already at `path`, a planted link included.
-  # A regular file that appeared since the check is overwritten as before; a
-  # link is refused.
+  # An entry that appeared since the check is re-walked and overwritten only
+  # under the same rules as an existing file.
   defp create_exclusive(path, bytes) do
     case :file.open(path, [:write, :exclusive, :binary, :raw]) do
       {:ok, fd} ->
@@ -92,10 +173,9 @@ defmodule UnitaresLeasePlane.EffectFileOps do
         end
 
       {:error, :eexist} ->
-        case File.lstat(path) do
-          {:ok, %File.Stat{type: :regular}} -> File.write(path, bytes)
-          {:ok, %File.Stat{type: :symlink}} -> {:error, :symlink_in_path}
-          {:ok, _other} -> {:error, :eexist}
+        case lstat_without_symlinks(path) do
+          {:ok, %File.Stat{} = stat} -> overwrite_if_unchanged(path, stat, bytes)
+          {:ok, :absent} -> {:error, :eexist}
           {:error, _} = error -> error
         end
 
