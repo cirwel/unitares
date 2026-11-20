@@ -762,6 +762,10 @@ def _continuity_secret_file(tmp_path, monkeypatch):
         "UNITARES_CONTINUITY_TOKEN_SECRET_FILE",
         str(tmp_path / "continuity-secret-unset" / "continuity_token_secret"),
     )
+    # A test that ran server startup must not leave its key held for the next.
+    from src import continuity_secret
+
+    monkeypatch.setattr(continuity_secret, "_held", None)
 
 
 @pytest.fixture(autouse=True)

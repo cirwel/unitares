@@ -205,3 +205,102 @@ def test_a_refused_key_file_does_not_leak_descriptors(secret_path):
         assert session_mod._get_continuity_secret() is None
 
     assert _open_fds() == before
+
+
+# ── a running server never loses its key ────────────────────────────────────
+
+
+def test_a_server_holds_its_key_when_the_file_is_deleted(secret_path):
+    from src.mcp_handlers.identity import stable_session
+
+    cs.hold_for_server()
+    key = session_mod._get_continuity_secret()
+    tag_key = stable_session.csid_key()
+    token = session_mod.create_continuity_token(_UUID, _SID)
+    secret_path.unlink()
+
+    assert key
+    assert session_mod._get_continuity_secret() == key
+    assert stable_session.csid_key() == tag_key
+    assert session_mod.resolve_continuity_token(token) == _SID
+
+
+def test_a_server_holds_its_key_when_the_file_is_opened_up(secret_path):
+    from src.mcp_handlers.identity import stable_session
+
+    cs.hold_for_server()
+    key = session_mod._get_continuity_secret()
+    tag_key = stable_session.csid_key()
+    os.chmod(secret_path, 0o644)
+
+    assert session_mod._get_continuity_secret() == key
+    assert stable_session.csid_key() == tag_key
+
+
+def test_a_server_holds_a_configured_key(secret_path, monkeypatch):
+    monkeypatch.setenv(cs.ENV, "operator-chosen")
+    cs.hold_for_server()
+    monkeypatch.delenv(cs.ENV)
+
+    assert session_mod._get_continuity_secret() == b"operator-chosen"
+    assert not secret_path.exists()
+
+
+def test_a_server_without_a_usable_key_raises(secret_path):
+    secret_path.mkdir(parents=True)
+
+    with pytest.raises(OSError, match="not a regular file"):
+        cs.hold_for_server()
+    assert session_mod._get_continuity_secret() is None
+
+
+def test_running_without_a_key_needs_the_explicit_override(monkeypatch):
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+    assert not cs.no_secret_allowed()
+    for value in ("1", "true", "yes", "on"):
+        assert cs.no_secret_allowed({cs.ALLOW_NO_SECRET_ENV: value})
+    assert not cs.no_secret_allowed({cs.ALLOW_NO_SECRET_ENV: "0"})
+
+
+def _run_stdio_to_the_probe(monkeypatch):
+    import asyncio
+
+    import src.mcp_server_std as std
+
+    monkeypatch.setattr(std, "STDIO_PROXY_URL", None, raising=False)
+    monkeypatch.setattr(std, "STDIO_PROXY_HTTP_URL", None, raising=False)
+    monkeypatch.setattr(std, "init_server_process", lambda: None)
+
+    async def stop_after_the_probe():
+        raise SystemExit("probe reached")
+
+    monkeypatch.setattr(std, "probe_identity_continuity_status", stop_after_the_probe)
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(std.main())
+    return exc.value.code
+
+
+def test_stdio_startup_refuses_without_a_usable_key(secret_path, monkeypatch):
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+    secret_path.mkdir(parents=True)
+
+    assert _run_stdio_to_the_probe(monkeypatch) == 1
+
+
+def test_stdio_startup_runs_keyless_only_with_the_override(secret_path, monkeypatch):
+    monkeypatch.setenv(cs.ALLOW_NO_SECRET_ENV, "1")
+    secret_path.mkdir(parents=True)
+
+    assert _run_stdio_to_the_probe(monkeypatch) == "probe reached"
+    assert session_mod._get_continuity_secret() is None
+
+
+def test_http_startup_refuses_without_a_key_before_bootstrap():
+    # Bootstrap SIGTERMs a running predecessor, so the refusal must come first.
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "src" / "mcp_server.py").read_text()
+    held = source.index("hold_for_server()")
+    refusal = source.index("raise SystemExit(1)", held)
+    assert source.index("no_secret_allowed()", held) < refusal
+    assert refusal < source.index("bootstrap_server(", held)

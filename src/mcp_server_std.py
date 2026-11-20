@@ -674,15 +674,23 @@ async def main():
         logger.info("Identity continuity mode: proxied (delegated to upstream HTTP server)")
     else:
         # Local handlers sign continuity tokens here, as the HTTP server does.
-        from src.continuity_secret import ensure_generated_secret
+        from src.continuity_secret import hold_for_server, no_secret_allowed
 
         try:
-            ensure_generated_secret()
+            hold_for_server()
         except OSError as exc:
+            if not no_secret_allowed():
+                logger.error(
+                    "Refusing to start: no usable continuity token secret (%s). Set "
+                    "UNITARES_CONTINUITY_TOKEN_SECRET or make the secret file writable and "
+                    "private to the server's user. UNITARES_ALLOW_NO_CONTINUITY_SECRET=1 "
+                    "runs without one.", exc,
+                )
+                raise SystemExit(1)
             logger.warning(
-                "Could not create the continuity token secret (%s). Continuity tokens "
-                "and effect grants are disabled until UNITARES_CONTINUITY_TOKEN_SECRET "
-                "is set or the file can be written.", exc,
+                "Running without a continuity token secret (%s), as "
+                "UNITARES_ALLOW_NO_CONTINUITY_SECRET allows. Continuity tokens and effect "
+                "grants are disabled, and session ids are derivable from agent UUIDs.", exc,
             )
         continuity_status = await probe_identity_continuity_status()
         continuity_message = format_identity_continuity_startup_message(continuity_status)
