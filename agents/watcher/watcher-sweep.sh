@@ -19,7 +19,22 @@
 #   UNITARES_WATCHER_SWEEP_ROOTS  colon-separated roots to walk
 #                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
+#   UNITARES_WATCHER_SWEEP_MAX_WINDOW_H
+#                                 oldest edit the sweep will go back for, in
+#                                 hours (default: 48). See "Window" below.
+#   UNITARES_WATCHER_SWEEP_REVIEW set to 1 to also run the free-form review
+#                                 scan on each file (default: off). The sweep
+#                                 runs the pattern scan only. Review findings
+#                                 (pattern R000) come from no rule, so nothing
+#                                 calibrates them, and unattended they arrive
+#                                 faster than anyone reads them: one deployment
+#                                 collected 370 in six days, one of which was
+#                                 ever adjudicated.
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
+#   UNITARES_WATCHER_LOCK_DIR     per-file debounce locks shared with
+#                                 watcher-hook.sh (default:
+#                                 /tmp/unitares-watcher-locks); set both
+#                                 triggers to the same directory
 #   UNITARES_WATCHER_PYTHON       interpreter for agent.py (default: python3 on
 #                                 PATH). A scheduler's PATH can resolve a
 #                                 python3 without Watcher's dependencies, so set
@@ -47,10 +62,15 @@ if [[ -z "$ROOTS" ]]; then
     exit 2
 fi
 MAX_FILES="${UNITARES_WATCHER_SWEEP_MAX:-40}"
+MAX_WINDOW_H="${UNITARES_WATCHER_SWEEP_MAX_WINDOW_H:-48}"
+case "$MAX_WINDOW_H" in ''|*[!0-9]*) MAX_WINDOW_H=48 ;; esac
+SWEEP_REVIEW="${UNITARES_WATCHER_SWEEP_REVIEW:-0}"
 MAX_CONCURRENT=3
-LOCK_DIR="/tmp/unitares-watcher-locks"
+LOCK_DIR="${UNITARES_WATCHER_LOCK_DIR:-/tmp/unitares-watcher-locks}"
 STATE_DIR="$HOME/.unitares"
 STATE_FILE="${STATE_DIR}/watcher-sweep.state"
+# One marker per file this sweep has scanned since the watermark last moved.
+DONE_DIR="${STATE_DIR}/watcher-sweep.done"
 LOG_FILE="$HOME/Library/Logs/unitares-watcher.log"
 
 if [[ ! -f "${WATCHER_AGENT}" ]]; then
@@ -89,13 +109,29 @@ if [[ ! -f "$STATE_FILE" ]]; then
     log "no watermark — seeding window at 1h"
 fi
 
+# The watermark is held whenever a sweep hits its file cap, so that the rest is
+# picked up next time. Edits can arrive faster than the cap drains them, and
+# then the watermark never moves and the window only grows: one deployment's
+# watermark sat 14 days back, with 219,000 files newer than it. So the window
+# has a floor. A watermark older than MAX_WINDOW_H is moved up to it, and the
+# edits before that are left to the hook, which is the primary trigger.
+if [[ "$MAX_WINDOW_H" -gt 0 ]] \
+    && [[ -n "$("$FIND" "$STATE_FILE" -mmin "+$(( MAX_WINDOW_H * 60 ))" 2>/dev/null)" ]]; then
+    FLOOR_STAMP=$(date -v-"${MAX_WINDOW_H}"H +%Y%m%d%H%M.%S 2>/dev/null \
+        || date -d "-${MAX_WINDOW_H} hours" +%Y%m%d%H%M.%S 2>/dev/null || true)
+    if [[ -n "$FLOOR_STAMP" ]] && touch -t "$FLOOR_STAMP" "$STATE_FILE" 2>/dev/null; then
+        log "watermark was more than ${MAX_WINDOW_H}h old; moved up to ${MAX_WINDOW_H}h, earlier edits are not swept"
+    fi
+fi
+
 # Stamp the next watermark NOW, before scanning, so edits made *during* the
 # sweep are still newer than it and get picked up on the following pass.
 PENDING_STATE="${STATE_FILE}.pending"
 : > "$PENDING_STATE"
 
 # --- Don't compete with an active editing session ---
-RUNNING=$(pgrep -f "agents/watcher/agent.py --all" 2>/dev/null | wc -l | tr -d ' ')
+# Counts the hook's scans too: both share one model.
+RUNNING=$(pgrep -f "agents/watcher/agent.py --(all|file) " 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$RUNNING" -ge "$MAX_CONCURRENT" ]]; then
     log "skip — ${RUNNING} scans already running"
     rm -f "$PENDING_STATE"
@@ -152,15 +188,32 @@ fi
 FILTERED_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 UNEDITED=$(( RAW_COUNT - FILTERED_COUNT ))
 
-if [[ -z "${CANDIDATES//[[:space:]]/}" ]]; then
+# Count lines; do not test the string. `${CANDIDATES//[[:space:]]/}` is
+# quadratic in bash 3.2, which is /bin/bash on macOS: 34 seconds on 100 paths,
+# and a sweep with 1,500 candidates sat in that one test for 22 hours.
+TOTAL="$FILTERED_COUNT"
+if [[ "$TOTAL" -eq 0 ]]; then
     mv -f "$PENDING_STATE" "$STATE_FILE"
+    rm -rf "$DONE_DIR"
     exit 0
 fi
 
-TOTAL=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+# One scan of one file (or region). `--file PATH` first, so the concurrency
+# count above sees the pattern scan and the review scan alike.
+scan_one() {
+    local target="$1"
+    shift
+    if [[ "$SWEEP_REVIEW" == "1" ]]; then
+        "$PY" "${WATCHER_AGENT}" --file "$target" --all "$@" >/dev/null 2>&1
+    else
+        "$PY" "${WATCHER_AGENT}" --file "$target" "$@" >/dev/null 2>&1
+    fi
+}
 
 SCANNED=0
 SKIPPED_HOOK=0
+SKIPPED_DONE=0
+mkdir -p "$DONE_DIR"
 while IFS= read -r FILE_PATH; do
     [[ -z "$FILE_PATH" ]] && continue
     [[ -f "$FILE_PATH" ]] || continue
@@ -173,39 +226,58 @@ while IFS= read -r FILE_PATH; do
     # the last write. Nothing new to see.
     FILE_HASH=$(printf '%s' "$FILE_PATH" | shasum -a 256 | cut -c1-16)
     LOCK_FILE="${LOCK_DIR}/${FILE_HASH}.lock"
-    if [[ -f "$LOCK_FILE" ]]; then
-        LOCK_MTIME=$(stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)
-        FILE_MTIME=$(stat -f %m "$FILE_PATH" 2>/dev/null || echo 0)
-        if [[ "$LOCK_MTIME" -ge "$FILE_MTIME" ]]; then
-            SKIPPED_HOOK=$(( SKIPPED_HOOK + 1 ))
-            continue
-        fi
+    DONE_FILE="${DONE_DIR}/${FILE_HASH}"
+    # `-nt`, not `stat -f %m`: that form is BSD-only, and on GNU stat it
+    # prints filesystem text that the numeric comparison then aborts on.
+    if [[ -f "$LOCK_FILE" && ! "$FILE_PATH" -nt "$LOCK_FILE" ]]; then
+        SKIPPED_HOOK=$(( SKIPPED_HOOK + 1 ))
+        touch "$DONE_FILE"
+        continue
     fi
 
-    # Claim it for both triggers before spending the inference.
+    # --- Did an earlier sweep in this window already scan this edit? ---
+    # While the watermark is held, every sweep sees the same candidates in the
+    # same order. The hook's lock cannot carry "already scanned" between
+    # sweeps: watcher-hook.sh deletes locks older than ten minutes. Without a
+    # record of its own, a sweep that hit the cap scanned the same first
+    # MAX_FILES files every interval and never reached the rest (one
+    # deployment: 64 files scanned five times or more, one of them 45 times).
+    if [[ -f "$DONE_FILE" && ! "$FILE_PATH" -nt "$DONE_FILE" ]]; then
+        SKIPPED_DONE=$(( SKIPPED_DONE + 1 ))
+        continue
+    fi
+
+    # Claim it for both triggers before spending the inference. The marker is
+    # stamped here too, before the scan reads the file: an edit that lands
+    # while the model is running is then newer than the marker and is scanned
+    # by the next sweep. Stamped after the scan, it would hide that edit.
     touch "$LOCK_FILE"
+    touch "$DONE_FILE"
 
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
     REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
     if [[ -z "$REGIONS" ]]; then
-        "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
+        scan_one "$FILE_PATH"
     else
         while IFS= read -r REGION; do
             [[ -z "$REGION" ]] && continue
-            "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
+            scan_one "$FILE_PATH" --region "$REGION"
         done <<< "$REGIONS"
     fi
     SCANNED=$(( SCANNED + 1 ))
 done <<< "$CANDIDATES"
 
 # Advance the watermark only after a completed pass. If the cap truncated the
-# work, hold the old watermark so the remainder is picked up next sweep.
+# work, hold the old watermark so the remainder is picked up next sweep; the
+# markers in DONE_DIR are what make that sweep start where this one stopped.
+# They describe the held window only, so they go when the watermark moves.
 if [[ "$SCANNED" -ge "$MAX_FILES" ]]; then
     rm -f "$PENDING_STATE"
-    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
+    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
 else
     mv -f "$PENDING_STATE" "$STATE_FILE"
-    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
+    rm -rf "$DONE_DIR"
+    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
 fi
 
 exit 0
