@@ -447,10 +447,12 @@ async def _maybe_recover_via_x_agent_id(
 
     The header names an agent; it proves nothing about the caller. A rebind
     also needs proof of ownership: a verified continuity token for the named
-    agent (``token_agent_uuid``) or a kernel-attested UDS peer, the same proof
-    PATH 0 accepts for a bare ``agent_uuid``. Without it the freshly-created
-    identity stays and no binding is cached, since a cached binding would later
-    resolve as the caller's own session.
+    agent (``token_agent_uuid``), or a UDS peer whose substrate attestation for
+    that agent is accepted (``verify_substrate_at_resume``, the check the
+    identity handler runs). A UDS peer alone is not proof: an agent with no
+    substrate claim, or a peer the attestation rejects, still needs the token.
+    Without proof the freshly-created identity stays and no binding is cached,
+    since a cached binding would later resolve as the caller's own session.
 
     Mutates ``identity_result`` in place on a successful rebind and returns the
     (possibly rebound) bound agent UUID. On refusal or any error it leaves the
@@ -466,7 +468,8 @@ async def _maybe_recover_via_x_agent_id(
     _uds_peer = (
         getattr(signals, "transport", None) == "uds" and isinstance(_peer_pid, int)
     ) if signals else False
-    if not (_uds_peer or (token_agent_uuid and token_agent_uuid == x_agent_id_header)):
+    _token_proof = bool(token_agent_uuid) and token_agent_uuid == x_agent_id_header
+    if not (_uds_peer or _token_proof):
         logger.warning(
             "[DISPATCH] X-Agent-Id recovery refused: the header carries no proof "
             "of ownership (no matching continuity token, no UDS peer); keeping "
@@ -477,6 +480,19 @@ async def _maybe_recover_via_x_agent_id(
         from ..identity.handlers import _agent_exists_in_postgres, _cache_session
         if not await _agent_exists_in_postgres(x_agent_id_header):
             return bound_agent_id
+        if not _token_proof:
+            # UDS peer without a token: only an accepted substrate attestation
+            # for the named agent proves ownership. None means the agent has
+            # no substrate claim (or the lookup failed), so there is no proof.
+            from src.substrate.handler_gate import verify_substrate_at_resume
+            _attestation = await verify_substrate_at_resume(x_agent_id_header, _peer_pid)
+            if _attestation is None or not _attestation.accepted:
+                logger.warning(
+                    "[DISPATCH] X-Agent-Id recovery refused: UDS peer without a "
+                    "matching continuity token and no accepted substrate "
+                    "attestation; keeping the freshly-created identity."
+                )
+                return bound_agent_id
         # Substrate-over-HTTP gate — same one PATH 1/2 apply.
         from ..identity.resolution import _substrate_http_reject
         if await _substrate_http_reject(
