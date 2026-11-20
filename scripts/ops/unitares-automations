@@ -1206,6 +1206,53 @@ DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
 NON_HOOK_FILENAMES = {"__init__.py"}
 SYSTEM_BIN_DIRS = {"/bin", "/usr/bin", "/sbin", "/usr/sbin"}
+_INTERPRETER_INLINE_FLAGS: dict[str, set[str]] = {
+    "sh": {"-c", "-s"},
+    "bash": {"-c", "-s"},
+    "zsh": {"-c", "-s"},
+    "dash": {"-c", "-s"},
+    "ksh": {"-c", "-s"},
+    "python": {"-c", "-m"},
+    "python3": {"-c", "-m"},
+    "osascript": {"-e"},
+    "ruby": {"-e"},
+    "perl": {"-e"},
+    "node": {"-e", "-p"},
+}
+_INTERPRETER_ARG_FLAGS: dict[str, set[str]] = {
+    "osascript": {"-l", "-s"},
+}
+
+
+def _missing_interpreter_operand(
+    tokens: list[str], sys_idx: int, sys_path: str, plugin_root: str | None,
+) -> bool:
+    """Return True when a system interpreter command names a missing script operand."""
+    sys_name = Path(sys_path).name.lower()
+    if sys_name not in _INTERPRETER_INLINE_FLAGS:
+        return False
+    inline_flags = _INTERPRETER_INLINE_FLAGS[sys_name]
+    arg_flags = _INTERPRETER_ARG_FLAGS.get(sys_name, set())
+    idx = sys_idx + 1
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if not tok or tok in {";", "&&", "||", "|"}:
+            break
+        if tok in inline_flags:
+            return False
+        if tok in arg_flags:
+            idx += 2
+            continue
+        if tok.startswith("-"):
+            idx += 1
+            continue
+        expanded = os.path.expanduser(tok)
+        if Path(expanded).exists():
+            return False
+        if plugin_root and (Path(plugin_root) / tok).exists():
+            return False
+        return True
+    return False
 
 
 _SHELL_KEYWORDS = {
@@ -1258,7 +1305,7 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     text = text.replace('"', "").replace("'", "")
     tokens = [t.strip(";,") for t in text.split()]
     found: list[str] = []
-    system_bins: list[str] = []
+    system_bins: list[tuple[int, str]] = []
     saw_missing_script = False
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
@@ -1281,7 +1328,7 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
                 continue
             resolved = Path(expanded).resolve()
         if is_system_bin or str(resolved.parent) in SYSTEM_BIN_DIRS:
-            system_bins.append(str(resolved))
+            system_bins.append((idx, str(resolved)))
             continue
         found.append(str(resolved))
         if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
@@ -1300,7 +1347,12 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
                 break
     if found:
         return found
-    return [] if saw_missing_script else system_bins
+    if saw_missing_script or not system_bins:
+        return []
+    first_idx, first_sys = system_bins[0]
+    if _missing_interpreter_operand(tokens, first_idx, first_sys, plugin_root):
+        return []
+    return [path for _, path in system_bins]
 
 
 def _dispatched_label(scripts: list[str], command: str) -> str:
