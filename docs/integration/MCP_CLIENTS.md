@@ -108,8 +108,9 @@ client registration remains a separate, off-by-default facility.
 **Upgrading:** apply migration `082_oauth_connectors.sql` with the normal migration
 workflow when deploying this version. This is a one-time schema upgrade, not a
 step for each connector. Public HTTPS, OAuth issuer configuration and operator
-sign-in still need initial setup as described below. If OAuth is absent or the
-registry is unavailable, the Connectors tab names the setup problem.
+sign-in still need initial setup as described below. If OAuth is absent, failed at
+startup, or connector storage is unavailable, the Connectors tab reports which
+setup step failed.
 
 ## Remote connectors (hosted Claude.ai, Perplexity, etc.)
 
