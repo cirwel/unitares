@@ -2902,3 +2902,52 @@ async def test_failover_budget_uses_next_host_timeout_without_polluting_skips(mo
         ("codex:host-adapter", 240),
         ("antigravity:host-adapter", 360),
     ]
+
+
+@pytest.mark.asyncio
+async def test_failover_skips_over_budget_host_to_reach_later_fitting_peer(monkeypatch):
+    seen: list[tuple[str, int]] = []
+
+    async def fake_delegated(request):
+        seen.append((request.host_id, request.timeout_s))
+        if request.host_id == "codex:host-adapter":
+            return _quota_failure()
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake_delegated)
+    monkeypatch.setattr(co, "_caller_family", lambda: None)
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid in _ALL_HOSTS)
+    monkeypatch.setattr(
+        co,
+        "_thorough_plan",
+        lambda _family, **_kw: co.ThoroughPlan(
+            peers=("codex:host-adapter", "antigravity:host-adapter", "claude:host-adapter"),
+            skipped=(),
+            job_configured=True,
+            order=(
+                ("codex:host-adapter", None),
+                ("antigravity:host-adapter", None),
+                ("claude:host-adapter", None),
+            ),
+        ),
+    )
+
+    # 120s elapsed -> 330s remaining: antigravity (360s) does not fit, but claude (240s) does.
+    clock = iter([0.0, 120.0])
+    monkeypatch.setattr(co, "_clock", lambda: next(clock))
+    parsed = _payload(await co.handle_consult({
+        "brief": "q",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+        "response_mode": "full",
+    }))
+    assert parsed["success"] is True
+    assert seen == [
+        ("codex:host-adapter", 240),
+        ("claude:host-adapter", 240),
+    ]
+    assert any(
+        item["host_id"] == "antigravity:host-adapter"
+        and item["reason"] == "insufficient_budget"
+        for item in parsed["skipped"]
+    )

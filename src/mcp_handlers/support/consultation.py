@@ -448,9 +448,12 @@ def _note_skip(request: ConsultRequest, item: dict[str, str]) -> None:
 
 
 def _find_next_peer(
-    request: ConsultRequest, tried: list[str],
+    request: ConsultRequest,
+    tried: list[str],
+    *,
+    remaining_s: float | None = None,
 ) -> tuple[str | None, list[dict[str, str]]]:
-    """Locate the next available host after the last one tried and any skipped hosts."""
+    """Locate the next available host after the last one tried that fits remaining_s."""
     walk = request.thorough_order or tuple((h, None) for h in request.thorough_peers)
     ids = [h for h, _ in walk]
     start = ids.index(tried[-1]) + 1 if tried and tried[-1] in ids else 0
@@ -460,10 +463,19 @@ def _find_next_peer(
             continue
         if static is not None:
             passed.append(static)
-        elif host_adapter_available(host_id):
-            return host_id, passed
-        else:
+        elif not host_adapter_available(host_id):
             passed.append(_availability_skip(host_id))
+        elif (
+            remaining_s is not None
+            and _thorough_attempt_timeout_s(host_id) > remaining_s
+        ):
+            passed.append(_skip(
+                host_id,
+                "insufficient_budget",
+                f"requires {_thorough_attempt_timeout_s(host_id)}s; {int(remaining_s)}s remaining",
+            ))
+        else:
+            return host_id, passed
     return None, []
 
 
@@ -811,13 +823,9 @@ async def _run_thorough_with_failover(
         elapsed = _clock() - started
         if reason is None:
             return current, outcome
-        nxt, passed = _find_next_peer(current, tried)
+        remaining_s = (CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S) - elapsed
+        nxt, passed = _find_next_peer(current, tried, remaining_s=remaining_s)
         if nxt is None:
-            return current, outcome
-        if (
-            elapsed + _thorough_attempt_timeout_s(nxt)
-            > CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S
-        ):
             return current, outcome
         # Only hosts passed on the way to one that will actually be tried count.
         for item in passed:
