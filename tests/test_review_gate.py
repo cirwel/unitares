@@ -3945,15 +3945,15 @@ def test_passing_families_counts_trusted_passing_records_only():
 
 def test_a_sensitive_diff_needs_two_families_before_the_check_passes():
     held = rg.second_family_check("success", "clean (antigravity)",
-                                  ["src/oauth_provider.py", "x"], {"google"})
+                                  ["src/oauth_provider.py", "x"], {"google"}, {"openai"})
     assert held[0] == "action_required"
     assert "src/oauth_provider.py (+1 more)" in held[1] and "have: google" in held[1]
     assert rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
-                                  {"google", "anthropic"}) == ("success", "clean")
-    assert rg.second_family_check("success", "clean", [], {"google"}) == ("success", "clean")
+                                  {"google", "anthropic"}, {"openai"}) == ("success", "clean")
+    assert rg.second_family_check("success", "clean", [], {"google"}, {"openai"}) == ("success", "clean")
     # Never upgrades a failing or pending check.
     assert rg.second_family_check("action_required", "findings", ["src/oauth_provider.py"],
-                                  set()) == ("action_required", "findings")
+                                  set(), {"openai"}) == ("action_required", "findings")
 
 
 def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
@@ -3994,12 +3994,14 @@ def test_ci_registers_the_carry_before_reading_native_evidence(monkeypatch):
     assert seen == [("k", [("old", "c0ffee")])]
 
 
-def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity")):
+def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity"),
+                       authors=("anthropic",)):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: changed)
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: rg.second_family_paths())
     monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     monkeypatch.setattr(rg, "passing_families", lambda *a: set(families))
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set(authors))
     monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: list(candidates))
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
     # The notice never starts a review: fail loudly if anything tries.
@@ -4024,7 +4026,7 @@ def test_the_notice_lists_only_eligible_other_family_providers(monkeypatch, caps
     """Claude on #2504 (P3): the real candidate filter, with an assertion that
     fails if a same-family, cooling or exhausted provider is offered."""
     _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
-                       candidates=("claude", "codex", "antigravity"))
+                       candidates=("claude", "codex", "antigravity"), authors=("google",))
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: "quota" if p == "antigravity" else None)
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -4142,13 +4144,22 @@ def test_review_sh_never_starts_a_review_and_names_the_next_step(monkeypatch, ca
     the second reviewer. It returns NEEDS_SECOND_FAMILY (exit 3) so review.sh
     cannot read as done while CI still blocks."""
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
-                             families={"google"}, candidates=("codex", "claude"))
+                             families=set(), candidates=("codex", "claude"), authors=("google",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex", "claude"])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
-    assert "have: google" in out
+    assert "have: none" in out
     assert "./scripts/dev/review.sh --fresh --reviewer codex; ./scripts/dev/review.sh --fresh --reviewer claude" in out
+
+    # When one independent family passed and the author is Anthropic, only codex is offered.
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                       families={"google"}, candidates=("codex", "claude"), authors=("anthropic",))
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex", "claude"])
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "have: google" in out
+    assert "./scripts/dev/review.sh --fresh --reviewer codex" in out and "--reviewer claude" not in out
 
 
 def test_two_families_passed_means_nothing_to_report(monkeypatch, capsys):
@@ -4167,7 +4178,8 @@ def test_the_notice_follows_the_base_refs_policy(monkeypatch):
 
 
 def test_the_notice_says_when_no_provider_is_eligible(monkeypatch, capsys):
-    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"})
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
+                       authors=("google",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -4215,7 +4227,7 @@ def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
 def test_locally_an_unreadable_path_list_is_sensitive_too(monkeypatch, capsys):
     """Claude on #2504 (P3): CI treats unreadable paths as sensitive; the
     local notice must not report done in the same state."""
-    _second_family_env(monkeypatch, changed=None, families={"google"})
+    _second_family_env(monkeypatch, changed=None, families={"google"}, authors=("openai",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["claude"])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
@@ -4346,9 +4358,9 @@ def test_a_disposed_antigravity_review_counts_by_its_models_family():
 
 
 def test_the_ci_message_asks_for_two_families_when_none_passed():
-    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], set())
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], set(), {"openai"})
     assert concl == "action_required" and "two model families" in desc
-    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"})
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"}, {"openai"})
     assert "a second model family" in desc
 
 
@@ -4377,6 +4389,7 @@ def test_cmd_review_exits_3_on_a_sensitive_diff_with_one_family(monkeypatch, cap
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, r: r)
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: {"google"})
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
     # No real lock: git is faked, so the lock path would land in the cwd.
     class _Held:
@@ -4402,7 +4415,7 @@ def test_a_malformed_agy_model_is_never_written_into_a_marker(monkeypatch):
     assert back.reviewer == "antigravity" and rg.record_family(back) is None
 
 
-def _sensitive_manual(monkeypatch, comments):
+def _sensitive_manual(monkeypatch, comments, authors=("anthropic",)):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/x"))
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
@@ -4410,13 +4423,14 @@ def _sensitive_manual(monkeypatch, comments):
     monkeypatch.setattr(rg, "post_record", lambda *a: None)
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set(authors))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
 
 
 def test_record_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_path, capsys):
     """Native Codex on #2504 (P2): record and dispose returned 0 directly, so
     the author saw success while CI held the PR for a missing family."""
-    _sensitive_manual(monkeypatch, comments=[])
+    _sensitive_manual(monkeypatch, comments=[], authors=("google",))
     review = tmp_path / "review.txt"
     review.write_text("Examined the OAuth token exchange end to end.\nVERDICT: CLEAN\n")
     args = SimpleNamespace(independent=True, emit=False, file=str(review),
@@ -5330,7 +5344,7 @@ def test_cli_and_ci_accept_same_sensitive_followup(repo, reviewed_followup, monk
     _git(repo, 'update-ref', 'refs/remotes/origin/master', fix.base)
     real_git = rg.git
     monkeypatch.setattr(rg, 'git', lambda *a, **kw: '' if a[0] == 'fetch' else real_git(*a, **kw))
-    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head},
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head, 'ref': 'gemini/x'},
                                                 'base': {'ref': 'master'}})
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
@@ -5510,6 +5524,7 @@ def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followu
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # POST not yet visible
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     args = SimpleNamespace(base=fix.base, completed_followup=fix)
     assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
 
@@ -5522,6 +5537,7 @@ def test_dispose_followup_preserves_families_during_api_read_lag(repo, reviewed_
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # fresh POST remains unreadable
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     posted = []
     monkeypatch.setattr(rg, 'post_comment', lambda pr, body: posted.append(body))
     disposition = repo / 'disposition.txt'
@@ -6161,6 +6177,7 @@ def test_missing_second_family_on_sensitive_path_is_not_blocked_by_round_cap(rep
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
     monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['src/oauth_provider.py'])
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['src/oauth_provider.py'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
     # Three prior full cycles by openai, then a scope=fix follow-up at fix.head.
     rounds = rg.CodexRounds(3, cycles=[rg.ReviewCycle('1' * 40, 'old1', {'openai'}),
                                        rg.ReviewCycle('2' * 40, 'old2', {'openai'}),
@@ -6262,7 +6279,7 @@ def test_main_accepts_agy_model_and_rejects_malformed_agy_model(monkeypatch):
 def test_second_family_pass_judges_printed_candidates_without_one_shot_agy_model_override(monkeypatch, capsys):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
     _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set(),
-                       candidates=("antigravity",))
+                       candidates=("antigravity",), authors=("openai",))
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30,
                            agy_model="claude-opus-5-5-high", completed_by="antigravity",
                            failed_providers={"antigravity"})
@@ -6423,3 +6440,179 @@ def test_local_suggestions_skip_author_families_under_the_cleared_model_override
         == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
     assert "--reviewer antigravity" in out and "--reviewer claude" not in out
+
+
+def test_independent_and_eligible_families_exclude_authors_and_fail_closed_when_unknown():
+    assert rg.independent_families({"anthropic", "openai"}, {"anthropic"}) == {"openai"}
+    assert rg.independent_families({"anthropic", "openai", "google"}, {"anthropic", "openai"}) == {"google"}
+    assert rg.independent_families({"openai", "google"}, set()) == set()
+    assert rg.eligible_families(set(), set()) == []
+    assert rg.eligible_families({"anthropic"}, {"openai"}) == ["google"]
+
+
+def test_second_family_check_excludes_author_families_and_fails_closed_on_unknown_authors():
+    held = rg.second_family_check("success", "clean", _PATHS, {"anthropic", "openai"}, {"anthropic"})
+    assert held[0] == "action_required"
+    assert "have: openai" in held[1]
+    assert "excluded author family: anthropic" in held[1]
+    assert "eligible to review: google" in held[1]
+
+    assert rg.second_family_check(
+        "success", "clean", _PATHS, {"anthropic", "openai", "google"}, {"anthropic"}
+    ) == ("success", "clean")
+
+    unknown = rg.second_family_check("success", "clean", _PATHS, {"openai", "google"}, set())
+    assert unknown[0] == "action_required"
+    assert "authors: unknown" in unknown[1] and "unknown" in unknown[1]
+
+    handover = rg.second_family_check(
+        "success", "clean", _PATHS, {"anthropic", "google"}, {"anthropic", "openai"}
+    )
+    assert handover[0] == "action_required"
+    assert "have: google" in handover[1]
+    assert "excluded author family: anthropic" in handover[1]
+    assert "no family outside the authors is left" in handover[1]
+
+
+def test_apply_waiver_reports_only_independent_reviewed_families():
+    k = "c" * 64
+    out = rg.apply_waiver(
+        _HELD, [_waiver_with(k, authors="anthropic")], k, _PATHS, _PATHS,
+        {"anthropic", "openai"}, 2, _POLICY, {"anthropic"},
+    )
+    assert out[0] == "success"
+    assert "have: openai)" in out[1]
+    assert "anthropic" not in out[1]
+    assert rg.apply_waiver(
+        _HELD, [_waiver_with(k, authors="")], k, _PATHS, _PATHS,
+        {"openai", "google"}, 2, _POLICY, set(),
+    ) == _HELD
+
+
+def test_ci_fails_closed_on_unsigned_pr_and_excludes_author_family_reviews(monkeypatch):
+    def run_ci(body, comments, branch="topic/fix"):
+        monkeypatch.setattr(rg, "gh_json", lambda *a: {
+            "state": "open", "head": {"sha": "h", "ref": branch},
+            "base": {"ref": "master"}, "body": body,
+        })
+        monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+        monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+        monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+        monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+        monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+        monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+        posted = []
+        monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
+        assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+        return posted[0]
+
+    both = [
+        _comment(full_record("k", "CLEAN", 0, False, "codex")),
+        _comment(full_record("k", "CLEAN", 0, False, "claude")),
+    ]
+    res_unknown = run_ci("No provenance signature.", both)
+    assert res_unknown[3] == "action_required" and "authors: unknown" in res_unknown[4]
+
+    res_self = run_ci(_SIGNED_BODY, both)
+    assert res_self[3] == "action_required"
+    assert "excluded author family: anthropic" in res_self[4]
+    assert "eligible to review: google" in res_self[4]
+
+    independent_two = [
+        _comment(full_record("k", "CLEAN", 0, False, "codex")),
+        _comment(full_record("k", "CLEAN", 0, False, "antigravity", model="gemini-4-argon-high")),
+    ]
+    assert run_ci(_SIGNED_BODY, independent_two)[3] == "success"
+
+
+def test_second_family_pass_excludes_authors_and_unknown_authorship(monkeypatch, capsys):
+    _second_family_env(
+        monkeypatch, changed=_PATHS, families={"anthropic", "openai"},
+        candidates=("claude", "codex", "antigravity"), authors=("anthropic",),
+    )
+    args = SimpleNamespace(base="origin/master", branch="b", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "have: openai; excluded author family: anthropic" in out
+    assert "--reviewer antigravity" in out
+    assert "--reviewer claude" not in out and "--reviewer codex" not in out
+
+    # Passing the third (second independent) family completes the gate.
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0, passed_family="google") == 0
+
+    # Unknown authorship fails closed even when two reviewer families passed.
+    _second_family_env(
+        monkeypatch, changed=_PATHS, families={"openai", "google"},
+        candidates=("claude",), authors=(),
+    )
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    unknown_out = capsys.readouterr().out
+    assert "unknown" in unknown_out and "--reviewer" not in unknown_out
+
+
+def test_cmd_review_round_cap_exemption_uses_independent_families(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "k", "claude/x"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic", "openai"})
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: {"anthropic"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    rounds = rg.CodexRounds(3, cycles=[
+        rg.ReviewCycle("1" * 40, "old1", {"openai"}),
+        rg.ReviewCycle("2" * 40, "old2", {"openai"}),
+        rg.ReviewCycle("3" * 40, "old3", {"openai"}),
+    ])
+    monkeypatch.setattr(rg, "pr_rounds", lambda *a: rounds)
+    class _Held:
+        held = True
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(rg, "review_lock", lambda key: _Held())
+    ran = []
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *a: ran.append(a[3]) or 0)
+    monkeypatch.setattr(rg, "second_family_pass", lambda *a: 0)
+
+    # Only 1 independent family (openai) passed: google may still join past the round cap.
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == 0
+    assert ran == ["antigravity"]
+
+    # Author family cannot use the sensitive-path round-cap exemption.
+    ran.clear()
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="claude")) == rg.UNREVIEWED
+    assert not ran
+
+    # Unknown authorship cannot use the round-cap exemption either.
+    monkeypatch.setattr(rg, "pr_authors_or_unknown", lambda *a: set())
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    assert rg.cmd_review(SimpleNamespace(base="origin/master", budget=30, fresh=True, reviewer="antigravity")) == rg.UNREVIEWED
+    assert not ran
+
+
+def test_cmd_sweep_keeps_dispatching_when_only_one_independent_family_passed(monkeypatch, tmp_path):
+    pr = _pr(3)
+    pr["headRefName"] = "claude/x"
+    pr["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: full_record("k", "CLEAN", 1, False, "codex"))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda *a: _PATHS)
+    # Anthropic (author self-review) + OpenAI passed: still only 1 independent family, so sweep runs agy.
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"anthropic", "openai"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a: ["claude", "antigravity"])
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == 1 and calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
