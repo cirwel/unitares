@@ -275,6 +275,7 @@ class _AcquireContext:
         *,
         dispatch_lock: threading.RLock | threading.Lock | None = None,
         is_accepting: Any | None = None,
+        acquire_is_accepting: Any | None = None,
         inflight: set[tuple[concurrent.futures.Future[Any], Any]] | None = None,
     ):
         self._raw_pool = raw_pool
@@ -285,6 +286,11 @@ class _AcquireContext:
             "is_accepting": is_accepting,
             "inflight": inflight,
         }
+        self._acquire_dispatch_kwargs = {
+            "dispatch_lock": dispatch_lock,
+            "is_accepting": acquire_is_accepting if acquire_is_accepting is not None else is_accepting,
+            "inflight": inflight,
+        }
         self._raw_acquire_ctx: Any = None
         self._raw_conn: Any = None
 
@@ -293,7 +299,7 @@ class _AcquireContext:
             def _factory():
                 kwargs = {} if self._timeout is None else {"timeout": self._timeout}
                 return self._raw_pool.acquire(**kwargs)
-            return await _await_on_loop(_factory, self._loop, **self._dispatch_kwargs)
+            return await _await_on_loop(_factory, self._loop, **self._acquire_dispatch_kwargs)
 
         raw_conn = yield from _direct_acquire().__await__()
         return _Connection(raw_conn, self._loop, **self._dispatch_kwargs)
@@ -308,7 +314,7 @@ class _AcquireContext:
             return self._raw_acquire_ctx.__aenter__()
 
         self._raw_conn = await _await_on_loop(
-            _enter_factory, self._loop, **self._dispatch_kwargs
+            _enter_factory, self._loop, **self._acquire_dispatch_kwargs
         )
         return _Connection(self._raw_conn, self._loop, **self._dispatch_kwargs)
 
@@ -329,8 +335,12 @@ class ExecutorPool:
     def _ensure_dispatch_state(self) -> None:
         if not hasattr(self, "_dispatch_lock"):
             self._dispatch_lock = threading.RLock()
+        closed = bool(getattr(self, "_closed_flag", False))
+        if not hasattr(self, "_closing"):
+            self._closing = closed
         if not hasattr(self, "_loop_accepting"):
-            self._loop_accepting = False
+            loop = getattr(self, "_loop", None)
+            self._loop_accepting = bool(loop is not None and loop.is_running() and not closed)
         if not hasattr(self, "_inflight_futures"):
             self._inflight_futures: set[tuple[concurrent.futures.Future[Any], Any]] = set()
 
@@ -342,6 +352,14 @@ class ExecutorPool:
             "inflight": self._inflight_futures,
         }
 
+    def _acquire_dispatch_kwargs(self) -> dict[str, Any]:
+        self._ensure_dispatch_state()
+        return {
+            "dispatch_lock": self._dispatch_lock,
+            "is_accepting": lambda: self._loop_accepting and not self._closing,
+            "inflight": self._inflight_futures,
+        }
+
     def _init_loop_state(self) -> None:
         # Close coordination: lock serializes concurrent close() callers;
         # done event lets the second caller AWAIT the first's completion
@@ -350,6 +368,7 @@ class ExecutorPool:
         self._close_lock = asyncio.Lock()
         self._close_done = asyncio.Event()
         self._closed_flag = False
+        self._closing = False
         self._dispatch_lock = threading.RLock()
         self._loop_accepting = False
         self._inflight_futures: set[tuple[concurrent.futures.Future[Any], Any]] = set()
@@ -363,7 +382,11 @@ class ExecutorPool:
         )
 
     def _abort_startup_sync(self) -> None:
+        self._ensure_dispatch_state()
         self._closed_flag = True
+        with self._dispatch_lock:
+            self._closing = True
+            self._loop_accepting = False
         self._close_done.set()
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -377,7 +400,11 @@ class ExecutorPool:
                 pass
 
     async def _abort_startup(self) -> None:
+        self._ensure_dispatch_state()
         self._closed_flag = True
+        with self._dispatch_lock:
+            self._closing = True
+            self._loop_accepting = False
         self._close_done.set()
 
         async def _cancel_and_stop() -> None:
@@ -532,6 +559,7 @@ class ExecutorPool:
                 _emit_executor_loop_died("premature_return", error_class=None)
         finally:
             with self._dispatch_lock:
+                self._closing = True
                 self._loop_accepting = False
                 pending_entries = list(self._inflight_futures)
                 self._inflight_futures.clear()
@@ -567,6 +595,7 @@ class ExecutorPool:
             self._loop,
             timeout=timeout,
             **self._dispatch_kwargs(),
+            acquire_is_accepting=self._acquire_dispatch_kwargs()["is_accepting"],
         )
 
     async def release(self, conn: _Connection) -> Any:
@@ -610,11 +639,15 @@ class ExecutorPool:
                 return
             self._closed_flag = True
             with self._dispatch_lock:
-                self._loop_accepting = False
+                self._closing = True
 
         # Teardown order matters (architect): close the raw pool ON
         # the executor loop (asyncpg connections are loop-bound),
         # THEN stop the loop, THEN join the thread.
+        #
+        # Only new acquires are refused while raw_pool.close() waits for
+        # checked-out connections to commit/release; _loop_accepting stays
+        # True until shutdown stops the loop below.
         #
         # Bounded wait: if the executor loop is wedged (asyncpg
         # released connections but PG-side responses unread —
@@ -631,9 +664,7 @@ class ExecutorPool:
                 _await_on_loop(
                     lambda: self._raw_pool.close(),
                     self._loop,
-                    dispatch_lock=self._dispatch_lock,
-                    is_accepting=lambda: True,
-                    inflight=self._inflight_futures,
+                    **self._dispatch_kwargs(),
                 ),
                 timeout=CLOSE_TIMEOUT_SECONDS,
             )
@@ -655,6 +686,8 @@ class ExecutorPool:
             )
             _to_reraise = e
         finally:
+            with self._dispatch_lock:
+                self._loop_accepting = False
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:

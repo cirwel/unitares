@@ -401,3 +401,95 @@ async def test_concurrent_acquire_and_queries_racing_pool_close_never_hang_or_ra
         gc.collect()
 
     assert not [w for w in caught if "was never awaited" in str(w.message)]
+
+
+@pytest.mark.asyncio
+async def test_close_drains_checked_out_transactions_and_blocks_new_acquires():
+    """`ExecutorPool.close()` refuses NEW acquires immediately, while allowing
+    already-checked-out connections/transactions to finish committing and
+    releasing so `raw_pool.close()` drains without timing out."""
+    from src.db.executor_pool import ExecutorPool
+
+    state = {"checked_out": 0, "committed": False, "released": False}
+    close_started = threading.Event()
+    proceed_worker = threading.Event()
+
+    class _FakeTxn:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, _exc_val, _exc_tb):
+            if exc_type is None:
+                state["committed"] = True
+            return False
+
+    class _FakeConn:
+        async def execute(self, *_a, **_k):
+            return "OK"
+
+        def transaction(self):
+            return _FakeTxn()
+
+    class _FakeRawPool:
+        def __init__(self):
+            self._all_released = None
+
+        def acquire(self, **_kw):
+            pool_self = self
+
+            class _Ctx:
+                async def __aenter__(self):
+                    state["checked_out"] += 1
+                    return _FakeConn()
+
+                async def __aexit__(self, *_exc):
+                    state["checked_out"] -= 1
+                    state["released"] = True
+                    if pool_self._all_released is not None and state["checked_out"] == 0:
+                        pool_self._all_released.set()
+                    return False
+
+            return _Ctx()
+
+        async def close(self):
+            self._all_released = asyncio.Event()
+            close_started.set()
+            if state["checked_out"] > 0:
+                await self._all_released.wait()
+
+    pool = ExecutorPool(_FakeRawPool())
+    inside_txn = asyncio.Event()
+    held_conn = None
+
+    async def in_flight_worker():
+        nonlocal held_conn
+        async with pool.acquire() as conn:
+            held_conn = conn
+            async with conn.transaction():
+                inside_txn.set()
+                await asyncio.to_thread(proceed_worker.wait, 2.0)
+                await conn.execute("INSERT INTO t VALUES (1)")
+
+    worker_task = asyncio.create_task(in_flight_worker())
+    await asyncio.wait_for(inside_txn.wait(), timeout=2.0)
+
+    close_task = asyncio.create_task(pool.close())
+    await asyncio.to_thread(close_started.wait, 2.0)
+
+    # New acquires fail immediately while close() is waiting on active connections.
+    with pytest.raises(ConnectionError, match="not running"):
+        async with pool.acquire():
+            pass
+
+    # Let the already-checked-out transaction finish, commit, and release.
+    proceed_worker.set()
+    await asyncio.wait_for(asyncio.gather(worker_task, close_task), timeout=2.0)
+
+    assert state["committed"] is True
+    assert state["released"] is True
+    assert state["checked_out"] == 0
+
+    # Once close() stopped the loop, stale connection operations fail promptly.
+    assert held_conn is not None
+    with pytest.raises(ConnectionError, match="not running"):
+        await held_conn.execute("SELECT 1")
