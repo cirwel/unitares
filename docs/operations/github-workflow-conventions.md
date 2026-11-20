@@ -65,7 +65,10 @@ veto by removing the label.
   `src/mcp_handlers/decorators.py`), and a change there passes `review` on one
   family. For an auth or identity-enforcement change in such a file the owner
   gets the second family's review before marking ready and names both families
-  in the PR body; nothing enforces this, so the body is the record. With no
+  in the PR body; nothing enforces this, so the body is the record. The same
+  holds for `ready-when-validated`: do not apply it to such a PR until both
+  families have passed, because the queue promotes a declared draft as soon as
+  `review` succeeds, and here `review` succeeds on one family. With no
   second family available, the PR waits for one or for the operator's word, as
   it would on a listed path. The operator reviews, merges and authors no PR, so a rule
   that parks a PR for the operator to read parks it for good; #3222 stayed a
