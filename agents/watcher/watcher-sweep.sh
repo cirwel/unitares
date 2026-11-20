@@ -19,6 +19,17 @@
 #   UNITARES_WATCHER_SWEEP_ROOTS  colon-separated roots to walk
 #                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
+#   UNITARES_WATCHER_SWEEP_MAX_WINDOW_H
+#                                 oldest edit the sweep will go back for, in
+#                                 hours (default: 48). See "Window" below.
+#   UNITARES_WATCHER_SWEEP_REVIEW set to 1 to also run the free-form review
+#                                 scan on each file (default: off). The sweep
+#                                 runs the pattern scan only. Review findings
+#                                 (pattern R000) come from no rule, so nothing
+#                                 calibrates them, and unattended they arrive
+#                                 faster than anyone reads them: one deployment
+#                                 collected 370 in six days, one of which was
+#                                 ever adjudicated.
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
 #   UNITARES_WATCHER_PYTHON       interpreter for agent.py (default: python3 on
 #                                 PATH). A scheduler's PATH can resolve a
@@ -47,6 +58,9 @@ if [[ -z "$ROOTS" ]]; then
     exit 2
 fi
 MAX_FILES="${UNITARES_WATCHER_SWEEP_MAX:-40}"
+MAX_WINDOW_H="${UNITARES_WATCHER_SWEEP_MAX_WINDOW_H:-48}"
+case "$MAX_WINDOW_H" in ''|*[!0-9]*) MAX_WINDOW_H=48 ;; esac
+SWEEP_REVIEW="${UNITARES_WATCHER_SWEEP_REVIEW:-0}"
 MAX_CONCURRENT=3
 LOCK_DIR="/tmp/unitares-watcher-locks"
 STATE_DIR="$HOME/.unitares"
@@ -89,13 +103,29 @@ if [[ ! -f "$STATE_FILE" ]]; then
     log "no watermark — seeding window at 1h"
 fi
 
+# The watermark is held whenever a sweep hits its file cap, so that the rest is
+# picked up next time. Edits can arrive faster than the cap drains them, and
+# then the watermark never moves and the window only grows: one deployment's
+# watermark sat 14 days back, with 219,000 files newer than it. So the window
+# has a floor. A watermark older than MAX_WINDOW_H is moved up to it, and the
+# edits before that are left to the hook, which is the primary trigger.
+if [[ "$MAX_WINDOW_H" -gt 0 ]] \
+    && [[ -n "$("$FIND" "$STATE_FILE" -mmin "+$(( MAX_WINDOW_H * 60 ))" 2>/dev/null)" ]]; then
+    FLOOR_STAMP=$(date -v-"${MAX_WINDOW_H}"H +%Y%m%d%H%M.%S 2>/dev/null \
+        || date -d "-${MAX_WINDOW_H} hours" +%Y%m%d%H%M.%S 2>/dev/null || true)
+    if [[ -n "$FLOOR_STAMP" ]] && touch -t "$FLOOR_STAMP" "$STATE_FILE" 2>/dev/null; then
+        log "watermark was more than ${MAX_WINDOW_H}h old; moved up to ${MAX_WINDOW_H}h, earlier edits are not swept"
+    fi
+fi
+
 # Stamp the next watermark NOW, before scanning, so edits made *during* the
 # sweep are still newer than it and get picked up on the following pass.
 PENDING_STATE="${STATE_FILE}.pending"
 : > "$PENDING_STATE"
 
 # --- Don't compete with an active editing session ---
-RUNNING=$(pgrep -f "agents/watcher/agent.py --all" 2>/dev/null | wc -l | tr -d ' ')
+# Counts the hook's scans too: both share one model.
+RUNNING=$(pgrep -f "agents/watcher/agent.py --(all|file) " 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$RUNNING" -ge "$MAX_CONCURRENT" ]]; then
     log "skip — ${RUNNING} scans already running"
     rm -f "$PENDING_STATE"
@@ -152,12 +182,26 @@ fi
 FILTERED_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 UNEDITED=$(( RAW_COUNT - FILTERED_COUNT ))
 
-if [[ -z "${CANDIDATES//[[:space:]]/}" ]]; then
+# Count lines; do not test the string. `${CANDIDATES//[[:space:]]/}` is
+# quadratic in bash 3.2, which is /bin/bash on macOS: 34 seconds on 100 paths,
+# and a sweep with 1,500 candidates sat in that one test for 22 hours.
+TOTAL="$FILTERED_COUNT"
+if [[ "$TOTAL" -eq 0 ]]; then
     mv -f "$PENDING_STATE" "$STATE_FILE"
     exit 0
 fi
 
-TOTAL=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+# One scan of one file (or region). `--file PATH` first, so the concurrency
+# count above sees the pattern scan and the review scan alike.
+scan_one() {
+    local target="$1"
+    shift
+    if [[ "$SWEEP_REVIEW" == "1" ]]; then
+        "$PY" "${WATCHER_AGENT}" --file "$target" --all "$@" >/dev/null 2>&1
+    else
+        "$PY" "${WATCHER_AGENT}" --file "$target" "$@" >/dev/null 2>&1
+    fi
+}
 
 SCANNED=0
 SKIPPED_HOOK=0
@@ -188,11 +232,11 @@ while IFS= read -r FILE_PATH; do
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
     REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
     if [[ -z "$REGIONS" ]]; then
-        "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
+        scan_one "$FILE_PATH"
     else
         while IFS= read -r REGION; do
             [[ -z "$REGION" ]] && continue
-            "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
+            scan_one "$FILE_PATH" --region "$REGION"
         done <<< "$REGIONS"
     fi
     SCANNED=$(( SCANNED + 1 ))

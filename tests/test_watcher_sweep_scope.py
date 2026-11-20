@@ -129,6 +129,110 @@ def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path, relative_roo
                             text=True, cwd=cwd)
 
     assert result.returncode == 0, result.stderr
-    scans = [c for c in calls.read_text().splitlines() if " --all " in f" {c} "]
-    assert len(scans) == 1 and scans[0].endswith(f"--file {root / 'edited.py'}"), scans
+    scans = [c for c in calls.read_text().splitlines() if c.startswith(f"{agent} --file ")]
+    assert scans == [f"{agent} --file {root / 'edited.py'}"], scans
     assert "1 unedited checkout files skipped" in log.read_text()
+
+
+def _scanning_env(tmp_path):
+    """A sweep that reaches the scan loop: Ollama answers, no scans are
+    running, the edit filter is the real one, and the scan root is not a git
+    work tree, so every file in it counts as an edit."""
+    import sys
+
+    env, calls, agent, log = _sweep_env(tmp_path)
+    root = Path(env["UNITARES_WATCHER_SWEEP_ROOTS"])
+    state = Path(env["HOME"]) / ".unitares" / "watcher-sweep.state"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.touch()
+    hour_ago = time.time() - 3600
+    os.utime(state, (hour_ago, hour_ago))
+    bins = Path(env["PATH"].split(":")[0])
+    (bins / "curl").write_text("#!/bin/sh\nexit 0\n")
+    (bins / "pgrep").write_text("#!/bin/sh\nexit 1\n")
+    (bins / "pgrep").chmod(0o755)
+    Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    return env, calls, agent, log, root, state
+
+
+def _scan_calls(calls, agent):
+    return [c for c in calls.read_text().splitlines() if c.startswith(f"{agent} --file ")]
+
+
+def test_sweep_runs_the_pattern_scan_only_by_default(tmp_path):
+    """Review findings come from no rule and nothing calibrates them, so an
+    unattended sweep does not produce them unless asked to."""
+    env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
+    (root / "a.py").write_text("a = 1\n")
+
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'}"]
+
+
+def test_sweep_runs_the_review_scan_when_opted_in(tmp_path):
+    env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_REVIEW"] = "1"
+    (root / "a.py").write_text("a = 1\n")
+
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'} --all"]
+
+
+def test_many_candidates_do_not_stall_the_sweep(tmp_path):
+    """The emptiness test on the candidate list was a bash pattern
+    substitution, quadratic in bash 3.2 (macOS /bin/bash): 34 seconds on 100
+    paths, and a sweep with 1,500 sat in it for 22 hours. 400 paths took
+    minutes; the count that replaces it takes none."""
+    env, calls, agent, log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX"] = "2"
+    for i in range(400):
+        (root / f"module_with_a_longish_name_{i:04d}.py").write_text("a = 1\n")
+
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True,
+                            text=True, timeout=120)
+
+    assert result.returncode == 0, result.stderr
+    assert len(_scan_calls(calls, agent)) == 2
+    assert "400 changed, scanned 2 (cap 2 hit" in log.read_text()
+
+
+def test_a_watermark_older_than_the_window_is_moved_up(tmp_path):
+    """A held watermark only falls further behind when edits outrun the cap.
+    Past the window it is moved up, so the sweep stays a backstop for recent
+    edits and the candidate list stays bounded."""
+    env, _calls, _agent, log, _root, state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX_WINDOW_H"] = "6"
+    long_ago = time.time() - 14 * 86400
+    os.utime(state, (long_ago, long_ago))
+    # Ollama down: the run stops before it would advance the watermark itself.
+    Path(env["PATH"].split(":")[0], "curl").write_text("#!/bin/sh\nexit 7\n")
+
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    age_h = (time.time() - state.stat().st_mtime) / 3600
+    assert 5.5 < age_h < 6.5, age_h
+    assert "watermark was more than 6h old" in log.read_text()
+
+
+def test_a_watermark_inside_the_window_is_left_alone(tmp_path):
+    env, _calls, _agent, log, _root, state = _scanning_env(tmp_path)
+    before = state.stat().st_mtime
+    Path(env["PATH"].split(":")[0], "curl").write_text("#!/bin/sh\nexit 7\n")
+
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert state.stat().st_mtime == before
+    assert "watermark was more than" not in log.read_text()
