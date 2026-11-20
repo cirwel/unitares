@@ -595,6 +595,8 @@ def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypat
     "/bin/bash /does/not/exist.sh",
     "/bin/bash does-not-exist-review.sh",
     "/usr/bin/osascript does-not-exist-review.scpt",
+    "/usr/bin/env /bin/bash does-not-exist-review.sh",
+    "/usr/bin/env FOO=1 bash does-not-exist-review.sh",
 ])
 def test_interpreter_with_missing_script_is_flagged_missing(census_mod, tmp_path, monkeypatch, command):
     """Interpreter commands with missing absolute or relative script operands stay missing."""
@@ -616,13 +618,17 @@ def test_interpreter_with_missing_script_is_flagged_missing(census_mod, tmp_path
     assert any("no resolvable script" in w for w in warnings)
 
 
-def test_inline_osascript_hook_is_wired(census_mod, tmp_path, monkeypatch):
+@pytest.mark.parametrize("command,expected_label", [
+    ("/usr/bin/osascript -e 'beep'", "Stop: osascript"),
+    ("/bin/bash -c 'echo /does/not/exist'", "Stop: bash"),
+])
+def test_inline_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch, command, expected_label):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (home / ".claude/settings.json").write_text(json.dumps({
         "hooks": {
             "Stop": [{
-                "hooks": [{"type": "command", "command": "/usr/bin/osascript -e 'beep'"}],
+                "hooks": [{"type": "command", "command": command}],
             }]
         }
     }))
@@ -632,4 +638,4 @@ def test_inline_osascript_hook_is_wired(census_mod, tmp_path, monkeypatch):
     assert warnings == []
     assert len(items) == 1
     assert items[0].status == "wired"
-    assert items[0].name == "Stop: osascript"
+    assert items[0].name == expected_label

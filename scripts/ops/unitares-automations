@@ -1224,16 +1224,49 @@ _INTERPRETER_ARG_FLAGS: dict[str, set[str]] = {
 }
 
 
+_ENV_ARG_FLAGS = {"-u", "--unset", "-C", "--chdir"}
+_WRAPPER_COMMANDS = {"env", "nohup", "nice", "command"}
+
+
+def _unwrap_command_index(tokens: list[str], idx: int, name: str) -> int:
+    """Advance past wrapper launchers (e.g. `/usr/bin/env VAR=1`) to the real command."""
+    while idx < len(tokens):
+        cur_name = name if name is not None else Path(tokens[idx]).name.lower()
+        name = None
+        if cur_name not in _WRAPPER_COMMANDS:
+            return idx
+        idx += 1
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if not tok or tok in {";", "&&", "||", "|"}:
+                return idx
+            if cur_name == "env":
+                if tok in _ENV_ARG_FLAGS:
+                    idx += 2
+                    continue
+                if re.match(r"^[A-Za-z_]\w*=", tok):
+                    idx += 1
+                    continue
+            if tok.startswith("-"):
+                idx += 1
+                continue
+            break
+    return idx
+
+
 def _missing_interpreter_operand(
     tokens: list[str], sys_idx: int, sys_path: str, plugin_root: str | None,
 ) -> bool:
     """Return True when a system interpreter command names a missing script operand."""
-    sys_name = Path(sys_path).name.lower()
+    cmd_idx = _unwrap_command_index(tokens, sys_idx, Path(sys_path).name.lower())
+    if cmd_idx >= len(tokens) or tokens[cmd_idx] in {";", "&&", "||", "|"}:
+        return False
+    sys_name = Path(tokens[cmd_idx]).name.lower()
     if sys_name not in _INTERPRETER_INLINE_FLAGS:
         return False
     inline_flags = _INTERPRETER_INLINE_FLAGS[sys_name]
     arg_flags = _INTERPRETER_ARG_FLAGS.get(sys_name, set())
-    idx = sys_idx + 1
+    idx = cmd_idx + 1
     while idx < len(tokens):
         tok = tokens[idx]
         if not tok or tok in {";", "&&", "||", "|"}:
@@ -1306,7 +1339,6 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     tokens = [t.strip(";,") for t in text.split()]
     found: list[str] = []
     system_bins: list[tuple[int, str]] = []
-    saw_missing_script = False
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
@@ -1323,8 +1355,6 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             resolved = Path(matches[0]).resolve()
         else:
             if not Path(expanded).exists():
-                if not is_system_bin:
-                    saw_missing_script = True
                 continue
             resolved = Path(expanded).resolve()
         if is_system_bin or str(resolved.parent) in SYSTEM_BIN_DIRS:
@@ -1347,7 +1377,7 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
                 break
     if found:
         return found
-    if saw_missing_script or not system_bins:
+    if not system_bins:
         return []
     first_idx, first_sys = system_bins[0]
     if _missing_interpreter_operand(tokens, first_idx, first_sys, plugin_root):
