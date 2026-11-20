@@ -51,6 +51,9 @@ def _sweep_env(tmp_path, *, python_exit=0):
             "UNITARES_WATCHER_SWEEP_ROOTS": str(root),
             "UNITARES_WATCHER_AGENT": str(agent),
             "UNITARES_WATCHER_PYTHON": str(interp),
+            # Never the shared /tmp directory: a live hook or sweep on this
+            # machine keeps its debounce locks there.
+            "UNITARES_WATCHER_LOCK_DIR": str(tmp_path / "locks"),
         }
     )
     return env, calls, agent, home / "Library" / "Logs" / "unitares-watcher.log"
@@ -253,9 +256,8 @@ def test_a_capped_sweep_resumes_where_the_last_one_stopped(tmp_path):
         result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         # What the hook does between sweeps: its locks do not outlive ten minutes.
-        for lock in Path("/tmp/unitares-watcher-locks").glob("*.lock"):
-            if lock.stat().st_mtime >= watermark:
-                lock.unlink(missing_ok=True)
+        for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
+            lock.unlink()
 
     sweep()
     sweep()
@@ -281,8 +283,8 @@ def test_a_file_edited_after_its_scan_is_scanned_again_in_the_same_window(tmp_pa
     scanned_first = Path(first[0].split(" --file ")[1])
     time.sleep(1.1)  # past the marker's mtime at one-second resolution
     scanned_first.write_text("a = 2\n")
-    for lock in Path("/tmp/unitares-watcher-locks").glob("*.lock"):
-        lock.unlink(missing_ok=True)
+    for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
+        lock.unlink()
 
     subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
     subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
@@ -312,3 +314,38 @@ def test_hook_and_sweep_count_the_same_scans():
     ):
         assert counted.search(command), command
     assert not counted.search("python3 /repo/agents/watcher/agent.py --lifecycle")
+
+
+def test_an_edit_made_while_its_scan_is_running_is_scanned_again(tmp_path):
+    """Review finding on this change (codex, P2): the marker was stamped after
+    the scan returned, so an edit that landed while the model was running was
+    older than the marker and the next sweep skipped it."""
+    import sys
+
+    env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX"] = "1"
+    target = root / "a.py"
+    target.write_text("a = 1\n")
+    (root / "b.py").write_text("b = 1\n")
+    # A scan that takes a moment, during which its own target is edited.
+    Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
+        f'  "{agent} --file {target}"*)\n'
+        f'    if [ ! -e "{tmp_path}/edited" ]; then sleep 1.2; echo "a = 2" > "{target}"; : > "{tmp_path}/edited"; fi ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+
+    def sweep():
+        subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
+        for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
+            lock.unlink()
+
+    sweep()
+    sweep()
+
+    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    assert scanned == [str(target), str(target)], scanned

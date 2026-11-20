@@ -31,6 +31,10 @@
 #                                 collected 370 in six days, one of which was
 #                                 ever adjudicated.
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
+#   UNITARES_WATCHER_LOCK_DIR     per-file debounce locks shared with
+#                                 watcher-hook.sh (default:
+#                                 /tmp/unitares-watcher-locks); set both
+#                                 triggers to the same directory
 #   UNITARES_WATCHER_PYTHON       interpreter for agent.py (default: python3 on
 #                                 PATH). A scheduler's PATH can resolve a
 #                                 python3 without Watcher's dependencies, so set
@@ -62,7 +66,7 @@ MAX_WINDOW_H="${UNITARES_WATCHER_SWEEP_MAX_WINDOW_H:-48}"
 case "$MAX_WINDOW_H" in ''|*[!0-9]*) MAX_WINDOW_H=48 ;; esac
 SWEEP_REVIEW="${UNITARES_WATCHER_SWEEP_REVIEW:-0}"
 MAX_CONCURRENT=3
-LOCK_DIR="/tmp/unitares-watcher-locks"
+LOCK_DIR="${UNITARES_WATCHER_LOCK_DIR:-/tmp/unitares-watcher-locks}"
 STATE_DIR="$HOME/.unitares"
 STATE_FILE="${STATE_DIR}/watcher-sweep.state"
 # One marker per file this sweep has scanned since the watermark last moved.
@@ -245,8 +249,12 @@ while IFS= read -r FILE_PATH; do
         continue
     fi
 
-    # Claim it for both triggers before spending the inference.
+    # Claim it for both triggers before spending the inference. The marker is
+    # stamped here too, before the scan reads the file: an edit that lands
+    # while the model is running is then newer than the marker and is scanned
+    # by the next sweep. Stamped after the scan, it would hide that edit.
     touch "$LOCK_FILE"
+    touch "$DONE_FILE"
 
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
     REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
@@ -258,7 +266,6 @@ while IFS= read -r FILE_PATH; do
             scan_one "$FILE_PATH" --region "$REGION"
         done <<< "$REGIONS"
     fi
-    touch "$DONE_FILE"
     SCANNED=$(( SCANNED + 1 ))
 done <<< "$CANDIDATES"
 

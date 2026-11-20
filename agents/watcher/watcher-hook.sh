@@ -16,7 +16,7 @@ set -u
 
 DEBOUNCE_SECS=30
 MAX_CONCURRENT=3
-LOCK_DIR="/tmp/unitares-watcher-locks"
+LOCK_DIR="${UNITARES_WATCHER_LOCK_DIR:-/tmp/unitares-watcher-locks}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 
