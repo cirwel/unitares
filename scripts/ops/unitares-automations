@@ -1206,110 +1206,6 @@ DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
 NON_HOOK_FILENAMES = {"__init__.py"}
 SYSTEM_BIN_DIRS = {"/bin", "/usr/bin", "/sbin", "/usr/sbin"}
-_INTERPRETER_INLINE_FLAGS: dict[str, set[str]] = {
-    "sh": {"c", "s"},
-    "bash": {"c", "s"},
-    "zsh": {"c", "s"},
-    "dash": {"c", "s"},
-    "ksh": {"c", "s"},
-    "python": {"c", "m"},
-    "python3": {"c", "m"},
-    "osascript": {"e"},
-    "ruby": {"e"},
-    "perl": {"e"},
-    "node": {"e", "p"},
-}
-_INTERPRETER_ARG_FLAGS: dict[str, set[str]] = {
-    "sh": {"-o", "+o"},
-    "bash": {"-o", "+o"},
-    "zsh": {"-o", "+o"},
-    "dash": {"-o", "+o"},
-    "ksh": {"-o", "+o"},
-    "python": {"-W", "-X"},
-    "python3": {"-W", "-X"},
-    "osascript": {"-l", "-s"},
-}
-_WRAPPER_ARG_FLAGS: dict[str, set[str]] = {
-    "env": {"-u", "--unset", "-C", "--chdir"},
-    "nice": {"-n", "--adjustment"},
-}
-_WRAPPER_COMMANDS = {"env", "nohup", "nice", "command"}
-
-
-def _unwrap_command_index(tokens: list[str], idx: int, name: str | None) -> int:
-    """Advance past wrapper launchers (e.g. `env`, `nice -n 1`) to the real command."""
-    while idx < len(tokens):
-        cur_name = name if name is not None else Path(tokens[idx]).name.lower()
-        name = None
-        if cur_name not in _WRAPPER_COMMANDS:
-            return idx
-        arg_flags = _WRAPPER_ARG_FLAGS.get(cur_name, set())
-        idx += 1
-        while idx < len(tokens):
-            tok = tokens[idx]
-            if not tok or tok in {";", "&&", "||", "|"}:
-                return idx
-            if tok == "--":
-                idx += 1
-                break
-            if cur_name == "command" and tok in {"-v", "-V"}:
-                return len(tokens)
-            if tok in arg_flags:
-                idx += 2
-                continue
-            if cur_name == "env" and re.match(r"^[A-Za-z_]\w*=", tok):
-                idx += 1
-                continue
-            if tok.startswith("-"):
-                idx += 1
-                continue
-            break
-    return idx
-
-
-def _missing_interpreter_operand(
-    tokens: list[str], sys_idx: int, sys_path: str, plugin_root: str | None,
-) -> bool:
-    """Return True when a system interpreter command names a missing script operand."""
-    cmd_idx = _unwrap_command_index(tokens, sys_idx, Path(sys_path).name.lower())
-    if cmd_idx >= len(tokens) or tokens[cmd_idx] in {";", "&&", "||", "|"}:
-        return False
-    sys_name = Path(tokens[cmd_idx]).name.lower()
-    if sys_name not in _INTERPRETER_INLINE_FLAGS:
-        return False
-    inline_chars = _INTERPRETER_INLINE_FLAGS[sys_name]
-    arg_flags = _INTERPRETER_ARG_FLAGS.get(sys_name, set())
-    idx = cmd_idx + 1
-    while idx < len(tokens):
-        tok = tokens[idx]
-        if not tok or tok in {";", "&&", "||", "|"}:
-            break
-        if tok == "--":
-            idx += 1
-            break
-        if tok in arg_flags:
-            idx += 2
-            continue
-        if tok.startswith("-") and not tok.startswith("--"):
-            if any(ch in inline_chars for ch in tok[1:]):
-                return False
-            idx += 1
-            continue
-        if tok.startswith(("-", "+")):
-            idx += 1
-            continue
-        break
-    else:
-        return False
-    if idx >= len(tokens) or tokens[idx] in {";", "&&", "||", "|"}:
-        return False
-    tok = tokens[idx]
-    expanded = os.path.expanduser(tok)
-    if Path(expanded).exists():
-        return False
-    if plugin_root and (Path(plugin_root) / tok).exists():
-        return False
-    return True
 
 
 _SHELL_KEYWORDS = {
@@ -1340,6 +1236,13 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     it strips the trailing path segment (bash's suffix-removal operator),
     so it needs its own expansion before the glob can be walked.
     """
+    # hooks.json uses ${CLAUDE_PLUGIN_ROOT}; codex-hooks.json uses
+    # ${PLUGIN_ROOT}, and its own #122 fallback separately uses
+    # ${PLUGIN_ROOT%/*} (bash suffix-removal: strips the trailing path
+    # segment, i.e. the plugin's dirname). `str.replace` only matches an
+    # exact contiguous substring, so `${PLUGIN_ROOT%/*}` is never mistaken
+    # for `${PLUGIN_ROOT}` (the `%` breaks the match) regardless of order
+    # -- listed first anyway so a reader doesn't have to reason about that.
     text = command
     plugin_dirname = str(Path(plugin_root).parent) if plugin_root else ""
     for placeholder, replacement in (
@@ -1361,8 +1264,7 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     # character, so dropping them all is safe.
     text = text.replace('"', "").replace("'", "")
     tokens = [t.strip(";,") for t in text.split()]
-    found: list[str] = []
-    system_bins: list[tuple[int, str]] = []
+    found: list[tuple[bool, str]] = []
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
@@ -1371,42 +1273,54 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
         if tok.startswith("-") or "://" in tok or any(ch in tok for ch in "<>"):
             continue
         expanded = os.path.expanduser(tok)
-        is_system_bin = str(Path(expanded).parent) in SYSTEM_BIN_DIRS
         if any(ch in expanded for ch in "*?["):
+            # `${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd` -- a real glob
+            # pattern once `%/*` is expanded, not a literal path. Resolve
+            # it against the filesystem rather than treating the `*` as a
+            # dead end, so a genuine plugin-cache rollover (the direct
+            # path gone, a sibling version directory still holding the
+            # dispatcher) reports "wired," not a false "no resolvable
+            # script." Sorted so which candidate wins is deterministic;
+            # the bash loop this mirrors keeps the *last* match, but for
+            # "does at least one exist" the choice of candidate doesn't
+            # matter.
             matches = sorted(glob_module.glob(expanded))
             if not matches:
                 continue
-            resolved = Path(matches[0]).resolve()
+            raw_path = Path(matches[0])
+            resolved = raw_path.resolve()
         else:
-            if not Path(expanded).exists():
+            raw_path = Path(expanded)
+            if not raw_path.exists():
                 continue
-            resolved = Path(expanded).resolve()
-        if is_system_bin or str(resolved.parent) in SYSTEM_BIN_DIRS:
-            system_bins.append((idx, str(resolved)))
-            continue
-        found.append(str(resolved))
-        if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
+            resolved = raw_path.resolve()
+        is_sys = (
+            str(raw_path.parent) in SYSTEM_BIN_DIRS
+            or str(resolved.parent) in SYSTEM_BIN_DIRS
+        )
+        found.append((is_sys, str(resolved)))
+        if not is_sys and resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
             dispatcher_idx = idx
             dispatcher_path = resolved
     if dispatcher_idx is not None and dispatcher_path is not None:
+        # System helper binaries in a dispatcher wrapper (e.g. /usr/bin/grep in #122)
+        # are not hooks, while standalone system-command hooks are kept intact.
+        paths = [path for is_sys, path in found if not is_sys]
         # Keep scanning candidates until one actually exists, rather than
-        # stopping at the first syntactically-plausible word.
+        # stopping at the first syntactically-plausible word. A wrapper
+        # that names a non-hook bare word before the real hook name (a
+        # shell builtin outside `_SHELL_KEYWORDS`, a `local` declaration,
+        # ...) would otherwise land on garbage and never recover.
         for tok in tokens[dispatcher_idx + 1:]:
             bare = tok.strip("$")
             if not _BARE_WORD.match(bare) or bare in _SHELL_KEYWORDS:
                 continue
             target = dispatcher_path.parent / bare
             if target.exists():
-                found.append(str(target.resolve()))
+                paths.append(str(target.resolve()))
                 break
-    if found:
-        return found
-    if not system_bins:
-        return []
-    first_idx, first_sys = system_bins[0]
-    if _missing_interpreter_operand(tokens, first_idx, first_sys, plugin_root):
-        return []
-    return [path for _, path in system_bins]
+        return paths
+    return [path for _, path in found]
 
 
 def _dispatched_label(scripts: list[str], command: str) -> str:
