@@ -16,7 +16,7 @@ set -u
 
 DEBOUNCE_SECS=30
 MAX_CONCURRENT=3
-LOCK_DIR="/tmp/unitares-watcher-locks"
+LOCK_DIR="${UNITARES_WATCHER_LOCK_DIR:-/tmp/unitares-watcher-locks}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 
@@ -59,7 +59,9 @@ esac
 
 # --- Concurrency cap ---
 # Count running watcher agent.py processes. If at the limit, skip.
-RUNNING=$(pgrep -f "agents/watcher/agent.py --all" 2>/dev/null | wc -l | tr -d ' ')
+# Same matcher as watcher-sweep.sh, whose pattern-only scans start with
+# `--file`: both triggers share one model, so each must count the other's.
+RUNNING=$(pgrep -f "agents/watcher/agent.py --(all|file) " 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$RUNNING" -ge "$MAX_CONCURRENT" ]]; then
     exit 0
 fi
