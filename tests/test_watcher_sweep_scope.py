@@ -476,3 +476,41 @@ def test_an_edit_resets_the_retry_count(tmp_path):
 
     assert "gave up" not in log.read_text(), "the second failure is the first for this version"
     assert log.read_text().count("(1 to retry, 0 given up)") == 2
+
+
+def test_an_edit_during_a_failed_scan_starts_its_own_retry_count(tmp_path):
+    """Review finding on this change (codex, P2): the count was dated when the
+    failure was recorded, after the scan, so an edit made while the scan was
+    running looked older than the count and inherited its failures."""
+    import sys
+
+    env, calls, agent, log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX_TRIES"] = "3"
+    target = root / "a.py"
+    target.write_text("a = 1\n")
+    # Every scan fails; the second one's target is edited while it runs.
+    Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
+        f'  "{agent} --file "*)\n'
+        f'    if [ -e "{tmp_path}/second" ] && [ ! -e "{tmp_path}/edited" ]; then\n'
+        f'      sleep 1.2; echo "a = 2" > "$3"; : > "{tmp_path}/edited"; fi\n'
+        f'    : > "{tmp_path}/second"; exit 75 ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+
+    _sweep_and_expire_locks(env)
+    _sweep_and_expire_locks(env)
+    # Two failures so far, both of the old text. The third scan reads the new
+    # text and is its first failure, not the old version's third.
+    _sweep_and_expire_locks(env)
+    assert "gave up" not in log.read_text()
+    _sweep_and_expire_locks(env)
+    assert "gave up" not in log.read_text()
+    _sweep_and_expire_locks(env)
+
+    assert f"gave up on {target} after 3 scans" in log.read_text()
+    assert _scanned_paths(calls, agent) == [str(target)] * 5

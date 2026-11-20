@@ -296,6 +296,10 @@ while IFS= read -r FILE_PATH; do
     else
         INCOMPLETE=$(( INCOMPLETE + 1 ))
         printf 'x\n' >> "$TRIES_FILE"
+        # Date the count at the pre-scan stamp, not at this write: an edit that
+        # landed while the scan was running is then newer than the count and
+        # starts its own.
+        touch -r "$DONE_FILE" "$TRIES_FILE"
         TRIES=$(grep -c . "$TRIES_FILE" 2>/dev/null || true)
         if [[ "${TRIES:-0}" -lt "$MAX_TRIES" ]]; then
             rm -f "$DONE_FILE" "$LOCK_FILE"
