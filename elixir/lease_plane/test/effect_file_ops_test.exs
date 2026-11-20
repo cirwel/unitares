@@ -202,6 +202,57 @@ defmodule UnitaresLeasePlane.EffectFileOpsTest do
   defp ok({:ok, _}), do: :ok
   defp ok(other), do: other
 
+  # Mode 0311 grants the owner write and search but not read, so the directory
+  # cannot be listed. Reaching a file below it needs search permission only,
+  # which a path-based open has always had; the walk must not ask for more.
+  test "an ancestor with search but no read permission still reaches its files", %{
+    tmp_dir: dir
+  } do
+    locked = Path.join(dir, "locked")
+    File.mkdir_p!(Path.join(locked, "sub"))
+    File.write!(Path.join(locked, "sub/out.txt"), "before\n")
+    File.chmod!(locked, 0o311)
+    on_exit(fn -> File.chmod(locked, 0o755) end)
+
+    # Running as root ignores the mode, which would let the test pass vacuously.
+    assert {:error, :eacces} = File.ls(locked)
+
+    leased = Path.join(locked, "sub/out.txt")
+    assert {:ok, "before\n"} = EffectFileOps.read(leased)
+    assert :ok = EffectFileOps.write(leased, "after\n")
+    assert {:ok, "after\n"} = EffectFileOps.read(leased)
+    assert :ok = EffectFileOps.rm(leased)
+
+    created = Path.join(locked, "sub/new.txt")
+    assert :ok = EffectFileOps.write(created, "new\n")
+    assert {:ok, "new\n"} = EffectFileOps.read(created)
+
+    # The leaf's own directory may be search-only too.
+    direct = Path.join(locked, "direct.txt")
+    assert :ok = EffectFileOps.write(direct, "direct\n")
+    assert {:ok, "direct\n"} = EffectFileOps.read(direct)
+    assert :ok = EffectFileOps.rm(direct)
+
+    File.chmod!(locked, 0o755)
+    refute File.exists?(leased)
+    assert File.read!(created) == "new\n"
+  end
+
+  test "a link is still refused below a search-only ancestor", %{tmp_dir: dir} do
+    locked = Path.join(dir, "locked")
+    real_dir = Path.join(dir, "elsewhere")
+    File.mkdir_p!(locked)
+    File.mkdir_p!(real_dir)
+    File.ln_s!(real_dir, Path.join(locked, "work"))
+    File.chmod!(locked, 0o311)
+    on_exit(fn -> File.chmod(locked, 0o755) end)
+
+    assert {:error, :symlink_in_path} =
+             EffectFileOps.write(Path.join(locked, "work/out.txt"), "x")
+
+    refute File.exists?(Path.join(real_dir, "out.txt"))
+  end
+
   test "a nil pre-image is refused and creates nothing", %{tmp_dir: dir} do
     path = Path.join(dir, "out.txt")
 

@@ -21,7 +21,10 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   Debian's essential `perl-base` in the container image) that walks the path
   one directory at a time. Each component is opened relative to the directory
   already held, with `O_NOFOLLOW|O_DIRECTORY`, and the helper changes into it
-  through that descriptor. The leaf is then opened relative to the last
+  through that descriptor. Directories are opened search-only (`O_SEARCH` on
+  macOS, `O_PATH` on Linux, `O_RDONLY` where neither exists), so the walk needs
+  only the search permission an open by path needs, not permission to list an
+  ancestor. The leaf is then opened relative to the last
   directory, also with `O_NOFOLLOW`. No component is looked up twice, so
   nothing can be swapped between a check and a use:
 
@@ -72,6 +75,7 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   use warnings;
   use Fcntl qw(O_RDONLY O_WRONLY O_RDWR O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK O_NOCTTY O_DIRECTORY);
   use Errno ();
+  use Config ();
   $| = 1;
   binmode STDIN;
   binmode STDOUT;
@@ -98,18 +102,40 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   @parts or fail("not_regular_file");
   for (@parts) { fail("bad_request") if $_ eq "." || $_ eq ".." }
   my $leaf = pop @parts;
+  # Reaching a file needs search permission on each directory above it, not
+  # read. An O_RDONLY directory open asks for read, so a directory with mode
+  # 0711 or 0311 would refuse a path that a plain open by path accepts. Open
+  # directories search-only where the platform can: O_SEARCH on macOS, O_PATH
+  # on Linux. Fcntl exports neither, so the values come from the system
+  # headers; Linux uses another O_PATH value on alpha, hppa and sparc. A probe
+  # opens "/" and changes into it the way the walk does, and falls back to
+  # O_RDONLY if either step fails.
+  my $dir_mode = O_RDONLY;
+  {
+    my $want = $^O eq "darwin" ? 0x40000000
+      : $^O eq "linux" && $Config::Config{archname} !~ /\A(?:alpha|hppa|parisc|sparc)/ ? 0x200000
+      : undef;
+    my $probe;
+    if (defined $want
+        && sysopen($probe, "/", $want | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY)
+        && chdir($probe)) {
+      $dir_mode = $want;
+    }
+    close($probe) if $probe;
+  }
+  sub fail_dir {
+    # macOS reports a link here as ENOTDIR, Linux as ELOOP. Name it the same
+    # on both; the open already failed, so this lstat only labels it.
+    my $e = $! + 0;
+    fail("symlink_in_path") if $!{ENOTDIR} && lstat($_[0]) && -l _;
+    $! = $e;
+    fail_errno();
+  }
   chdir("/") or fail_errno();
   for my $p (@parts) {
     my $d;
-    unless (sysopen($d, $p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY)) {
-      # macOS reports a link here as ENOTDIR, Linux as ELOOP. Name it the same
-      # on both; the open already failed, so this lstat only labels it.
-      my $e = $! + 0;
-      fail("symlink_in_path") if $!{ENOTDIR} && lstat($p) && -l _;
-      $! = $e;
-      fail_errno();
-    }
-    chdir($d) or fail_errno();
+    sysopen($d, $p, $dir_mode | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY) or fail_dir($p);
+    chdir($d) or fail_dir($p);
     close($d);
   }
   if (defined $pause && $pause eq "pause") { print STDOUT "W"; my $b; sysread(STDIN, $b, 1); }
