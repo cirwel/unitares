@@ -11,7 +11,10 @@ and the live writer that posts ``github.*`` events to ``POST /v1/external/events
 with durable local and server-side fingerprint deduplication.
 
 It reads GitHub with GET requests only, never reads a UNITARES table, never
-branches on an agent or resident name, and attaches no score, verdict or
-severity to anything it reports. A failing CI run on an open pull request is
-the process working.
+branches on an agent or resident name, and by default attaches no score,
+verdict or severity to anything it reports. A failing CI run on an open pull
+request is the process working. ``--record-outcomes`` is the one exception:
+it also writes each merge as a ``task_completed`` outcome (``outcomes.py``),
+an operator direction of 2026-11-20 recorded in the proposal's section 6b.
+CI results stay events either way.
 """

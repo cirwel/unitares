@@ -1565,3 +1565,300 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
     assert summary["writes_failed"] == 0
     assert len(read_only_fingerprints(state)) == 12
 
+
+
+# --- graded outcomes (--record-outcomes, proposal section 6b) --------------
+
+from agents.github_observer import outcomes as oc  # noqa: E402
+from agents.github_observer.store import FingerprintStore  # noqa: E402
+
+class _Outcomes:
+    """Records the outcome bodies it is asked to post; answers ``result``."""
+
+    def __init__(self, result="written"):
+        self.result, self.posted = result, []
+
+    def write(self, payload):
+        self.posted.append(payload)
+        return self.result
+
+
+class _Answers:
+    """An event writer that answers every event the same way."""
+
+    def __init__(self, result):
+        self.result, self.events = result, []
+
+    def write(self, event):
+        self.events.append(event)
+        return self.result
+
+
+def outcome_cycle(reader, *, writer=None, outcome_writer=None, store=None):
+    """One poll whose events and outcome keys share one store, as in a live run."""
+    store = oc.MemoryPendingStore() if store is None else store
+    out = io.StringIO()
+    queue = oc.OutcomeQueue(store, outcome_writer) if outcome_writer is not None else None
+    counts = obs.run_cycle(
+        reader,
+        [REPO],
+        writer or obs.DryRunWriter(out),
+        seen=store.has,
+        mark=store.add,
+        since=SINCE,
+        trusted_apps={APP_ID: APP_ACTOR_ID},
+        outcomes=queue,
+    )
+    return counts, store
+
+
+def _merge_event(agent=AGENT, fingerprint="1#2:state:7"):
+    return {
+        "type": "github.pr_merged",
+        "agent_uuid": agent,
+        "fingerprint": fingerprint,
+        "repo": REPO,
+        "pr": 2,
+        "merge_commit_sha": "m1",
+        "head_sha_at_observation": "h1",
+        "observed_at": "2026-11-19T00:00:00+00:00",
+        "pr_author": {"association": "OWNER"},
+    }
+
+
+def test_only_a_merge_grades_as_an_outcome():
+    base = {"agent_uuid": AGENT, "fingerprint": "1#1:x"}
+    assert oc.outcome_type_for({**base, "type": "github.pr_merged"}) == "task_completed"
+    # CI stays a timeline event: a red run on an open pull request is the
+    # process working, and a close is as often a supersede as a failure.
+    for kind, conclusion in (
+        ("github.ci_result", "success"),
+        ("github.ci_result", "failure"),
+        ("github.ci_result", "timed_out"),
+        ("github.ci_result", "cancelled"),
+        ("github.pr_closed", None),
+        ("github.pr_opened", None),
+        ("github.pr_reopened", None),
+        ("github.review_record", None),
+    ):
+        event = {**base, "type": kind, "conclusion": conclusion}
+        assert oc.outcome_type_for(event) is None and oc.outcome_payload(event) is None
+
+
+def test_an_outcome_is_external_signal_for_the_footer_agent_with_no_invented_confidence():
+    payload = oc.outcome_payload(_merge_event())
+    assert payload["agent_uuid"] == AGENT
+    assert payload["outcome_type"] == "task_completed"
+    assert payload["verification_source"] == "external_signal"
+    # The observer has no prediction: the server marks the row calibration_excluded.
+    assert not {"confidence", "prediction_id", "is_bad", "outcome_score"} & set(payload)
+    detail = payload["detail"]
+    assert detail["producer"] == "github_observer"
+    assert detail["github_event_fingerprint"] == "1#2:state:7"
+    assert detail["merge_commit_sha"] == "m1" and detail["pr"] == 2
+    # Nothing in the detail claims provenance the server would have to strip.
+    assert not {"verification_source", "verified", "corroboration_grade", "evidence_weight"} & set(detail)
+    assert "pr_author" not in detail
+
+
+def test_without_the_flag_a_poll_posts_no_outcomes():
+    counts, store = outcome_cycle(FakeReader())
+    assert counts["outcomes_written"] == 0
+    assert store.accepted_pending() == []
+
+
+def test_a_poll_posts_the_merge_once_and_a_second_poll_posts_nothing():
+    writer = _Outcomes()
+    counts, store = outcome_cycle(FakeReader(), outcome_writer=writer)
+    # The recorded pull requests hold one merge; their CI runs grade as nothing.
+    assert [p["outcome_type"] for p in writer.posted] == ["task_completed"]
+    assert writer.posted[0]["agent_uuid"] == AGENT
+    assert counts["outcomes_written"] == 1 and counts["events_new"] == 12
+    assert store.accepted_pending() == []
+
+    again = _Outcomes()
+    second, _ = outcome_cycle(FakeReader(), outcome_writer=again, store=store)
+    assert again.posted == [] and second["outcomes_written"] == 0
+
+
+def test_an_event_the_route_refused_posts_no_outcome_and_queues_nothing():
+    # The route checks the subject uuid and the PR author before its dedup;
+    # an outcome follows only an event it stored, so it inherits both checks.
+    for refusal in ("unknown_agent", "untrusted_author", "future_timestamp", "rejected"):
+        writer = _Outcomes()
+        _, store = outcome_cycle(FakeReader(), writer=_Answers(refusal), outcome_writer=writer)
+        assert writer.posted == [], refusal
+        assert store._pending == {}, refusal
+
+
+def test_a_409_for_an_event_this_store_never_queued_records_no_outcome():
+    # Another writer stored it, or it was stored before the flag was on: the
+    # observer cannot tell what the stored event says, so it grades nothing.
+    writer = _Outcomes()
+    counts, store = outcome_cycle(FakeReader(), writer=_Answers("duplicate"), outcome_writer=writer)
+    assert writer.posted == [] and counts["events_known"] == 12
+    assert store._pending == {}
+
+
+def test_a_lost_event_answer_keeps_the_outcome_queued_until_the_route_answers():
+    writer = _Outcomes()
+    counts, store = outcome_cycle(FakeReader(), writer=_Answers("failed"), outcome_writer=writer)
+    assert writer.posted == [] and counts["writes_failed"] == 12
+    assert [s for s in (store.pending_state(k) for k in store._pending)] == ["queued"]
+
+    # Next poll the route says it already has the event: our earlier attempt
+    # landed, so the queued outcome goes out.
+    second, store = outcome_cycle(FakeReader(), writer=_Answers("duplicate"), outcome_writer=writer, store=store)
+    assert [p["outcome_type"] for p in writer.posted] == ["task_completed"]
+    assert second["outcomes_written"] == 1 and store._pending == {}
+
+
+def test_a_409_releases_the_body_of_the_attempt_that_landed_not_an_edited_footer():
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    queue = oc.OutcomeQueue(store, writer)
+    first = queue.before_event(_merge_event(agent="agent-before-edit"))
+    queue.after_event(first, "failed")
+    # The footer is edited before the retry; the fingerprint is the same fact.
+    second = queue.before_event(_merge_event(agent="agent-after-edit"))
+    queue.after_event(second, "duplicate")
+    counts = dict.fromkeys(obs.COUNTS, 0)
+    queue.flush(counts)
+    assert [p["agent_uuid"] for p in writer.posted] == ["agent-before-edit"]
+
+
+def test_a_201_releases_the_body_the_server_just_stored():
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    queue = oc.OutcomeQueue(store, writer)
+    queue.after_event(queue.before_event(_merge_event(agent="agent-before-edit")), "failed")
+    # The earlier attempt never landed; this one does, with the edited footer.
+    queue.after_event(queue.before_event(_merge_event(agent="agent-after-edit")), "written")
+    queue.flush(dict.fromkeys(obs.COUNTS, 0))
+    assert [p["agent_uuid"] for p in writer.posted] == ["agent-after-edit"]
+
+
+def test_a_failed_outcome_is_retried_from_the_queue_on_later_polls():
+    failing = _Outcomes("failed")
+    counts, store = outcome_cycle(FakeReader(), outcome_writer=failing)
+    assert counts["outcomes_failed"] == 1 and counts["events_new"] == 12
+    # The event itself is stored and marked; only the outcome waits.
+    assert len(store.accepted_pending()) == 1
+
+    # A later poll sends it even though GitHub no longer lists the pull request.
+    retry = _Outcomes()
+    second, store = outcome_cycle(FakeReader(pulls=[]), outcome_writer=retry, store=store)
+    assert [p["outcome_type"] for p in retry.posted] == ["task_completed"]
+    assert second["outcomes_written"] == 1 and store.accepted_pending() == []
+
+
+def test_a_rejected_outcome_is_marked_counted_and_not_posted_again():
+    rejecting = _Outcomes("rejected")
+    counts, store = outcome_cycle(FakeReader(), outcome_writer=rejecting)
+    assert counts["outcomes_rejected"] == 1 and counts["outcomes_failed"] == 0
+    again = _Outcomes()
+    outcome_cycle(FakeReader(), outcome_writer=again, store=store)
+    assert again.posted == []
+
+
+def test_queued_outcomes_survive_a_restart_in_the_fingerprint_store(tmp_path):
+    path = tmp_path / "emitted.sqlite3"
+    store = FingerprintStore(path)
+    counts, _ = outcome_cycle(FakeReader(), outcome_writer=_Outcomes("failed"), store=store)
+    assert counts["outcomes_failed"] == 1
+    store.close()
+
+    reopened = FingerprintStore(path)
+    retry = _Outcomes()
+    second, _ = outcome_cycle(FakeReader(), outcome_writer=retry, store=reopened)
+    assert [p["outcome_type"] for p in retry.posted] == ["task_completed"]
+    assert second["events_known"] == 12 and reopened.accepted_pending() == []
+    reopened.close()
+
+
+def test_the_outcome_writer_posts_to_the_harness_route_with_the_operator_header():
+    import io as _io
+    import urllib.error
+
+    seen: list = []
+
+    class _Ack:
+        status = 201
+
+        def __init__(self, body):
+            self._body = body
+
+        def read(self, n=-1):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    payload = oc.outcome_payload(_merge_event())
+
+    def ok(request, timeout=None):
+        seen.append(request)
+        body = json.loads(request.data)
+        return _Ack(json.dumps({"success": True, "outcome_id": "o1", "agent_uuid": body["agent_uuid"], "outcome_type": body["outcome_type"]}).encode())
+
+    writer = oc.UnitaresOutcomeWriter("http://127.0.0.1:8767/", "secret-op", opener=ok)
+    assert writer.write(payload) == "written"
+    request = seen[0]
+    assert request.full_url == "http://127.0.0.1:8767/v1/harness/outcome"
+    assert request.get_method() == "POST"
+    headers = {k.lower(): v for k, v in request.header_items()}
+    assert headers["x-unitares-operator"] == "secret-op" and "authorization" not in headers
+    assert json.loads(request.data) == payload
+
+    def acks(body):
+        return lambda request, timeout=None: _Ack(body)
+
+    # An ack for another agent or type, or one without an id, is not a write.
+    assert oc.UnitaresOutcomeWriter("http://h", "t", opener=acks(json.dumps({"success": True, "outcome_id": "o", "agent_uuid": "other", "outcome_type": "task_completed"}).encode())).write(payload) == "failed"
+    assert oc.UnitaresOutcomeWriter("http://h", "t", opener=acks(json.dumps({"success": True, "agent_uuid": AGENT, "outcome_type": "task_completed"}).encode())).write(payload) == "failed"
+    assert oc.UnitaresOutcomeWriter("http://h", "t", opener=acks(b"<html>")).write(payload) == "failed"
+
+    for code, expected in ((400, "rejected"), (422, "rejected"), (401, "failed"), (403, "failed"), (404, "failed"), (500, "failed")):
+        def err(request, timeout=None, _code=code):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(b"{}"))
+
+        assert oc.UnitaresOutcomeWriter("http://h", "t", opener=err).write(payload) == expected
+
+    def down(request, timeout=None):
+        raise TimeoutError("timed out")
+
+    assert oc.UnitaresOutcomeWriter("http://h", "t", opener=down).write(payload) == "failed"
+
+
+def test_the_dry_run_with_the_flag_prints_the_merge_outcome_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    state = tmp_path / "emitted.sqlite3"
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.delenv("GITHUB_OBSERVER_TRUSTED_APPS", raising=False)
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+    args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}", "--dry-run"]
+
+    assert obs.main(args) == 0
+    plain = capsys.readouterr().out.splitlines()
+    assert not any("outcome" in json.loads(line) for line in plain)
+
+    assert obs.main([*args, "--record-outcomes"]) == 0
+    captured = capsys.readouterr()
+    lines = [json.loads(line) for line in captured.out.splitlines()]
+    outcomes = [line["outcome"] for line in lines if "outcome" in line]
+    assert [o["outcome_type"] for o in outcomes] == ["task_completed"] and len(lines) == 13
+    assert json.loads(captured.err)["outcomes_written"] == 1
+    assert not state.exists()
+
+
+@pytest.mark.parametrize("result,count", [("failed", "outcomes_failed"), ("rejected", "outcomes_rejected")])
+def test_a_poll_whose_outcome_failed_or_was_refused_exits_nonzero(tmp_path, monkeypatch, capsys, result, count):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKEN", "op")
+    monkeypatch.delenv("GITHUB_OBSERVER_TRUSTED_APPS", raising=False)
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+    monkeypatch.setattr(obs, "UnitaresEventWriter", lambda *a, **k: _Answers("written"))
+    monkeypatch.setattr(obs, "UnitaresOutcomeWriter", lambda *a, **k: _Outcomes(result))
+    args = ["--repo", REPO, "--state-path", str(tmp_path / "s.sqlite3"), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
+    assert obs.main([*args, "--record-outcomes"]) == 1
+    assert json.loads(capsys.readouterr().err)[count] == 1
