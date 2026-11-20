@@ -5,6 +5,7 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
@@ -201,7 +202,7 @@ async def _check_effect_binding(body: dict, proposer: str):
     # asyncpg returns a command tag like "INSERT 0 1" (1 row) or "INSERT 0 0".
     if str(result).split()[-1] != "1":
         return False, "binding_replayed"
-    await _maybe_purge_consumed_nonces(db)
+    _schedule_nonce_purge(db)
     return True, None
 
 
@@ -209,10 +210,20 @@ async def _check_effect_binding(body: dict, proposer: str):
 # A row is purged only once verify_effect_grant would refuse its grant anyway:
 # expired by more than the margin, or with a grant_exp no grant the server
 # mints could carry (exp <= iat + max TTL, iat <= now + skew), plus the margin.
+#
+# The purge never runs on the veto's request path: the lease plane's veto call
+# has a short client timeout, and the nonce is already consumed, so a slow purge
+# there would turn an allowed effect into a vetoed one that cannot be retried.
+# It runs as one background task at a time, skips rows another transaction has
+# locked, and is bounded by a lock timeout, a statement timeout and a deadline.
 _NONCE_PURGE_MARGIN_SECONDS = 60
 _NONCE_PURGE_BATCH = 1000
 _NONCE_PURGE_INTERVAL_SECONDS = 60.0
+_NONCE_PURGE_LOCK_TIMEOUT_MS = 500
+_NONCE_PURGE_STATEMENT_TIMEOUT_MS = 2000
+_NONCE_PURGE_DEADLINE_SECONDS = 5.0
 _last_nonce_purge = 0.0
+_nonce_purge_task: asyncio.Task | None = None
 
 
 async def _purge_consumed_nonces(conn) -> None:
@@ -221,31 +232,54 @@ async def _purge_consumed_nonces(conn) -> None:
 
     past = int(_NONCE_PURGE_MARGIN_SECONDS)
     future = int(MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS + _NONCE_PURGE_MARGIN_SECONDS)
-    await conn.execute(
-        f"""
-        DELETE FROM effects.consumed_nonces
-        WHERE nonce IN (
-            SELECT nonce FROM effects.consumed_nonces
-            WHERE grant_exp < now() - interval '{past} seconds'
-               OR grant_exp > now() + interval '{future} seconds'
-            LIMIT {int(_NONCE_PURGE_BATCH)}
+    async with conn.transaction():
+        await conn.execute(
+            f"SET LOCAL lock_timeout = '{int(_NONCE_PURGE_LOCK_TIMEOUT_MS)}ms'"
         )
-        """
-    )
+        await conn.execute(
+            f"SET LOCAL statement_timeout = '{int(_NONCE_PURGE_STATEMENT_TIMEOUT_MS)}ms'"
+        )
+        await conn.execute(
+            f"""
+            DELETE FROM effects.consumed_nonces
+            WHERE nonce IN (
+                SELECT nonce FROM effects.consumed_nonces
+                WHERE grant_exp < now() - interval '{past} seconds'
+                   OR grant_exp > now() + interval '{future} seconds'
+                LIMIT {int(_NONCE_PURGE_BATCH)}
+                FOR UPDATE SKIP LOCKED
+            )
+            """
+        )
 
 
-async def _maybe_purge_consumed_nonces(db) -> None:
-    """Best-effort, rate-limited purge; never affects the veto outcome."""
-    global _last_nonce_purge
+async def _run_nonce_purge(db) -> None:
+    """One bounded purge pass; failures and timeouts are logged, never raised."""
+    try:
+        async with asyncio.timeout(_NONCE_PURGE_DEADLINE_SECONDS):
+            async with db.acquire() as conn:
+                await _purge_consumed_nonces(conn)
+    except Exception as e:  # noqa: BLE001 — cleanup only; the nonce is already consumed
+        logger.warning("effect-binding nonce purge failed: %s", e)
+
+
+def _schedule_nonce_purge(db) -> None:
+    """Start a rate-limited background purge; return at once, whatever happens.
+
+    At most one purge is in flight. Nothing here awaits the database, so the
+    veto response is never delayed or failed by cleanup.
+    """
+    global _last_nonce_purge, _nonce_purge_task
     now = time.monotonic()
     if now - _last_nonce_purge < _NONCE_PURGE_INTERVAL_SECONDS:
         return
+    if _nonce_purge_task is not None and not _nonce_purge_task.done():
+        return
     _last_nonce_purge = now
     try:
-        async with db.acquire() as conn:
-            await _purge_consumed_nonces(conn)
-    except Exception as e:  # noqa: BLE001 — cleanup only; the nonce is already consumed
-        logger.warning("effect-binding nonce purge failed: %s", e)
+        _nonce_purge_task = asyncio.get_running_loop().create_task(_run_nonce_purge(db))
+    except Exception as e:  # noqa: BLE001 — scheduling cleanup must not fail the veto
+        logger.warning("effect-binding nonce purge not scheduled: %s", e)
 
 
 # Identity lifecycle states that may not commit a governed effect. A pause holds

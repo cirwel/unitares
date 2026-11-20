@@ -17,6 +17,7 @@ Governance row is None (unknown proposer → §6 fails open) so §7+§8 are isol
 Tokens + grants are minted with the real primitives under a test HMAC secret.
 """
 
+import asyncio
 import os
 from unittest.mock import patch
 
@@ -177,27 +178,47 @@ def test_flag_off_is_noop_even_without_grant():
 
 # ── nonce-ledger purge: bounded, rate-limited, never changes the outcome ─────
 
+class _FakeTxn:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        self._conn.statements.append("BEGIN")
+        return self
+
+    async def __aexit__(self, exc_type, *_a):
+        self._conn.statements.append("ROLLBACK" if exc_type else "COMMIT")
+        return False
+
+
 class _RecordingConn(_FakeConn):
-    def __init__(self, purge_exc=None):
+    """Consume succeeds; the purge DELETE can raise or block until released."""
+
+    def __init__(self, purge_exc=None, purge_gate=None):
         super().__init__(None, "INSERT 0 1", None)
         self.statements = []
         self._purge_exc = purge_exc
+        self._purge_gate = purge_gate
+        self.purge_started = asyncio.Event()
+
+    def transaction(self):
+        return _FakeTxn(self)
 
     async def execute(self, sql, *args, **_k):
         self.statements.append(sql)
-        if "DELETE" in sql and self._purge_exc:
-            raise self._purge_exc
+        if "DELETE" in sql:
+            self.purge_started.set()
+            if self._purge_gate is not None:
+                await self._purge_gate.wait()
+            if self._purge_exc:
+                raise self._purge_exc
         return "INSERT 0 1"
 
 
-def _post_with_conn(conn, body):
+def _recording_db(conn):
     db = _FakeDB()
     db._conn = conn
-    with patch("src.db.get_db", return_value=db):
-        app = Starlette(routes=[Route("/v1/effect-veto", http_effect_veto, methods=["POST"])])
-        return TestClient(app, client=("127.0.0.1", 50000)).post(
-            "/v1/effect-veto", json=body
-        )
+    return db
 
 
 @pytest.fixture
@@ -205,29 +226,91 @@ def _purge_due(monkeypatch):
     from src.http_routes import effects as effects_mod
 
     monkeypatch.setattr(effects_mod, "_last_nonce_purge", 0.0)
+    monkeypatch.setattr(effects_mod, "_nonce_purge_task", None)
     return effects_mod
 
 
-def test_purge_runs_after_consume_and_is_rate_limited(_purge_due):
+async def _check(conn):
+    from src.http_routes.effects import _check_effect_binding
+
+    with patch("src.db.get_db", return_value=_recording_db(conn)):
+        return await _check_effect_binding(_body(), PROPOSER)
+
+
+async def _drain(effects_mod):
+    task = effects_mod._nonce_purge_task
+    if task is not None:
+        await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_purge_runs_after_consume_and_is_rate_limited(_purge_due):
     conn = _RecordingConn()
-    assert _post_with_conn(conn, _body()).json()["binding_ok"] is True
-    assert _post_with_conn(conn, _body()).json()["binding_ok"] is True
+    assert await _check(conn) == (True, None)
+    await _drain(_purge_due)
+    assert await _check(conn) == (True, None)
+    await _drain(_purge_due)
     deletes = [s for s in conn.statements if "DELETE" in s]
     assert len(deletes) == 1
     assert "LIMIT" in deletes[0]
 
 
-def test_purge_failure_does_not_veto(_purge_due):
+@pytest.mark.asyncio
+async def test_purge_is_bounded_and_skips_locked_rows(_purge_due):
+    conn = _RecordingConn()
+    assert await _check(conn) == (True, None)
+    await _drain(_purge_due)
+    purge = conn.statements[conn.statements.index("BEGIN"):]
+    assert purge[-1] == "COMMIT"
+    assert any("SET LOCAL lock_timeout" in s for s in purge)
+    assert any("SET LOCAL statement_timeout" in s for s in purge)
+    delete = next(s for s in purge if "DELETE" in s)
+    assert "FOR UPDATE SKIP LOCKED" in delete
+
+
+@pytest.mark.asyncio
+async def test_purge_failure_does_not_veto(_purge_due):
     conn = _RecordingConn(purge_exc=RuntimeError("purge failed"))
-    j = _post_with_conn(conn, _body()).json()
-    assert j["binding_ok"] is True
-    assert j["vetoed"] is False
+    assert await _check(conn) == (True, None)
+    await _drain(_purge_due)  # the failure is logged inside the task, not raised
+
+
+@pytest.mark.asyncio
+async def test_blocked_purge_does_not_delay_the_veto(_purge_due):
+    """A purge stuck on a lock must not hold the allow decision: the lease plane
+    times out its veto call, and the nonce is already consumed, so a delayed
+    allow would become a veto the proposer cannot retry."""
+    gate = asyncio.Event()
+    conn = _RecordingConn(purge_gate=gate)
+    try:
+        result = await asyncio.wait_for(_check(conn), timeout=1.0)
+        assert result == (True, None)
+        await asyncio.wait_for(conn.purge_started.wait(), timeout=1.0)
+        # A second consume while the first purge is still in flight starts no
+        # second purge, even once the interval has elapsed.
+        _purge_due._last_nonce_purge = 0.0
+        assert await asyncio.wait_for(_check(conn), timeout=1.0) == (True, None)
+        assert sum("DELETE" in s for s in conn.statements) == 1
+    finally:
+        gate.set()
+        await _drain(_purge_due)
+
+
+@pytest.mark.asyncio
+async def test_hung_purge_is_cut_off_by_its_deadline(_purge_due, monkeypatch):
+    monkeypatch.setattr(_purge_due, "_NONCE_PURGE_DEADLINE_SECONDS", 0.05)
+    conn = _RecordingConn(purge_gate=asyncio.Event())  # never released
+    assert await _check(conn) == (True, None)
+    await asyncio.wait_for(_purge_due._nonce_purge_task, timeout=2.0)
+    assert _purge_due._nonce_purge_task.done()
+    assert conn.statements[-1] == "ROLLBACK"
 
 
 @pytest.mark.asyncio
 async def test_purge_sql_keeps_live_nonces_against_real_db():
     """Expired-past-margin and unmintable far-future rows go; live rows stay,
-    and a replay of a live nonce is still refused after the purge."""
+    a row another transaction has locked is skipped without waiting, and a
+    replay of a live nonce is still refused after the purge."""
     from tests.test_db_utils import (
         TEST_DB_URL,
         can_connect_to_test_db,
@@ -253,6 +336,7 @@ async def test_purge_sql_keeps_live_nonces_against_real_db():
         )
         rows = {
             "old": "now() - interval '10 minutes'",
+            "old-locked": "now() - interval '10 minutes'",
             "just-expired": "now() - interval '5 seconds'",
             "live": "now() + interval '120 seconds'",
             "far-future": "now() + interval '3650 days'",
@@ -264,7 +348,20 @@ async def test_purge_sql_keeps_live_nonces_against_real_db():
                 prefix + name,
             )
 
-        await _purge_consumed_nonces(conn)
+        # Another transaction holds a row lock on one purgeable row: the purge
+        # skips it rather than waiting on it.
+        locker = await asyncpg.connect(TEST_DB_URL)
+        locker_txn = locker.transaction()
+        await locker_txn.start()
+        try:
+            await locker.fetchval(
+                "SELECT nonce FROM effects.consumed_nonces WHERE nonce = $1 FOR UPDATE",
+                prefix + "old-locked",
+            )
+            await asyncio.wait_for(_purge_consumed_nonces(conn), timeout=3.0)
+        finally:
+            await locker_txn.rollback()
+            await locker.close()
 
         left = {
             r["nonce"][len(prefix):]
@@ -273,7 +370,7 @@ async def test_purge_sql_keeps_live_nonces_against_real_db():
                 prefix + "%",
             )
         }
-        assert left == {"just-expired", "live"}
+        assert left == {"just-expired", "live", "old-locked"}
 
         replay = await conn.execute(
             "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
