@@ -662,6 +662,106 @@ async def test_a_used_refresh_token_stays_refused_when_the_store_delete_fails(ca
     assert await provider.load_refresh_token(client, tokens.refresh_token) is None
 
 
+async def _rotate(provider, client, refresh_token, times):
+    for _ in range(times):
+        entry = await provider.load_refresh_token(client, refresh_token)
+        refresh_token = (await provider.exchange_refresh_token(client, entry, [])).refresh_token
+    return refresh_token
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_refresh_digest_whose_delete_landed_stays_refused():
+    store = _DictStore()
+    provider = GovernanceOAuthProvider(store=store, max_consumed_refresh_per_client=2)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+
+    latest = await _rotate(provider, client, tokens.refresh_token, 10)
+
+    assert len(provider._consumed_refresh) <= 2
+    assert await provider.load_refresh_token(client, tokens.refresh_token) is None
+    restarted = GovernanceOAuthProvider(store=store)
+    assert await restarted.load_refresh_token(client, tokens.refresh_token) is None
+    assert await provider.load_refresh_token(client, latest) is not None
+
+
+class _SlowGetStore(_DictStore):
+    async def get(self, key):
+        import asyncio
+
+        value = await super().get(key)
+        await asyncio.sleep(0.01)
+        return value
+
+
+@pytest.mark.asyncio
+async def test_a_load_overlapping_an_exchange_does_not_recache_the_used_token():
+    import asyncio
+
+    store = _SlowGetStore()
+    provider = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+    entry = await provider.load_refresh_token(client, tokens.refresh_token)
+    provider._refresh_tokens.clear()  # as after a restart: the load hits the store
+
+    async def slow_load():
+        return await provider.load_refresh_token(client, tokens.refresh_token)
+
+    loading = asyncio.create_task(slow_load())
+    await asyncio.sleep(0)
+    await provider.exchange_refresh_token(client, entry, [])
+
+    assert await loading is None
+    assert tokens.refresh_token not in provider._refresh_tokens
+
+
+@pytest.mark.asyncio
+async def test_refresh_digests_whose_delete_failed_are_kept_and_cap_refreshes():
+    from mcp.server.auth.provider import TokenError
+
+    store = _FailingDeleteStore()
+    provider = GovernanceOAuthProvider(store=store, max_consumed_refresh_per_client=2)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+    latest = await _rotate(provider, client, tokens.refresh_token, 2)
+
+    entry = await provider.load_refresh_token(client, latest)
+    with pytest.raises(TokenError) as refused:
+        await provider.exchange_refresh_token(client, entry, [])
+
+    assert refused.value.error == "invalid_request"
+    assert len(provider._consumed_refresh) == 2
+    # Both still-persisted used tokens stay refused by this process.
+    assert await provider.load_refresh_token(client, tokens.refresh_token) is None
+    # The refused grant consumed nothing: the token it carried still works.
+    assert await provider.load_refresh_token(client, latest) is not None
+
+
+@pytest.mark.asyncio
+async def test_token_caches_have_a_global_cap_and_reload_from_the_store():
+    store = _DictStore()
+    provider = GovernanceOAuthProvider(
+        store=store, max_access_tokens_total=2, max_refresh_tokens_total=2
+    )
+    issued = []
+    for index in range(5):
+        client = _dcr_client(f"dcr-{index}")
+        await provider.register_client(client)
+        issued.append((client, await _sign_in(provider, client)))
+
+    assert len(provider._access_tokens) <= 2
+    assert len(provider._refresh_tokens) <= 2
+    first_client, first = issued[0]
+    assert await provider.load_access_token(first.access_token) is not None
+    assert await provider.load_refresh_token(first_client, first.refresh_token) is not None
+    assert len(provider._access_tokens) <= 2
+    assert len(provider._refresh_tokens) <= 2
+
+
 class _CountingStore(_DictStore):
     def __init__(self):
         super().__init__()
