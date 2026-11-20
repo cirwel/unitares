@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.4.1`
+**Current contract:** `unitares.interface-contract.v1`, version `2.4.2`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1364,3 +1364,12 @@ digest change. No capability or parameter is added or removed. Clients should
 supply the summary when storing and the discovery ID when updating, as the
 handlers already required. Hash-pinning clients should refresh those two
 schema pins; schema-aware clients can now detect incomplete calls locally.
+
+## 2.4.2 (2026-11-20)
+
+Imported-memory close-contest `ranking_multiplier` relaxes from `0.55` to `0.85` while `channel_message` stays `0.55`.
+
+- **Affected outputs:** the `authority.ranking_multiplier` field on search outputs (`knowledge(action="search")`, `search_knowledge_graph`, and `search_shared_memory` digests) now reports `0.85` instead of `0.55` for `imported_context` rows, and authority-adjusted search ordering uses `0.85` for `imported_context`. `channel_message` (`0.55`), `native_finding` (`1.0`), and `governed_claim` (`1.15`) are unchanged; queryless listing omission (1.44.0), check-in suggestion filtering, and `source-<provider>-memory` classification (1.46.0) are unchanged. Close relevance contests still favor `native_finding` over `imported_context`, while strong imported-memory matches are no longer buried behind weak native rows (operator decision 2026-11-20, KG `2026-11-20T07:55:29.151367+00:00`, live `bge-m3` ablation KG `2026-11-20T05:44:43.941727+00:00`).
+- **Compatibility:** no tool, action, parameter name, type, default, or requiredness changes. Clients inspecting `authority.ranking_multiplier` or pinning exact close-contest ordering for `imported_context` rows see `0.85` in place of `0.55`.
+- **Schema digests:** none move (`surface_sha256` and all per-tool `input_schema_sha256` values are unchanged); only `version` advances from `2.4.1` to `2.4.2`.
+- **Client action:** none required unless a client asserts the literal `0.55` multiplier on `imported_context` rows.
