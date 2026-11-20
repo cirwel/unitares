@@ -10,6 +10,11 @@ substrate resident's UUID could rebind to it over HTTP, evading the #802 closure
 This pins both directions: the legitimate non-substrate / UDS recovery still
 works, and the substrate-over-HTTP exfiltration path is refused (the session
 keeps its freshly-created identity).
+
+The header itself proves nothing: anyone can send it. A rebind also needs
+proof that the caller owns the named agent, a verified continuity token for
+that agent or a kernel-attested UDS peer; without one the session keeps its
+freshly-created identity and no binding is cached.
 """
 from __future__ import annotations
 
@@ -32,7 +37,11 @@ def _fresh_result(created_uuid="aaaaaaaa-0000-0000-0000-000000000000"):
 
 
 def _signals(peer_pid=None, fp="ip-x:ua-x"):
-    return SimpleNamespace(peer_pid=peer_pid, ip_ua_fingerprint=fp)
+    return SimpleNamespace(
+        peer_pid=peer_pid,
+        ip_ua_fingerprint=fp,
+        transport="uds" if peer_pid is not None else "mcp",
+    )
 
 
 def _claim(label="com.unitares.sentinel"):
@@ -43,20 +52,79 @@ def _claim(label="com.unitares.sentinel"):
 
 class TestRecoveryBranches:
     @pytest.mark.asyncio
-    async def test_non_substrate_uuid_rebinds(self):
-        """The legitimate recovery: a known non-substrate UUID over HTTP rebinds
-        the freshly-created session (the branch that previously had no test)."""
+    async def test_header_alone_does_not_rebind(self):
+        """A known non-substrate UUID in the header, over HTTP, with no proof:
+        the session keeps its freshly-created identity and nothing is cached."""
+        result = _fresh_result()
+        original = result["agent_uuid"]
+        with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
+             patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
+             patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)):
+            bound = await _maybe_recover_via_x_agent_id(
+                result, PLAIN_UUID, "sess-key", signals=_signals(peer_pid=None),
+            )
+        assert bound == original
+        assert result["agent_uuid"] == original
+        assert result["created"] is True
+        assert result.get("source") != "x_agent_id_recovery"
+        cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_token_for_another_agent_does_not_rebind(self):
+        result = _fresh_result()
+        original = result["agent_uuid"]
+        with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
+             patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
+             patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)):
+            bound = await _maybe_recover_via_x_agent_id(
+                result, PLAIN_UUID, "sess-key",
+                signals=_signals(peer_pid=None), token_agent_uuid=SUBSTRATE_UUID,
+            )
+        assert bound == original
+        cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rebind_with_matching_token(self):
+        """A verified continuity token for the header's agent is proof."""
         result = _fresh_result()
         with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
              patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
              patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)):
-            bound = await _maybe_recover_via_x_agent_id(result, PLAIN_UUID, "sess-key")
+            bound = await _maybe_recover_via_x_agent_id(
+                result, PLAIN_UUID, "sess-key",
+                signals=_signals(peer_pid=None), token_agent_uuid=PLAIN_UUID,
+            )
         assert bound == PLAIN_UUID
         assert result["agent_uuid"] == PLAIN_UUID
         assert result["created"] is False
         assert result["persisted"] is True
         assert result["source"] == "x_agent_id_recovery"
         cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rebind_over_uds_peer(self):
+        """A kernel-attested UDS peer is proof (the resident reconnection)."""
+        result = _fresh_result()
+        with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
+             patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
+             patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)):
+            bound = await _maybe_recover_via_x_agent_id(
+                result, PLAIN_UUID, "sess-key", signals=_signals(peer_pid=4321),
+            )
+        assert bound == PLAIN_UUID
+        assert result["source"] == "x_agent_id_recovery"
+        cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_signals_does_not_rebind(self):
+        result = _fresh_result()
+        original = result["agent_uuid"]
+        with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
+             patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
+             patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)):
+            bound = await _maybe_recover_via_x_agent_id(result, PLAIN_UUID, "sess-key")
+        assert bound == original
+        cache.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_substrate_uuid_refused_no_rebind(self):
@@ -68,7 +136,10 @@ class TestRecoveryBranches:
         with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
              patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache, \
              patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=refusal)):
-            bound = await _maybe_recover_via_x_agent_id(result, SUBSTRATE_UUID, "sess-key")
+            bound = await _maybe_recover_via_x_agent_id(
+                result, SUBSTRATE_UUID, "sess-key",
+                signals=_signals(peer_pid=None), token_agent_uuid=SUBSTRATE_UUID,
+            )
         assert bound == original
         assert result["agent_uuid"] == original
         assert result["created"] is True
@@ -97,7 +168,9 @@ class TestRecoveryBranches:
         original = result["agent_uuid"]
         with patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=False)), \
              patch(f"{_RES}._substrate_http_reject", new=AsyncMock(return_value=None)) as gate:
-            bound = await _maybe_recover_via_x_agent_id(result, PLAIN_UUID, "k")
+            bound = await _maybe_recover_via_x_agent_id(
+                result, PLAIN_UUID, "k", signals=_signals(peer_pid=4321),
+            )
         assert bound == original
         gate.assert_not_awaited()  # never reaches the gate for an unknown UUID
 
@@ -114,7 +187,10 @@ class TestGateWiring:
              patch(f"{_HANDLERS}._cache_session", new=AsyncMock()), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=_signals(peer_pid=None)), \
              patch("src.substrate.verification.fetch_substrate_claim", new=AsyncMock(return_value=_claim())):
-            bound = await _maybe_recover_via_x_agent_id(result, SUBSTRATE_UUID, "k")
+            bound = await _maybe_recover_via_x_agent_id(
+                result, SUBSTRATE_UUID, "k",
+                signals=_signals(peer_pid=None), token_agent_uuid=SUBSTRATE_UUID,
+            )
         assert bound == original
         assert result["created"] is True
 
@@ -127,7 +203,42 @@ class TestGateWiring:
              patch(f"{_HANDLERS}._cache_session", new=AsyncMock()), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=_signals(peer_pid=4321)), \
              patch("src.substrate.verification.fetch_substrate_claim", new=AsyncMock(return_value=_claim())):
-            bound = await _maybe_recover_via_x_agent_id(result, SUBSTRATE_UUID, "k")
+            bound = await _maybe_recover_via_x_agent_id(
+                result, SUBSTRATE_UUID, "k", signals=_signals(peer_pid=4321),
+            )
         assert bound == SUBSTRATE_UUID
         assert result["agent_uuid"] == SUBSTRATE_UUID
         assert result["source"] == "x_agent_id_recovery"
+
+
+# ── through the dispatch middleware, strict identity off ────────────────────
+
+class TestDispatchWiring:
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_foreign_header_stays_on_the_minted_identity(self):
+        """With STRICT_IDENTITY_REQUIRED off, a call that mints carries another
+        agent's UUID in X-Agent-Id and no proof: it stays bound to the minted
+        identity, and no session binding to the named agent is cached."""
+        from src.mcp_handlers.middleware import DispatchContext
+        from src.mcp_handlers.middleware.identity_step import resolve_identity
+        from tests.test_identity_premint_recovery import (
+            FakeRedis,
+            FakeSignals,
+            _make_db,
+            _patches,
+            _Stack,
+        )
+
+        signals = FakeSignals(x_agent_id=PLAIN_UUID)
+        with _Stack(_patches(FakeRedis(), _make_db())), \
+             patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
+             patch(f"{_HANDLERS}._agent_exists_in_postgres", new=AsyncMock(return_value=True)), \
+             patch(f"{_HANDLERS}._cache_session", new=AsyncMock()) as cache:
+            _, _, ctx = await resolve_identity("sync_state", {}, DispatchContext())
+
+        assert ctx.bound_agent_id is not None
+        assert ctx.bound_agent_id != PLAIN_UUID
+        assert ctx.identity_result["created"] is True
+        assert ctx.identity_result.get("source") != "x_agent_id_recovery"
+        assert all(PLAIN_UUID not in call.args for call in cache.await_args_list)

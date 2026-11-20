@@ -427,6 +427,9 @@ async def _maybe_recover_via_x_agent_id(
     identity_result: Dict[str, Any],
     x_agent_id_header: Optional[str],
     session_key: str,
+    *,
+    signals: Any = None,
+    token_agent_uuid: Optional[str] = None,
 ) -> Optional[str]:
     """PATH 2.75: rebind a freshly-created session to an existing UUID supplied
     via the ``X-Agent-Id`` header (reconnection when the session key changed,
@@ -442,6 +445,13 @@ async def _maybe_recover_via_x_agent_id(
     pass through untouched, so legitimate Pi/Lumen reconnection over UDS is
     unaffected; only the same-host copyable-header exfiltration path is denied.
 
+    The header names an agent; it proves nothing about the caller. A rebind
+    also needs proof of ownership: a verified continuity token for the named
+    agent (``token_agent_uuid``) or a kernel-attested UDS peer, the same proof
+    PATH 0 accepts for a bare ``agent_uuid``. Without it the freshly-created
+    identity stays and no binding is cached, since a cached binding would later
+    resolve as the caller's own session.
+
     Mutates ``identity_result`` in place on a successful rebind and returns the
     (possibly rebound) bound agent UUID. On refusal or any error it leaves the
     freshly-created identity in place — the safe denial — and never raises.
@@ -451,6 +461,17 @@ async def _maybe_recover_via_x_agent_id(
         return bound_agent_id
     is_uuid = len(x_agent_id_header) == 36 and x_agent_id_header.count("-") == 4
     if not is_uuid:
+        return bound_agent_id
+    _peer_pid = getattr(signals, "peer_pid", None) if signals else None
+    _uds_peer = (
+        getattr(signals, "transport", None) == "uds" and isinstance(_peer_pid, int)
+    ) if signals else False
+    if not (_uds_peer or (token_agent_uuid and token_agent_uuid == x_agent_id_header)):
+        logger.warning(
+            "[DISPATCH] X-Agent-Id recovery refused: the header carries no proof "
+            "of ownership (no matching continuity token, no UDS peer); keeping "
+            "the freshly-created identity."
+        )
         return bound_agent_id
     try:
         from ..identity.handlers import _agent_exists_in_postgres, _cache_session
@@ -1155,7 +1176,8 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
         # PATH 2.75: X-Agent-Id UUID recovery (substrate-over-HTTP gated, #802).
         bound_agent_id = await _maybe_recover_via_x_agent_id(
-            identity_result, x_agent_id_header, session_key
+            identity_result, x_agent_id_header, session_key,
+            signals=signals, token_agent_uuid=_token_agent_uuid,
         )
 
         # Mark dispatch-created identities as ephemeral

@@ -1,0 +1,1 @@
+- **identity:** an `X-Agent-Id` header no longer rebinds a freshly minted session to the named agent on its own. The rebind now needs a verified continuity token for that agent or a kernel-attested UDS peer; otherwise the session keeps its minted identity and no binding is cached.
