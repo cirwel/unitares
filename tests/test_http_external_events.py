@@ -193,6 +193,21 @@ class TestValidation:
         r2 = client.post("/v1/external/events", json=body, headers=_op_headers())
         assert r2.status_code == 400
 
+    @pytest.mark.parametrize(
+        "bad_author",
+        [
+            {"association": [], "id": 1, "type": "User"},
+            {"association": "NONE", "id": "not-an-int", "type": "Bot"},
+            {"association": "NONE", "id": 1, "type": ["Bot"]},
+        ],
+    )
+    def test_malformed_pr_author_fields_are_400_and_helper_does_not_raise(self, client, bad_author):
+        from src.http_routes.external_events import is_trusted_pr_author
+
+        assert is_trusted_pr_author(bad_author, frozenset({1})) is False
+        r = client.post("/v1/external/events", json=_body(pr_author=bad_author), headers=_op_headers())
+        assert r.status_code == 400
+
 
 class TestAuthorTrustAndDelivery:
     @pytest.mark.parametrize(

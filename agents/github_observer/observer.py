@@ -339,9 +339,10 @@ class UnitaresEventWriter:
                 status = getattr(response, "status", None)
                 if status is None and hasattr(response, "getcode"):
                     status = response.getcode()
-                if status in (None, 200, 201):
-                    return "written"
-                return "failed"
+                if status not in (200, 201):
+                    return "failed"
+                raw_body = response.read(16384)
+                ack = json.loads(raw_body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 409:
                 return "duplicate"
@@ -357,8 +358,17 @@ class UnitaresEventWriter:
                 if _error_reason(exc) == "untrusted pr_author":
                     return "untrusted_author"
             return "failed"
-        except (OSError, http.client.HTTPException, ValueError):
+        except (OSError, http.client.HTTPException, UnicodeDecodeError, ValueError, AttributeError):
             return "failed"
+        if (
+            isinstance(ack, dict)
+            and ack.get("success") is True
+            and isinstance(ack.get("event_id"), str)
+            and bool(ack.get("event_id"))
+            and ack.get("fingerprint") == event.get("fingerprint")
+        ):
+            return "written"
+        return "failed"
 
 
 COUNTS = (

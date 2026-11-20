@@ -1291,6 +1291,12 @@ def test_unitares_event_writer_posts_with_operator_header_and_no_redirect():
     class _CreatedResponse:
         status = 201
 
+        def __init__(self, body=b'{"success": true, "event_id": "evt-1", "fingerprint": "1#1:opened"}'):
+            self._body = body
+
+        def read(self, n=-1):
+            return self._body if n < 0 else self._body[:n]
+
         def __enter__(self):
             return self
 
@@ -1324,6 +1330,34 @@ def test_unitares_event_writer_posts_with_operator_header_and_no_redirect():
         raise TimeoutError("timed out")
 
     assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "secret-op", opener=net_err_opener).write(event) == "failed"
+
+    # Non-JSON 200 (e.g. HTML proxy fallback) or incomplete ack must fail rather than mark handled.
+    class _FakeHttp200:
+        status = 200
+
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def read(self, n=-1):
+            return self._body if n < 0 else self._body[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    for bad_body in (
+        b"<html>proxy fallback</html>",
+        b'{"success": false, "event_id": "evt-1", "fingerprint": "1#1:opened"}',
+        b'{"success": true, "fingerprint": "1#1:opened"}',
+        b'{"success": true, "event_id": "evt-1", "fingerprint": "wrong-fp"}',
+    ):
+        assert obs.UnitaresEventWriter(
+            "http://127.0.0.1:8767",
+            "secret-op",
+            opener=lambda req, timeout=None, _b=bad_body: _FakeHttp200(_b),
+        ).write(event) == "failed"
 
     # Real _DEFAULT_OPENER must refuse redirects instead of forwarding X-Unitares-Operator.
     class RedirectHandler(BaseHTTPRequestHandler):

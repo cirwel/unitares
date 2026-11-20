@@ -98,11 +98,13 @@ def is_trusted_pr_author(pr_author: Any, trusted_bot_ids: frozenset[int]) -> boo
     """Whether ``pr_author`` matches the configured GitHub association or trusted bot ID."""
     if not isinstance(pr_author, dict):
         return False
-    if pr_author.get("association") in TRUSTED_GITHUB_ASSOCIATIONS:
+    association = pr_author.get("association")
+    if isinstance(association, str) and association in TRUSTED_GITHUB_ASSOCIATIONS:
         return True
     actor_id = pr_author.get("id")
     return (
-        pr_author.get("type") == "Bot"
+        isinstance(pr_author.get("type"), str)
+        and pr_author.get("type") == "Bot"
         and type(actor_id) is int
         and actor_id in trusted_bot_ids
     )
@@ -235,6 +237,19 @@ async def http_record_external_event(request):
     if not isinstance(pr_author, dict):
         return JSONResponse(
             {"success": False, "error": "pr_author must be an object"}, status_code=400
+        )
+
+    assoc = pr_author.get("association")
+    actor_id = pr_author.get("id")
+    actor_type = pr_author.get("type")
+    if (
+        (assoc is not None and not isinstance(assoc, str))
+        or (actor_type is not None and not isinstance(actor_type, str))
+        or (actor_id is not None and (type(actor_id) is not int or actor_id < 0))
+    ):
+        return JSONResponse(
+            {"success": False, "error": "pr_author fields have invalid types"},
+            status_code=400,
         )
 
     if not is_trusted_pr_author(pr_author, configured_trusted_github_bot_ids()):
