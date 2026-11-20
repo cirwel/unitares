@@ -1,30 +1,35 @@
 """
-Per-agent bearer credentials for REST check-ins.
+Per-agent bearer credentials for scoped REST tool calls.
 
-A resident on another machine needs to check in over the authenticated HTTPS
-path without holding the shared ``UNITARES_HTTP_API_TOKEN``. An agent token
-authorizes one agent's check-ins and nothing else, and it can be revoked
-without touching any other client.
+A resident on another machine needs to check in, report outcomes, and store
+observations over the authenticated HTTPS path without holding the shared
+``UNITARES_HTTP_API_TOKEN``. Each agent token authorizes only the granted
+capabilities for one agent UUID, and multiple tokens for the same agent can be
+issued or revoked independently.
 
-Design (operator decision 2026-10-27, after a tailnet-to-loopback proxy that
-an embodied resident relied on was retired as an unauthenticated exposure):
+Design (operator decision 2026-10-27, extended for scoped outcome and
+append-only knowledge writes):
 
 - ``UNITARES_HTTP_AGENT_TOKENS`` holds comma-separated entries
-  ``<agent_uuid>:sha256:<64 hex>``. The server keeps only digests, so the
-  service environment carries no secret. Generate a token with
-  ``openssl rand -hex 32`` and store ``sha256(token)`` here.
+  ``<agent_uuid>:sha256:<64 hex>`` or
+  ``<agent_uuid>:sha256:<64 hex>:<scope1+scope2>``.
+  When the fourth scope field is omitted, the grant defaults to ``checkin``
+  only so existing credentials gain no additional permissions on deploy.
+  Valid scopes are ``checkin``, ``outcome``, and ``knowledge_store``.
+- The server keeps only SHA-256 digests, so the service environment carries no
+  secret. Generate a token with ``openssl rand -hex 32`` and store
+  ``sha256(token)`` here.
 - Accepted only by ``POST /v1/tools/call``, in both REST postures, and only
   when the request did not already authenticate another way. No other REST
-  route, the WebSocket or ``/mcp`` reads it.
+  route, WebSocket, or ``/mcp`` reads it.
 - Authorization, not identity. The call still resolves its caller through the
-  normal REST path (client_session_id echo); the token only admits a call
-  that resolves to its own agent. It is never a binding proof.
-- Only ``process_agent_update`` (and its aliases) is allowed. ``identity`` and
-  ``onboard`` can create or move a binding before any check could run after
-  them, so they are refused outright.
-- Arguments that select or prove an identity (``agent_id``, ``agent_uuid``,
-  ``continuity_token``) are refused at every ``kwargs`` depth dispatch will
-  unwrap, as is the ``X-Unitares-Operator`` header.
+  normal REST path using the body's explicit ``client_session_id``; the token
+  only admits a call that resolves to its own agent. It is never a binding
+  proof.
+- Enforces flat top-level argument allowlists per scope: refuses wrapper keys
+  (``kwargs``, ``arguments``, ``params``), identity-selecting arguments
+  (``agent_id``, ``agent_uuid``, ``continuity_token``), ``X-Agent-Id``, and
+  ``X-Unitares-Operator``. ``identity`` and ``onboard`` remain forbidden.
 - A malformed entry disables every agent token (fail closed) and logs an
   error. It does not stop the server, so a typo cannot take down the shared
   check-in path for everyone else.
@@ -40,7 +45,8 @@ import os
 import re
 import secrets
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from src.logging_utils import get_logger
 
@@ -48,29 +54,110 @@ logger = get_logger(__name__)
 
 AGENT_TOKENS_ENV = "UNITARES_HTTP_AGENT_TOKENS"
 
-# Canonical names, after alias resolution.
-ALLOWED_TOOLS = frozenset({"process_agent_update"})
+DEFAULT_SCOPES: FrozenSet[str] = frozenset({"checkin"})
+VALID_SCOPES: FrozenSet[str] = frozenset({"checkin", "outcome", "knowledge_store"})
 
-# Keys that name or prove an identity. A check-in client that echoes
-# client_session_id needs none of them.
+# Kept for callers/tests inspecting the default un-scoped tool set.
+ALLOWED_TOOLS: FrozenSet[str] = frozenset({"process_agent_update"})
+
 _IDENTITY_KEYS = ("agent_id", "agent_uuid", "continuity_token")
+_WRAPPER_KEYS: FrozenSet[str] = frozenset({"kwargs", "arguments", "params"})
+
+_OUTCOME_ALLOWED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "client_session_id",
+        "outcome_type",
+        "outcome_score",
+        "is_bad",
+        "detail",
+        "confidence",
+        "decision_action",
+        "response_mode",
+    }
+)
+
+_KNOWLEDGE_STORE_ALLOWED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "client_session_id",
+        "action",
+        "summary",
+        "discovery_type",
+        "tags",
+        "details",
+        "content",
+        "severity",
+    }
+)
+_KNOWLEDGE_STORE_ALLOWED_SEVERITIES: FrozenSet[str] = frozenset({"low", "medium"})
+_KNOWLEDGE_STORE_ALLOWED_TYPES: FrozenSet[str] = frozenset(
+    {
+        "observation",
+        "insight",
+        "learning",
+        "note",
+        "pattern",
+        "exploration",
+        "question",
+        "experiment",
+    }
+)
+_KNOWLEDGE_STORE_RESERVED_TAGS: FrozenSet[str] = frozenset(
+    {"permanent", "source-claude-memory"}
+)
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _warned_raw: set[str] = set()
 
 
-def _parse(raw: str) -> List[Tuple[str, bytes]]:
+@dataclass(frozen=True)
+class AgentTokenGrant:
+    """Authorized scopes and audit prefix bound to an agent token digest."""
+
+    agent_uuid: str
+    scopes: FrozenSet[str]
+    digest_prefix: str
+
+
+def _parse_scopes(raw_scopes: Optional[str], position: int) -> FrozenSet[str]:
+    if raw_scopes is None:
+        return DEFAULT_SCOPES
+    if not raw_scopes:
+        raise ValueError(f"entry {position} has an empty scope suffix")
+    parts = raw_scopes.split("+")
+    if any(not scope for scope in parts):
+        raise ValueError(f"entry {position} has an empty scope name")
+    unknown = [scope for scope in parts if scope not in VALID_SCOPES]
+    if unknown:
+        raise ValueError(
+            f"entry {position} has unknown scope(s): {', '.join(unknown)}"
+        )
+    if len(parts) != len(set(parts)):
+        raise ValueError(f"entry {position} repeats a scope")
+    return frozenset(parts)
+
+
+def _parse(raw: str) -> List[Tuple[AgentTokenGrant, bytes]]:
     """Parse the allowlist. Raises ValueError naming the first bad entry."""
-    entries: List[Tuple[str, bytes]] = []
+    entries: List[Tuple[AgentTokenGrant, bytes]] = []
     seen_digests: set[bytes] = set()
     for position, item in enumerate((x.strip() for x in raw.split(",")), start=1):
         if not item:
             continue
         parts = item.split(":")
-        if len(parts) != 3 or parts[1] != "sha256":
-            raise ValueError(f"entry {position} is not <agent_uuid>:sha256:<hex>")
-        agent, _scheme, digest_hex = parts
+        if len(parts) == 3:
+            agent, scheme, digest_hex = parts
+            raw_scopes: Optional[str] = None
+        elif len(parts) == 4:
+            agent, scheme, digest_hex, raw_scopes = parts
+        else:
+            raise ValueError(
+                f"entry {position} is not <agent_uuid>:sha256:<hex>[:<scopes>]"
+            )
+        if scheme != "sha256":
+            raise ValueError(
+                f"entry {position} is not <agent_uuid>:sha256:<hex>[:<scopes>]"
+            )
         try:
             agent = str(uuid.UUID(agent))
         except ValueError:
@@ -82,11 +169,21 @@ def _parse(raw: str) -> List[Tuple[str, bytes]]:
         if digest in seen_digests:
             raise ValueError(f"entry {position} repeats a digest")
         seen_digests.add(digest)
-        entries.append((agent, digest))
+        scopes = _parse_scopes(raw_scopes, position)
+        entries.append(
+            (
+                AgentTokenGrant(
+                    agent_uuid=agent,
+                    scopes=scopes,
+                    digest_prefix=digest[:4].hex(),
+                ),
+                digest,
+            )
+        )
     return entries
 
 
-def configured_entries() -> List[Tuple[str, bytes]]:
+def configured_entries() -> List[Tuple[AgentTokenGrant, bytes]]:
     """The allowlist, read at call time. Empty when unset or malformed."""
     raw = os.environ.get(AGENT_TOKENS_ENV, "")
     if not raw.strip():
@@ -104,11 +201,11 @@ def configured_entries() -> List[Tuple[str, bytes]]:
         return []
 
 
-def agent_for_bearer(token: Optional[str]) -> Optional[str]:
-    """The agent uuid a presented bearer token belongs to, or None.
+def grant_for_bearer(token: Optional[str]) -> Optional[AgentTokenGrant]:
+    """Return the grant a presented bearer token resolves to, or None.
 
-    Every entry is compared, without an early exit, so the response time does
-    not say which entry matched or how many there are.
+    Every entry is compared without an early exit so timing does not leak which
+    entry matched or how many entries exist.
     """
     if not token:
         return None
@@ -116,11 +213,17 @@ def agent_for_bearer(token: Optional[str]) -> Optional[str]:
     if not entries:
         return None
     presented = hashlib.sha256(token.encode("utf-8")).digest()
-    matched: Optional[str] = None
-    for agent, digest in entries:
+    matched: Optional[AgentTokenGrant] = None
+    for grant, digest in entries:
         if secrets.compare_digest(presented, digest) and matched is None:
-            matched = agent
+            matched = grant
     return matched
+
+
+def agent_for_bearer(token: Optional[str]) -> Optional[str]:
+    """The agent uuid a presented bearer token belongs to, or None."""
+    grant = grant_for_bearer(token)
+    return grant.agent_uuid if grant is not None else None
 
 
 def call_refusal(
@@ -128,28 +231,97 @@ def call_refusal(
     arguments: Dict[str, Any],
     *,
     operator_header: Optional[str],
+    agent_id_header: Optional[str] = None,
+    scopes: FrozenSet[str] = DEFAULT_SCOPES,
 ) -> Optional[str]:
     """Why an agent-token call is refused before dispatch, or None to allow it."""
-    from src.mcp_handlers.middleware.params_step import unwrapped_views
     from src.mcp_handlers.tool_stability import resolve_tool_alias
 
-    canonical, _alias = resolve_tool_alias(tool_name)
-    if canonical not in ALLOWED_TOOLS:
-        return f"agent tokens may call only {', '.join(sorted(ALLOWED_TOOLS))}"
     if operator_header:
         return "agent tokens cannot be combined with an operator token"
+    if agent_id_header:
+        return "agent tokens cannot be combined with X-Agent-Id"
     if not isinstance(arguments, dict):
         return "arguments must be an object"
-    for view in unwrapped_views(arguments, _DISPATCH_UNWRAP_DEPTH):
-        named = [key for key in _IDENTITY_KEYS if key in view]
-        if named:
+
+    wrappers = sorted(key for key in _WRAPPER_KEYS if key in arguments)
+    if wrappers:
+        return (
+            "agent tokens require flat top-level arguments; "
+            f"remove {', '.join(wrappers)}"
+        )
+
+    named = [key for key in _IDENTITY_KEYS if key in arguments]
+    if named:
+        return (
+            "agent tokens resolve the caller from client_session_id only; "
+            f"remove {', '.join(named)}"
+        )
+
+    csid = arguments.get("client_session_id")
+    if not isinstance(csid, str) or not csid.strip():
+        return "agent tokens require a non-empty client_session_id argument"
+
+    canonical, alias = resolve_tool_alias(tool_name)
+
+    if canonical == "process_agent_update":
+        if "checkin" not in scopes:
+            return "agent token lacks 'checkin' scope for process_agent_update"
+        return None
+
+    if canonical == "outcome_event":
+        if "outcome" not in scopes:
+            return "agent token lacks 'outcome' scope for outcome_event"
+        disallowed = sorted(set(arguments.keys()) - _OUTCOME_ALLOWED_KEYS)
+        if disallowed:
             return (
-                "agent tokens resolve the caller from client_session_id only; "
-                f"remove {', '.join(named)}"
+                "agent token forbids argument(s) on outcome_event: "
+                f"{', '.join(disallowed)}"
             )
-    return None
+        return None
 
+    if canonical == "knowledge":
+        if "knowledge_store" not in scopes:
+            return "agent token lacks 'knowledge_store' scope for knowledge"
+        disallowed = sorted(set(arguments.keys()) - _KNOWLEDGE_STORE_ALLOWED_KEYS)
+        if disallowed:
+            return (
+                "agent token forbids argument(s) on knowledge: "
+                f"{', '.join(disallowed)}"
+            )
+        if "action" in arguments:
+            action = arguments["action"]
+            if not isinstance(action, str) or action != "store":
+                return "agent tokens admit only action='store' on knowledge"
+        elif not (alias is not None and alias.inject_action == "store"):
+            return "agent tokens admit only action='store' on knowledge"
 
-# Dispatch unwraps kwargs twice (the pipeline boundary, then the HTTP
-# fallback); see src/http_routes/access.py.
-_DISPATCH_UNWRAP_DEPTH = 2
+        if "severity" in arguments and arguments["severity"] is not None:
+            severity = arguments["severity"]
+            if (
+                not isinstance(severity, str)
+                or severity not in _KNOWLEDGE_STORE_ALLOWED_SEVERITIES
+            ):
+                return "agent tokens allow only low or medium severity on knowledge store"
+
+        if "discovery_type" in arguments and arguments["discovery_type"] is not None:
+            dtype = arguments["discovery_type"]
+            if (
+                not isinstance(dtype, str)
+                or dtype not in _KNOWLEDGE_STORE_ALLOWED_TYPES
+            ):
+                return "agent token forbids discovery_type on knowledge store"
+
+        tags = arguments.get("tags")
+        if tags is not None:
+            if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+                return "tags must be a list of strings"
+            reserved = [
+                t for t in tags if t.strip().lower() in _KNOWLEDGE_STORE_RESERVED_TAGS
+            ]
+            if reserved:
+                return f"agent token forbids reserved tag(s): {', '.join(reserved)}"
+
+        return None
+
+    return "agent tokens may call only process_agent_update (and explicitly granted outcome/knowledge_store tools)"
