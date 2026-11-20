@@ -788,6 +788,206 @@ def test_a_merge_of_a_branch_not_on_the_base_does_not_carry(carry_repo):
     assert rg.base_merge_equivalents("master", "HEAD") == []  # ...but no walk past it
 
 
+# ---- carrying a review across a commit that only adds skill attestations ----
+
+_ATTESTED_AT = "2026-11-18T18:35:35Z"
+_ATTESTATION_NAME = "20261118T183535474214Z-8c598012.json"
+
+
+def _attestation(skill="demo", **over) -> dict:
+    record = {"schema": "unitares.skill_attestation.v1", "skill": skill,
+              "verified_at": _ATTESTED_AT, "verified_date": "2026-11-18",
+              "verifier": "model-x (agent 1234): re-checked demo after the base merge",
+              "source_digests": {"unitares/src/a.py#symbol": "95d7d8a248ee2c31"},
+              "skill_digest": "789148a2dc55a729",
+              "superseded_digests": {"unitares/src/a.py#symbol": ["ad9d23e2f1018ca1"]}}
+    record.update(over)
+    return {k: v for k, v in record.items() if v is not None}
+
+
+def _add_skill(r: Path, skill="demo") -> None:
+    (r / "skills" / skill).mkdir(parents=True, exist_ok=True)
+    (r / "skills" / skill / "SKILL.md").write_text("# demo\n")
+    _git(r, "add", "skills")
+    _git(r, "commit", "-q", "-m", f"add skill {skill}")
+
+
+def _restamp(r: Path, text: str | None = None, skill="demo", name=_ATTESTATION_NAME,
+             message="restamp") -> None:
+    d = r / "skills" / ".attestations" / skill
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(_attestation(skill)) if text is None else text)
+    _git(r, "add", "skills")
+    _git(r, "commit", "-q", "-m", message)
+
+
+def test_a_restamp_commit_carries_the_review(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    assert rg.diff_key("master", "HEAD") != reviewed_key  # the #3222 failure
+    assert rg.base_merge_equivalents("master", "HEAD") == [(reviewed_key, reviewed_head)]
+    rec, carried = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN"
+    assert carried == {"reviewed": reviewed_head}
+
+
+def test_a_restamp_carries_an_open_finding_too(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    rec, _ = _decide([_record(reviewed_key, "FINDINGS", 2)])
+    assert (rec.verdict, rec.findings, rec.disposed) == ("FINDINGS", 2, False)
+
+
+def test_a_restamp_carries_on_a_second_family_diff_but_a_base_merge_still_does_not(
+        carry_repo, monkeypatch):
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    _add_skill(carry_repo)
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    merged_head = _git(carry_repo, "rev-parse", "HEAD")
+    merged_key = rg.diff_key("master", "HEAD")
+    assert rg.base_merge_equivalents("master", "HEAD") == []  # 2026-09-28 rule, unchanged
+    _restamp(carry_repo)
+    # The restamp is stepped over; the base merge under it still ends the walk.
+    assert rg.base_merge_equivalents("master", "HEAD") == [(merged_key, merged_head)]
+
+
+def test_a_restamp_on_top_of_a_base_merge_carries_both_on_an_ordinary_diff(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    merged_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    assert [k for k, _ in rg.base_merge_equivalents("master", "HEAD")] == [merged_key, reviewed_key]
+    rec, _ = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN"
+
+
+def test_a_restamp_that_also_edits_code_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    (carry_repo / "other.txt").write_text("slipped in\n")
+    _git(carry_repo, "add", "other.txt")
+    _restamp(carry_repo)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps(_attestation(note="extra field")),
+    json.dumps(_attestation(verifier="two\nlines")),
+    json.dumps(_attestation(verifier="bidi ‮ override")),
+    json.dumps(_attestation(verifier="x" * 601)),
+    json.dumps(_attestation(skill_digest="not-a-digest")),
+    json.dumps(_attestation(source_digests={"../../etc/passwd": "95d7d8a248ee2c31"})),
+    json.dumps(_attestation(source_digests={})),
+    json.dumps(_attestation(verified_at="2026-11-18T18:35:36Z")),   # disagrees with the file name
+    json.dumps(_attestation(verified_date="2026-11-19")),
+    json.dumps(_attestation(schema="unitares.skill_attestation.v2")),
+    json.dumps(_attestation(skill_digest=None)),                     # required field missing
+    json.dumps(_attestation(superseded_digests={"unitares/src/a.py": "ad9d23e2f1018ca1"})),
+    '{"schema": "unitares.skill_attestation.v1", "schema": "unitares.skill_attestation.v1"}',
+    json.dumps(_attestation()).replace('"789148a2dc55a729"', "NaN"),
+    json.dumps([_attestation()]),
+    "not json",
+    json.dumps(_attestation(verifier="y" * 500)) + " " * (17 * 1024),
+])
+def test_a_malformed_attestation_does_not_carry(carry_repo, text):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, text)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_an_attestation_for_another_or_unknown_skill_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, json.dumps(_attestation("other")))          # record names another skill
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    _git(carry_repo, "reset", "-q", "--hard", "HEAD~1")
+    _restamp(carry_repo, json.dumps(_attestation("ghost")), skill="ghost")  # no skills/ghost/SKILL.md
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+@pytest.mark.parametrize("name", ["notes.json", "20261118T183535474214Z-8c598012.txt",
+                                  "20261118T183535Z-8c598012.json"])
+def test_a_file_that_is_not_named_like_an_attestation_does_not_carry(carry_repo, name):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, name=name)
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_changing_or_swapping_an_attestation_does_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo)
+    path = carry_repo / "skills" / ".attestations" / "demo" / _ATTESTATION_NAME
+    path.write_text(json.dumps(_attestation(verifier="someone else")))
+    _git(carry_repo, "commit", "-q", "-am", "edit the attestation")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+    _git(carry_repo, "rm", "-q", str(path))
+    _restamp(carry_repo, name="20261118T183535999999Z-00000000.json", message="swap")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_too_many_attestations_in_one_commit_do_not_carry(carry_repo):
+    _add_skill(carry_repo)
+    d = carry_repo / "skills" / ".attestations" / "demo"
+    d.mkdir(parents=True)
+    for n in range(rg.ATTESTATION_MAX_FILES + 1):
+        (d / f"20261118T183535{n:06d}Z-8c598012.json").write_text(json.dumps(_attestation()))
+    _git(carry_repo, "add", "skills")
+    _git(carry_repo, "commit", "-q", "-m", "many restamps")
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_a_branch_made_only_of_attestations_has_no_earlier_key(carry_repo):
+    _git(carry_repo, "checkout", "-q", "master")
+    _add_skill(carry_repo)
+    _git(carry_repo, "checkout", "-q", "-b", "restamp-only")
+    _restamp(carry_repo)
+    # Stepping onto master would yield the key of an empty diff.
+    assert rg.base_merge_equivalents("master", "HEAD") == []
+
+
+def test_a_waiver_is_not_carried_across_a_restamp(carry_repo):
+    _add_skill(carry_repo)
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _restamp(carry_repo)
+    key = rg.diff_key("master", "HEAD")
+    waiver = {"author_association": "OWNER", "user": {"type": "User"}, "html_url": "waiver",
+              "body": f"<!-- {rg.WAIVER_MARKER} key={reviewed_key} authors=openai -->\n"
+                      "### waived\n\nReason: help string only; no auth decision changes\n"}
+    comments, carried = rg.carry_records([waiver, _record(reviewed_key)], key,
+                                         rg.base_merge_equivalents("master", "HEAD"))
+    assert "waiver" not in carried and f"key={reviewed_key}" in comments[0]["body"]
+    assert rg.active_waiver(comments, key, rg.waiver_policy()) is None
+
+
+def test_every_attestation_in_this_repository_is_wellformed():
+    # The carry is only as good as its agreement with the real producer
+    # (scripts/client/_check_freshness.py --stamp).
+    root = Path(__file__).resolve().parents[1] / "skills" / ".attestations"
+    files = sorted(root.glob("*/*.json"))
+    assert files
+    for f in files:
+        m = rg.ATTESTATION_PATH_RE.fullmatch(f"skills/.attestations/{f.parent.name}/{f.name}")
+        assert m is not None, f.name
+        assert rg.wellformed_attestation(f.read_bytes(), m["skill"], m["stamp"]), f.name
+
+
+def test_the_held_check_names_the_waiver_route_when_no_family_is_left():
+    _, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
+                                     {"anthropic"}, {"google", "openai"})
+    assert "no family outside the authors is left" in desc
+    assert "waiver with a line allowance" in desc and "none of the gate's own files" in desc
+    _, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"],
+                                     {"anthropic"}, {"openai"})
+    assert "eligible to review: google" in desc and "waiver" not in desc
+
+
 def test_the_carry_walks_through_several_base_merges(carry_repo):
     reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
     reviewed_key = rg.diff_key("master", "HEAD")
@@ -6095,12 +6295,15 @@ def test_a_waiver_is_bound_to_the_authorship_it_was_granted_against():
                            {"google", "openai"})[0] == "success"
 
 
-def test_the_held_message_names_the_facts_and_no_command():
+def test_the_held_message_names_the_facts_and_the_route_but_no_command():
     held = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"anthropic"},
                                   {"google", "openai"})
     assert held[0] == "action_required"
     assert "authors: google, openai" in held[1] and "needs an operator decision" in held[1]
-    assert "review.sh" not in held[1] and "waive" not in held[1]
+    # It says which decision (operator ruling 2026-11-20: two successors on
+    # #3222 read "operator decision" as "no route exists"), in words only:
+    # nothing here can be pasted and run.
+    assert "review.sh" not in held[1] and "--" not in held[1] and "waive " not in held[1]
     open_ = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"}, {"anthropic"})
     assert "eligible to review: openai" in open_[1]
 

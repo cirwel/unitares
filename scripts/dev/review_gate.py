@@ -399,6 +399,133 @@ def _clean_auto_merge(merge: str, pr_side: str, base_side: str) -> bool:
     return bool(auto_tree) and auto_tree == git("rev-parse", f"{merge}^{{tree}}").strip()
 
 
+#: A commit that adds nothing but well-formed skill attestations carries a
+#: finished review (see `base_merge_equivalents`). The shape is checked here
+#: and not left to the freshness check, because a carried file reaches master
+#: without a reviewer reading it: the limits bound what such a file can hold.
+ATTESTATION_PATH_RE = re.compile(
+    r"skills/\.attestations/(?P<skill>[a-z0-9][a-z0-9-]{0,63})/"
+    r"(?P<stamp>\d{8}T\d{6})\d{6}Z-[0-9a-f]{8}\.json")
+ATTESTATION_SCHEMA = "unitares.skill_attestation.v1"
+ATTESTATION_REQUIRED = frozenset({"schema", "skill", "verified_at", "verified_date",
+                                  "verifier", "source_digests", "skill_digest"})
+ATTESTATION_OPTIONAL = frozenset({"superseded_digests"})
+ATTESTATION_MAX_BYTES = 16 * 1024
+ATTESTATION_MAX_FILES = 8      # per commit; a restamp writes one per skill
+ATTESTATION_MAX_SOURCES = 200
+ATTESTATION_MAX_VERIFIER = 600
+_ATTESTATION_DIGEST_RE = re.compile(r"[0-9a-f]{16}")
+_ATTESTATION_SOURCE_RE = re.compile(r"[A-Za-z0-9._/@+#-]{1,240}")
+
+
+def _json_object_no_duplicates(pairs: list[tuple[str, object]]) -> dict:
+    out: dict = {}
+    for name, value in pairs:
+        if name in out:
+            raise ValueError("duplicate key")
+        out[name] = value
+    return out
+
+
+def _reject_json_constant(name: str) -> None:
+    raise ValueError(f"non-finite number {name}")
+
+
+def wellformed_attestation(text: bytes, skill: str, stamp: str) -> bool:
+    """True when `text` is one skill attestation record and nothing else.
+
+    `skill` and `stamp` (YYYYMMDDTHHMMSS) come from the file's path and must
+    agree with the record. Free text is limited to `verifier`: printable
+    ASCII, bounded, so it cannot carry control characters, bidi overrides or
+    a second line. This says the file has the shape of an attestation, never
+    that its claim is true; the freshness check recomputes the digests.
+    """
+    if len(text) > ATTESTATION_MAX_BYTES:
+        return False
+    try:
+        record = json.loads(text.decode("utf-8"), object_pairs_hook=_json_object_no_duplicates,
+                            parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(record, dict):
+        return False
+    names = set(record)
+    if not ATTESTATION_REQUIRED <= names or names - ATTESTATION_REQUIRED - ATTESTATION_OPTIONAL:
+        return False
+    if record["schema"] != ATTESTATION_SCHEMA or record["skill"] != skill:
+        return False
+    verified_at, verified_date = record["verified_at"], record["verified_date"]
+    if not (isinstance(verified_at, str) and isinstance(verified_date, str)):
+        return False
+    try:
+        at = datetime.strptime(verified_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    if at.strftime("%Y%m%dT%H%M%S") != stamp or at.strftime("%Y-%m-%d") != verified_date:
+        return False
+    verifier = record["verifier"]
+    if not (isinstance(verifier, str) and 0 < len(verifier) <= ATTESTATION_MAX_VERIFIER
+            and all(" " <= ch <= "~" for ch in verifier)):
+        return False
+
+    def digest(value: object) -> bool:
+        return isinstance(value, str) and _ATTESTATION_DIGEST_RE.fullmatch(value) is not None
+
+    def source(name: object) -> bool:
+        return (isinstance(name, str) and _ATTESTATION_SOURCE_RE.fullmatch(name) is not None
+                and ".." not in name and not name.startswith("/"))
+
+    sources = record["source_digests"]
+    if not (digest(record["skill_digest"]) and isinstance(sources, dict)
+            and 0 < len(sources) <= ATTESTATION_MAX_SOURCES
+            and all(source(k) and digest(v) for k, v in sources.items())):
+        return False
+    superseded = record.get("superseded_digests", {})
+    return (isinstance(superseded, dict) and len(superseded) <= ATTESTATION_MAX_SOURCES
+            and all(source(k) and isinstance(v, list) and 0 < len(v) <= ATTESTATION_MAX_SOURCES
+                    and all(digest(d) for d in v) for k, v in superseded.items()))
+
+
+def attestation_only_commit(parent: str, commit: str) -> bool:
+    """True when `commit` differs from `parent` only by adding well-formed
+    attestation files for skills that exist in `commit`.
+
+    Read from the raw diff of the two trees, so a file that was modified,
+    deleted, renamed, made executable or swapped for another does not qualify,
+    and neither does a commit that also touches anything else. Anything that
+    cannot be read counts as "no".
+    """
+    raw = subprocess.run(
+        ["git", "diff", "--raw", "--no-renames", "--full-index", "--no-abbrev",
+         "--no-ext-diff", "-z", parent, commit], capture_output=True)
+    if raw.returncode != 0:
+        return False
+    fields = raw.stdout.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if not fields or len(fields) % 2 or len(fields) // 2 > ATTESTATION_MAX_FILES:
+        return False
+    for meta, raw_path in zip(fields[0::2], fields[1::2]):
+        parts = meta.split(b" ")
+        if len(parts) != 5 or parts[0] != b":000000" or parts[1] != b"100644" or parts[4] != b"A":
+            return False
+        try:
+            path = raw_path.decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        m = ATTESTATION_PATH_RE.fullmatch(path)
+        if m is None:
+            return False
+        if subprocess.run(["git", "cat-file", "-e", f"{commit}:skills/{m['skill']}/SKILL.md"],
+                          capture_output=True).returncode != 0:
+            return False
+        blob = subprocess.run(["git", "cat-file", "blob", parts[3].decode("ascii")],
+                              capture_output=True)
+        if blob.returncode != 0 or not wellformed_attestation(blob.stdout, m["skill"], m["stamp"]):
+            return False
+    return True
+
+
 def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
     """Earlier diff keys that describe the same PR change as `head`, newest
     first, as (key, commit) pairs.
@@ -431,19 +558,40 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
     counts, as it always has (native Codex reviews are bound to their commit
     regardless). Binding second-family evidence to the head was considered
     and not adopted (operator decision, 2026-09-28).
+
+    The walk also steps back through a commit that only adds well-formed
+    skill attestations (`attestation_only_commit`): a restamp after a base
+    merge changes no code, and re-reviewing the whole diff for it voided
+    finished reviews on #3222 (operator decision, 2026-11-20). This step is
+    taken on a second-family diff too, because the code on those paths is
+    byte-identical on both sides of it; a base merge on such a diff still
+    ends the walk. The walk never steps onto a commit that is already on
+    `base`, so a branch made only of attestations has no earlier key.
+    Operator waivers are not review records and are never carried: a waiver
+    stays bound to the exact diff it names.
     """
     changed = changed_paths(base, head)
-    if changed is None or (changed and sensitive_paths(changed, base_policy_paths(base))):
+    if changed is None:
         return []
+    sensitive = bool(changed and sensitive_paths(changed, base_policy_paths(base)))
     out: list[tuple[str, str]] = []
     try:
-        fingerprint = None  # computed only once a base merge is found
         cur = head
         # One step past the bound, to tell a chain that ends there from one
         # that would be cut off.
         for _ in range(CARRY_MAX_BASE_MERGES + 1):
             parents = git("rev-list", "--parents", "-n", "1", cur).split()[1:]
-            if len(parents) != 2:
+            if len(parents) == 1:
+                (parent,) = parents
+                if subprocess.run(["git", "merge-base", "--is-ancestor", parent, base],
+                                  capture_output=True).returncode == 0:
+                    break  # the PR's first commit: nothing earlier to carry from
+                if not attestation_only_commit(parent, cur):
+                    break
+                out.append((diff_key(base, parent), parent))
+                cur = parent
+                continue
+            if len(parents) != 2 or sensitive:
                 break
             pr_side, base_side = parents
             if subprocess.run(["git", "merge-base", "--is-ancestor", base_side, base],
@@ -451,9 +599,9 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
                 break
             if not _clean_auto_merge(cur, pr_side, base_side):
                 break
-            if fingerprint is None:
-                fingerprint = patch_fingerprint(base, head)
-            if patch_fingerprint(base, pr_side) != fingerprint:
+            # Compared with the commit this step leaves, not with `head`: an
+            # attestation step above it changed the set of files.
+            if patch_fingerprint(base, pr_side) != patch_fingerprint(base, cur):
                 break
             out.append((diff_key(base, pr_side), pr_side))
             cur = pr_side
@@ -1811,7 +1959,10 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
 
     The message states the facts an operator needs (who passed, who wrote it,
     who could still review) and no command: when no family outside the
-    authors remains, the way forward is an operator decision, not a rerun."""
+    authors remains, the way forward is an operator decision, not a rerun.
+    It names that decision in words (a waiver with a line allowance, and the
+    one thing that rules it out), because "needs an operator decision" alone
+    was read on #3222 as "no route exists"."""
     if conclusion != "success" or not sensitive or len(families) >= 2:
         return conclusion, desc
     have = ", ".join(sorted(families)) or "none"
@@ -1822,7 +1973,10 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
     if eligible:
         tail = f"eligible to review: {', '.join(eligible)}"
     else:
-        tail = "no family outside the authors is left to review; needs an operator decision"
+        tail = ("no family outside the authors is left to review; needs an operator decision: "
+                "a second-family waiver with a line allowance for this diff, which the gate "
+                "accepts only when the diff changes none of the gate's own files "
+                "(docs/operations/github-workflow-conventions.md#second-family-review)")
     return ("action_required",
             f"security-sensitive path {sensitive[0]}{more}: needs review coverage "
             f"from {missing} (have: {have}; authors: {wrote}); {tail}")
@@ -4338,7 +4492,7 @@ def cmd_ci(args) -> int:
     conclusion, desc = held
     carried = {**carried, **snapshot.carried}
     if rec is not None and rec.url in carried:
-        desc += f" · carried across a base merge from {carried[rec.url][:7]}"
+        desc += f" · carried from {carried[rec.url][:7]} (base merge or attestation-only commit)"
     if proposal_advisory(changed, f"origin/{base_ref}"):
         conclusion = "success"
         desc = "proposal-only advisory: " + desc + "; implementation requires correctness review"
