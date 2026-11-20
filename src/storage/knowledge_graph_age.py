@@ -186,14 +186,14 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
                 id, agent_id, type, severity, status,
                 created_at, updated_at, resolved_at,
                 summary, details, tags, references_files, related_to,
-                response_to_id, response_type, provenance, epoch,
+                response_to_id, response_type, provenance, provenance_chain, epoch,
                 closure_class, closure_evidence
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15, $16, $17,
-                $18, $19
+                $14, $15, $16, $17, $18,
+                $19, $20
             )
             ON CONFLICT (id) DO UPDATE SET
                 agent_id = EXCLUDED.agent_id,
@@ -211,6 +211,7 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
                 response_to_id = EXCLUDED.response_to_id,
                 response_type = EXCLUDED.response_type,
                 provenance = EXCLUDED.provenance,
+                provenance_chain = EXCLUDED.provenance_chain,
                 epoch = EXCLUDED.epoch,
                 closure_class = EXCLUDED.closure_class,
                 closure_evidence = EXCLUDED.closure_evidence
@@ -231,6 +232,7 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
             response_to_id,
             response_type,
             json.dumps(discovery.provenance) if discovery.provenance else None,
+            json.dumps(discovery.provenance_chain) if discovery.provenance_chain else None,
             GovernanceConfig.CURRENT_EPOCH,
             # The row carries the pair the AGE vertex gets, so a classified
             # node round-trips (graph unavailable, or rebuilt from SQL). Like
