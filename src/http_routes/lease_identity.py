@@ -15,6 +15,11 @@ import uuid
 from starlette.responses import JSONResponse
 
 from src.http_routes import access
+from src.services.http_request_parser import (
+    MAX_HTTP_SMALL_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 LEASE_HOLDER_ATTESTATION_SCOPE = frozenset(
     {
@@ -43,7 +48,9 @@ async def http_verify_lease_holder(request):
         return access._http_unauthorized()
 
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -109,7 +116,9 @@ async def http_attest_lease_holder(request):
         return access._http_unauthorized()
 
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = {}
     if not isinstance(body, dict):
