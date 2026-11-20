@@ -966,16 +966,32 @@ def test_a_waiver_is_not_carried_across_a_restamp(carry_repo):
     assert rg.active_waiver(comments, key, rg.waiver_policy()) is None
 
 
-def test_every_attestation_in_this_repository_is_wellformed():
+def test_the_shape_check_agrees_with_the_attestations_the_stamp_tool_wrote():
     # The carry is only as good as its agreement with the real producer
-    # (scripts/client/_check_freshness.py --stamp).
+    # (scripts/client/_check_freshness.py --stamp). The carry is deliberately
+    # narrower in one way: the producer accepts any verifier text, the carry
+    # only bounded printable ASCII. Such a record is still a valid
+    # attestation; it is reviewed like any other change. So this must never
+    # fail merely because a valid attestation is not carryable.
     root = Path(__file__).resolve().parents[1] / "skills" / ".attestations"
-    files = sorted(root.glob("*/*.json"))
-    assert files
-    for f in files:
+    carryable = 0
+    for f in sorted(root.glob("*/*.json")):
+        verifier = json.loads(f.read_text()).get("verifier")
+        if not (isinstance(verifier, str) and 0 < len(verifier) <= rg.ATTESTATION_MAX_VERIFIER
+                and all(" " <= ch <= "~" for ch in verifier)):
+            continue
         m = rg.ATTESTATION_PATH_RE.fullmatch(f"skills/.attestations/{f.parent.name}/{f.name}")
         assert m is not None, f.name
         assert rg.wellformed_attestation(f.read_bytes(), m["skill"], m["stamp"]), f.name
+        carryable += 1
+    assert carryable
+
+
+def test_a_valid_attestation_with_a_unicode_verifier_is_reviewed_not_carried(carry_repo):
+    _add_skill(carry_repo)
+    _restamp(carry_repo, json.dumps(_attestation(verifier="Jos\u00e9 (re-checked skill)"),
+                                    ensure_ascii=False))
+    assert rg.base_merge_equivalents("master", "HEAD") == []
 
 
 def test_the_held_check_names_the_waiver_route_when_no_family_is_left():

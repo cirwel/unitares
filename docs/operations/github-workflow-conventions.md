@@ -394,7 +394,9 @@ starting an automatic model review before its evidence has been recorded.
   most 8 of them: known fields only, digests and dates that agree with the
   file name, and a one-line printable-ASCII `verifier` of at most 600
   characters. A changed, deleted or replaced attestation, or any other file in
-  the same commit, stops the carry. This step applies on a second-family path
+  the same commit, stops the carry. These limits decide the carry only: a
+  valid attestation outside them (a non-ASCII verifier name, say) is not
+  rejected, it is reviewed like any other change. This step applies on a second-family path
   as well, because the code there is byte-identical on both sides of it.
   The carried file reaches master without a reviewer reading it; the shape
   check bounds what it can hold, and the freshness check recomputes its
