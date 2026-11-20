@@ -15,9 +15,13 @@ Two sources, in order:
 The HTTP API token is never used. It used to be the fallback, which made every
 holder of that bearer able to forge ownership proofs.
 
-Looking the key up only reads; :func:`ensure_generated_secret` creates the file
-and runs at server startup. Deleting the file and restarting rotates the key,
-which invalidates every outstanding token and grant.
+Looking the key up only reads; :func:`ensure_generated_secret` creates the file.
+A server calls :func:`hold_for_server` at startup: it creates the key, refuses
+to start without a usable one (unless ``UNITARES_ALLOW_NO_CONTINUITY_SECRET``
+is set), and holds the key for the life of the process, so a file deleted or
+opened up later cannot switch a running server to keyless operation. Deleting
+the file and restarting rotates the key, which invalidates every outstanding
+token and grant.
 
 Stdlib only: this runs before bootstrap and must not import the web stack.
 """
@@ -33,10 +37,14 @@ from pathlib import Path
 
 ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
 FILE_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET_FILE"
+ALLOW_NO_SECRET_ENV = "UNITARES_ALLOW_NO_CONTINUITY_SECRET"
 DEFAULT_FILE = Path(__file__).resolve().parent.parent / "data" / "secrets" / "continuity_token_secret"
 
 # sha256 of the default docker-compose.yml assigned before this module existed.
 RETIRED_COMPOSE_DEFAULT_SHA256 = "973513065628b7d58160a920f829e640921bb86d5b761dc821bfa83dc3457e29"
+
+# The key this server process resolved at startup (hold_for_server), or None.
+_held: tuple[bytes, str] | None = None
 
 
 def is_retired_compose_default(value: str) -> bool:
@@ -94,7 +102,12 @@ def _read(path: Path) -> tuple[str | None, str | None]:
 
 
 def resolve(environ: Mapping[str, str] | None = None) -> tuple[bytes, str] | None:
-    """(key, source) for signing and verifying, or None when there is no key."""
+    """(key, source) for signing and verifying, or None when there is no key.
+
+    In a server that called :func:`hold_for_server`, the key it held at startup.
+    """
+    if environ is None and _held is not None:
+        return _held
     configured = configured_secret(environ)
     if configured:
         return configured.encode(), ENV
@@ -131,3 +144,29 @@ def ensure_generated_secret(environ: Mapping[str, str] | None = None) -> Path | 
     if not value:
         raise OSError(problem or f"continuity token secret file {path} is unusable")
     return path
+
+
+def no_secret_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the operator chose to run without a continuity key.
+
+    Without one, session ids are the legacy agent-{uuid12} form, which anyone
+    who knows an agent's UUID can compute, and continuity tokens and effect
+    grants are off.
+    """
+    value = ((os.environ if environ is None else environ).get(ALLOW_NO_SECRET_ENV) or "").strip()
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def hold_for_server(environ: Mapping[str, str] | None = None) -> None:
+    """Server startup: create the key if needed and hold it for this process.
+
+    Raises OSError when there is no usable key; the caller refuses to start
+    unless :func:`no_secret_allowed`.
+    """
+    global _held
+    _held = None
+    ensure_generated_secret(environ)
+    resolved = resolve(environ)
+    if resolved is None:
+        raise OSError(f"continuity token secret file {secret_file(environ)} is unusable")
+    _held = resolved
