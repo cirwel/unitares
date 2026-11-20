@@ -670,10 +670,12 @@ async def main():
     # Initialize server process (PID file, signal handlers, heartbeat)
     init_server_process()
 
-    if STDIO_PROXY_URL or STDIO_PROXY_HTTP_URL:
+    _proxied = bool(STDIO_PROXY_URL or STDIO_PROXY_HTTP_URL)
+    if _proxied:
         logger.info("Identity continuity mode: proxied (delegated to upstream HTTP server)")
-    else:
+    if not _proxied or not STDIO_PROXY_STRICT:
         # Local handlers sign continuity tokens here, as the HTTP server does.
+        # With a non-strict proxy they run whenever the upstream call fails.
         from src.continuity_secret import hold_for_server, no_secret_allowed
 
         try:
@@ -692,6 +694,7 @@ async def main():
                 "UNITARES_ALLOW_NO_CONTINUITY_SECRET allows. Continuity tokens and effect "
                 "grants are disabled, and session ids are derivable from agent UUIDs.", exc,
             )
+    if not _proxied:
         continuity_status = await probe_identity_continuity_status()
         continuity_message = format_identity_continuity_startup_message(continuity_status)
         if continuity_status.get("mode") == "redis":

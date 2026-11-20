@@ -295,12 +295,108 @@ def test_stdio_startup_runs_keyless_only_with_the_override(secret_path, monkeypa
     assert session_mod._get_continuity_secret() is None
 
 
-def test_http_startup_refuses_without_a_key_before_bootstrap():
-    # Bootstrap SIGTERMs a running predecessor, so the refusal must come first.
-    from pathlib import Path
+def _proxied_stdio_to_the_server(monkeypatch, *, strict):
+    import asyncio
 
-    source = (Path(__file__).resolve().parents[1] / "src" / "mcp_server.py").read_text()
-    held = source.index("hold_for_server()")
-    refusal = source.index("raise SystemExit(1)", held)
-    assert source.index("no_secret_allowed()", held) < refusal
-    assert refusal < source.index("bootstrap_server(", held)
+    import src.mcp_server_std as std
+
+    monkeypatch.setattr(std, "STDIO_PROXY_URL", "http://127.0.0.1:1/mcp/", raising=False)
+    monkeypatch.setattr(std, "STDIO_PROXY_HTTP_URL", None, raising=False)
+    monkeypatch.setattr(std, "STDIO_PROXY_STRICT", strict, raising=False)
+    monkeypatch.setattr(std, "init_server_process", lambda: None)
+    monkeypatch.setattr(std, "remove_pid_file", lambda: None)
+
+    def stop_at_the_transport():
+        raise SystemExit("stdio reached")
+
+    monkeypatch.setattr(std, "stdio_server", stop_at_the_transport)
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(std.main())
+    return exc.value.code
+
+
+def test_stdio_with_a_fallback_proxy_refuses_without_a_usable_key(secret_path, monkeypatch):
+    # A non-strict proxy runs the local handlers when the upstream fails.
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+    secret_path.mkdir(parents=True)
+
+    assert _proxied_stdio_to_the_server(monkeypatch, strict=False) == 1
+
+
+def test_stdio_with_a_strict_proxy_needs_no_local_key(secret_path, monkeypatch):
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+    secret_path.mkdir(parents=True)
+
+    assert _proxied_stdio_to_the_server(monkeypatch, strict=True) == "stdio reached"
+
+
+class _BootstrapReached(Exception):
+    pass
+
+
+async def _run_http_main(monkeypatch):
+    from types import SimpleNamespace
+
+    from src import mcp_server
+
+    # Importing the server may load a .env; the fixture's key state must win.
+    monkeypatch.delenv(cs.ENV, raising=False)
+    bootstrapped = []
+
+    async def _bootstrap(**_kwargs):
+        bootstrapped.append(True)
+        raise _BootstrapReached()
+
+    monkeypatch.setattr("src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap)
+    monkeypatch.setattr("src.insecure_defaults.published_default_refusal", lambda: None)
+    monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", False)
+    monkeypatch.setattr(mcp_server, "_auth_settings", None)
+    monkeypatch.setattr(
+        mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
+    )
+    try:
+        await mcp_server.main()
+    except SystemExit as exc:
+        return exc.code, bootstrapped
+    except _BootstrapReached:
+        return "bootstrap reached", bootstrapped
+    return None, bootstrapped
+
+
+@pytest.mark.asyncio
+async def test_http_startup_refuses_without_a_key_before_bootstrap(secret_path, monkeypatch):
+    # Bootstrap SIGTERMs a running predecessor, so the refusal must come first.
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+    secret_path.mkdir(parents=True)
+
+    code, bootstrapped = await _run_http_main(monkeypatch)
+
+    assert code == 1
+    assert bootstrapped == []
+
+
+@pytest.mark.asyncio
+async def test_http_startup_runs_keyless_only_with_the_override(secret_path, monkeypatch):
+    monkeypatch.setenv(cs.ALLOW_NO_SECRET_ENV, "1")
+    secret_path.mkdir(parents=True)
+
+    code, bootstrapped = await _run_http_main(monkeypatch)
+
+    assert code == "bootstrap reached"
+    assert bootstrapped == [True]
+    assert session_mod._get_continuity_secret() is None
+
+
+@pytest.mark.asyncio
+async def test_http_startup_holds_a_usable_key_and_proceeds(secret_path, monkeypatch):
+    monkeypatch.delenv(cs.ALLOW_NO_SECRET_ENV, raising=False)
+
+    code, bootstrapped = await _run_http_main(monkeypatch)
+
+    assert code == "bootstrap reached"
+    key = session_mod._get_continuity_secret()
+    assert key
+    secret_path.unlink()
+    assert session_mod._get_continuity_secret() == key
