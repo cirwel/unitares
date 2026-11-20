@@ -460,6 +460,53 @@ class TestExchangeAuthorizationCode:
 
         assert token.access_token.startswith("at_")
 
+    @pytest.mark.asyncio
+    async def test_global_code_cap_does_not_lower_a_static_clients_own_cap(self):
+        static = build_static_client("static-client", "secret", ["https://app.example/cb"])
+        provider = GovernanceOAuthProvider(
+            static_clients=[static], max_auth_codes=1, max_auth_codes_per_client=2
+        )
+        for _ in range(2):
+            entry = await self._issue_code(provider, static)
+            token = await provider.exchange_authorization_code(static, entry)
+            assert token.access_token.startswith("at_")
+
+        entry = await self._issue_code(provider, static)
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(static, entry)
+        assert refused.value.error == "invalid_request"
+
+    @pytest.mark.asyncio
+    async def test_a_registration_expiring_mid_exchange_keeps_the_new_tokens(self):
+        """Issuing renews the client's registration before caching its new
+        tokens, so a registration that expires during the exchange cannot
+        take the just-minted tokens with it."""
+        provider = GovernanceOAuthProvider()
+        client = _client("client-1")
+        entry = await self._issue_code(provider, client)
+        await provider.exchange_authorization_code(client, entry)
+        provider._dynamic_client_expires_at["client-1"] = time.time() + 0.5
+
+        original = provider._cache_access
+        advanced = []
+
+        def cache_then_advance_clock(token):
+            original(token)
+            if not advanced:
+                # Model the clock moving one second on: every registration
+                # is one second nearer its expiry.
+                advanced.append(True)
+                for client_id in provider._dynamic_client_expires_at:
+                    provider._dynamic_client_expires_at[client_id] -= 1.0
+
+        provider._cache_access = cache_then_advance_clock
+        entry = await self._issue_code(provider, client)
+        token = await provider.exchange_authorization_code(client, entry)
+
+        assert advanced
+        assert await provider.load_access_token(token.access_token) is not None
+        assert await provider.load_refresh_token(client, token.refresh_token) is not None
+
 
 # --------------------------------------------------------------------------- #
 # Refresh token rotation

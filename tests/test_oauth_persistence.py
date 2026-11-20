@@ -814,6 +814,38 @@ async def test_dynamic_churn_does_not_evict_a_static_clients_cached_tokens():
 
 
 @pytest.mark.asyncio
+async def test_client_eviction_frees_token_slots_before_new_tokens_are_cached():
+    """Admitting a client past the client cap evicts the oldest registration
+    and its cached tokens. The new tokens are cached after that, so they take
+    the freed slots instead of evicting a third client's live tokens (which a
+    failing store cannot reload)."""
+    provider = GovernanceOAuthProvider(
+        store=_DeadStore(),
+        max_dynamic_clients=2,
+        max_access_tokens_total=2,
+        max_refresh_tokens_total=2,
+    )
+    kept, evicted = _dcr_client("dcr-kept"), _dcr_client("dcr-evicted")
+    kept_tokens = await _sign_in(provider, kept)
+    evicted_tokens = await _sign_in(provider, evicted)
+    # The kept client holds the oldest tokens, but the evicted client holds
+    # the registration due to leave first.
+    provider._access_tokens[kept_tokens.access_token].expires_at -= 10
+    provider._refresh_tokens[kept_tokens.refresh_token].created_at -= 10
+    provider._dynamic_client_expires_at["dcr-evicted"] = time.time() + 60
+
+    newcomer = _dcr_client("dcr-new")
+    new_tokens = await _sign_in(provider, newcomer)
+
+    assert "dcr-evicted" not in provider._clients
+    assert await provider.load_access_token(evicted_tokens.access_token) is None
+    assert await provider.load_access_token(kept_tokens.access_token) is not None
+    assert await provider.load_refresh_token(kept, kept_tokens.refresh_token) is not None
+    assert await provider.load_access_token(new_tokens.access_token) is not None
+    assert await provider.load_refresh_token(newcomer, new_tokens.refresh_token) is not None
+
+
+@pytest.mark.asyncio
 async def test_dynamic_refresh_churn_does_not_block_a_static_clients_refresh():
     from mcp.server.auth.provider import TokenError
 

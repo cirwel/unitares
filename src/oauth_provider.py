@@ -225,9 +225,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_token_ttl = refresh_token_ttl
         self._auth_code_ttl = auth_code_ttl
         self._max_dynamic_clients = max(1, int(max_dynamic_clients))
-        self._max_auth_codes_per_client = max(
-            1, min(int(max_auth_codes_per_client), max(1, int(max_auth_codes)))
-        )
+        # Not clamped to max_auth_codes: that cap counts dynamic clients only,
+        # so it must not lower a static or managed client's own cap.
+        self._max_auth_codes_per_client = max(1, int(max_auth_codes_per_client))
         self._max_access_tokens_per_client = max(1, int(max_access_tokens))
         self._max_refresh_tokens_per_client = max(1, int(max_refresh_tokens))
         self._max_auth_codes = max(1, int(max_auth_codes))
@@ -595,6 +595,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             self._clients[client.client_id] = client
             self._approved_dynamic_client_ids.add(client.client_id)
             self._dynamic_client_expires_at[client.client_id] = time.time() + CLIENT_STATE_TTL
+        # Cache only after the client bookkeeping: pruning or evicting a
+        # client drops its cached tokens, so caching first could drop the new
+        # tokens, or evict another client's token for a slot that the client
+        # eviction then frees anyway. No await precedes this, so the tokens
+        # are cached before any concurrent request can run.
+        self._cache_access(access)
+        self._cache_refresh(refresh)
         await self._persist_access(access)
         await self._persist_refresh(refresh)
         # A client that just got a token is in use; keep its registration.
@@ -796,8 +803,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh = self._new_refresh(
             refresh_token_str, client.client_id, authorization_code.scopes or ["mcp:tools"]
         )
-        self._cache_access(access)
-        self._cache_refresh(refresh)
         await self._issued(
             client,
             access,
@@ -913,8 +918,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh = self._new_refresh(
             new_refresh_str, client.client_id, effective_scopes
         )
-        self._cache_access(access)
-        self._cache_refresh(refresh)
         await self._issued(
             client,
             access,
