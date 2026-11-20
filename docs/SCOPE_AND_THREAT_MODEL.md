@@ -217,13 +217,28 @@ the `gap_suppress` cadence window downgraded 195 of 218 recorded pauses (89.4%) 
 the 2026-08-06 audit, so widening one constant disarms most of the enforcement
 surface in a one-line diff with a plausible performance rationale. **No instance of
 this is known and nothing here implies intent; the claim is structural.** The
-control today is the human merge gate for exactly these PRs: since 2026-09-27
-the merge queue lands most PRs on their owning agent's `approved-to-merge`
-label, but it never arms one that is governance-sensitive, which the
-operator merges by hand. It does not rely on CI's `governance-sensitive`
-label alone, which is best-effort (a fork's read-only token cannot apply it):
-before arming, it matches the diff against the same manifest itself and
-fails closed, and it never arms a PR from a fork. Around it sit CI gates aimed elsewhere (`unitares_doctor.py` for
+control was a human merge gate for exactly these PRs: from 2026-09-27 the
+merge queue landed most PRs on their owning agent's `approved-to-merge`
+label and never armed a governance-sensitive one, which the operator merged
+by hand. Since the operator ruling of 2026-11-16 that approval is a veto
+window. The operator no longer merges, so the queue lands a
+governance-sensitive PR once three things hold: its `review` check has
+passed on the final head with two model families, its body states the
+expected effect on pause and verdict rates, and 24 hours have passed since
+its `approved-to-merge` label went on. Removing the label inside that window
+is the veto. A diff touching the sensitivity manifest, its checker or its CI
+workflow is outside the delegation and is still merged by hand. The queue
+does not rely on CI's `governance-sensitive` label alone, which is
+best-effort (a fork's read-only token cannot apply it): before arming, it
+matches the diff against the same manifest itself and fails closed to a hand
+merge, and it never arms a PR from a fork. This is a weaker control than the
+gate it replaces, and the difference should be stated plainly. Two-family
+review means two independent model families read the diff; it does not mean
+a human did. The veto window gives the operator time to object; it does not
+show that the operator looked. And the window holds only because agents
+follow the rules: agents can act under the operator's GitHub login, so
+nothing technical stops one from applying the label early, arming a PR
+itself, or changing the queue. Around it sit CI gates aimed elsewhere (`unitares_doctor.py` for
 migration drift, `check-repo-scope.sh` for scope leakage). The latter is precedent
 rather than coverage: it exists because agent-authored config once stripped an
 accountability artifact past `.gitignore`, and its own rationale concluded that
@@ -233,9 +248,10 @@ aimed at this channel specifically: the [governance-sensitivity
 inventory](dev/GOVERNANCE_SENSITIVITY.md) enumerates the constants and
 anti-gaming tests whose movement materially changes enforcement, and CI labels
 any PR touching them and asks for the expected effect on pause/verdict rates —
-conspicuousness, deliberately not a block, so the human merge gate stays the
-control rather than being routed around. That label is also what keeps such a
-PR out of the merge queue. **This binds hardest on cross-operator
+conspicuousness, deliberately not a block, so the review and the veto window
+stay the control rather than being routed around. That label, like a manifest
+match, is also what puts such a PR on the queue's delegated route. **This
+binds hardest on cross-operator
 trust.** A
 partner governor calibrating a peer's telemetry has to model who authored that
 peer's thresholds; an operator who cannot answer that is asking to be trusted
