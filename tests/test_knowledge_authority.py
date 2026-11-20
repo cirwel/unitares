@@ -334,8 +334,9 @@ async def test_promote_memory_claim_refused_while_paused(cold_cache, monkeypatch
 
 
 # Channel messages (operator decision 2026-09-27): agent-to-agent notes on a
-# `channel-<topic>` lane get the imported-memory multiplier. Measured that day
-# on the relational table: 78 rows match, 61 of them open.
+# `channel-<topic>` lane keep the 0.55 close-contest multiplier (stronger than
+# imported memory's 0.85 since 2026-11-20). Measured on 2026-09-27 on the
+# relational table: 78 rows match, 61 of them open.
 
 
 def test_channel_message_is_the_tag_pair_or_the_summary_prefix():
