@@ -98,6 +98,48 @@ async def read_bounded_json_body(request: Any, max_bytes: int | None = None) -> 
     return json.loads(b"".join(chunks))
 
 
+async def read_bounded_asgi_body(
+    scope: Mapping[str, Any], receive: Any, max_bytes: int | None = None
+) -> Any:
+    """Read a raw ASGI request body under a byte cap and return a replaying receive.
+
+    For handlers that read the whole body themselves (the MCP SDK's
+    transport and client registration). Raises the 413 ``HttpToolRequestError``
+    as soon as the declared or counted length passes the cap, so at most the
+    cap plus one server-delivered message is held. A disconnect mid-body
+    ends the read early and is replayed unchanged.
+    """
+    limit = MAX_HTTP_TOOL_REQUEST_SIZE if max_bytes is None else max_bytes
+    for key, value in scope.get("headers") or ():
+        if key.lower() == b"content-length":
+            try:
+                declared = int(value)
+            except (TypeError, ValueError):
+                break
+            if declared > limit:
+                raise _body_too_large(limit)
+            break
+    pending: list[Any] = []
+    received = 0
+    while True:
+        message = await receive()
+        pending.append(message)
+        if message.get("type") != "http.request":
+            break
+        received += len(message.get("body", b""))
+        if received > limit:
+            raise _body_too_large(limit)
+        if not message.get("more_body", False):
+            break
+
+    async def replay() -> Any:
+        if pending:
+            return pending.pop(0)
+        return await receive()
+
+    return replay
+
+
 def parse_http_tool_request(
     body: Any,
     *,
