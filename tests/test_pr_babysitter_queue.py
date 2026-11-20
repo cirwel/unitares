@@ -1986,6 +1986,32 @@ def _delegable(tmp_path: Path, n: int = 1, *, labelled_min_ago: float = DAY + 60
     return _pr(n, head=head, **kw), timeline
 
 
+@pytest.mark.parametrize("body", [
+    "Expected effect: Narrowing the risk band lowers the pause rate by a small amount.",
+    "Expected effect: NaN handling only; pause and verdict rates are unchanged.",
+    "Expected effect: Unknowns in the outcome term now read as held, so fewer guide verdicts.",
+    "Expected effect: Filling the missing axis stops spurious pauses for new agents.",
+])
+def test_an_effect_that_merely_starts_like_a_placeholder_is_accepted(tmp_path: Path, body: str) -> None:
+    pr, timeline = _delegable(tmp_path, body=body)
+    calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                    PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1, "aaa")]
+
+
+@pytest.mark.parametrize("body", [
+    "Expected effect: unknown at this time, to be measured",
+    "Expected effect: N/A - this is a refactor only change",
+    "Expected effect: fill in before merging this change",
+    "Expected effect: TODO: describe the pause-rate effect",
+])
+def test_a_placeholder_followed_by_more_words_is_still_a_placeholder(tmp_path: Path, body: str) -> None:
+    pr, timeline = _delegable(tmp_path, body=body)
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [] and "its body has no Expected effect: line" in out
+
+
 def test_a_sensitive_pr_is_armed_after_the_veto_window(tmp_path: Path) -> None:
     pr, timeline = _delegable(tmp_path)
     calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},

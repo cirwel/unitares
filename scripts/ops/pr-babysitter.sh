@@ -624,7 +624,7 @@ expected_effect() {
   jq -er '[(.body // "") | splits("\\r?\\n")
            | capture("^Expected effect:[ \\t]*(?<v>.*?)[ \\t]*$"; "i") | .v
            | select(length >= 20
-                    and (test("^<|^[\\[({`*_ ]*(tbd|todo|n/?a|fill|placeholder|unknown|\\.\\.\\.)"; "i") | not))]
+                    and (test("^<|^[\\[({`*_ ]*((tbd|todo|n/?a|fill( in)?|placeholder|unknown)([^a-z0-9]|$)|\\.\\.\\.)"; "i") | not))]
           | last // empty' <<<"$1"
 }
 
