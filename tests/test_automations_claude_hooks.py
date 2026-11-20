@@ -656,3 +656,72 @@ def test_antigravity_hooks_preserve_plugin_namespace_in_id(census_mod, tmp_path,
     assert {
         note for item in items for note in item.notes if note.startswith("plugin=")
     } == {"plugin=plugin-alpha", "plugin=plugin-beta"}
+
+
+def test_manifest_declared_claude_hooks_also_loads_conventional_hooks_json(
+    census_mod, tmp_path, monkeypatch,
+):
+    """Manifest-declared hooks in Claude plugins supplement, not replace, hooks/hooks.json."""
+    home = tmp_path / "home"
+    plugin = home / "plugins/manifest-plus-conv"
+    _exe(plugin / "hooks/conv-hook")
+    _exe(plugin / "hooks/extra-hook")
+    (plugin / "hooks/hooks.json").write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/conv-hook"),
+        }]}]},
+    }))
+    (plugin / "hooks/extra-hooks.json").write_text(json.dumps({
+        "hooks": {"UserPromptSubmit": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/extra-hook"),
+        }]}]},
+    }))
+    manifest = plugin / ".claude-plugin/plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "name": "manifest-plus-conv",
+        "hooks": ["./hooks/extra-hooks.json", "./hooks/hooks.json"],
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "plugins": {"manifest-plus-conv@local": [{"installPath": str(plugin)}]},
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert [i for i in items if i.status == "orphaned"] == []
+    wired = [i for i in items if i.status == "wired" and i.scheduler == "claude-plugin"]
+    assert sorted(i.name for i in wired) == ["Stop: conv-hook", "UserPromptSubmit: extra-hook"]
+
+
+def test_shared_plugin_root_across_claude_and_codex_gets_distinct_ids(
+    census_mod, tmp_path, monkeypatch,
+):
+    """When Claude and Codex load the exact same plugin root and hooks/hooks.json, IDs stay distinct."""
+    home = tmp_path / "home"
+    plugin = home / "plugins/shared-plugin"
+    _exe(plugin / "hooks/shared-hook")
+    (plugin / "hooks/hooks.json").write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/shared-hook"),
+        }]}]},
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"shared-plugin@local": [{"installPath": str(plugin)}]},
+    }))
+    codex_link = home / ".codex/plugins/shared-plugin"
+    codex_link.parent.mkdir(parents=True, exist_ok=True)
+    codex_link.symlink_to(plugin, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    wired = [i for i in items if i.status == "wired"]
+    assert {i.scheduler for i in wired} == {"claude-plugin", "codex-plugin"}
+    assert len(wired) == 2
+    assert len({i.id for i in wired}) == 2

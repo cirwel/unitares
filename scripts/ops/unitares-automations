@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import glob as glob_module
+import hashlib
 import json
 import os
 import plistlib
@@ -1166,7 +1167,7 @@ def _plugin_hook_declarations(root: Path, host: str) -> tuple[list[Path], list[P
 
     claude_declared = _manifest_declared_hooks(root, ".claude-plugin/plugin.json")
     if claude_declared:
-        active = _existing_unique_paths(claude_declared)
+        active = _existing_unique_paths([root / "hooks/hooks.json", *claude_declared])
         active_keys = {str(p.resolve()) for p in active}
         sibling_candidates = (
             _manifest_declared_hooks(root, ".codex-plugin/plugin.json")
@@ -1426,14 +1427,18 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
                 warnings.append(
                     f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
                 )
-            id_seed = (
-                f"{settings_path}:{event}:{matcher}:{command}:{namespace}"
-                if namespace is not None
-                else f"{settings_path}:{event}:{matcher}:{command}"
+            id_key = json.dumps(
+                [scheduler, str(settings_path), namespace, event, matcher, command],
+                separators=(",", ":"),
             )
+            id_hash = hashlib.sha256(id_key.encode("utf-8")).hexdigest()[:12]
+            id_parts = [scheduler]
+            if namespace:
+                id_parts.append(namespace)
+            id_parts.extend([event, label, id_hash])
             results.append(
                 Automation(
-                    id=stable_id("claude-hook", id_seed),
+                    id=stable_id("claude-hook", ":".join(id_parts)),
                     name=f"{event}: {label}",
                     source="claude-hooks",
                     kind="hook",
