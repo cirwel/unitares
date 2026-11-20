@@ -68,16 +68,18 @@ def test_authority_ranking_corrects_close_false_memory_but_preserves_strong_matc
     imported = _discovery("memory-1", tags=["source-any-harness-memory"])
     native = _discovery("finding-1")
 
+    assert assess_authority(imported).multiplier == 0.85
+
     corrected, changed = rank_by_authority(
         [imported, native],
-        relevance_scores={"memory-1": 0.82, "finding-1": 0.55},
+        relevance_scores={"memory-1": 0.62, "finding-1": 0.55},
     )
     assert changed is True
     assert [row.id for row in corrected] == ["finding-1", "memory-1"]
 
     strong_match, changed = rank_by_authority(
         [imported, native],
-        relevance_scores={"memory-1": 0.95, "finding-1": 0.30},
+        relevance_scores={"memory-1": 0.82, "finding-1": 0.55},
     )
     assert changed is False
     assert [row.id for row in strong_match] == ["memory-1", "finding-1"]
@@ -88,7 +90,7 @@ def test_authority_ranking_can_be_disabled_for_raw_relevance_inspection():
     native = _discovery("finding-1")
     ranked, changed = rank_by_authority(
         [imported, native],
-        relevance_scores={"memory-1": 0.82, "finding-1": 0.55},
+        relevance_scores={"memory-1": 0.62, "finding-1": 0.55},
         enabled=False,
     )
     assert changed is False
@@ -110,7 +112,7 @@ async def test_search_pipeline_annotates_and_prefers_native_authority():
     state = _KnowledgeSearchState(request=request, graph=AsyncMock())
     state.search_mode = "semantic"
     state.candidates = [imported, native]
-    state.semantic_scores = {"memory-1": 0.82, "finding-1": 0.55}
+    state.semantic_scores = {"memory-1": 0.62, "finding-1": 0.55}
 
     await _filter_and_rerank_candidates(state)
     serialized = _serialize_search_discoveries(state, include_details=False)
@@ -139,7 +141,7 @@ async def test_search_authority_all_preserves_raw_backend_order():
     state = _KnowledgeSearchState(request=request, graph=AsyncMock())
     state.search_mode = "semantic"
     state.candidates = [imported, native]
-    state.semantic_scores = {"memory-1": 0.82, "finding-1": 0.55}
+    state.semantic_scores = {"memory-1": 0.62, "finding-1": 0.55}
 
     await _filter_and_rerank_candidates(state)
 
@@ -332,8 +334,9 @@ async def test_promote_memory_claim_refused_while_paused(cold_cache, monkeypatch
 
 
 # Channel messages (operator decision 2026-09-27): agent-to-agent notes on a
-# `channel-<topic>` lane get the imported-memory multiplier. Measured that day
-# on the relational table: 78 rows match, 61 of them open.
+# `channel-<topic>` lane keep the 0.55 close-contest multiplier (stronger than
+# imported memory's 0.85 since 2026-11-20). Measured on 2026-09-27 on the
+# relational table: 78 rows match, 61 of them open.
 
 
 def test_channel_message_is_the_tag_pair_or_the_summary_prefix():
@@ -589,7 +592,7 @@ async def test_an_ordinary_channel_topic_keeps_authority_order():
     state = _KnowledgeSearchState(request=request, graph=AsyncMock())
     state.search_mode = "semantic"
     state.candidates = [imported, native]
-    state.semantic_scores = {"memory-1": 0.82, "finding-1": 0.55}
+    state.semantic_scores = {"memory-1": 0.62, "finding-1": 0.55}
     await _filter_and_rerank_candidates(state)
     assert [row.id for row in state.results] == ["finding-1", "memory-1"]
 
