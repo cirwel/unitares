@@ -243,9 +243,11 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
     ``stall_fingerprint`` so a stall can be paired with its closure, and the
     closure carries ``outcome`` and ``open_hours``.
 
-    A post that did not reach governance is kept for the next cycle: a failed
-    open is dropped from the open set, so the PR re-opens and is announced
-    then; a failed closure goes to ``stalled_pr_pending_closures`` and is
+    A post that did not reach governance is kept for the next cycle: an open
+    stays on the open list marked ``announced: False`` and is re-sent with the
+    same episode identity (so a post that was stored but whose reply was lost
+    dedups server-side, and a PR that closes before the retry still gets its
+    closure); a failed closure goes to ``stalled_pr_pending_closures`` and is
     re-sent as it stands. Closures are not put back on the open list: the
     closure already happened, and a PR that went red again in the meantime
     would otherwise be read as the same stall continuing, losing both the
@@ -283,9 +285,8 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
         if not isinstance(open_set, dict):
             return counts
 
-        for key in list(health_state.get("stalled_pr_opened") or []):
-            entry = open_set.get(key)
-            if not isinstance(entry, dict):
+        for key, entry in list(open_set.items()):
+            if not isinstance(entry, dict) or entry.get("announced") is not False:
                 continue
             failing = list(entry.get("failing") or [])
             shown = ", ".join(str(f) for f in failing[:3])
@@ -320,9 +321,8 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             )
             if outcome in REACHED_GOVERNANCE:
                 counts["opened"] += 1
+                entry["announced"] = True
                 notify("Vigil", message)
-            else:
-                open_set.pop(key, None)
 
         carried = health_state.get("stalled_pr_pending_closures")
         carried = list(carried) if isinstance(carried, list) else []
@@ -359,6 +359,9 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
                     "url": row.get("url", ""),
                     "outcome": row.get("outcome"),
                     "open_hours": hours,
+                    # False when the stall closed before its opening finding
+                    # was ever delivered: this closure is then the only record.
+                    "stall_announced": row.get("announced") is not False,
                     "author_agent_uuid": row.get("author_agent_uuid", ""),
                     "author_model": row.get("author_model", ""),
                 },

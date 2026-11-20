@@ -361,7 +361,13 @@ def reconcile(
             "author_agent_uuid": row.get("author_agent_uuid", ""),
             "author_model": row.get("author_model", ""),
             "first_seen": held.get("first_seen", now) if held else now,
+            # False until agent.py has delivered this episode's opening
+            # finding. It stays with the entry so a failed post is retried
+            # under the same episode identity instead of a fresh one.
+            "announced": bool(held.get("announced", True)) if held else False,
         }
+        if held and "last_closure_check" in held:
+            entry["last_closure_check"] = held["last_closure_check"]
         if held is None:
             opened.append(key)
         new_open[key] = entry

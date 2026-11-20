@@ -20,7 +20,7 @@ def _entry(**kw) -> dict:
         "repo": "acmeco/unitares", "number": 7, "url": "https://example.test/7",
         "failing": ["smoke", "lint"], "red_hours": 30.0,
         "author_agent_uuid": UUID_A, "author_model": "claude-test-1",
-        "first_seen": 1_000_000.0,
+        "first_seen": 1_000_000.0, "announced": False,
     }
     base.update(kw)
     return base
@@ -73,7 +73,7 @@ def test_unsigned_pr_is_reported_with_no_author(posts):
 
 def test_still_open_pr_is_not_posted_again(posts):
     calls, _ = posts
-    state = {"stalled_pr_open": {KEY: _entry()}, "stalled_pr_opened": [],
+    state = {"stalled_pr_open": {KEY: _entry(announced=True)}, "stalled_pr_opened": [],
              "stalled_pr_resolved": []}
     assert _emit(state)["opened"] == 0
     assert calls == []
@@ -106,13 +106,32 @@ def test_deduped_counts_as_reached(posts):
     assert KEY in state["stalled_pr_open"]
 
 
-def test_failed_open_is_dropped_so_it_reopens_next_cycle(posts):
-    _, outcome = posts
+def test_failed_open_keeps_its_episode_and_is_resent(posts):
+    """Review finding: dropping the entry would mint a new episode on retry
+    (defeating server dedup) and lose the closure if the PR merged first."""
+    calls, outcome = posts
     outcome["value"] = FAILED
     state = {"stalled_pr_open": {KEY: _entry()}, "stalled_pr_opened": [KEY],
              "stalled_pr_resolved": []}
     assert _emit(state) == {"opened": 0, "resolved": 0, "failed": 1, "deferred": 0}
-    assert KEY not in state["stalled_pr_open"]
+    assert state["stalled_pr_open"][KEY]["announced"] is False
+    first_token = calls[0]["change_token"]
+
+    # Next cycle the check no longer lists it as newly opened; it is still sent.
+    outcome["value"] = DELIVERED
+    calls.clear()
+    state["stalled_pr_opened"] = []
+    assert _emit(state)["opened"] == 1
+    assert calls[0]["change_token"] == first_token
+    assert state["stalled_pr_open"][KEY]["announced"] is True
+
+
+def test_closure_of_a_never_announced_stall_says_so(posts):
+    calls, _ = posts
+    state = {"stalled_pr_open": {}, "stalled_pr_opened": [],
+             "stalled_pr_resolved": [{**_entry(), "outcome": "merged", "open_hours": 0.5}]}
+    _emit(state)
+    assert calls[0]["extra"]["stall_announced"] is False
 
 
 def test_failed_closure_is_kept_pending_and_resent(posts):
@@ -139,6 +158,7 @@ def test_failed_closure_is_kept_pending_and_resent(posts):
     assert ("vigil_finding", "open:1050000.0") in kinds
     assert ("vigil_resolution_finding", "resolved:1000000.0") in kinds
     assert state["stalled_pr_open"][KEY]["first_seen"] == 1_050_000.0
+    assert state["stalled_pr_open"][KEY]["announced"] is True
 
 
 def test_pending_closures_are_bounded(posts, monkeypatch):
@@ -178,7 +198,8 @@ def test_first_failed_post_stops_the_pass_and_undoes_the_rest(posts):
     counts = _emit(state)
     assert len(calls) == 1
     assert counts == {"opened": 0, "resolved": 0, "failed": 1, "deferred": 14}
-    assert state["stalled_pr_open"] == {}  # all re-open next cycle
+    assert len(state["stalled_pr_open"]) == 15  # all kept, none announced
+    assert not any(e["announced"] for e in state["stalled_pr_open"].values())
 
 
 def test_emit_budget_defers_what_does_not_fit(posts, monkeypatch):
@@ -202,5 +223,7 @@ def test_emit_budget_defers_what_does_not_fit(posts, monkeypatch):
     counts = _emit(state)
     assert len(calls) == 2
     assert counts["opened"] == 2 and counts["deferred"] == 4 and counts["failed"] == 0
-    assert sorted(state["stalled_pr_open"]) == ["acmeco/unitares#1", "acmeco/unitares#2"]
+    announced = sorted(k for k, e in state["stalled_pr_open"].items() if e["announced"])
+    assert announced == ["acmeco/unitares#1", "acmeco/unitares#2"]
+    assert len(state["stalled_pr_open"]) == 5
     assert [r["number"] for r in state["stalled_pr_pending_closures"]] == [99]

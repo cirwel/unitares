@@ -662,8 +662,12 @@ def test_reconcile_opens_a_new_stall_once():
     assert opened == ["acmeco/unitares#1"] and resolved == []
     assert open_set["acmeco/unitares#1"]["first_seen"] == NOW
 
-    # Next cycle, still stalled: not opened again, first_seen kept.
+    assert open_set["acmeco/unitares#1"]["announced"] is False
+
+    # Next cycle, still stalled: not opened again, first_seen kept, and the
+    # undelivered-announcement mark survives the rebuild.
     open_2, opened_2, _ = _reconcile(open_set, [_stalled(1, 20.5)], {})
+    assert open_2["acmeco/unitares#1"]["announced"] is False
     assert opened_2 == []
     assert open_2["acmeco/unitares#1"]["first_seen"] == NOW
     assert open_2["acmeco/unitares#1"]["red_hours"] == 20.5
