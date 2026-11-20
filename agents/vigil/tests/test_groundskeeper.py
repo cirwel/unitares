@@ -511,6 +511,46 @@ class TestRunAgedCandidateArchive:
         client.audit_knowledge.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_failed_shared_audit_sentinel_prevents_redundant_retries(self):
+        """A failed shared audit sentinel stops both hygiene steps from retrying."""
+        from types import SimpleNamespace
+
+        agent = _make_agent()
+        agent.with_hygiene = True
+        failed_shared = SimpleNamespace(success=False, error="audit_timeout")
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(side_effect=AssertionError("should not retry audit"))
+
+        stale = await agent._run_stale_opens_sweep(client, audit_result=failed_shared)
+        assert stale == []
+        res = await agent._run_aged_candidate_archive(client, audit_result=failed_shared)
+        assert res["archived"] == 0
+        assert "audit_timeout" in res["errors"]
+        client.audit_knowledge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_archive_kg_entry_uses_caller_resolution_notes(self):
+        """Operator review closures carry operator attribution, not auto-sweep text."""
+        from agents.vigil.agent import archive_kg_entry
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        client = AsyncMock()
+        client.call_tool = AsyncMock(side_effect=[
+            GovernanceToolRefused("Tool knowledge failed: Cannot set status 'archived' on high-severity"),
+            {"success": True},
+        ])
+        ok, err = await archive_kg_entry(
+            client,
+            "hi-sev-op",
+            resolution_notes="Closed via Vigil operator review --apply (high-severity non-owner fallback).",
+        )
+        assert ok is True
+        assert err == ""
+        second = client.call_tool.call_args_list[1].args[1]
+        assert "operator review --apply" in second["resolution_notes"]
+        assert "aged-candidate sweep" not in second["resolution_notes"]
+
+    @pytest.mark.asyncio
     async def test_non_dict_response_does_not_crash(self):
         """Server returning non-dict (None, primitive) is reported, not raised."""
         agent = _make_agent()

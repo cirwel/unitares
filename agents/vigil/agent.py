@@ -32,6 +32,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # Add project root to path
@@ -592,7 +593,12 @@ def _is_high_sev_permission_denial(error_code: Optional[str], message: str) -> b
     return "high-severity" in low and "authentication required" not in low
 
 
-async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, str]:
+async def archive_kg_entry(
+    client: GovernanceClient,
+    eid: str,
+    *,
+    resolution_notes: Optional[str] = None,
+) -> Tuple[bool, str]:
     """Archive one KG entry; high-severity entries fall back to ``closed``.
 
     Shared by auto-archive and the operator review path so both use the same
@@ -632,6 +638,10 @@ async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, st
     if not high_sev_refused:
         return False, first_err
 
+    fallback_notes = (
+        resolution_notes
+        or "Closed by Vigil (high-severity non-owner fallback)."
+    )
     try:
         raw2 = await asyncio.wait_for(
             client.call_tool("knowledge", {
@@ -639,10 +649,7 @@ async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, st
                 "discovery_id": eid,
                 "status": "closed",
                 "closure_class": "obsolete",
-                "resolution_notes": (
-                    "Auto-closed by Vigil aged-candidate sweep "
-                    "(high-severity non-owner fallback)."
-                ),
+                "resolution_notes": fallback_notes,
             }),
             timeout=5.0,
         )
@@ -937,6 +944,9 @@ class VigilAgent(GovernanceAgent):
                 return summary
 
         if not getattr(result, "success", False):
+            err = getattr(result, "error", None)
+            if isinstance(err, str) and err.startswith(("audit_timeout", "audit_failed")):
+                summary["errors"].append(err)
             return summary
 
         audit_data = getattr(result, "audit", None) or {}
@@ -958,7 +968,14 @@ class VigilAgent(GovernanceAgent):
             eid = entry.get("id")
             if not eid:
                 continue
-            archived_ok, err = await archive_kg_entry(client, eid)
+            archived_ok, err = await archive_kg_entry(
+                client,
+                eid,
+                resolution_notes=(
+                    "Auto-closed by Vigil aged-candidate sweep "
+                    "(high-severity non-owner fallback)."
+                ),
+            )
             if not archived_ok:
                 summary["errors"].append(f"{eid[:24]}: {err}")
 
@@ -1235,8 +1252,17 @@ class VigilAgent(GovernanceAgent):
                     client.audit_knowledge(scope="open", top_n=max(20, max_per_cycle * 3)),
                     timeout=15.0,
                 )
-            except Exception:
-                shared_audit = None
+            except asyncio.TimeoutError:
+                log("hygiene shared audit timed out after 15s; skipping stale-opens and auto-archive")
+                shared_audit = SimpleNamespace(success=False, error="audit_timeout")
+            except Exception as e:
+                log(
+                    f"hygiene shared audit failed ({type(e).__name__}: {e}); "
+                    "skipping stale-opens and auto-archive"
+                )
+                shared_audit = SimpleNamespace(
+                    success=False, error=f"audit_failed: {type(e).__name__}"
+                )
 
         # --- 4.5. KG hygiene v1: stale-opens propose-only sweep (optional) ---
         stale_opens = await self._run_stale_opens_sweep(client, audit_result=shared_audit)
@@ -1538,7 +1564,14 @@ class VigilAgent(GovernanceAgent):
                 eid = e.get("id")
                 if not eid:
                     continue
-                ok, err = await archive_kg_entry(client, eid)
+                ok, err = await archive_kg_entry(
+                    client,
+                    eid,
+                    resolution_notes=(
+                        "Closed via Vigil operator review --apply "
+                        "(high-severity non-owner fallback)."
+                    ),
+                )
                 if ok:
                     archived += 1
                     log(f"OPERATOR_ARCHIVE: {eid} (age={e.get('last_activity_days')}d)")
