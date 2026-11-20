@@ -5896,3 +5896,96 @@ def test_print_unresolved_groups_despite_a_wide_out_of_scope_backlog(
     assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
     out = capsys.readouterr().out
     assert "(2 locations, same line text" in out
+
+
+# --- #3318: a scan that did not run must be distinguishable from a clean one ---
+
+
+def _outcome_main(watcher_module, monkeypatch, argv):
+    monkeypatch.setattr(
+        watcher_module, "_make_identity_client",
+        lambda: (_ for _ in ()).throw(ConnectionError("down")),
+    )
+    monkeypatch.setattr("sys.argv", ["watcher", *argv])
+    return watcher_module.main()
+
+
+def _stub_scan_state(watcher_module, monkeypatch):
+    for name in ("_record_model_failure", "_clear_model_failures", "_note_busy_region"):
+        monkeypatch.setattr(watcher_module, name, lambda *a, **kw: None)
+
+
+@pytest.mark.parametrize("flags", [[], ["--all"], ["--review"]])
+def test_exit_incomplete_reports_a_scan_the_model_was_too_busy_for(
+    watcher_module, tmp_path, monkeypatch, flags
+):
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    _stub_scan_state(watcher_module, monkeypatch)
+
+    def busy(prompt, *args, **kwargs):
+        raise watcher_module.ModelBusy("slot held")
+
+    monkeypatch.setattr(watcher_module, "call_model", busy)
+
+    argv = ["--file", str(target), *flags]
+    assert _outcome_main(watcher_module, monkeypatch, [*argv, "--exit-incomplete"]) == 75
+    assert _outcome_main(watcher_module, monkeypatch, argv) == 0, "the hook's status is unchanged"
+
+
+def test_exit_incomplete_reports_a_failed_call_and_an_unusable_reply(
+    watcher_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    _stub_scan_state(watcher_module, monkeypatch)
+    argv = ["--file", str(target), "--exit-incomplete"]
+
+    def down(prompt, *args, **kwargs):
+        raise TimeoutError("no answer")
+
+    monkeypatch.setattr(watcher_module, "call_model", down)
+    assert _outcome_main(watcher_module, monkeypatch, argv) == 75
+
+    monkeypatch.setattr(
+        watcher_module, "call_model",
+        lambda prompt, *a, **kw: {
+            "text": _unreadable(watcher_module), "model_used": "m", "tokens_used": 1,
+        },
+    )
+    assert _outcome_main(watcher_module, monkeypatch, argv) == 75
+
+
+def test_exit_incomplete_is_zero_for_a_scan_that_ran(watcher_module, tmp_path, monkeypatch):
+    """Also covers the reset: an earlier incomplete scan in the same process
+    must not leak into this one's status."""
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    _stub_scan_state(watcher_module, monkeypatch)
+    monkeypatch.setattr(watcher_module, "persist_findings", lambda findings: [])
+    watcher_module._note_region_outcome(False)
+    monkeypatch.setattr(
+        watcher_module, "call_model",
+        lambda prompt, *a, **kw: {
+            "text": _readable(watcher_module), "model_used": "m", "tokens_used": 1,
+        },
+    )
+
+    assert _outcome_main(watcher_module, monkeypatch, ["--file", str(target), "--exit-incomplete"]) == 0
+    assert watcher_module._region_outcomes == {"ran": 1, "not_run": 0}
+
+
+def test_exit_incomplete_is_zero_for_a_file_the_scanner_declines(
+    watcher_module, tmp_path, monkeypatch
+):
+    """Nothing to scan is not a failed scan; retrying it would never succeed."""
+    monkeypatch.setattr(watcher_module, "should_skip", lambda path: (True, "test file"))
+
+    def unreachable(prompt, *args, **kwargs):
+        raise AssertionError("a skipped file must not reach the model")
+
+    monkeypatch.setattr(watcher_module, "call_model", unreachable)
+
+    assert _outcome_main(
+        watcher_module, monkeypatch, ["--file", str(tmp_path / "x.py"), "--exit-incomplete"]
+    ) == 0
