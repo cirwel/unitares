@@ -1958,29 +1958,56 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     return families
 
 
+def independent_families(families: set[str], authors: set[str]) -> set[str]:
+    """Review families provably outside PR authorship.
+
+    Unknown authorship fails closed (empty set), matching waiver semantics
+    so stripping a provenance signature never lets a self-review count as
+    independent."""
+    if not authors:
+        return set()
+    return set(families) - set(authors)
+
+
 def eligible_families(authors: set[str], families: set[str]) -> list[str]:
     """Families that could still supply an independent review: known, not an
-    author family, and not already passed."""
+    author family, and not already passed. Empty when authorship is unknown."""
+    if not authors:
+        return []
     return sorted(set(_FAMILY_TOKENS) - set(authors) - set(families))
 
 
 def second_family_check(conclusion: str, desc: str, sensitive: list[str],
                         families: set[str], authors: set[str] = frozenset()) -> tuple[str, str]:
-    """Hold a passing check on a sensitive diff until two families passed.
+    """Hold a passing check on a sensitive diff until two independent families passed.
 
+    Author families are excluded even when recorded on the PR, and unknown PR
+    authorship fails closed on sensitive paths (matching waiver semantics).
     The message states the facts an operator needs (who passed, who wrote it,
     who could still review) and no command: when no family outside the
     authors remains, the way forward is an operator decision, not a rerun.
     It names that decision in words (a waiver with a line allowance, and the
     one thing that rules it out), because "needs an operator decision" alone
     was read on #3222 as "no route exists"."""
-    if conclusion != "success" or not sensitive or len(families) >= 2:
+    if conclusion != "success" or not sensitive:
         return conclusion, desc
-    have = ", ".join(sorted(families)) or "none"
+    independent = independent_families(families, authors)
+    if len(independent) >= 2:
+        return conclusion, desc
     more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
-    missing = "two model families" if not families else "a second model family"
-    wrote = ", ".join(sorted(authors)) or "unknown"
-    eligible = eligible_families(authors, families)
+    if not authors:
+        have = ", ".join(sorted(families)) or "none"
+        return ("action_required",
+                f"security-sensitive path {sensitive[0]}{more}: PR author families are unknown "
+                "(no provenance signature or branch prefix); cannot verify independent "
+                f"two-family review coverage (have: {have}; authors: unknown); "
+                "add a Model + UNITARES agent provenance signature to the PR body")
+    have = ", ".join(sorted(independent)) or "none"
+    missing = "two model families" if not independent else "a second model family"
+    wrote = ", ".join(sorted(authors))
+    excluded = sorted(set(families) & set(authors))
+    excl_note = f"; excluded author family: {', '.join(excluded)}" if excluded else ""
+    eligible = eligible_families(authors, independent)
     if eligible:
         tail = f"eligible to review: {', '.join(eligible)}"
     else:
@@ -1990,7 +2017,7 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
                 "(docs/operations/github-workflow-conventions.md#second-family-review)")
     return ("action_required",
             f"security-sensitive path {sensitive[0]}{more}: needs review coverage "
-            f"from {missing} (have: {have}; authors: {wrote}); {tail}")
+            f"from {missing} (have: {have}; authors: {wrote}{excl_note}); {tail}")
 
 
 # --- operator waiver of the second family ---------------------------------
@@ -2175,7 +2202,7 @@ def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, changed:
     reason = applicable_waiver(comments, key, changed, sensitive, families, lines, policy, authors)
     if reason is None:
         return held
-    have = ", ".join(sorted(families))
+    have = ", ".join(sorted(independent_families(families, authors))) or ", ".join(sorted(families))
     return ("success", f"second family waived by the operator ({lines} changed line(s) on "
                        f"{sensitive[0]}; have: {have}): {reason[:120]}")
 
@@ -3428,14 +3455,17 @@ def cmd_review(args) -> int:
                 family = provider_family(reviewer)
                 sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                 families = passing_families(comments, key, snapshot.records) if sensitive else set()
+                authors = pr_authors_or_unknown(repo, pr) if sensitive else set()
+                independent = independent_families(families, authors)
                 already_attempted = bool(
                     family and any(family in cycle.families for cycle in rounds.cycles)
                 )
                 missing_required_family = bool(
-                    sensitive and family and 1 <= len(families) < 2 and family not in families
+                    sensitive and family and authors and family not in authors
+                    and 1 <= len(independent) < 2 and family not in independent
                     and not already_attempted
                     and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head,
-                                              pr_authors_or_unknown(repo, pr))
+                                              authors)
                 )
                 joining_cycle = rounds.can_join(head, key, family) or missing_required_family
                 if grant_id:
@@ -3572,9 +3602,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         # A record or disposition this command just posted, credited by its
         # own model-aware family (record_family), not by a provider name.
         families.add(passed_family)
-    if len(families) >= 2:
-        return result
     authors = pr_authors_or_unknown(repo, pr)
+    independent = independent_families(families, authors)
+    if len(independent) >= 2:
+        return result
     waived = waiver_reason_for(comments, key, changed, sensitive, families, base, head, authors)
     if waived:
         print(f"[review] second family waived by the operator ({waived[:120]}); CI accepts it")
@@ -3587,24 +3618,31 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         if prev_agy:
             failed.discard("antigravity")
         candidates = second_family_candidates(
-            getattr(args, "branch", "") or "", families, comments, key, failed)
-        # A reviewer of an author family is not independent (AGENTS.md). Judged
-        # with the same (cleared) model override the candidates were chosen under.
-        candidates = [c for c in candidates if provider_family(c) not in authors]
+            getattr(args, "branch", "") or "", independent, comments, key, failed)
+        # A reviewer of an author family is not independent (AGENTS.md), and
+        # unknown PR authorship fails closed until a signature or branch prefix
+        # identifies the authors. Judged with the same (cleared) model override.
+        candidates = [c for c in candidates if authors and provider_family(c) not in authors]
     finally:
         _AGY_MODEL_OVERRIDE = prev_agy
-    have = ", ".join(sorted(families)) or "none"
-    if candidates:
+    excluded = sorted(set(families) & set(authors)) if authors else []
+    have = ", ".join(sorted(independent)) or "none"
+    note = f"; excluded author family: {', '.join(excluded)}" if excluded else ""
+    if not authors:
+        next_step = ("PR author families are unknown (no provenance signature or branch prefix); "
+                     "add a Model + UNITARES agent provenance signature to the PR body so "
+                     "independent coverage can be verified")
+    elif candidates:
         runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
         next_step = f"run one of: {runs}"
-    elif authors and not eligible_families(authors, families):
+    elif not eligible_families(authors, independent):
         next_step = (f"no family outside the authors ({', '.join(sorted(authors))}) is left to "
                      "review this diff; that needs an operator decision")
     else:
         next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
                      "on this diff)")
     print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs review "
-          f"coverage from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
+          f"coverage from two model families (have: {have}{note}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
           "(e.g. gemini-…, gpt-…) with ./scripts/dev/review.sh record --independent.")
     return NEEDS_SECOND_FAMILY
@@ -4316,11 +4354,12 @@ def cmd_sweep(args) -> int:
             if sensitive:
                 native = read_native(repo, n, key, head, comments)
                 families = passing_families(comments, key, native.records)
-                if len(families) < 2:
+                check_families = independent_families(families, authored_by) if authored_by else families
+                if len(check_families) < 2:
                     waived = waiver_reason_for(comments, key, changed, sensitive, families,
                                                f"origin/{base}", head, authored_by)
                     eligible = ([] if waived else second_family_candidates(
-                        p["headRefName"], families, comments, key))
+                        p["headRefName"], check_families, comments, key))
                     selected = next((p for p in choices if p in eligible
                                      and not _skips_author_family(p, authored_by)), None)
                     if selected:
