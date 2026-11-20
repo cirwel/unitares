@@ -101,21 +101,17 @@ class AuditMixin:
         """Atomically claim `fingerprint` and persist an external `audit.events` row.
 
         Returns `(inserted, event_id, stored_ts)`. Duplicate fingerprints return
-        `(False, None, clamped_ts)` without modifying `audit.events`. If a partition
-        for a historical `ts` is missing, creates that monthly partition (or falls back
-        to `now`) inside the same outer transaction so a failed insert never burns
-        the fingerprint.
+        `(False, None, ts_utc)` without modifying `audit.events`. If a partition
+        for `ts_utc` is missing, creates that monthly partition (or falls back
+        to `now` and marks ``timestamp_adjusted``/``original_observed_at`` in the
+        stored payload) inside the same outer transaction so a failed insert
+        never burns the fingerprint.
         """
         import asyncpg
 
         now = datetime.now(timezone.utc)
         ts_utc = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
-        adjusted = False
-        if now - timedelta(days=180) <= ts_utc <= now + timedelta(minutes=5):
-            event_ts = ts_utc
-        else:
-            event_ts = now
-            adjusted = True
+        event_ts = ts_utc
 
         event_id = uuid.uuid4()
 
@@ -162,7 +158,7 @@ class AuditMixin:
                 if claimed is None:
                     return False, None, event_ts
 
-                payload_json = _encoded_payload(adjusted)
+                payload_json = _encoded_payload(False)
                 try:
                     async with conn.transaction():
                         await _insert_audit_row(conn, event_ts, payload_json)

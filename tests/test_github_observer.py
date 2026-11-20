@@ -1431,7 +1431,7 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
         (400, b'{"error": "bad payload"}', "rejected"),
         (413, b'{"error": "too big"}', "rejected"),
         (422, b'{"error": "observed_at outside accepted retention window"}', "rejected"),
-        (403, b'{"error": "untrusted pr_author"}', "rejected"),
+        (403, b'{"error": "untrusted pr_author"}', "untrusted_author"),
         (403, b'{"error": "operator credential required"}', "failed"),
         (401, b'{"error": "unauthorized"}', "failed"),
     ):
@@ -1439,6 +1439,13 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
             raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(_body))
 
         assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener).write(event) == expected
+
+    class UntrustedAuthorWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "untrusted_author"
 
     class RejectingWriter:
         def __init__(self, base_url, token):
@@ -1457,7 +1464,20 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
     assert obs.main(["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}", "--dry-run"]) == 0
     _ = capsys.readouterr()
 
-    # Live run with permanent refusals marks fingerprints once and exits 0.
+    # 403 untrusted pr_author does NOT mark fingerprints locally and exits 0 so config sync recovers.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", UntrustedAuthorWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 0
+    untrusted_summary = json.loads(capsys.readouterr().err)
+    assert untrusted_summary["events_untrusted_author"] == 12
+    assert untrusted_summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 0
+
+    # Permanent 400/413/422 refusals mark fingerprints once and exit 0.
     monkeypatch.setattr(obs, "UnitaresEventWriter", RejectingWriter)
     assert obs.main([
         "--repo", REPO,

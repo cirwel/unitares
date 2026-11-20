@@ -493,37 +493,48 @@ def test_http_external_events_rejects_stale_or_future_observed_at_with_422(monke
 
 
 @pytest.mark.asyncio
-async def test_record_external_event_marks_adjusted_timestamp_when_clamped():
+async def test_record_external_event_partition_fallback_marks_adjusted_timestamp():
+    import asyncpg
+
     tx_log: list[str] = []
-    inserted_payloads: list[dict] = []
+    inserted_payloads: list[tuple[datetime, dict]] = []
 
     async def fetchval(sql, *args):
+        if "create_events_partition" in sql:
+            raise RuntimeError("partition helper unavailable")
         return args[0]
 
-    async def execute(sql, *args):
+    attempts = 0
+
+    async def execute_with_fallback(sql, *args):
+        nonlocal attempts
         if "INSERT INTO audit.events" in sql:
-            inserted_payloads.append(json.loads(args[6]))
+            attempts += 1
+            if attempts == 1:
+                raise asyncpg.exceptions.CheckViolationError("no partition")
+            inserted_payloads.append((args[0], json.loads(args[6])))
 
     conn = SimpleNamespace(
         fetchval=fetchval,
-        execute=execute,
+        execute=execute_with_fallback,
         transaction=lambda: _TxCtx(tx_log, "tx"),
     )
     audit = _DummyAudit(conn)
-    old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 11, 1, tzinfo=timezone.utc)
     caller_payload = {"fingerprint": "100#3:opened"}
 
     inserted, _event_id, stored_ts = await audit.record_external_event(
         fingerprint="100#3:opened",
         event_type="github.pr_opened",
         agent_id=AGENT_UUID,
-        ts=old_ts,
+        ts=ts,
         producer="github_observer",
         payload=caller_payload,
     )
     assert inserted is True
-    assert stored_ts > old_ts
+    assert stored_ts > ts
+    assert attempts == 2
     assert len(inserted_payloads) == 1
-    assert inserted_payloads[0]["timestamp_adjusted"] is True
-    assert inserted_payloads[0]["original_observed_at"] == old_ts.isoformat()
+    assert inserted_payloads[0][1]["timestamp_adjusted"] is True
+    assert inserted_payloads[0][1]["original_observed_at"] == ts.isoformat()
     assert "timestamp_adjusted" not in caller_payload
