@@ -1435,7 +1435,7 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
             id_parts = [scheduler]
             if namespace:
                 id_parts.append(namespace)
-            id_parts.extend([event, label, id_hash])
+            id_parts.extend([event, id_hash])
             results.append(
                 Automation(
                     id=stable_id("claude-hook", ":".join(id_parts)),

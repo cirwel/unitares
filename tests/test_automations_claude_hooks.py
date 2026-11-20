@@ -725,3 +725,30 @@ def test_shared_plugin_root_across_claude_and_codex_gets_distinct_ids(
     assert {i.scheduler for i in wired} == {"claude-plugin", "codex-plugin"}
     assert len(wired) == 2
     assert len({i.id for i in wired}) == 2
+
+
+def test_hook_id_stays_stable_when_script_becomes_missing(census_mod, tmp_path, monkeypatch):
+    """Hook automation ID must depend on configuration alone, never script presence on disk."""
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/custom-stop.sh")
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": str(hook)}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    wired_id = items[0].id
+
+    hook.unlink()
+    items_after, _ = _collect(census_mod)
+    assert len(items_after) == 1
+    assert items_after[0].status == "missing"
+    assert items_after[0].id == wired_id
