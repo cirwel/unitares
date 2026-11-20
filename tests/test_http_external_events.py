@@ -58,7 +58,7 @@ def _body(**overrides):
         "fingerprint": "100#42:ci:700:1",
         "repo": "example/repo",
         "pr": 42,
-        "observed_at": "2026-11-19T12:15:00Z",
+        "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "pr_author": {"association": "OWNER", "id": 1, "type": "User"},
         "head_sha": "abc1234",
         "source": "actions",
