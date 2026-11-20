@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse
 
@@ -87,11 +88,14 @@ PENDING_CLIENT_TTL = 10 * 60
 # live tokens. The dynamic-client cache has a separate global cap: Redis can
 # reload an issued client after eviction, while memory-only open enrollment
 # may require that client to register again. Evicting a dynamic client also
-# drops its cached tokens. With a store, the token caches also have a global
-# cap (an evicted token reloads from the store on its next use). Redeemed
-# codes from dynamic clients share a global cap that static and managed
-# clients are exempt from. Used refresh-token digests are capped per client
-# and globally; only digests whose store delete landed are evicted.
+# drops its cached tokens. With a store, dynamic clients' cached tokens also
+# have a global cap (an evicted token reloads from the store on its next
+# use). Redeemed codes and used refresh-token digests from dynamic clients
+# share global caps too. Static and managed clients are exempt from every
+# global cap, so open enrollment cannot lock them out; their per-client caps
+# times an operator-controlled number of ids bound them. Used refresh-token
+# digests are also capped per client; only digests whose store delete landed
+# are evicted.
 # Limits are constructor-overridable for constrained deployments and tests.
 DEFAULT_MAX_DYNAMIC_CLIENTS = 256
 DEFAULT_MAX_AUTH_CODES = 1024
@@ -261,6 +265,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # token from the store. Once the delete has landed (or there is no
         # store) the token cannot be reloaded, so its digest may be evicted.
         self._consumed_refresh: dict[str, tuple[str, float, bool]] = {}
+        # Digests of refresh tokens with a load in progress, with a count of
+        # concurrent loads. Eviction keeps those digests: such a load may have
+        # read the token from the store before its delete landed.
+        self._refresh_loads_in_flight: dict[str, int] = {}
 
     def _prune_expired_state(self) -> None:
         """Remove expired process-local entries before accepting new state."""
@@ -312,12 +320,15 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     def _is_dynamic_client_id(self, client_id: str) -> bool:
         return client_id not in self._static_client_ids and not managed_client_id(client_id)
 
-    def _evict_deleted_refresh_digest(self, client_id: str | None = None) -> bool:
-        """Drop the oldest used-refresh digest whose store delete landed."""
+    def _evict_deleted_refresh_digest(self, owned_by: Callable[[str], bool]) -> bool:
+        """Drop the oldest used-refresh digest whose store delete landed.
+
+        Digests with a load in flight are skipped: that load may have read
+        the token from the store before the delete landed."""
         candidates = [
             (expiry, digest)
             for digest, (owner, expiry, deleted) in self._consumed_refresh.items()
-            if deleted and (client_id is None or owner == client_id)
+            if deleted and owned_by(owner) and digest not in self._refresh_loads_in_flight
         ]
         if not candidates:
             return False
@@ -327,18 +338,28 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     def _claim_refresh_digest(self, digest: str, entry: RefreshTokenEntry) -> None:
         """Record a used refresh token within the per-client and global caps.
 
-        Raises before recording anything when every digest at a cap is still
-        needed to refuse a replay (its store delete has not landed)."""
+        The global cap counts dynamic clients only, so open enrollment cannot
+        block a static or managed connector from refreshing. Raises before
+        recording anything when every digest at a cap is still needed to
+        refuse a replay (its store delete has not landed)."""
         self._prune_expired_state()
         used_by_client = sum(
             owner == entry.client_id for owner, _expiry, _deleted in self._consumed_refresh.values()
         )
+        used_by_dynamic = (
+            sum(
+                self._is_dynamic_client_id(owner)
+                for owner, _expiry, _deleted in self._consumed_refresh.values()
+            )
+            if self._is_dynamic_client_id(entry.client_id)
+            else 0
+        )
         if (
             used_by_client >= self._max_consumed_refresh_per_client
-            and not self._evict_deleted_refresh_digest(entry.client_id)
+            and not self._evict_deleted_refresh_digest(lambda owner: owner == entry.client_id)
         ) or (
-            len(self._consumed_refresh) >= self._max_consumed_refresh
-            and not self._evict_deleted_refresh_digest()
+            used_by_dynamic >= self._max_consumed_refresh
+            and not self._evict_deleted_refresh_digest(self._is_dynamic_client_id)
         ):
             raise TokenError(
                 error="invalid_request",
@@ -483,16 +504,24 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             self._access_tokens.pop(client_tokens[0], None)
         # Global cap only with a store, where an evicted token reloads on its
         # next use; memory-only, eviction would revoke another client's token.
+        # It counts and evicts dynamic clients' tokens only: if the store is
+        # failing, eviction revokes, and open enrollment must not be able to
+        # sign out a static or managed connector.
         if (
             self._store is not None
+            and self._is_dynamic_client_id(entry.client_id)
             and entry.token not in self._access_tokens
-            and len(self._access_tokens) >= self._max_access_tokens
         ):
-            oldest = min(
-                self._access_tokens,
-                key=lambda token: self._access_tokens[token].expires_at or 0,
-            )
-            self._access_tokens.pop(oldest, None)
+            dynamic_tokens = [
+                token for token, cached in self._access_tokens.items()
+                if self._is_dynamic_client_id(cached.client_id)
+            ]
+            if len(dynamic_tokens) >= self._max_access_tokens:
+                oldest = min(
+                    dynamic_tokens,
+                    key=lambda token: self._access_tokens[token].expires_at or 0,
+                )
+                self._access_tokens.pop(oldest, None)
         self._access_tokens[entry.token] = entry
 
     def _cache_refresh(self, entry: RefreshTokenEntry) -> None:
@@ -506,11 +535,16 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             self._refresh_tokens.pop(oldest.token, None)
         if (
             self._store is not None
+            and self._is_dynamic_client_id(entry.client_id)
             and entry.token not in self._refresh_tokens
-            and len(self._refresh_tokens) >= self._max_refresh_tokens
         ):
-            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
-            self._refresh_tokens.pop(oldest.token, None)
+            dynamic_tokens = [
+                cached for cached in self._refresh_tokens.values()
+                if self._is_dynamic_client_id(cached.client_id)
+            ]
+            if len(dynamic_tokens) >= self._max_refresh_tokens:
+                oldest = min(dynamic_tokens, key=lambda token: token.created_at)
+                self._refresh_tokens.pop(oldest.token, None)
         self._refresh_tokens[entry.token] = entry
 
     # -- persistence helpers ------------------------------------------------
@@ -777,6 +811,21 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         )
 
     async def load_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: str,
+    ) -> RefreshTokenEntry | None:
+        # The SDK calls exchange_refresh_token after this returns with no
+        # await in between, so marking the load in flight until it returns
+        # keeps its digest from being evicted before the exchange claims it.
+        digest = _digest(refresh_token)
+        self._refresh_loads_in_flight[digest] = self._refresh_loads_in_flight.get(digest, 0) + 1
+        try:
+            return await self._load_refresh_token(client, refresh_token)
+        finally:
+            remaining = self._refresh_loads_in_flight.pop(digest, 1) - 1
+            if remaining > 0:
+                self._refresh_loads_in_flight[digest] = remaining
+
+    async def _load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str,
     ) -> RefreshTokenEntry | None:
         if managed_client_id(client.client_id) and await self.managed_connector(client.client_id) is None:

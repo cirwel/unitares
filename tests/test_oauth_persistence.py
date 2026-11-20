@@ -19,6 +19,7 @@ from src.oauth_provider import (
     GovernanceOAuthProvider,
     OAuthStateStore,
     RedisOAuthStore,
+    _digest,
     build_static_client,
 )
 
@@ -760,6 +761,129 @@ async def test_token_caches_have_a_global_cap_and_reload_from_the_store():
     assert await provider.load_refresh_token(first_client, first.refresh_token) is not None
     assert len(provider._access_tokens) <= 2
     assert len(provider._refresh_tokens) <= 2
+
+
+@pytest.mark.asyncio
+async def test_memory_only_token_caches_have_no_global_eviction():
+    """Without a store an evicted token cannot reload, so a global cap would
+    revoke another client's live token."""
+    provider = GovernanceOAuthProvider(max_access_tokens_total=2, max_refresh_tokens_total=2)
+    issued = []
+    for index in range(4):
+        client = _dcr_client(f"dcr-{index}")
+        await provider.register_client(client)
+        issued.append((client, await _sign_in(provider, client)))
+
+    first_client, first = issued[0]
+    assert await provider.load_access_token(first.access_token) is not None
+    assert await provider.load_refresh_token(first_client, first.refresh_token) is not None
+
+
+class _DeadStore(_DictStore):
+    """A store object whose backend is down: every call fails softly."""
+
+    async def get(self, key):
+        return None
+
+    async def set(self, key, value, ttl):
+        return False
+
+    async def delete(self, *keys):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_churn_does_not_evict_a_static_clients_cached_tokens():
+    static = build_static_client("google", "s3cret", ["https://example.org/cb"])
+    provider = GovernanceOAuthProvider(
+        store=_DeadStore(),
+        static_clients=[static],
+        max_access_tokens_total=2,
+        max_refresh_tokens_total=2,
+    )
+    static_tokens = await _sign_in_static(provider, static)
+    for index in range(4):
+        client = _dcr_client(f"dcr-{index}")
+        await provider.register_client(client)
+        await _sign_in(provider, client)
+
+    dynamic_cached = [t for t in provider._access_tokens.values() if t.client_id != "google"]
+    assert len(dynamic_cached) <= 2
+    assert await provider.load_access_token(static_tokens.access_token) is not None
+    assert await provider.load_refresh_token(static, static_tokens.refresh_token) is not None
+
+
+@pytest.mark.asyncio
+async def test_dynamic_refresh_churn_does_not_block_a_static_clients_refresh():
+    from mcp.server.auth.provider import TokenError
+
+    static = build_static_client("google", "s3cret", ["https://example.org/cb"])
+    provider = GovernanceOAuthProvider(
+        store=_FailingDeleteStore(),
+        static_clients=[static],
+        max_consumed_refresh_per_client=4,
+        max_consumed_refresh=8,
+    )
+    static_tokens = await _sign_in_static(provider, static)
+    for index in range(2):
+        client = _dcr_client(f"dcr-{index}")
+        await provider.register_client(client)
+        await _rotate(provider, client, (await _sign_in(provider, client)).refresh_token, 4)
+
+    # The global record is full of undeleted dynamic digests: another dynamic
+    # client is refused, but the static connector still refreshes.
+    third = _dcr_client("dcr-2")
+    await provider.register_client(third)
+    third_tokens = await _sign_in(provider, third)
+    entry = await provider.load_refresh_token(third, third_tokens.refresh_token)
+    with pytest.raises(TokenError) as refused:
+        await provider.exchange_refresh_token(third, entry, [])
+    assert refused.value.error == "invalid_request"
+
+    entry = await provider.load_refresh_token(static, static_tokens.refresh_token)
+    rotated = await provider.exchange_refresh_token(static, entry, [])
+    assert rotated.refresh_token.startswith("rt_")
+
+
+@pytest.mark.asyncio
+async def test_a_digest_with_a_load_in_flight_is_not_evicted():
+    """A load that read the token from the store before its delete landed
+    must still find the digest when it resumes, whatever churn happened."""
+    import asyncio
+
+    class _GatedGetStore(_DictStore):
+        """Holds a read of one key, after reading it, until released."""
+
+        def __init__(self):
+            super().__init__()
+            self.gated_key = None
+            self.release = asyncio.Event()
+
+        async def get(self, key):
+            value = await super().get(key)
+            if key == self.gated_key:
+                await self.release.wait()
+            return value
+
+    store = _GatedGetStore()
+    provider = GovernanceOAuthProvider(store=store, max_consumed_refresh_per_client=2)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+    entry = await provider.load_refresh_token(client, tokens.refresh_token)
+    provider._refresh_tokens.clear()  # as after a restart: the load hits the store
+    store.gated_key = f"rt:{_digest(tokens.refresh_token)}"
+
+    loading = asyncio.create_task(provider.load_refresh_token(client, tokens.refresh_token))
+    await asyncio.sleep(0)
+    rotated = await provider.exchange_refresh_token(client, entry, [])
+    # Two more rotations reach the per-client cap and evict a delete-landed
+    # digest; the in-flight one must not be the one evicted.
+    await _rotate(provider, client, rotated.refresh_token, 2)
+    store.release.set()
+
+    assert await loading is None
+    assert provider._refresh_loads_in_flight == {}
 
 
 class _CountingStore(_DictStore):
