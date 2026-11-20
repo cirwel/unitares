@@ -1421,3 +1421,52 @@ def test_main_live_mode_persists_fingerprints_and_tracks_failures(tmp_path, monk
     monkeypatch.setattr(obs, "UnitaresEventWriter", FailingWriter)
     assert obs.main([*args, "--state-path", str(tmp_path / "fail.sqlite3"), "--unitares-url", "https://gov.example"]) == 1
 
+
+def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(tmp_path, monkeypatch, capsys):
+    import io as _io
+    import urllib.error
+
+    event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
+    for code, body_bytes, expected in (
+        (400, b'{"error": "bad payload"}', "rejected"),
+        (413, b'{"error": "too big"}', "rejected"),
+        (422, b'{"error": "observed_at outside accepted retention window"}', "rejected"),
+        (403, b'{"error": "untrusted pr_author"}', "rejected"),
+        (403, b'{"error": "operator credential required"}', "failed"),
+        (401, b'{"error": "unauthorized"}', "failed"),
+    ):
+        def opener(request, timeout=None, _code=code, _body=body_bytes):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(_body))
+
+        assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener).write(event) == expected
+
+    class RejectingWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "rejected"
+
+    state = tmp_path / "rejected.sqlite3"
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKEN", "op-secret")
+    monkeypatch.setenv("UNITARES_URL", "not-a-valid-url")
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+
+    # --dry-run must ignore invalid UNITARES_URL and return 0.
+    assert obs.main(["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}", "--dry-run"]) == 0
+    _ = capsys.readouterr()
+
+    # Live run with permanent refusals marks fingerprints once and exits 0.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", RejectingWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 0
+    summary = json.loads(capsys.readouterr().err)
+    assert summary["events_rejected"] == 12
+    assert summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 12
+

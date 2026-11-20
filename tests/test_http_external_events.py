@@ -470,3 +470,60 @@ async def test_live_postgres_external_events_end_to_end(live_postgres_backend, m
     assert len(audit_rows) == 1
     assert audit_rows[0]["event_type"] == "github.ci_result"
     assert outcome_count == 0
+
+
+def test_http_external_events_rejects_stale_or_future_observed_at_with_422(monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", OP_TOKEN)
+    monkeypatch.delenv("UNITARES_EXTERNAL_TRUSTED_GITHUB_APPS", raising=False)
+    app = Starlette(
+        routes=[Route("/v1/external/events", http_record_external_event, methods=["POST"])]
+    )
+    client = TestClient(app)
+
+    stale_ts = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    r_old = client.post("/v1/external/events", json=_body(observed_at=stale_ts), headers=_op_headers())
+    assert r_old.status_code == 422
+    assert "retention window" in r_old.json()["error"]
+
+    future_ts = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    r_future = client.post("/v1/external/events", json=_body(observed_at=future_ts), headers=_op_headers())
+    assert r_future.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_record_external_event_marks_adjusted_timestamp_when_clamped():
+    tx_log: list[str] = []
+    inserted_payloads: list[dict] = []
+
+    async def fetchval(sql, *args):
+        return args[0]
+
+    async def execute(sql, *args):
+        if "INSERT INTO audit.events" in sql:
+            inserted_payloads.append(json.loads(args[6]))
+
+    conn = SimpleNamespace(
+        fetchval=fetchval,
+        execute=execute,
+        transaction=lambda: _TxCtx(tx_log, "tx"),
+    )
+    audit = _DummyAudit(conn)
+    old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    caller_payload = {"fingerprint": "100#3:opened"}
+
+    inserted, _event_id, stored_ts = await audit.record_external_event(
+        fingerprint="100#3:opened",
+        event_type="github.pr_opened",
+        agent_id=AGENT_UUID,
+        ts=old_ts,
+        producer="github_observer",
+        payload=caller_payload,
+    )
+    assert inserted is True
+    assert stored_ts > old_ts
+    assert len(inserted_payloads) == 1
+    assert inserted_payloads[0]["timestamp_adjusted"] is True
+    assert inserted_payloads[0]["original_observed_at"] == old_ts.isoformat()
+    assert "timestamp_adjusted" not in caller_payload

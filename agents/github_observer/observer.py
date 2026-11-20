@@ -336,6 +336,16 @@ class UnitaresEventWriter:
                 return "duplicate"
             if exc.code == 404:
                 return "unknown_agent"
+            if exc.code in (400, 413, 422):
+                return "rejected"
+            if exc.code == 403:
+                try:
+                    raw_body = exc.read(4096)
+                    data = json.loads(raw_body.decode("utf-8"))
+                except (OSError, UnicodeDecodeError, ValueError):
+                    data = None
+                if isinstance(data, dict) and data.get("error") == "untrusted pr_author":
+                    return "rejected"
             return "failed"
         except (OSError, http.client.HTTPException, ValueError):
             return "failed"
@@ -350,6 +360,7 @@ COUNTS = (
     "events_new",
     "events_known",
     "events_unknown_agent",
+    "events_rejected",
     "markers_untrusted",
     "writes_failed",
 )
@@ -426,6 +437,9 @@ def run_cycle(
                     counts["events_known"] += 1
                 elif outcome == "unknown_agent":
                     counts["events_unknown_agent"] += 1
+                elif outcome == "rejected":
+                    mark(fingerprint, event["type"])
+                    counts["events_rejected"] += 1
                 else:
                     counts["writes_failed"] += 1
     return counts
@@ -481,10 +495,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--repo must be OWNER/NAME, got {repo!r}")
     if args.since_days < 1:
         parser.error("--since-days must be at least 1")
-    try:
-        unitares_url = _validate_http_url(args.unitares_url)
-    except ValueError as exc:
-        parser.error(f"--unitares-url: {exc}")
+    unitares_url = ""
+    if not args.dry_run:
+        try:
+            unitares_url = _validate_http_url(args.unitares_url)
+        except ValueError as exc:
+            parser.error(f"--unitares-url: {exc}")
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         print("github_observer: set GITHUB_TOKEN (read access to the repository)", file=sys.stderr)

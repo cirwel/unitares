@@ -15,7 +15,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -198,13 +198,19 @@ async def http_record_external_event(request):
         )
 
     observed_at = body.get("observed_at")
+    now = datetime.now(timezone.utc)
     if observed_at is not None:
         try:
             event_ts_input = _parse_observed_at(observed_at)
         except ValueError as exc:
             return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
+        if not (now - timedelta(days=180) <= event_ts_input <= now + timedelta(minutes=5)):
+            return JSONResponse(
+                {"success": False, "error": "observed_at outside accepted retention window"},
+                status_code=422,
+            )
     else:
-        event_ts_input = datetime.now(timezone.utc)
+        event_ts_input = now
 
     raw_producer = body.get("producer")
     if raw_producer is None:

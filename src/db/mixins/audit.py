@@ -110,15 +110,23 @@ class AuditMixin:
 
         now = datetime.now(timezone.utc)
         ts_utc = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+        adjusted = False
         if now - timedelta(days=180) <= ts_utc <= now + timedelta(minutes=5):
             event_ts = ts_utc
         else:
             event_ts = now
+            adjusted = True
 
         event_id = uuid.uuid4()
-        payload_json = json.dumps(payload)
 
-        async def _insert_audit_row(conn, row_ts: datetime) -> None:
+        def _encoded_payload(is_adjusted: bool) -> str:
+            row_payload = dict(payload)
+            if is_adjusted:
+                row_payload["timestamp_adjusted"] = True
+                row_payload["original_observed_at"] = ts_utc.isoformat()
+            return json.dumps(row_payload)
+
+        async def _insert_audit_row(conn, row_ts: datetime, row_payload_json: str) -> None:
             await conn.execute(
                 """
                 INSERT INTO audit.events (ts, event_id, agent_id, session_id, event_type, confidence, payload, raw_hash)
@@ -130,7 +138,7 @@ class AuditMixin:
                 None,
                 event_type,
                 1.0,
-                payload_json,
+                row_payload_json,
                 None,
             )
 
@@ -154,9 +162,10 @@ class AuditMixin:
                 if claimed is None:
                     return False, None, event_ts
 
+                payload_json = _encoded_payload(adjusted)
                 try:
                     async with conn.transaction():
-                        await _insert_audit_row(conn, event_ts)
+                        await _insert_audit_row(conn, event_ts, payload_json)
                 except asyncpg.exceptions.CheckViolationError:
                     created = False
                     try:
@@ -173,7 +182,7 @@ class AuditMixin:
                     if created:
                         try:
                             async with conn.transaction():
-                                await _insert_audit_row(conn, event_ts)
+                                await _insert_audit_row(conn, event_ts, payload_json)
                         except asyncpg.exceptions.CheckViolationError:
                             created = False
 
@@ -188,7 +197,7 @@ class AuditMixin:
                             event_ts,
                             fingerprint,
                         )
-                        await _insert_audit_row(conn, event_ts)
+                        await _insert_audit_row(conn, event_ts, _encoded_payload(True))
 
         return True, str(event_id), event_ts
 
