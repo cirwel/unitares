@@ -57,6 +57,14 @@ veto by removing the label.
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
   than holding a fix. Reserved auth, identity, scientific and
   governance-sensitive gates are unchanged.
+- A PR that records an operator decision also carries it to the open issues it
+  touches. Before readiness, the owner lists in the PR body each open issue the
+  decision parks, supersedes or unblocks, and posts a short note on each one
+  that links the PR and states the new status and what would reopen it. A
+  decision recorded only in a document leaves those issues reading as live
+  work: the 2026-11-18 EISV maths freeze (#3297) parked #2818 and #2610, and
+  neither said so until a later session was asked to look. If the decision
+  touches no open issue, the PR body says that.
 - End an agent-authored PR body with the provenance signature described in the
   shared global contract: `Model: <actual model identifier>` followed by
   `UNITARES agent: <uuid>`. GitHub keeps PR labels after merge, but labels are
@@ -377,7 +385,8 @@ starting an automatic model review before its evidence has been recorded.
   the earlier head: a review, its findings, its dispositions and its model
   families. An open finding stays open until
   disposed, and a later CLEAN does not clear it. The `review` check says
-  "carried across a base merge from `<sha>`" when a carried record decides.
+  "carried from `<sha>` (base merge or attestation-only commit)" when a
+  carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any
   change to an added or removed line stops the carry. A PR that touches a
   second-family path (`review_policy.json`) is never carried automatically: a
@@ -385,6 +394,24 @@ starting an automatic model review before its evidence has been recorded.
   a full review on the new key. A base merge
   that leaves the PR's files untouched keeps the key, and its records still
   count, as for any PR.
+- A commit that only adds skill attestations carries the review too
+  (`attestation_only_commit`; operator decision, 2026-11-20). A restamp after
+  a base merge changes no code, and on #3222 each one voided a finished
+  review. The commit must add nothing but new files named and shaped like the
+  records `_check_freshness.py --stamp` writes, for a skill that exists, at
+  most 8 of them: known fields only, digests and dates that agree with the
+  file name, and a one-line printable-ASCII `verifier` of at most 600
+  characters. A changed, deleted or replaced attestation, or any other file in
+  the same commit, stops the carry. These limits decide the carry only: a
+  valid attestation outside them (a non-ASCII verifier name, say) is not
+  rejected, it is reviewed like any other change. This step applies on a second-family path
+  as well, because the code there is byte-identical on both sides of it;
+  there the walk also passes a base merge that left the diff key unchanged,
+  and still stops at one that moved it.
+  The carried file reaches master without a reviewer reading it; the shape
+  check bounds what it can hold, and the freshness check recomputes its
+  digests. An operator waiver is never carried: it stays bound to the exact
+  diff it names, so a restamp after a waiver needs the waiver again.
 - The gate proves a review was recorded, not that it was honest: every agent
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own
@@ -694,7 +721,9 @@ change on a sensitive path can be waived too, so read the hunks before you
 waive. The comment shows the waived hunks, the author families, the
 independent family that passed, any raised allowance and the reason. When a
 sensitive diff is held, the `review` check names who passed, who wrote it and
-which families could still review, and says when none is left. It does not
+which families could still review, and says when none is left. In that case
+it names the route in words (a waiver with a line allowance, which the gate
+accepts only when the diff changes none of the gate's own files). It does not
 print a waive command. Bot comments are excluded; cloud agents using the
 operator's account remain indistinguishable from the operator, so an agent
 runs `waive` only when the operator says to and never through the App runner.
