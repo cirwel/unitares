@@ -3,7 +3,7 @@
   "skill": "unitares-dashboard",
   "verified_at": "2026-11-20T04:15:41Z",
   "verified_date": "2026-11-20",
-  "verifier": "gemini-4-neon-xhigh (agent fded7e7e): re-checked claims after B1p/B3/B4 boundary refactor (public rewrap_behavioral_verdict alias in core.py/phases.py and owner-mixin SQL helpers in db/mixins/{audit,identity,knowledge_graph,state}.py called by telemetry.py); zero API, route, schema, auth, or response changes",
+  "verifier": "gemini-4-neon-xhigh (agent fded7e7e): re-checked claims after B1p/B3/B4 boundary refactor (telemetry.py calling fetch_pause_divergence_summary on the audit mixin); zero API, route, schema, auth, or response changes",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "1dd876b057a86dda",

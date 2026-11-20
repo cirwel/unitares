@@ -172,3 +172,11 @@ def test_severity_default_is_per_family_not_global(client, monkeypatch):
     assert ("entropy_outlier", "warning") not in kept, "sentinel warning must not"
     assert ("verdict_shift", "high") in kept
     assert body["count"] == 2
+
+
+def test_sentinel_backlog_severities_match_finding_intake():
+    """Keep agents/sentinel/routes.py severity vocabulary synced with finding intake."""
+    from agents.sentinel.routes import _FINDING_SEVERITIES as sentinel_severities
+    from src.http_routes.findings import _FINDING_SEVERITIES as intake_severities
+
+    assert sentinel_severities == intake_severities
