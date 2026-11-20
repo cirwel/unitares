@@ -663,7 +663,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       ok: true,
       status: "ok",
       identity_binding: %{
-        mode: Application.get_env(:lease_plane, :identity_binding_mode, :off),
+        mode: IdentityBinding.mode(),
+        bound_surface_kinds: IdentityBinding.bound_surface_kinds(),
+        warning: IdentityBinding.posture_warning(),
         proof_format: Application.get_env(:lease_plane, :identity_proof_format, :hybrid),
         metrics: UnitaresLeasePlane.IdentityMetrics.snapshot()
       }

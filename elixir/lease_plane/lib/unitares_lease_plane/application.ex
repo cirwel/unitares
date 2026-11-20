@@ -122,8 +122,10 @@ defmodule UnitaresLeasePlane.Application do
     configure_governance_api_token()
 
     # Identity attribution is a separate gate from the shared service bearer.
-    # Native upgrades keep the compatibility default until their lease
-    # producers carry proofs; Compose opts migrated surface kinds into enforce.
+    # Unset means `:log` (verify and record, but allow) so native upgrades keep
+    # serving producers that carry no proof yet; Compose opts migrated surface
+    # kinds into enforce. Anything short of enforce on every kind is logged
+    # below and reported on /v1/health.
     Application.put_env(
       :lease_plane,
       :identity_binding_mode,
@@ -139,6 +141,10 @@ defmodule UnitaresLeasePlane.Application do
         System.get_env("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS")
       )
     )
+
+    if warning = UnitaresLeasePlane.IdentityBinding.posture_warning() do
+      Logger.warning(warning)
+    end
 
     Application.put_env(
       :lease_plane,
