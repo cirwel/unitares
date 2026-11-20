@@ -748,6 +748,21 @@ def test_a_pr_that_drops_out_of_the_sweep_is_not_closed(monkeypatch):
     result = _run_check(monkeypatch, fake_gh, prev_state=prev)
     assert list(result.detail["stalled_pr_open"]) == ["acmeco/unitares#7"]
     assert result.detail["stalled_pr_resolved"] == []
+    # Review finding: holding it open while reporting "no stalled draft PRs"
+    # would flip the health flag to a recovery that did not happen.
+    assert result.ok is False
+    assert "acmeco/unitares#7" in result.summary
+    assert "carried from an earlier cycle" in result.summary
+    assert result.detail["stalled_pr_count"] == 1
+
+
+def test_parse_owner_reads_a_crlf_body():
+    """GitHub's web editor stores CRLF; `$` alone does not match before \\r\\n."""
+    from agents.vigil.checks.stalled_draft_pr import parse_owner
+
+    assert parse_owner(BODY_SIGNED.replace("\n", "\r\n")) == {
+        "agent_uuid": UUID_A, "model": "claude-test-1",
+    }
 
 
 def test_an_unreadable_closure_check_holds_the_pr_open(monkeypatch):

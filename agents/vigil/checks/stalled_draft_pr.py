@@ -248,8 +248,10 @@ def red_since(rollup: Any) -> Optional[float]:
 
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-_OWNER_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*$", re.MULTILINE)
-_OWNER_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*$", re.MULTILINE)
+# `\r?` before `$`: GitHub returns CRLF line endings for bodies written in its
+# web editor, and under re.MULTILINE `$` matches before `\n` only.
+_OWNER_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*\r?$", re.MULTILINE)
+_OWNER_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*\r?$", re.MULTILINE)
 
 
 def parse_owner(body: Any) -> dict:
@@ -399,6 +401,7 @@ def assess(
     open_set: Optional[dict] = None,
     opened: Optional[List[str]] = None,
     resolved: Optional[List[dict]] = None,
+    held: int = 0,
 ) -> CheckResult:
     """Pure: turn the sweep into a CheckResult.
 
@@ -417,6 +420,10 @@ def assess(
         caveats.append(f"{unreadable} draft(s) could not be status-checked (gh error)")
     if deadline_skipped:
         caveats.append(f"{deadline_skipped} draft(s) dropped at the wall-clock budget")
+    if held:
+        caveats.append(
+            f"{held} carried from an earlier cycle and not re-read in this sweep"
+        )
     caveat_str = f" [{'; '.join(caveats)}]" if caveats else ""
 
     # Every branch emits the same key set. _collect_health_state merges detail
@@ -763,8 +770,32 @@ class StalledDraftPR:
                 # Held after a read: send it to the back of the closure queue.
                 open_set[key] = {**open_set[key], "last_closure_check": now}
 
+        # The verdict covers the whole open set, not just this sweep. A PR
+        # that fell out of the sweep but is still on the open list is still
+        # stalled as far as anyone knows; reporting "no stalled draft PRs"
+        # while holding it would flip the health flag to a recovery that did
+        # not happen.
+        held_rows = [
+            {
+                "repo": e["repo"],
+                "number": e["number"],
+                "red_hours": e.get("red_hours") or 0.0,
+                "failing": list(e.get("failing") or []),
+                "url": e.get("url", ""),
+            }
+            for k, e in open_set.items()
+            if k not in stalled_keys
+            and isinstance(e, dict)
+            and e.get("repo") and e.get("number") is not None
+        ]
+        rows = sorted(
+            list(res["stalled"]) + held_rows,
+            key=lambda r: r["red_hours"], reverse=True,
+        )
+
         return _this.assess(
-            res["stalled"],
+            rows,
+            held=len(held_rows),
             open_set=open_set,
             opened=opened,
             resolved=resolved,
