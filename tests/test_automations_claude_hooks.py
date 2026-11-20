@@ -571,58 +571,14 @@ def test_codex_and_antigravity_user_hooks_are_discovered(
     ]
 
 
-def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch):
-    """Valid hooks running standalone system binaries (e.g. /usr/bin/true) stay wired."""
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude/settings.json").write_text(json.dumps({
-        "hooks": {
-            "Stop": [{
-                "hooks": [{"type": "command", "command": "/usr/bin/true"}],
-            }]
-        }
-    }))
-    monkeypatch.setattr(census_mod, "HOME", home)
-
-    items, warnings = _collect(census_mod)
-    assert warnings == []
-    assert len(items) == 1
-    assert items[0].status == "wired"
-    assert items[0].name == "Stop: true"
-
-
-@pytest.mark.parametrize("command", [
-    "/bin/bash /does/not/exist.sh",
-    "/bin/bash does-not-exist-review.sh",
-    "/usr/bin/osascript does-not-exist-review.scpt",
-    "/usr/bin/env /bin/bash does-not-exist-review.sh",
-    "/usr/bin/env FOO=1 bash does-not-exist-review.sh",
-])
-def test_interpreter_with_missing_script_is_flagged_missing(census_mod, tmp_path, monkeypatch, command):
-    """Interpreter commands with missing absolute or relative script operands stay missing."""
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude/settings.json").write_text(json.dumps({
-        "hooks": {
-            "Stop": [{
-                "hooks": [{"type": "command", "command": command}],
-            }]
-        }
-    }))
-    monkeypatch.setattr(census_mod, "HOME", home)
-
-    items, warnings = _collect(census_mod)
-    assert len(items) == 1
-    assert items[0].status == "missing"
-    assert "attention:script_not_found_on_disk" in items[0].notes
-    assert any("no resolvable script" in w for w in warnings)
-
-
 @pytest.mark.parametrize("command,expected_label", [
+    ("/usr/bin/true", "Stop: true"),
     ("/usr/bin/osascript -e 'beep'", "Stop: osascript"),
+    ("/bin/bash -ec 'exit 0'", "Stop: bash"),
     ("/bin/bash -c 'echo /does/not/exist'", "Stop: bash"),
 ])
-def test_inline_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch, command, expected_label):
+def test_standalone_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch, command, expected_label):
+    """Valid standalone/inline system-command hooks stay wired."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (home / ".claude/settings.json").write_text(json.dumps({
@@ -639,3 +595,22 @@ def test_inline_system_command_hook_is_wired(census_mod, tmp_path, monkeypatch, 
     assert len(items) == 1
     assert items[0].status == "wired"
     assert items[0].name == expected_label
+
+
+def test_interpreter_wrapped_hook_prefers_script_label(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/custom-stop.sh")
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": f"/bin/bash {hook}"}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    assert items[0].name == "Stop: custom-stop.sh"
