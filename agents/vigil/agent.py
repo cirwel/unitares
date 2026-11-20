@@ -28,6 +28,7 @@ import functools
 import inspect
 import json
 import os
+import time
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -79,6 +80,10 @@ CYCLE_TIMEOUT = int(os.getenv("HEARTBEAT_CYCLE_TIMEOUT", "120"))
 # means "a stalled draft PR exists", not "GitHub is unreachable", and those
 # notes land in the shared KG tagged `outage` where other residents read them.
 CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
+
+# Wall-clock bound on posting stalled-draft-PR findings in one cycle. What does
+# not fit is retried next cycle; see emit_stalled_pr_findings.
+STALLED_PR_EMIT_BUDGET = float(os.getenv("VIGIL_STALLED_PR_EMIT_BUDGET", "15"))
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
@@ -242,9 +247,31 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
     Without that, a governance blip would leave a stall recorded as announced
     that nobody was told about, or closed with no closure on record.
 
+    Posting is synchronous and each post can take several seconds against a
+    struggling governance, so the whole pass is bounded: after the first post
+    that fails, or once ``STALLED_PR_EMIT_BUDGET`` seconds have gone, nothing
+    more is sent this cycle and the rest is undone the same way, to be retried
+    next cycle. Otherwise fifteen stalls opening during an outage would hold
+    the heartbeat past its own timeout.
+
     MUST NOT raise: it runs inside the heartbeat cycle.
     """
-    counts = {"opened": 0, "resolved": 0, "failed": 0}
+    counts = {"opened": 0, "resolved": 0, "failed": 0, "deferred": 0}
+    deadline = time.monotonic() + STALLED_PR_EMIT_BUDGET
+    stop = {"now": False}
+
+    def _send(**kwargs) -> Optional[str]:
+        """Post unless the pass has stopped; None means "not attempted"."""
+        if stop["now"] or time.monotonic() >= deadline:
+            stop["now"] = True
+            counts["deferred"] += 1
+            return None
+        outcome = post_finding_result(**kwargs)
+        if outcome not in REACHED_GOVERNANCE:
+            stop["now"] = True
+            counts["failed"] += 1
+        return outcome
+
     try:
         open_set = health_state.get("stalled_pr_open")
         if not isinstance(open_set, dict):
@@ -266,7 +293,7 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
                 f"with no new run ({shown}). Owner: {_stalled_pr_owner(entry)}. "
                 "Nothing will merge it — re-run CI or push a fix"
             )
-            outcome = post_finding_result(
+            outcome = _send(
                 event_type="vigil_finding",
                 severity="warning",
                 message=message,
@@ -289,7 +316,6 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
                 counts["opened"] += 1
                 notify("Vigil", message)
             else:
-                counts["failed"] += 1
                 open_set.pop(key, None)
 
         for row in list(health_state.get("stalled_pr_resolved") or []):
@@ -301,7 +327,7 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             )
             hours = row.get("open_hours")
             lasted = f"{hours:.0f}h" if isinstance(hours, (int, float)) else "an unknown time"
-            outcome = post_finding_result(
+            outcome = _send(
                 event_type="vigil_resolution_finding",
                 severity="info",
                 message=(
@@ -331,7 +357,6 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             if outcome in REACHED_GOVERNANCE:
                 counts["resolved"] += 1
             else:
-                counts["failed"] += 1
                 held = {k: v for k, v in row.items() if k not in ("outcome", "open_hours")}
                 open_set[key] = held
     except Exception as e:  # pragma: no cover - defensive, cycle must survive

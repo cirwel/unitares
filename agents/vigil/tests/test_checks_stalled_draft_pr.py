@@ -798,6 +798,32 @@ def test_closure_reads_are_capped_oldest_first(monkeypatch):
     assert len(result.detail["stalled_pr_resolved"]) == 2
 
 
+def test_closure_reads_rotate_past_prs_that_stay_unreadable(monkeypatch):
+    """Review finding: the same oldest PRs must not hold the cap forever while
+    a newer, already merged PR is never read."""
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    monkeypatch.setattr(mod, "MAX_RESOLVE", 2)
+    state = {"github_healthy": False, "stalled_pr_open": {
+        f"acmeco/unitares#{n}": _open_entry(n, NOW - (10 - n) * HOUR) for n in (1, 2, 3)
+    }}
+
+    async def fake_gh(args, timeout):
+        if args[0] == "search":
+            return []
+        if int(args[2]) in (1, 2):  # the two open longest never become readable
+            raise mod.GhUnavailable("403")
+        return {"state": "MERGED"}
+
+    first = _run_check(monkeypatch, fake_gh, prev_state=state)
+    assert first.detail["stalled_pr_resolved"] == []
+    assert first.detail["stalled_pr_open"]["acmeco/unitares#1"]["last_closure_check"] == NOW
+
+    second = _run_check(monkeypatch, fake_gh,
+                        prev_state={"github_healthy": False, **first.detail})
+    assert [r["number"] for r in second.detail["stalled_pr_resolved"]] == [3]
+
+
 def test_check_opts_out_of_the_aggregate_edge_post():
     from agents.vigil.checks.stalled_draft_pr import StalledDraftPR
 

@@ -625,25 +625,42 @@ async def read_closures(
     timeout: float,
     budget: float,
     max_resolve: int,
-) -> dict:
+) -> Tuple[dict, List[str]]:
     """Read previously stalled PRs directly and say which ones closed.
 
-    Returns ``{key: outcome}`` for the PRs that are verifiably no longer
-    stalled. Anything that could not be read, was not reached inside the
-    budget, or is still stalled is simply absent, and so stays open. Longest
-    open first, so the cap never starves the oldest stall.
+    Returns ``(closures, attempted)``. ``closures`` is ``{key: outcome}`` for
+    the PRs that are verifiably no longer stalled; anything that could not be
+    read, was not reached inside the budget, or is still stalled is absent
+    from it, and so stays open. ``attempted`` lists every key a read was
+    started for, whatever came of it.
+
+    Least recently attempted first (never-attempted before all, then longest
+    open). The caller stamps ``last_closure_check`` on what was attempted, so
+    the cap rotates through the open set: five PRs that stay unreadable cannot
+    keep a sixth, already merged, from ever being read.
     """
     deadline = time.monotonic() + budget
+
+    def _order(k: str) -> Tuple[float, float]:
+        e = prev_open[k]
+        last = e.get("last_closure_check")
+        seen = e.get("first_seen")
+        return (
+            float(last) if isinstance(last, (int, float)) else 0.0,
+            float(seen) if isinstance(seen, (int, float)) else now,
+        )
+
     ordered = sorted(
-        (k for k in keys if isinstance(prev_open.get(k), dict)),
-        key=lambda k: prev_open[k].get("first_seen", now),
+        (k for k in keys if isinstance(prev_open.get(k), dict)), key=_order
     )[: max(0, max_resolve)]
     out: dict = {}
+    attempted: List[str] = []
     for key in ordered:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         entry = prev_open[key]
+        attempted.append(key)
         try:
             view = await _gh_json(
                 ["pr", "view", str(entry["number"]), "-R", str(entry["repo"]),
@@ -657,7 +674,7 @@ async def read_closures(
         outcome = classify_closure(view, now=now, stale_hours=stale_hours)
         if outcome is not None:
             out[key] = outcome
-    return out
+    return out, attempted
 
 
 class StalledDraftPR:
@@ -720,9 +737,10 @@ class StalledDraftPR:
         stalled_keys = {pr_key(r["repo"], r["number"]) for r in res["stalled"]}
         to_verify = [k for k in prev_open if k not in stalled_keys]
         closures: dict = {}
+        attempted: List[str] = []
         if to_verify:
             try:
-                closures = await _this.read_closures(
+                closures, attempted = await _this.read_closures(
                     to_verify,
                     prev_open,
                     now=now,
@@ -736,10 +754,14 @@ class StalledDraftPR:
             except Exception:
                 # A failed closure pass closes nothing; the sweep's own result
                 # still stands.
-                closures = {}
+                closures, attempted = {}, []
         open_set, opened, resolved = _this.reconcile(
             prev_open, res["stalled"], closures, now=now, max_open=_this.MAX_OPEN,
         )
+        for key in attempted:
+            if isinstance(open_set.get(key), dict):
+                # Held after a read: send it to the back of the closure queue.
+                open_set[key] = {**open_set[key], "last_closure_check": now}
 
         return _this.assess(
             res["stalled"],
