@@ -490,6 +490,7 @@ def test_http_external_events_rejects_stale_or_future_observed_at_with_422(monke
     future_ts = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
     r_future = client.post("/v1/external/events", json=_body(observed_at=future_ts), headers=_op_headers())
     assert r_future.status_code == 422
+    assert r_future.json()["error"] == "observed_at in the future"
 
 
 @pytest.mark.asyncio

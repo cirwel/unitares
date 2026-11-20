@@ -295,6 +295,17 @@ def _validate_http_url(url: str) -> str:
     return url.rstrip("/")
 
 
+def _error_reason(exc: urllib.error.HTTPError) -> str | None:
+    """Return JSON ``error`` string from a small HTTP error response, if readable."""
+    try:
+        raw_body = exc.read(4096)
+        data = json.loads(raw_body.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    err = data.get("error") if isinstance(data, dict) else None
+    return err if isinstance(err, str) else None
+
+
 class UnitaresEventWriter:
     """Post events to ``POST /v1/external/events`` with operator credentials."""
 
@@ -336,15 +347,14 @@ class UnitaresEventWriter:
                 return "duplicate"
             if exc.code == 404:
                 return "unknown_agent"
-            if exc.code in (400, 413, 422):
+            if exc.code in (400, 413):
+                return "rejected"
+            if exc.code == 422:
+                if _error_reason(exc) == "observed_at in the future":
+                    return "future_timestamp"
                 return "rejected"
             if exc.code == 403:
-                try:
-                    raw_body = exc.read(4096)
-                    data = json.loads(raw_body.decode("utf-8"))
-                except (OSError, UnicodeDecodeError, ValueError):
-                    data = None
-                if isinstance(data, dict) and data.get("error") == "untrusted pr_author":
+                if _error_reason(exc) == "untrusted pr_author":
                     return "untrusted_author"
             return "failed"
         except (OSError, http.client.HTTPException, ValueError):
@@ -361,6 +371,7 @@ COUNTS = (
     "events_known",
     "events_unknown_agent",
     "events_untrusted_author",
+    "events_future",
     "events_rejected",
     "markers_untrusted",
     "writes_failed",
@@ -441,6 +452,9 @@ def run_cycle(
                 elif outcome == "untrusted_author":
                     # Server/observer allowlist mismatch may be fixed in config; do not mark locally.
                     counts["events_untrusted_author"] += 1
+                elif outcome == "future_timestamp":
+                    # Clock skew relative to GitHub may resolve on a later poll; do not mark locally.
+                    counts["events_future"] += 1
                 elif outcome == "rejected":
                     mark(fingerprint, event["type"])
                     counts["events_rejected"] += 1
