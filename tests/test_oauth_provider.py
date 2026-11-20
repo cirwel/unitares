@@ -534,6 +534,23 @@ class TestRefreshFlow:
         assert len(provider._consumed_refresh) <= 4
 
     @pytest.mark.asyncio
+    async def test_refresh_succeeds_when_one_eviction_frees_both_caps(self):
+        # The per-client eviction also frees a slot under the global cap, so
+        # the global check must count after it rather than evict again.
+        provider = GovernanceOAuthProvider(
+            max_consumed_refresh_per_client=1, max_consumed_refresh=1,
+        )
+        client = _client()
+        token = await self._full_token(provider, client)
+        refresh = token.refresh_token
+        for _ in range(3):
+            entry = await provider.load_refresh_token(client, refresh)
+            refresh = (await provider.exchange_refresh_token(client, entry, [])).refresh_token
+
+        assert len(provider._consumed_refresh) == 1
+        assert await provider.load_refresh_token(client, refresh) is not None
+
+    @pytest.mark.asyncio
     async def test_requested_scopes_override(self, provider):
         client = _client()
         token = await self._full_token(provider, client)

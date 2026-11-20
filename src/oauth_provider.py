@@ -343,28 +343,30 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         recording anything when every digest at a cap is still needed to
         refuse a replay (its store delete has not landed)."""
         self._prune_expired_state()
+        refused = TokenError(
+            error="invalid_request",
+            error_description="too many recently refreshed tokens",
+        )
         used_by_client = sum(
             owner == entry.client_id for owner, _expiry, _deleted in self._consumed_refresh.values()
-        )
-        used_by_dynamic = (
-            sum(
-                self._is_dynamic_client_id(owner)
-                for owner, _expiry, _deleted in self._consumed_refresh.values()
-            )
-            if self._is_dynamic_client_id(entry.client_id)
-            else 0
         )
         if (
             used_by_client >= self._max_consumed_refresh_per_client
             and not self._evict_deleted_refresh_digest(lambda owner: owner == entry.client_id)
-        ) or (
-            used_by_dynamic >= self._max_consumed_refresh
-            and not self._evict_deleted_refresh_digest(self._is_dynamic_client_id)
         ):
-            raise TokenError(
-                error="invalid_request",
-                error_description="too many recently refreshed tokens",
+            raise refused
+        # Count after the per-client eviction: the digest it dropped may
+        # have been the one holding the global cap full.
+        if self._is_dynamic_client_id(entry.client_id):
+            used_by_dynamic = sum(
+                self._is_dynamic_client_id(owner)
+                for owner, _expiry, _deleted in self._consumed_refresh.values()
             )
+            if (
+                used_by_dynamic >= self._max_consumed_refresh
+                and not self._evict_deleted_refresh_digest(self._is_dynamic_client_id)
+            ):
+                raise refused
         self._consumed_refresh[digest] = (
             entry.client_id,
             entry.created_at + self._refresh_token_ttl,
