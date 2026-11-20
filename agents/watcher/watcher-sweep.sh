@@ -65,6 +65,8 @@ MAX_CONCURRENT=3
 LOCK_DIR="/tmp/unitares-watcher-locks"
 STATE_DIR="$HOME/.unitares"
 STATE_FILE="${STATE_DIR}/watcher-sweep.state"
+# One marker per file this sweep has scanned since the watermark last moved.
+DONE_DIR="${STATE_DIR}/watcher-sweep.done"
 LOG_FILE="$HOME/Library/Logs/unitares-watcher.log"
 
 if [[ ! -f "${WATCHER_AGENT}" ]]; then
@@ -188,6 +190,7 @@ UNEDITED=$(( RAW_COUNT - FILTERED_COUNT ))
 TOTAL="$FILTERED_COUNT"
 if [[ "$TOTAL" -eq 0 ]]; then
     mv -f "$PENDING_STATE" "$STATE_FILE"
+    rm -rf "$DONE_DIR"
     exit 0
 fi
 
@@ -205,6 +208,8 @@ scan_one() {
 
 SCANNED=0
 SKIPPED_HOOK=0
+SKIPPED_DONE=0
+mkdir -p "$DONE_DIR"
 while IFS= read -r FILE_PATH; do
     [[ -z "$FILE_PATH" ]] && continue
     [[ -f "$FILE_PATH" ]] || continue
@@ -217,13 +222,27 @@ while IFS= read -r FILE_PATH; do
     # the last write. Nothing new to see.
     FILE_HASH=$(printf '%s' "$FILE_PATH" | shasum -a 256 | cut -c1-16)
     LOCK_FILE="${LOCK_DIR}/${FILE_HASH}.lock"
+    DONE_FILE="${DONE_DIR}/${FILE_HASH}"
     if [[ -f "$LOCK_FILE" ]]; then
         LOCK_MTIME=$(stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)
         FILE_MTIME=$(stat -f %m "$FILE_PATH" 2>/dev/null || echo 0)
         if [[ "$LOCK_MTIME" -ge "$FILE_MTIME" ]]; then
             SKIPPED_HOOK=$(( SKIPPED_HOOK + 1 ))
+            touch "$DONE_FILE"
             continue
         fi
+    fi
+
+    # --- Did an earlier sweep in this window already scan this edit? ---
+    # While the watermark is held, every sweep sees the same candidates in the
+    # same order. The hook's lock cannot carry "already scanned" between
+    # sweeps: watcher-hook.sh deletes locks older than ten minutes. Without a
+    # record of its own, a sweep that hit the cap scanned the same first
+    # MAX_FILES files every interval and never reached the rest (one
+    # deployment: 64 files scanned five times or more, one of them 45 times).
+    if [[ -f "$DONE_FILE" && ! "$FILE_PATH" -nt "$DONE_FILE" ]]; then
+        SKIPPED_DONE=$(( SKIPPED_DONE + 1 ))
+        continue
     fi
 
     # Claim it for both triggers before spending the inference.
@@ -239,17 +258,21 @@ while IFS= read -r FILE_PATH; do
             scan_one "$FILE_PATH" --region "$REGION"
         done <<< "$REGIONS"
     fi
+    touch "$DONE_FILE"
     SCANNED=$(( SCANNED + 1 ))
 done <<< "$CANDIDATES"
 
 # Advance the watermark only after a completed pass. If the cap truncated the
-# work, hold the old watermark so the remainder is picked up next sweep.
+# work, hold the old watermark so the remainder is picked up next sweep; the
+# markers in DONE_DIR are what make that sweep start where this one stopped.
+# They describe the held window only, so they go when the watermark moves.
 if [[ "$SCANNED" -ge "$MAX_FILES" ]]; then
     rm -f "$PENDING_STATE"
-    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
+    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
 else
     mv -f "$PENDING_STATE" "$STATE_FILE"
-    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
+    rm -rf "$DONE_DIR"
+    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
 fi
 
 exit 0

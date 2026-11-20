@@ -236,3 +236,79 @@ def test_a_watermark_inside_the_window_is_left_alone(tmp_path):
     assert result.returncode == 0, result.stderr
     assert state.stat().st_mtime == before
     assert "watermark was more than" not in log.read_text()
+
+
+def test_a_capped_sweep_resumes_where_the_last_one_stopped(tmp_path):
+    """While the watermark is held, each sweep sees the same candidates. The
+    hook deletes its locks after ten minutes, so they cannot carry "already
+    scanned" from one sweep to the next; without its own record the sweep
+    scanned the same first files every interval and never reached the rest."""
+    env, calls, agent, log, root, state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX"] = "2"
+    for name in ("a.py", "b.py", "c.py", "d.py", "e.py"):
+        (root / name).write_text("a = 1\n")
+    watermark = state.stat().st_mtime
+
+    def sweep():
+        result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        # What the hook does between sweeps: its locks do not outlive ten minutes.
+        for lock in Path("/tmp/unitares-watcher-locks").glob("*.lock"):
+            if lock.stat().st_mtime >= watermark:
+                lock.unlink(missing_ok=True)
+
+    sweep()
+    sweep()
+    assert state.stat().st_mtime == watermark, "watermark held while the cap is hit"
+    sweep()
+
+    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    assert sorted(scanned) == sorted(str(root / n) for n in ("a.py", "b.py", "c.py", "d.py", "e.py")), scanned
+    assert state.stat().st_mtime > watermark, "a pass that finishes under the cap advances it"
+    assert not (state.parent / "watcher-sweep.done").exists()
+    assert "2 already scanned in this window" in log.read_text()
+
+
+def test_a_file_edited_after_its_scan_is_scanned_again_in_the_same_window(tmp_path):
+    env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX"] = "1"
+    (root / "a.py").write_text("a = 1\n")
+    (root / "b.py").write_text("b = 1\n")
+
+    subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
+    first = _scan_calls(calls, agent)
+    assert len(first) == 1
+    scanned_first = Path(first[0].split(" --file ")[1])
+    time.sleep(1.1)  # past the marker's mtime at one-second resolution
+    scanned_first.write_text("a = 2\n")
+    for lock in Path("/tmp/unitares-watcher-locks").glob("*.lock"):
+        lock.unlink(missing_ok=True)
+
+    subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
+    subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
+
+    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    assert scanned.count(str(scanned_first)) == 2, scanned
+
+
+def test_hook_and_sweep_count_the_same_scans():
+    """Review finding on this change (codex, P2): the sweep's pattern-only
+    scans start `agent.py --file`, which the hook's `agent.py --all` matcher
+    did not count, so the two could exceed the shared concurrency limit."""
+    import re
+
+    hook = SCRIPT.with_name("watcher-hook.sh").read_text()
+    sweep = SCRIPT.read_text()
+    matcher = re.compile(r'pgrep -f "([^"]+)"')
+    hook_patterns = matcher.findall(hook)
+    sweep_patterns = matcher.findall(sweep)
+    assert hook_patterns == sweep_patterns == ["agents/watcher/agent.py --(all|file) "]
+    counted = re.compile(hook_patterns[0])
+    for command in (
+        "python3 /repo/agents/watcher/agent.py --file /x/a.py",
+        "python3 /repo/agents/watcher/agent.py --file /x/a.py --region L1-L40",
+        "python3 /repo/agents/watcher/agent.py --file /x/a.py --all",
+        "python3 /repo/agents/watcher/agent.py --all --file /x/a.py",
+    ):
+        assert counted.search(command), command
+    assert not counted.search("python3 /repo/agents/watcher/agent.py --lifecycle")
