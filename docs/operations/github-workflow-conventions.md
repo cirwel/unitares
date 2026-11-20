@@ -649,9 +649,9 @@ entries expire at their recorded `retry_after` UTC time.
 **Second-family review for security-sensitive paths.** A diff that touches a
 path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth, the
 MCP authorization gate, lease and effect authorization, the strong-model host
-adapter and Antigravity client, the dialectic reviewer's backends, and the
-review gate itself; `_boundary` in the file says what is deliberately left
-off) needs a passing full review from **two different model families** before
+adapter and Antigravity client, the dialectic reviewer's backends, the
+review gate itself, and every file in the governance-sensitivity manifest;
+`_boundary` in the file says what is deliberately left off) needs a passing full review from **two different model families** before
 the `review` check goes green: OpenAI (Codex, native or local), Anthropic
 (Claude) or Google. An Antigravity review counts by the model it ran, which
 its record carries (`agy` can run Gemini, Claude or GPT-OSS models); a review
@@ -977,9 +977,9 @@ Draft PRs cannot be queued, so mark ready first.
   readiness-only handoff, apply it only following a later verified queue-entry
   grant and fresh validation of the current head (CI green, known findings
   addressed, required sensitive-path review coverage passing). The operator
-  vetoes by removing it. The exception is a PR labelled `governance-sensitive` (see
-  `docs/dev/GOVERNANCE_SENSITIVITY.md`), touching that manifest, or coming from
-  a fork: the queue never arms it, and the operator merges it by hand. When the
+  vetoes by removing it. A PR from a fork is the exception: the queue never
+  arms it, and the operator merges it by hand. A governance-sensitive PR has
+  its own rule (next bullet). When the
   queue first sees `approved-to-merge` (within 15 minutes of application), it
   pins the head and a diff fingerprint (`master...<SHA>` added/removed lines or
   blob SHA) and arms with `--match-head-commit`. A clean base update preserves
@@ -987,6 +987,26 @@ Draft PRs cannot be queued, so mark ready first.
   is skipped until the label is removed and re-added. The pin catches honest
   follow-up pushes or branch mutations after approval, not hostile actors
   sharing the same credentials.
+- **Governance-sensitive PRs get a veto window (operator ruling,
+  2026-11-16).** A PR labelled `governance-sensitive`, or whose diff matches
+  the manifest in `docs/dev/GOVERNANCE_SENSITIVITY.md`, used to wait for the
+  operator to merge it by hand. The operator no longer merges, so the queue
+  arms it once all three hold: the diff touches a `review_policy.json`
+  `second_family_paths` file and `review` has passed on the current head (two
+  model families); the PR body has a line starting `Expected effect:` stating
+  the expected effect on pause and verdict rates; and 24 hours have passed
+  since the current `approved-to-merge` label went on. Removing the label
+  inside the 24 hours is the veto, and re-adding it starts them again. While
+  it waits the PR is skipped, so it never holds the slot, and the queue posts
+  one notice per head saying when the window ends or what is missing. A diff
+  touching the manifest, its checker
+  (`scripts/dev/check_governance_sensitivity.sh`) or its workflow
+  (`.github/workflows/governance-sensitivity.yml`) is never armed: the
+  operator merges it by hand. The same goes for anything the queue cannot
+  read (the manifest, the diff, the review policy, the label time).
+  `PR_QUEUE_SENSITIVE_DELEGATED=0` restores the earlier never-arm rule. The
+  window works because agents follow it, not because anything enforces it:
+  agents can act under the operator's GitHub login.
 - **Holds.** A queued PR labelled `automerge-hold` or `no-auto-merge` is not
   armed, and is disarmed if the queue had armed it. Its approval stands, so it
   returns in turn once the hold comes off: a hold pauses, removing
@@ -1067,7 +1087,9 @@ else, the script looks at every PR against `master` that carries
 - It never promotes a fork, a PR labelled `governance-sensitive`,
   `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
   governance-sensitive surface, a stacked PR, or a PR whose body does not say
-  `Classification: fix`.
+  `Classification: fix`. The veto-window route for a governance-sensitive PR
+  starts from a PR its owner marked ready and labelled, never from a
+  declaration.
 
 Lasting refusals post one notice on the PR; waiting on CI or review posts
 nothing. Findings still need their author: the route removes the wait for a
@@ -1205,6 +1227,7 @@ this entirely).
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your session will end before CI and review finish, and the PR is a `fix` you own | `gh pr edit <n> --add-label ready-when-validated` on the draft; the queue marks it ready and queues it once that content validates (section 4) |
 | Your PR is READY and you hold queue-entry authority (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| Your READY, labelled PR is governance-sensitive | Put `Expected effect: <effect on pause and verdict rates>` in the body and get `review` passing with two model families; the queue arms it 24 hours after the label went on (section 4). A diff touching the sensitivity manifest, its checker or its workflow waits for the operator's hand merge |
 | You have readiness-only authority | Mark an unlabeled draft ready, leave it unlabeled, and wait for a separate verified queue-entry grant before revalidation and labeling |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
