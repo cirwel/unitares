@@ -11,8 +11,10 @@
 # this Dockerfile still installed postgresql-server-dev-17, breaking the pgvector
 # build (postgres.h not found). AGE 1.7.0 is required by the app (see
 # src/mcp_handlers/lifecycle/lineage_reachability.py), so pin the PG18_1.7.0 tag
-# rather than the PG17 image (whose newest AGE is only 1.6.0).
-FROM apache/age:release_PG18_1.7.0
+# rather than the PG17 image (whose newest AGE is only 1.6.0). The tag also
+# carries its multi-arch index digest, so a moved tag cannot change what a
+# release builds on; Dependabot's docker ecosystem proposes digest bumps.
+FROM apache/age:release_PG18_1.7.0@sha256:e7de1717e487dac7c1be93a1cd5360a2cf07ff4170342c2af2ac4713c21baf00
 
 # Install build dependencies for pgvector. Use $PG_MAJOR (set by the upstream
 # postgres base image) so the dev headers always match the base PG version.
@@ -26,9 +28,15 @@ RUN apt-get update && apt-get install -y \
 # Build and install pgvector
 # OPTFLAGS="" avoids SIMD instructions that cause "Illegal instruction" on
 # some CPUs (notably older x86_64 and ARM under emulation).
+# A git tag can be moved, so the build checks out the commit v0.8.3 named when
+# it was pinned and refuses to build anything else. Bump both together.
+ARG PGVECTOR_VERSION=v0.8.3
+ARG PGVECTOR_COMMIT=586e7515bafe6912c425164d186d56550657c349
 RUN cd /tmp && \
-    git clone --branch v0.8.3 https://github.com/pgvector/pgvector.git && \
+    git clone --branch "$PGVECTOR_VERSION" https://github.com/pgvector/pgvector.git && \
     cd pgvector && \
+    git -c advice.detachedHead=false checkout --detach "$PGVECTOR_COMMIT" && \
+    test "$(git rev-parse HEAD)" = "$PGVECTOR_COMMIT" && \
     make OPTFLAGS="" && \
     make install && \
     cd / && rm -rf /tmp/pgvector
