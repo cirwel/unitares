@@ -227,6 +227,7 @@ async def replay(args):
                   "src/knowledge_authority.py", "src/retrieval.py", "scripts/eval/kg_serving_ablation.py")},
               "variants": {}}
     with patch("src.storage.knowledge_graph_age.datetime", FrozenClock), \
+         patch("src.mcp_handlers.knowledge.search_helpers.datetime", FrozenClock), \
          patch("src.mcp_handlers.knowledge.handlers.datetime", FrozenClock), \
          patch("src.retrieval.hybrid_enabled", return_value=True), \
          patch("src.retrieval.related_expansion_enabled", return_value=False), \
@@ -247,7 +248,7 @@ async def replay(args):
                 })
                 graph = FrozenGraph(index, options)
                 state = handlers._KnowledgeSearchState(request, graph)
-                with patch("src.mcp_handlers.knowledge.handlers.rank_by_authority",
+                with patch("src.mcp_handlers.knowledge.search_helpers.rank_by_authority",
                            side_effect=(lambda docs, **kw: (list(docs), False)) if options.get("authority") is False
                            else handlers.rank_by_authority):
                     await handlers._run_text_search(state)
