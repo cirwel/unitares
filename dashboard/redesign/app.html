@@ -63,6 +63,11 @@
   .adj-note { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-2); }
   .adj-empty { color: var(--muted); font-size: var(--text-sm); padding: var(--space-5) 0; }
 
+  #connectors-mount .security-grid { align-items: start; }
+  #connectors-mount .security-grid > .panel { margin-top: 0; }
+  #connectors-mount a { color: var(--accent); }
+  #connector-form .security-secret { width: 100%; box-sizing: border-box; }
+  #connector-result { scroll-margin-top: 1rem; }
   /* Security section */
   .security-intro { color: var(--muted); font-size: var(--text-sm); max-width: 68ch;
     margin: calc(-1 * var(--space-3)) 0 var(--space-5); }
@@ -120,6 +125,7 @@
     <a href="#timeline" data-section="timeline">Timeline</a>
     <a href="#eisv" data-section="eisv">EISV</a>
     <a href="#risk" data-section="risk">Risk</a>
+    <a href="#connectors" data-section="connectors">Connectors</a>
     <a href="#security" data-section="security">Security</a>
   </nav>
 
@@ -202,6 +208,10 @@
       <div id="risk-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
 
+    <section class="section" data-pane="connectors" hidden>
+      <div class="section-head"><h1>Connectors</h1></div>
+      <div id="connectors-mount"></div>
+    </section>
     <section class="section" data-pane="security" hidden>
       <h2 class="section-title">Passkeys & sessions</h2>
       <div id="security-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
@@ -224,6 +234,7 @@
 <script src="./sections/eisv.js"></script>
 <script src="./sections/risk.js"></script>
 <script src="./sections/security.js"></script>
+<script src="./sections/connectors.js"></script>
 <script>
 // theme toggle
 const themeBtn = document.getElementById("themeBtn");
@@ -249,6 +260,7 @@ function activateSection(id, updateHash = false) {
   if (!link) return false;
   nav.querySelectorAll("a").forEach((x) => x.classList.toggle("active", x === link));
   document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== id; });
+  if (activeSection === "connectors" && id !== "connectors") window.Connectors?.clearCredentials();
   activeSection = id;
   lazyLoad(id);
   updateLivePill();
@@ -278,6 +290,7 @@ function lazyLoad(id) {
   if (id === "timeline" && window.Timeline) { loaded[id] = true; window.Timeline.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
   if (id === "risk" && window.Risk) { loaded[id] = true; window.Risk.load(); }
+  if (id === "connectors" && window.Connectors) { loaded[id] = true; window.Connectors.load(); }
   if (id === "security" && window.Security) { loaded[id] = true; window.Security.load(); }
   if (EXT[id]) { loaded[id] = true; EXT[id].mod.load(); }
 }

@@ -35,7 +35,16 @@ describe("dashboard extensions", () => {
   it("ships only the core sections", () => {
     const dom = boot(null, {});
     const ids = [...dom.window.document.querySelectorAll("#nav a[data-section]")].map((a) => a.dataset.section);
-    expect(ids).toEqual(["overview", "agents", "discoveries", "dialectic", "activity", "timeline", "eisv", "risk", "security"]);
+    expect(ids).toEqual(["overview", "agents", "discoveries", "dialectic", "activity", "timeline", "eisv", "risk", "connectors", "security"]);
+  });
+
+  it("clears connector credentials through the real section switch", () => {
+    const dom = boot(null, {});
+    dom.window.Connectors = { load: vi.fn(), clearCredentials: vi.fn() };
+    const doc = dom.window.document;
+    doc.querySelector('#nav a[data-section="connectors"]').click();
+    doc.querySelector('#nav a[data-section="security"]').click();
+    expect(dom.window.Connectors.clearCredentials).toHaveBeenCalledTimes(1);
   });
 
   it("adds nothing when no manifest is served", async () => {

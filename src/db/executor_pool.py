@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # path can release _init_lock and proceed. Module-level so tests can patch.
 CLOSE_TIMEOUT_SECONDS = 10.0
 THREAD_JOIN_TIMEOUT_SECONDS = 2.0
+LOOP_START_TIMEOUT_SECONDS = 5.0
 
 
 def _emit_executor_loop_died(sub_type: str, *, error_class: str | None) -> None:
@@ -93,6 +94,9 @@ async def _await_on_loop(target: Any, loop: asyncio.AbstractEventLoop) -> Any:
         async def _wrap():
             return await target
         coro = _wrap()
+    if not loop.is_running():
+        coro.close()
+        raise ConnectionError("Database executor loop is not running")
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return await asyncio.wrap_future(future)
 
@@ -207,12 +211,7 @@ class ExecutorPool:
     background thread that owns its own asyncio event loop.
     """
 
-    def __init__(self, raw_pool: Any):
-        # Direct constructor: caller has already-created pool (mocks, tests).
-        # Production code should use `await ExecutorPool.create(coro_factory)`
-        # so the asyncpg pool is created on the executor loop — asyncpg
-        # connections are loop-bound (architect's per-thread pinning).
-        self._raw_pool = raw_pool
+    def _init_loop_state(self) -> None:
         # Close coordination: lock serializes concurrent close() callers;
         # done event lets the second caller AWAIT the first's completion
         # rather than return prematurely while raw_pool.close() is still
@@ -220,6 +219,7 @@ class ExecutorPool:
         self._close_lock = asyncio.Lock()
         self._close_done = asyncio.Event()
         self._closed_flag = False
+        self._startup_pool: Any = None
         self._loop = asyncio.new_event_loop()
         self._loop_ready = threading.Event()
         self._thread = threading.Thread(
@@ -227,8 +227,107 @@ class ExecutorPool:
             name="ExecutorPool-loop",
             daemon=True,
         )
+
+    def _abort_startup_sync(self) -> None:
+        self._closed_flag = True
+        self._close_done.set()
+        try:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        except Exception:
+            pass
+        self._thread.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
+        if not self._thread.is_alive() and not self._loop.is_running():
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+
+    async def _abort_startup(self) -> None:
+        self._closed_flag = True
+        self._close_done.set()
+
+        async def _cancel_and_stop() -> None:
+            try:
+                current = asyncio.current_task()
+                pending = [
+                    t
+                    for t in asyncio.all_tasks()
+                    if t is not current and not t.done()
+                ]
+                for task in pending:
+                    if not task.cancelling():
+                        task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                pool, self._startup_pool = self._startup_pool, None
+                close_fn = getattr(pool, "close", None)
+                if callable(close_fn):
+                    try:
+                        maybe_coro = close_fn()
+                        if asyncio.iscoroutine(maybe_coro):
+                            await maybe_coro
+                    except Exception:
+                        pass
+            finally:
+                self._loop.stop()
+
+        scheduled_drain = False
+        fut = None
+        if self._loop.is_running():
+            coro = _cancel_and_stop()
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+                fut.add_done_callback(
+                    lambda f: f.exception() if not f.cancelled() else None
+                )
+                scheduled_drain = True
+            except Exception:
+                coro.close()
+        if not scheduled_drain:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+        join_timeout = (
+            CLOSE_TIMEOUT_SECONDS if scheduled_drain else THREAD_JOIN_TIMEOUT_SECONDS
+        )
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._thread.join, join_timeout
+            )
+        except BaseException:
+            pass
+        if self._thread.is_alive():
+            if fut is not None:
+                fut.cancel()
+            self._cancel_orphan_tasks_on_executor_loop()
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._thread.join, THREAD_JOIN_TIMEOUT_SECONDS
+                )
+            except BaseException:
+                pass
+        if not self._thread.is_alive() and not self._loop.is_running():
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+
+    def __init__(self, raw_pool: Any):
+        # Direct constructor: caller has already-created pool (mocks, tests).
+        # Production code should use `await ExecutorPool.create(coro_factory)`
+        # so the asyncpg pool is created on the executor loop — asyncpg
+        # connections are loop-bound (architect's per-thread pinning).
+        self._raw_pool = raw_pool
+        self._init_loop_state()
         self._thread.start()
-        self._loop_ready.wait(timeout=5.0)
+        if not self._loop_ready.wait(timeout=LOOP_START_TIMEOUT_SECONDS):
+            self._abort_startup_sync()
+            raise ConnectionError("Database executor loop failed to start")
 
     @classmethod
     async def create(cls, create_pool_factory: Any) -> "ExecutorPool":
@@ -239,27 +338,38 @@ class ExecutorPool:
         means the pool and all its connections are bound to that loop.
         """
         instance = cls.__new__(cls)
-        instance._close_lock = asyncio.Lock()
-        instance._close_done = asyncio.Event()
-        instance._closed_flag = False
-        instance._loop = asyncio.new_event_loop()
-        instance._loop_ready = threading.Event()
-        instance._thread = threading.Thread(
-            target=instance._run_loop,
-            name="ExecutorPool-loop",
-            daemon=True,
-        )
+        instance._init_loop_state()
         instance._thread.start()
-        instance._loop_ready.wait(timeout=5.0)
+        if not instance._loop_ready.wait(timeout=LOOP_START_TIMEOUT_SECONDS):
+            await instance._abort_startup()
+            raise ConnectionError("Database executor loop failed to start")
         # Pass the factory (not the result) so it's called *inside* the
         # executor loop — asyncpg.create_pool's Futures must be loop-bound
         # to the executor loop.
-        instance._raw_pool = await _await_on_loop(create_pool_factory, instance._loop)
+        async def _create_and_record() -> Any:
+            result = create_pool_factory()
+            if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                result = await result
+            instance._startup_pool = result
+            return result
+
+        try:
+            instance._raw_pool = await _await_on_loop(
+                _create_and_record, instance._loop
+            )
+            instance._startup_pool = None
+        except BaseException:
+            await instance._abort_startup()
+            raise
         return instance
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop_ready.set()
+        # Signal readiness from a callback executed by the loop, not before
+        # run_forever() starts.  Callers may schedule work as soon as this
+        # event is set, so setting it in the thread prologue leaves a race in
+        # which loop.is_running() is still false.
+        self._loop.call_soon(self._loop_ready.set)
         try:
             self._loop.run_forever()
         except BaseException as exc:
@@ -276,6 +386,12 @@ class ExecutorPool:
             # that's a structural bug worth flagging.
             if not self._closed_flag:
                 _emit_executor_loop_died("premature_return", error_class=None)
+        finally:
+            if self._closed_flag and not self._loop.is_running():
+                try:
+                    self._loop.close()
+                except Exception:
+                    pass
 
     def acquire(self, timeout: Any = None) -> _AcquireContext:
         return _AcquireContext(self._raw_pool, self._loop, timeout=timeout)
