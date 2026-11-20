@@ -1210,11 +1210,42 @@ def test_redact_url_credentials_scrubs_the_endpoint_and_any_userinfo():
     assert "https://other.example/x" in redacted
 
 
+def test_redact_url_credentials_scrubs_query_secrets_on_request_urls():
+    # A client appends the configured query to each request path it builds,
+    # so the URL a provider error quotes is not the configured string.
+    text = (
+        "error from http://10.0.0.5:8000/v1/chat/completions?api_key=sekret "
+        "and HTTP://USER:KEY@10.0.0.5:8000/v1/models#frag; param api_key=sekret"
+    )
+    redacted = env.redact_url_credentials(text, SECRET_BASE)
+    _assert_no_endpoint_secret(redacted)
+    assert "http://10.0.0.5:8000/v1/chat/completions " in redacted
+    assert "frag" not in redacted
+
+
+def test_redact_url_credentials_scrubs_encoded_query_values_and_password():
+    base = "http://u:pa%40ssword@gpu:8000/v1?token=a%2Bb%2Fcdef"
+    text = "token a+b/cdef and a%2Bb%2Fcdef rejected; password pa@ssword"
+    redacted = env.redact_url_credentials(text, base)
+    assert "a+b/cdef" not in redacted
+    assert "a%2Bb%2Fcdef" not in redacted
+    assert "pa@ssword" not in redacted
+
+
+def test_redact_url_credentials_leaves_short_values_and_other_hosts():
+    base = "http://gpu:8000/v1?stream=1&api_key=sekret"
+    text = "retry 1 of 3 at https://docs.example/x?page=1"
+    assert env.redact_url_credentials(text, base) == text
+
+
 async def _failed_call(monkeypatch, model_inference):
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", SECRET_BASE)
     fake = MagicMock()
     fake.return_value.chat.completions.create = AsyncMock(
-        side_effect=RuntimeError(f"upstream refused request to {SECRET_BASE}/chat/completions")
+        side_effect=RuntimeError(
+            f"upstream refused request to {SECRET_BASE}/chat/completions; "
+            "POST http://10.0.0.5:8000/v1/chat/completions?api_key=sekret"
+        )
     )
     fake.return_value.close = AsyncMock()
     monkeypatch.setattr(model_inference, "OpenAI", fake)
