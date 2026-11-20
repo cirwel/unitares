@@ -21,8 +21,8 @@ An agent-to-agent channel message is coordination traffic: a note addressed
 to another agent on a `channel-<topic>` lane, the convention cross-harness
 coordination used before the lease-plane message transport replaced it
 (#1960). Such notes stay open by default and outlive their conversation, so
-they get the imported-memory multiplier. They remain searchable and win when
-they are the only strong match.
+they keep a stronger close-contest down-rank (0.55) than imported memory (0.85).
+They remain searchable and win when they are the only strong match.
 """
 
 from __future__ import annotations
@@ -40,9 +40,13 @@ PROMOTION_SCHEMA = "unitares.knowledge_promotion.v1"
 PROMOTION_TAG = "authority-governed"
 
 AUTHORITY_MULTIPLIERS = {
-    IMPORTED_CONTEXT: 0.55,
-    # Operator decision 2026-09-27: the same close-contest down-rank as
-    # imported memory; nothing is excluded.
+    # Operator decision 2026-11-20: relaxed from 0.55 -> 0.85 after live bge-m3
+    # ablation (doubled memory retrieval_gold r@5 18.2% -> 36.4% while keeping
+    # native labels.json r@1 at 72.7% / MRR 0.801; close contests still prefer
+    # native findings).
+    IMPORTED_CONTEXT: 0.85,
+    # Operator decision 2026-09-27: close-contest down-rank for coordination
+    # chatter; nothing is excluded.
     CHANNEL_MESSAGE: 0.55,
     NATIVE_FINDING: 1.0,
     GOVERNED_CLAIM: 1.15,
