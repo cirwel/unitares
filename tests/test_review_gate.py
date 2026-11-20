@@ -856,6 +856,38 @@ def test_a_restamp_carries_on_a_second_family_diff_but_a_base_merge_still_does_n
     assert rg.base_merge_equivalents("master", "HEAD") == [(merged_key, merged_head)]
 
 
+def _master_edits_an_unrelated_file(r: Path) -> None:
+    _git(r, "checkout", "-q", "master")
+    (r / "other.txt").write_text("x on master\n")
+    _git(r, "commit", "-q", "-am", "master edits a file the PR does not touch")
+    _git(r, "checkout", "-q", "feature")
+
+
+@pytest.mark.parametrize("restamp_first", [True, False])
+def test_a_base_merge_that_keeps_the_key_does_not_cut_a_restamp_off_on_a_second_family_diff(
+        carry_repo, monkeypatch, restamp_first):
+    # Found in review of #3309: stopping at every base merge on a sensitive
+    # diff dropped the records under one that had not moved the key at all.
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    _add_skill(carry_repo)
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_an_unrelated_file(carry_repo)
+    if restamp_first:
+        _restamp(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    else:
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        assert rg.diff_key("master", "HEAD") == reviewed_key  # the merge kept the key
+        _restamp(carry_repo)
+    equivalents = rg.base_merge_equivalents("master", "HEAD")
+    assert (reviewed_key, reviewed_head) in equivalents
+    rec, carried = _decide([_record(reviewed_key)])
+    # Several commits share the reviewed key here; which one is named is not the point.
+    assert rec.verdict == "CLEAN" and carried["reviewed"] in {commit for _, commit in equivalents}
+
+
 def test_a_restamp_on_top_of_a_base_merge_carries_both_on_an_ordinary_diff(carry_repo):
     _add_skill(carry_repo)
     reviewed_key = rg.diff_key("master", "HEAD")

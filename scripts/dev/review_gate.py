@@ -564,8 +564,10 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
     merge changes no code, and re-reviewing the whole diff for it voided
     finished reviews on #3222 (operator decision, 2026-11-20). This step is
     taken on a second-family diff too, because the code on those paths is
-    byte-identical on both sides of it; a base merge on such a diff still
-    ends the walk. The walk never steps onto a commit that is already on
+    byte-identical on both sides of it. On such a diff a base merge that
+    moved the key still ends the walk, while one that left the key where it
+    was is stepped through, so a restamp before or after it reaches the same
+    records. The walk never steps onto a commit that is already on
     `base`, so a branch made only of attestations has no earlier key.
     Operator waivers are not review records and are never carried: a waiver
     stays bound to the exact diff it names.
@@ -591,7 +593,7 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
                 out.append((diff_key(base, parent), parent))
                 cur = parent
                 continue
-            if len(parents) != 2 or sensitive:
+            if len(parents) != 2:
                 break
             pr_side, base_side = parents
             if subprocess.run(["git", "merge-base", "--is-ancestor", base_side, base],
@@ -599,11 +601,20 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
                 break
             if not _clean_auto_merge(cur, pr_side, base_side):
                 break
+            earlier_key = diff_key(base, pr_side)
+            if sensitive:
+                # Only a base merge that left the diff key where it was: its
+                # records already count on that key, and stepping through it
+                # lets an attestation step on either side reach them (and the
+                # commit-bound native reviews under it). One that moved the
+                # key is reviewed again (2026-09-28).
+                if earlier_key != diff_key(base, cur):
+                    break
             # Compared with the commit this step leaves, not with `head`: an
             # attestation step above it changed the set of files.
-            if patch_fingerprint(base, pr_side) != patch_fingerprint(base, cur):
+            elif patch_fingerprint(base, pr_side) != patch_fingerprint(base, cur):
                 break
-            out.append((diff_key(base, pr_side), pr_side))
+            out.append((earlier_key, pr_side))
             cur = pr_side
     except (subprocess.CalledProcessError, SystemExit):
         return []  # history unreadable (git() raises SystemExit): no carry

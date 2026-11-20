@@ -397,7 +397,9 @@ starting an automatic model review before its evidence has been recorded.
   the same commit, stops the carry. These limits decide the carry only: a
   valid attestation outside them (a non-ASCII verifier name, say) is not
   rejected, it is reviewed like any other change. This step applies on a second-family path
-  as well, because the code there is byte-identical on both sides of it.
+  as well, because the code there is byte-identical on both sides of it;
+  there the walk also passes a base merge that left the diff key unchanged,
+  and still stops at one that moved it.
   The carried file reaches master without a reviewer reading it; the shape
   check bounds what it can hold, and the freshness check recomputes its
   digests. An operator waiver is never carried: it stays bound to the exact
