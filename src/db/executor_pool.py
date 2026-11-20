@@ -16,6 +16,8 @@ Caller surface is unchanged: handlers still write
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import inspect
 import logging
 import threading
 from typing import Any
@@ -69,7 +71,14 @@ def _emit_executor_loop_died(sub_type: str, *, error_class: str | None) -> None:
         )
 
 
-async def _await_on_loop(target: Any, loop: asyncio.AbstractEventLoop) -> Any:
+async def _await_on_loop(
+    target: Any,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    dispatch_lock: threading.RLock | threading.Lock | None = None,
+    is_accepting: Any | None = None,
+    inflight: set[tuple[concurrent.futures.Future[Any], Any]] | None = None,
+) -> Any:
     """Schedule on `loop` (a different thread's loop) and await the result.
 
     Accepts either:
@@ -94,10 +103,37 @@ async def _await_on_loop(target: Any, loop: asyncio.AbstractEventLoop) -> Any:
         async def _wrap():
             return await target
         coro = _wrap()
-    if not loop.is_running():
-        coro.close()
-        raise ConnectionError("Database executor loop is not running")
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    if dispatch_lock is not None:
+        with dispatch_lock:
+            accepting = True if is_accepting is None else bool(is_accepting())
+            if not accepting or not loop.is_running():
+                coro.close()
+                raise ConnectionError("Database executor loop is not running")
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                coro.close()
+                raise ConnectionError("Database executor loop is not running") from None
+            if inflight is not None:
+                entry = (future, coro)
+                inflight.add(entry)
+        if inflight is not None:
+            def _discard(
+                _done: concurrent.futures.Future[Any],
+                _entry: tuple[concurrent.futures.Future[Any], Any] = entry,
+            ) -> None:
+                with dispatch_lock:
+                    inflight.discard(_entry)
+            future.add_done_callback(_discard)
+    else:
+        if not loop.is_running():
+            coro.close()
+            raise ConnectionError("Database executor loop is not running")
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            coro.close()
+            raise ConnectionError("Database executor loop is not running") from None
     return await asyncio.wrap_future(future)
 
 
@@ -108,58 +144,120 @@ class _Transaction:
     started on one loop and committed on another silently corrupts.
     """
 
-    def __init__(self, raw_txn: Any, loop: asyncio.AbstractEventLoop):
+    def __init__(
+        self,
+        raw_txn: Any,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        dispatch_lock: threading.RLock | threading.Lock | None = None,
+        is_accepting: Any | None = None,
+        inflight: set[tuple[concurrent.futures.Future[Any], Any]] | None = None,
+    ):
         self._raw = raw_txn
         self._loop = loop
+        self._dispatch_kwargs = {
+            "dispatch_lock": dispatch_lock,
+            "is_accepting": is_accepting,
+            "inflight": inflight,
+        }
 
     async def __aenter__(self) -> Any:
-        return await _await_on_loop(lambda: self._raw.__aenter__(), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.__aenter__(), self._loop, **self._dispatch_kwargs
+        )
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> Any:
         return await _await_on_loop(
-            lambda: self._raw.__aexit__(exc_type, exc_val, exc_tb), self._loop
+            lambda: self._raw.__aexit__(exc_type, exc_val, exc_tb),
+            self._loop,
+            **self._dispatch_kwargs,
         )
 
     async def start(self) -> Any:
-        return await _await_on_loop(lambda: self._raw.start(), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.start(), self._loop, **self._dispatch_kwargs
+        )
 
     async def commit(self) -> Any:
-        return await _await_on_loop(lambda: self._raw.commit(), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.commit(), self._loop, **self._dispatch_kwargs
+        )
 
     async def rollback(self) -> Any:
-        return await _await_on_loop(lambda: self._raw.rollback(), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.rollback(), self._loop, **self._dispatch_kwargs
+        )
 
 
 class _Connection:
     """Wraps an asyncpg Connection, dispatching all calls to the executor loop."""
 
-    def __init__(self, raw_conn: Any, loop: asyncio.AbstractEventLoop):
+    def __init__(
+        self,
+        raw_conn: Any,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        dispatch_lock: threading.RLock | threading.Lock | None = None,
+        is_accepting: Any | None = None,
+        inflight: set[tuple[concurrent.futures.Future[Any], Any]] | None = None,
+    ):
         self._raw = raw_conn
         self._loop = loop
+        self._dispatch_kwargs = {
+            "dispatch_lock": dispatch_lock,
+            "is_accepting": is_accepting,
+            "inflight": inflight,
+        }
 
     async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
-        return await _await_on_loop(lambda: self._raw.fetchval(*args, **kwargs), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.fetchval(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     async def fetch(self, *args: Any, **kwargs: Any) -> Any:
-        return await _await_on_loop(lambda: self._raw.fetch(*args, **kwargs), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.fetch(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     async def fetchrow(self, *args: Any, **kwargs: Any) -> Any:
-        return await _await_on_loop(lambda: self._raw.fetchrow(*args, **kwargs), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.fetchrow(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     async def execute(self, *args: Any, **kwargs: Any) -> Any:
-        return await _await_on_loop(lambda: self._raw.execute(*args, **kwargs), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.execute(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     async def executemany(self, *args: Any, **kwargs: Any) -> Any:
-        return await _await_on_loop(lambda: self._raw.executemany(*args, **kwargs), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.executemany(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     def transaction(self, *args: Any, **kwargs: Any) -> _Transaction:
         # transaction() is a sync method on asyncpg.Connection that returns
         # a Transaction object — the actual BEGIN/COMMIT happen in __aenter__/
         # __aexit__, both of which must round-trip to the executor loop.
-        return _Transaction(self._raw.transaction(*args, **kwargs), self._loop)
+        return _Transaction(
+            self._raw.transaction(*args, **kwargs),
+            self._loop,
+            **self._dispatch_kwargs,
+        )
 
     async def close(self) -> None:
-        return await _await_on_loop(lambda: self._raw.close(), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw.close(), self._loop, **self._dispatch_kwargs
+        )
 
 
 class _AcquireContext:
@@ -169,10 +267,30 @@ class _AcquireContext:
     returns the connection directly — caller must `pool.release(conn)` later.
     """
 
-    def __init__(self, raw_pool: Any, loop: asyncio.AbstractEventLoop, timeout: Any = None):
+    def __init__(
+        self,
+        raw_pool: Any,
+        loop: asyncio.AbstractEventLoop,
+        timeout: Any = None,
+        *,
+        dispatch_lock: threading.RLock | threading.Lock | None = None,
+        is_accepting: Any | None = None,
+        acquire_is_accepting: Any | None = None,
+        inflight: set[tuple[concurrent.futures.Future[Any], Any]] | None = None,
+    ):
         self._raw_pool = raw_pool
         self._loop = loop
         self._timeout = timeout
+        self._dispatch_kwargs = {
+            "dispatch_lock": dispatch_lock,
+            "is_accepting": is_accepting,
+            "inflight": inflight,
+        }
+        self._acquire_dispatch_kwargs = {
+            "dispatch_lock": dispatch_lock,
+            "is_accepting": acquire_is_accepting if acquire_is_accepting is not None else is_accepting,
+            "inflight": inflight,
+        }
         self._raw_acquire_ctx: Any = None
         self._raw_conn: Any = None
 
@@ -181,10 +299,10 @@ class _AcquireContext:
             def _factory():
                 kwargs = {} if self._timeout is None else {"timeout": self._timeout}
                 return self._raw_pool.acquire(**kwargs)
-            return await _await_on_loop(_factory, self._loop)
+            return await _await_on_loop(_factory, self._loop, **self._acquire_dispatch_kwargs)
 
         raw_conn = yield from _direct_acquire().__await__()
-        return _Connection(raw_conn, self._loop)
+        return _Connection(raw_conn, self._loop, **self._dispatch_kwargs)
 
     async def __aenter__(self) -> _Connection:
         # The PoolAcquireContext is created on the executor loop AND its
@@ -195,13 +313,16 @@ class _AcquireContext:
             self._raw_acquire_ctx = self._raw_pool.acquire(**kwargs)
             return self._raw_acquire_ctx.__aenter__()
 
-        self._raw_conn = await _await_on_loop(_enter_factory, self._loop)
-        return _Connection(self._raw_conn, self._loop)
+        self._raw_conn = await _await_on_loop(
+            _enter_factory, self._loop, **self._acquire_dispatch_kwargs
+        )
+        return _Connection(self._raw_conn, self._loop, **self._dispatch_kwargs)
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> Any:
         return await _await_on_loop(
             lambda: self._raw_acquire_ctx.__aexit__(exc_type, exc_val, exc_tb),
             self._loop,
+            **self._dispatch_kwargs,
         )
 
 
@@ -211,6 +332,34 @@ class ExecutorPool:
     background thread that owns its own asyncio event loop.
     """
 
+    def _ensure_dispatch_state(self) -> None:
+        if not hasattr(self, "_dispatch_lock"):
+            self._dispatch_lock = threading.RLock()
+        closed = bool(getattr(self, "_closed_flag", False))
+        if not hasattr(self, "_closing"):
+            self._closing = closed
+        if not hasattr(self, "_loop_accepting"):
+            loop = getattr(self, "_loop", None)
+            self._loop_accepting = bool(loop is not None and loop.is_running() and not closed)
+        if not hasattr(self, "_inflight_futures"):
+            self._inflight_futures: set[tuple[concurrent.futures.Future[Any], Any]] = set()
+
+    def _dispatch_kwargs(self) -> dict[str, Any]:
+        self._ensure_dispatch_state()
+        return {
+            "dispatch_lock": self._dispatch_lock,
+            "is_accepting": lambda: self._loop_accepting,
+            "inflight": self._inflight_futures,
+        }
+
+    def _acquire_dispatch_kwargs(self) -> dict[str, Any]:
+        self._ensure_dispatch_state()
+        return {
+            "dispatch_lock": self._dispatch_lock,
+            "is_accepting": lambda: self._loop_accepting and not self._closing,
+            "inflight": self._inflight_futures,
+        }
+
     def _init_loop_state(self) -> None:
         # Close coordination: lock serializes concurrent close() callers;
         # done event lets the second caller AWAIT the first's completion
@@ -219,6 +368,10 @@ class ExecutorPool:
         self._close_lock = asyncio.Lock()
         self._close_done = asyncio.Event()
         self._closed_flag = False
+        self._closing = False
+        self._dispatch_lock = threading.RLock()
+        self._loop_accepting = False
+        self._inflight_futures: set[tuple[concurrent.futures.Future[Any], Any]] = set()
         self._startup_pool: Any = None
         self._loop = asyncio.new_event_loop()
         self._loop_ready = threading.Event()
@@ -229,7 +382,11 @@ class ExecutorPool:
         )
 
     def _abort_startup_sync(self) -> None:
+        self._ensure_dispatch_state()
         self._closed_flag = True
+        with self._dispatch_lock:
+            self._closing = True
+            self._loop_accepting = False
         self._close_done.set()
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -243,7 +400,11 @@ class ExecutorPool:
                 pass
 
     async def _abort_startup(self) -> None:
+        self._ensure_dispatch_state()
         self._closed_flag = True
+        with self._dispatch_lock:
+            self._closing = True
+            self._loop_accepting = False
         self._close_done.set()
 
         async def _cancel_and_stop() -> None:
@@ -355,7 +516,9 @@ class ExecutorPool:
 
         try:
             instance._raw_pool = await _await_on_loop(
-                _create_and_record, instance._loop
+                _create_and_record,
+                instance._loop,
+                **instance._dispatch_kwargs(),
             )
             instance._startup_pool = None
         except BaseException:
@@ -364,12 +527,20 @@ class ExecutorPool:
         return instance
 
     def _run_loop(self) -> None:
+        self._ensure_dispatch_state()
         asyncio.set_event_loop(self._loop)
+
+        def _mark_ready() -> None:
+            with self._dispatch_lock:
+                if not self._closed_flag:
+                    self._loop_accepting = True
+            self._loop_ready.set()
+
         # Signal readiness from a callback executed by the loop, not before
         # run_forever() starts.  Callers may schedule work as soon as this
         # event is set, so setting it in the thread prologue leaves a race in
         # which loop.is_running() is still false.
-        self._loop.call_soon(self._loop_ready.set)
+        self._loop.call_soon(_mark_ready)
         try:
             self._loop.run_forever()
         except BaseException as exc:
@@ -387,19 +558,54 @@ class ExecutorPool:
             if not self._closed_flag:
                 _emit_executor_loop_died("premature_return", error_class=None)
         finally:
+            with self._dispatch_lock:
+                self._closing = True
+                self._loop_accepting = False
+                pending_entries = list(self._inflight_futures)
+                self._inflight_futures.clear()
+            for fut, coro in pending_entries:
+                if not fut.done():
+                    try:
+                        fut.set_exception(
+                            ConnectionError("Database executor loop stopped")
+                        )
+                    except concurrent.futures.InvalidStateError:
+                        pass
+                if inspect.iscoroutine(coro) and inspect.getcoroutinestate(coro) == inspect.CORO_CREATED:
+                    try:
+                        coro.close()
+                    except Exception:
+                        pass
             if self._closed_flag and not self._loop.is_running():
+                if isinstance(self._loop, asyncio.AbstractEventLoop):
+                    try:
+                        for task in asyncio.all_tasks(self._loop):
+                            if not task.done():
+                                task.cancel()
+                    except Exception:
+                        pass
                 try:
                     self._loop.close()
                 except Exception:
                     pass
 
     def acquire(self, timeout: Any = None) -> _AcquireContext:
-        return _AcquireContext(self._raw_pool, self._loop, timeout=timeout)
+        return _AcquireContext(
+            self._raw_pool,
+            self._loop,
+            timeout=timeout,
+            **self._dispatch_kwargs(),
+            acquire_is_accepting=self._acquire_dispatch_kwargs()["is_accepting"],
+        )
 
     async def release(self, conn: _Connection) -> Any:
         # Pair to `await pool.acquire()`. Forwards to raw pool with the
         # underlying asyncpg connection (postgres_backend.py:206).
-        return await _await_on_loop(lambda: self._raw_pool.release(conn._raw), self._loop)
+        return await _await_on_loop(
+            lambda: self._raw_pool.release(conn._raw),
+            self._loop,
+            **self._dispatch_kwargs(),
+        )
 
     @property
     def _closed(self) -> Any:
@@ -423,6 +629,7 @@ class ExecutorPool:
         # close() concurrently with recovery — that's the race the
         # lock guards against. Second caller awaits the done-event so
         # they see a fully-closed pool, not a half-closed one (council).
+        self._ensure_dispatch_state()
         async with self._close_lock:
             if self._closed_flag:
                 # Already closed (or close in progress and done). Wait
@@ -431,10 +638,16 @@ class ExecutorPool:
                 await self._close_done.wait()
                 return
             self._closed_flag = True
+            with self._dispatch_lock:
+                self._closing = True
 
         # Teardown order matters (architect): close the raw pool ON
         # the executor loop (asyncpg connections are loop-bound),
         # THEN stop the loop, THEN join the thread.
+        #
+        # Only new acquires are refused while raw_pool.close() waits for
+        # checked-out connections to commit/release; _loop_accepting stays
+        # True until shutdown stops the loop below.
         #
         # Bounded wait: if the executor loop is wedged (asyncpg
         # released connections but PG-side responses unread —
@@ -449,7 +662,9 @@ class ExecutorPool:
         try:
             await asyncio.wait_for(
                 _await_on_loop(
-                    lambda: self._raw_pool.close(), self._loop,
+                    lambda: self._raw_pool.close(),
+                    self._loop,
+                    **self._dispatch_kwargs(),
                 ),
                 timeout=CLOSE_TIMEOUT_SECONDS,
             )
@@ -471,6 +686,8 @@ class ExecutorPool:
             )
             _to_reraise = e
         finally:
+            with self._dispatch_lock:
+                self._loop_accepting = False
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:

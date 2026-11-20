@@ -204,15 +204,75 @@ class TestExpiry:
         assert row["status"] == "open"
         assert row["path_gone"] is True
 
-    def test_old_finding_on_live_path_never_expires(self, tmp_path):
-        """Expiry is for deleted paths only; a live file keeps its finding."""
+    def test_old_finding_on_live_path_ages_out_but_is_kept(self, tmp_path):
+        """The bound covers a file that still exists. #3199 left these open at
+        any age, so with nobody adjudicating they had no exit at all."""
         real = tmp_path / "live.py"
         real.write_text("asyncio.create_task(x())\n")
-        _write([_finding(file=str(real), detected_at=_iso_days_ago(200))])
+        _write([_finding(file=str(real), detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+
+        dropped = F._sweep_stale_quiet()
+
+        assert dropped == 0, "expiry must not delete the row"
+        row = _read()[0]
+        assert row["status"] == "aged_out"
+        assert row["resolution_reason"] == "live_path_unadjudicated"
+        assert row["aged_out_at"]
+        assert row["path_gone"] is False, "the file is still there"
+
+    def test_young_finding_on_live_path_stays_open(self, tmp_path):
+        real = tmp_path / "live.py"
+        real.write_text("asyncio.create_task(x())\n")
+        _write([_finding(file=str(real), detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS - 1))])
 
         F._sweep_stale_quiet()
 
-        assert _read()[0]["status"] == "open"
+        row = _read()[0]
+        assert row["status"] == "open"
+        assert "resolution_reason" not in row
+
+    @pytest.mark.parametrize("status", ["confirmed", "dismissed", "aged_out"])
+    def test_adjudicated_rows_on_a_live_path_are_not_rewritten(self, tmp_path, status):
+        real = tmp_path / "live.py"
+        real.write_text("asyncio.create_task(x())\n")
+        _write([_finding(file=str(real), status=status, detected_at=_iso_days_ago(90))])
+
+        F._sweep_stale_quiet()
+
+        row = _read()[0]
+        assert row["status"] == status
+        assert "resolution_reason" not in row
+
+    def test_live_path_expiry_needs_no_snapshot(self, tmp_path):
+        """A review finding carries no source snapshot; on a file that still
+        exists it expires like any other and the row stays."""
+        real = tmp_path / "live.py"
+        real.write_text("x = 1\n")
+        _write(
+            [
+                _finding(
+                    file=str(real),
+                    pattern="R000",
+                    line_content="",
+                    status="surfaced",
+                    detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 3),
+                )
+            ]
+        )
+
+        assert F._sweep_stale_counts() == (0, 1)
+        assert _read()[0]["resolution_reason"] == "live_path_unadjudicated"
+
+    def test_cli_sweep_reports_live_path_expiry(self, capsys, tmp_path):
+        real = tmp_path / "live.py"
+        real.write_text("x = 1\n")
+        _write([_finding(file=str(real), detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+
+        F.sweep_stale_findings()
+
+        out = capsys.readouterr().out
+        assert "aged out 1" in out
+        assert "nothing to sweep" not in out
 
     @pytest.mark.parametrize("status", ["confirmed", "dismissed", "aged_out"])
     def test_adjudicated_rows_are_not_rewritten(self, status):
@@ -302,6 +362,24 @@ class TestCompactionKeepsExpired:
         F.compact_findings()
 
         assert _read() == [], "an adjudicated row compacts like any other"
+
+    def test_live_path_expired_row_survives_compaction_then_compacts_once_labelled(
+        self, capsys, tmp_path
+    ):
+        real = tmp_path / "live.py"
+        real.write_text("x = 1\n")
+        _write([_finding(file=str(real), detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+        F._sweep_stale_quiet()
+
+        F.compact_findings()
+
+        rows = _read()
+        assert len(rows) == 1 and rows[0]["status"] == "aged_out"
+
+        assert F.update_finding_status("deadbeef", "dismissed", emit_resolution_event=False) == 0
+        F.compact_findings()
+
+        assert _read() == []
 
     def test_other_aged_out_rows_still_compact(self, capsys):
         _write(
