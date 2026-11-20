@@ -38,6 +38,11 @@ from src.mcp_listen_config import (
 )
 from src.mcp_transport import Transport503EmissionMiddleware
 from src.oauth_connectors import ConnectorRegistryUnavailableError
+from src.services.http_request_parser import (
+    MAX_HTTP_SMALL_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_asgi_body,
+)
 
 logger = get_logger(__name__)
 
@@ -165,6 +170,35 @@ class LowercaseWebSocketHeaders:
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "websocket" and scope.get("headers"):
             scope = {**scope, "headers": [(k.lower(), v) for k, v in scope["headers"]]}
+        await self.app(scope, receive, send)
+
+
+class BoundedRegistrationBody:
+    """Refuse an OAuth client-registration body past its cap with 413.
+
+    The SDK's registration handler buffers the whole body before it parses
+    it, and the route needs no credential when dynamic registration is on.
+    Client metadata is a few KB, so the cap matches the token-body cap.
+    """
+
+    def __init__(self, app: Any, *, path: str = "/register", max_bytes: int = MAX_HTTP_SMALL_JSON_BODY):
+        self.app = app
+        self._path = path
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if (
+            scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == self._path
+        ):
+            try:
+                receive = await read_bounded_asgi_body(scope, receive, self._max_bytes)
+            except HttpToolRequestError as exc:
+                await JSONResponse(exc.payload, status_code=exc.status_code)(
+                    scope, receive, send
+                )
+                return
         await self.app(scope, receive, send)
 
 
@@ -410,6 +444,17 @@ def make_streamable_mcp_asgi(
             await decision.response(scope, receive, send)
             return
 
+        if scope.get("method") == "POST":
+            # The SDK buffers the whole POST body before its own checks; count
+            # it against the REST tool cap first.
+            try:
+                receive = await read_bounded_asgi_body(scope, receive)
+            except HttpToolRequestError as exc:
+                await JSONResponse(exc.payload, status_code=exc.status_code)(
+                    scope, receive, send
+                )
+                return
+
         tokens = TransportContextTokens()
         try:
             tokens = capture_transport_context(
@@ -637,6 +682,7 @@ def build_transport_runtime(
         # Added after the shim, so outside it: it logs what the client
         # actually sent, not the compat rewrite.
         app.add_middleware(OAuthAttemptLogger, static_client_id=auth_config.static_client_id)
+        app.add_middleware(BoundedRegistrationBody)
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(
         app,
