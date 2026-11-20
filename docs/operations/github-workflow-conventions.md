@@ -57,9 +57,17 @@ veto by removing the label.
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
   than holding a fix. Scientific and governance-sensitive gates are unchanged.
   An auth or identity-enforcement diff is no longer held as a draft for the
-  operator (operator ruling, 2026-11-20): its gate is the two-family `review`
-  check on `second_family_paths`, and its owner marks it ready and labels it
-  once that passes. The operator reviews, merges and authors no PR, so a rule
+  operator (operator ruling, 2026-11-20): its gate is two reviewer families
+  outside the authors, and its owner marks it ready and labels it once both
+  have passed. On a `second_family_paths` file the `review` check enforces
+  that. `review_policy.json` deliberately leaves some files with an access
+  decision off that list (its `_boundary` note names them, for example
+  `src/mcp_handlers/decorators.py`), and a change there passes `review` on one
+  family. For an auth or identity-enforcement change in such a file the owner
+  gets the second family's review before marking ready and names both families
+  in the PR body; nothing enforces this, so the body is the record. With no
+  second family available, the PR waits for one or for the operator's word, as
+  it would on a listed path. The operator reviews, merges and authors no PR, so a rule
   that parks a PR for the operator to read parks it for good; #3222 stayed a
   draft for 13 days while each reviewer repeated that it was reserved.
 - End an agent-authored PR body with the provenance signature described in the
