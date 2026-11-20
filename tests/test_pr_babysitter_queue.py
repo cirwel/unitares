@@ -30,6 +30,7 @@ case "$1 $2" in
   "pr list")
     # A later read in the same tick may see a changed world (prs_live.json).
     if [ -f "$d/prs_live.json" ] && [ -f "$d/listed_once" ]; then cat "$d/prs_live.json"; else cat "$d/prs.json"; fi
+    [ -f "$d/listed_once" ] && : > "$d/listed_twice"
     : > "$d/listed_once"
     exit 0 ;;
   "pr view")
@@ -72,6 +73,10 @@ if [ "$1" = "api" ]; then
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       [ -f "$d/timeline_$n.fail" ] && exit 1
+      # After the tick's live re-read, the label history may have moved on.
+      if [ -f "$d/timeline_${n}_later.json" ] && [ -f "$d/listed_twice" ]; then
+        cat "$d/timeline_${n}_later.json"; exit 0
+      fi
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
       exit 0 ;;
     */commits/*)
@@ -2157,6 +2162,43 @@ def test_a_veto_during_the_tick_stops_the_arming(tmp_path: Path) -> None:
                       PR_QUEUE_REQUIRED_CHECKS="")
     assert calls == []
     assert f"#1 lost {LABEL} since this tick began (a veto); not armed" in out
+
+
+def test_a_label_renewed_during_the_tick_restarts_the_window(tmp_path: Path) -> None:
+    # Removed and re-added after the tick read the label time: the label is
+    # present in the live re-read, but its 24 hours have only just begun.
+    pr, timeline = _delegable(tmp_path)
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([pr]))
+    (d / "timeline_1_later.json").write_text(json.dumps(_timeline(1, DAY + 90)))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "its veto window restarts; not armed" in out
+
+
+def test_an_unreadable_label_time_at_arming_fails_closed(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([pr]))
+    (d / "timeline_1_later.json").write_text("[]")
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "its veto window restarts; not armed" in out
+
+
+@pytest.mark.parametrize("review", [None, "PENDING"])
+def test_a_sensitive_pr_awaiting_review_does_not_hold_the_queue(tmp_path: Path, review: str | None) -> None:
+    # Past its window with no review yet: an ordinary auth PR would hold the
+    # order here, but nobody may ever review this one, so the next PR lands.
+    pr, timeline = _delegable(tmp_path, review=review)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(2, "bbb")]
+    assert "does not hold the queue" in out
 
 
 def test_a_delegated_arm_that_still_meets_its_conditions_is_left_armed(tmp_path: Path) -> None:

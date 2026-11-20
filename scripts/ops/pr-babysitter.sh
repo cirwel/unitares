@@ -1338,7 +1338,15 @@ while read -r labelled_at n head; do
     case " $unmet" in
       # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
       # an unreviewed PR): wait rather than let a later PR jump the order.
-      *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
+      *=MISSING*|*=PENDING*)
+        # A delegated sensitive PR never holds the order: its review may be
+        # missing for as long as nobody runs one, and it has already waited a
+        # day, so later PRs go ahead of it.
+        if [ -n "$delegated" ]; then
+          log "#$n waiting on $unmet (must pass before arming); skipped, as a governance-sensitive PR does not hold the queue"
+          continue
+        fi
+        log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
       *)
         log "#$n: $unmet (must pass before arming); skipped"
         notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
@@ -1382,6 +1390,16 @@ while read -r labelled_at n head; do
        'any(.[]; .number == $n and any(.labels[]?; .name == $l))' <<<"$live" >/dev/null; then
     log "#$n lost $LABEL since this tick began (a veto); not armed"
     continue
+  fi
+  # And a veto that was undone: removing and re-adding the label inside the
+  # tick leaves it present, but restarts the 24 hours. The window was judged
+  # on the label time read earlier, so that time must still be the latest.
+  if [ -n "$delegated" ]; then
+    now_at=$(latest_label_time "$n") || now_at=""
+    if [ -z "$now_at" ] || [ "$now_at" != "$labelled_at" ]; then
+      log "#$n: its $LABEL label changed since this tick began (now ${now_at:-unreadable}, was $labelled_at); its veto window restarts; not armed"
+      continue
+    fi
   fi
   for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
     at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
