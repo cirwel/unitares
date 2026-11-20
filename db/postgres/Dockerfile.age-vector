@@ -28,14 +28,16 @@ RUN apt-get update && apt-get install -y \
 # Build and install pgvector
 # OPTFLAGS="" avoids SIMD instructions that cause "Illegal instruction" on
 # some CPUs (notably older x86_64 and ARM under emulation).
-# A git tag can be moved, so the build checks out the commit v0.8.3 named when
-# it was pinned and refuses to build anything else. Bump both together.
+# A git tag can be moved, so right after the clone the build compares the
+# commit the tag resolved to with the commit v0.8.3 named when it was pinned,
+# and refuses to build on a mismatch (a moved tag, or a version bumped without
+# its commit). Nothing checks out a different commit afterwards, so the tree
+# that is built is the one that was verified. Bump both together.
 ARG PGVECTOR_VERSION=v0.8.3
 ARG PGVECTOR_COMMIT=586e7515bafe6912c425164d186d56550657c349
 RUN cd /tmp && \
     git clone --branch "$PGVECTOR_VERSION" https://github.com/pgvector/pgvector.git && \
     cd pgvector && \
-    git -c advice.detachedHead=false checkout --detach "$PGVECTOR_COMMIT" && \
     test "$(git rev-parse HEAD)" = "$PGVECTOR_COMMIT" && \
     make OPTFLAGS="" && \
     make install && \

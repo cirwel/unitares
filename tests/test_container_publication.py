@@ -261,16 +261,27 @@ def test_published_images_build_on_digest_pinned_bases(dockerfile):
 
 
 def test_database_image_builds_pgvector_from_a_verified_commit():
-    """A git tag can be moved; the build checks out and verifies a fixed commit."""
+    """A git tag can be moved. The build compares the commit the cloned tag
+    resolved to with the pinned commit, and builds that same tree.
+
+    Checking out the pinned commit first and then comparing HEAD would always
+    pass: it never looks at what the tag named."""
     dockerfile = (ROOT / "db/postgres/Dockerfile.age-vector").read_text()
     pin = re.search(r"^ARG PGVECTOR_COMMIT=([0-9a-f]{40})$", dockerfile, re.M)
     assert pin, "pgvector must be pinned to a full 40-hex commit"
-    run = dockerfile[dockerfile.index("pgvector.git"):]
-    run = run[: run.index("make install")]
-    assert 'checkout --detach "$PGVECTOR_COMMIT"' in run
-    assert 'test "$(git rev-parse HEAD)" = "$PGVECTOR_COMMIT"' in run
-    # The check runs before anything from the clone is built.
-    assert run.index("git rev-parse HEAD") < run.index("make OPTFLAGS")
+    start = dockerfile.index("git clone")
+    run = dockerfile[start : dockerfile.index("make install", start)]
+    assert '--branch "$PGVECTOR_VERSION"' in run
+    check = 'test "$(git rev-parse HEAD)" = "$PGVECTOR_COMMIT"'
+    assert check in run
+    between = run[: run.index(check)]
+    # Nothing between the clone and the check may move HEAD off the tag.
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert f"git {mover}" not in between and f" {mover} " not in between, mover
+    # Nor may anything after it, up to the build.
+    after = run[run.index(check) : run.index("make OPTFLAGS")]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert mover not in after, mover
 
 
 def test_dependabot_bumps_every_published_base_image():
