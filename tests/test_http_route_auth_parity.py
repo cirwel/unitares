@@ -81,6 +81,7 @@ GATE_CALLS = (
     "_check_http_auth",   # REST data routes: bearer or trusted network
     "_check_read_auth",   # read-only REST routes: _check_http_auth, or a read-only key
     "_session_gate",      # dashboard session routes: validated session
+    "_connector_management_gate",  # operator credential or validated dashboard session
     "_auth_or_response",  # Wave 3a probe: WAVE_3A_PROBE_TOKEN, fail-closed
     "_is_operator",       # Wave 3a admin: operator credential
     "_hub_signin_gate",   # hub approval page: a fresh passkey session, else sign-in
@@ -178,7 +179,8 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # reads with _check_http_auth-gated read-only routes.
 # 54 -> 55: /v1/audit/volume-summary replaces BEAM Sentinel AuditVolumeWatch
 # direct Postgrex queries with a _check_http_auth-gated read-only route.
-EXPECTED_GET_ROUTES = 55
+# 55 -> 56: /auth/connectors; operator/session gated, never public.
+EXPECTED_GET_ROUTES = 56
 
 
 def test_route_registry_is_readable():

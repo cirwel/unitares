@@ -1,0 +1,1 @@
+- **OAuth connectors:** Add a **Connectors** dashboard tab and operator-gated `/auth/connectors` HTTP endpoints backed by PostgreSQL migration `082_oauth_connectors.sql` so confidential OAuth clients can be enrolled and revoked without editing configuration or restarting the server, plus `ExecutorPool` startup readiness/teardown and stopped-loop liveness checks (#3222).
