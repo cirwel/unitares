@@ -588,5 +588,12 @@ def main(argv: list[str] | None = None) -> int:
         if store is not None:
             store.close()
     print(json.dumps({"dry_run": bool(args.dry_run), **counts}, sort_keys=True), file=sys.stderr)
-    # A poll that could not read or write something is not a clean poll.
-    return 1 if counts["repos_failed"] or counts["prs_failed"] or counts["writes_failed"] else 0
+    # A poll that could not read, admit, or write something is not a clean poll.
+    return 1 if (
+        counts["repos_failed"]
+        or counts["prs_failed"]
+        or counts["writes_failed"]
+        or counts["events_unknown_agent"]
+        or counts["events_untrusted_author"]
+        or counts["events_future"]
+    ) else 0

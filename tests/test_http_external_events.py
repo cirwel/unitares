@@ -554,3 +554,21 @@ async def test_record_external_event_partition_fallback_marks_adjusted_timestamp
     assert inserted_payloads[0][1]["timestamp_adjusted"] is True
     assert inserted_payloads[0][1]["original_observed_at"] == ts.isoformat()
     assert "timestamp_adjusted" not in caller_payload
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_get_recent_events_handles_historical_external_event():
+    from src.broadcaster import EISVBroadcaster
+
+    broadcaster = EISVBroadcaster()
+    await broadcaster.broadcast_event("lifecycle_resumed", agent_id=AGENT_UUID, persist=False)
+    await broadcaster.broadcast_event(
+        "github.pr_merged",
+        agent_id=AGENT_UUID,
+        payload={"timestamp": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
+        persist=False,
+    )
+
+    recent = broadcaster.get_recent_events(since=datetime.now(timezone.utc).timestamp() - 300)
+    assert len(recent) == 1
+    assert recent[0]["type"] == "lifecycle_resumed"

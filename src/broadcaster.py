@@ -215,7 +215,7 @@ class EISVBroadcaster:
                     try:
                         evt_time = datetime.fromisoformat(ts).timestamp()
                         if evt_time < since:
-                            break  # ring buffer is append-order, so we can stop
+                            continue  # external/backfilled events may carry historical timestamps out of append order
                     except (ValueError, TypeError):
                         pass
             results.append(event)

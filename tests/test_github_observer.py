@@ -1489,6 +1489,13 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
         def write(self, event):
             return "future_timestamp"
 
+    class UnknownAgentWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "unknown_agent"
+
     class RejectingWriter:
         def __init__(self, base_url, token):
             pass
@@ -1506,30 +1513,43 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
     assert obs.main(["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}", "--dry-run"]) == 0
     _ = capsys.readouterr()
 
-    # 403 untrusted pr_author does NOT mark fingerprints locally and exits 0 so config sync recovers.
+    # 403 untrusted pr_author keeps fingerprints unmarked and exits 1 to surface config mismatch.
     monkeypatch.setattr(obs, "UnitaresEventWriter", UntrustedAuthorWriter)
     assert obs.main([
         "--repo", REPO,
         "--state-path", str(state),
         "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
         "--unitares-url", "http://127.0.0.1:8767",
-    ]) == 0
+    ]) == 1
     untrusted_summary = json.loads(capsys.readouterr().err)
     assert untrusted_summary["events_untrusted_author"] == 12
     assert untrusted_summary["writes_failed"] == 0
     assert len(read_only_fingerprints(state)) == 0
 
-    # Transient future_timestamp (clock skew) does NOT mark fingerprints locally and exits 0.
+    # Transient future_timestamp (clock skew) keeps fingerprints unmarked and exits 1.
     monkeypatch.setattr(obs, "UnitaresEventWriter", FutureTimestampWriter)
     assert obs.main([
         "--repo", REPO,
         "--state-path", str(state),
         "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
         "--unitares-url", "http://127.0.0.1:8767",
-    ]) == 0
+    ]) == 1
     future_summary = json.loads(capsys.readouterr().err)
     assert future_summary["events_future"] == 12
     assert future_summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 0
+
+    # Unknown agent_uuid leaves fingerprints unmarked and exits 1 to expose bad subject attribution.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", UnknownAgentWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 1
+    unknown_summary = json.loads(capsys.readouterr().err)
+    assert unknown_summary["events_unknown_agent"] == 12
+    assert unknown_summary["writes_failed"] == 0
     assert len(read_only_fingerprints(state)) == 0
 
     # Permanent 400/413/stale-422 refusals mark fingerprints once and exit 0.
