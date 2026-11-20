@@ -31,3 +31,4 @@
 - [ ] User-facing behavior and compatibility notes are documented.
 - [ ] No credentials, private telemetry, or unrelated generated files are included.
 - [ ] Version, release, migration, and deployment steps are called out when applicable.
+- [ ] If this records an operator decision, each open issue it parks, supersedes or unblocks is listed here and carries a note linking this PR.
