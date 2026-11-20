@@ -71,6 +71,16 @@ MAX_GRANT_TTL_SECONDS = 300
 GRANT_CLOCK_SKEW_SECONDS = 30
 
 
+def grant_clock() -> int:
+    """The one clock grants are minted, verified and their nonces purged on.
+
+    Anything that decides whether a grant could still verify must read this,
+    not another clock such as the database's ``now()``: two clocks that drift
+    apart let a nonce be deleted while its grant is still accepted.
+    """
+    return int(time.time())
+
+
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
@@ -134,7 +144,7 @@ def mint_effect_grant(
     if not (aid and payload_sha256 and surface and custody_mode and idempotency_key):
         return None
 
-    now = int(time.time()) if _now is None else int(_now)
+    now = grant_clock() if _now is None else int(_now)
     ttl = min(MAX_GRANT_TTL_SECONDS, max(_MIN_GRANT_TTL_SECONDS, int(ttl_seconds)))
     grant_nonce = nonce or secrets.token_urlsafe(16)
 
@@ -218,7 +228,7 @@ def verify_effect_grant(
     except (TypeError, ValueError):
         return EffectGrantVerification(False, "bad_exp", nonce=nonce)
 
-    now = int(time.time()) if _now is None else int(_now)
+    now = grant_clock() if _now is None else int(_now)
     if now >= exp_int:
         return EffectGrantVerification(False, "expired", nonce=nonce, exp=exp_int)
 

@@ -207,16 +207,19 @@ async def _check_effect_binding(body: dict, proposer: str):
 
 
 # Nonce-ledger retention (migration 054): a row must outlive its grant's exp.
-# A row is purged only once verify_effect_grant would refuse its grant anyway:
-# expired by more than the margin, or with a grant_exp no grant the server
-# mints could carry (exp <= iat + max TTL, iat <= now + skew), plus the margin.
+# A row is purged only once its grant has been expired, on the verifier's own
+# clock (src.effect_grant.grant_clock), for longer than the retention margin:
+# one maximum grant lifetime plus the iat skew tolerance. The cutoff is computed
+# in Python and passed to SQL; the database's now() is never compared, so a
+# database clock ahead of or behind the verifier cannot purge a nonce whose
+# grant still verifies. Rows with a grant_exp in the future are always kept:
+# such a grant can verify again until it expires.
 #
 # The purge never runs on the veto's request path: the lease plane's veto call
 # has a short client timeout, and the nonce is already consumed, so a slow purge
 # there would turn an allowed effect into a vetoed one that cannot be retried.
 # It runs as one background task at a time, skips rows another transaction has
 # locked, and is bounded by a lock timeout, a statement timeout and a deadline.
-_NONCE_PURGE_MARGIN_SECONDS = 60
 _NONCE_PURGE_BATCH = 1000
 _NONCE_PURGE_INTERVAL_SECONDS = 60.0
 _NONCE_PURGE_LOCK_TIMEOUT_MS = 500
@@ -226,12 +229,19 @@ _last_nonce_purge = 0.0
 _nonce_purge_task: asyncio.Task | None = None
 
 
-async def _purge_consumed_nonces(conn) -> None:
-    """Delete one bounded batch of nonce rows whose grants can no longer verify."""
-    from src.effect_grant import GRANT_CLOCK_SKEW_SECONDS, MAX_GRANT_TTL_SECONDS
+async def _purge_consumed_nonces(conn, now: int | None = None) -> None:
+    """Delete one bounded batch of nonce rows whose grants can no longer verify.
 
-    past = int(_NONCE_PURGE_MARGIN_SECONDS)
-    future = int(MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS + _NONCE_PURGE_MARGIN_SECONDS)
+    ``now`` defaults to the verifier's clock; tests pass it explicitly.
+    """
+    from src.effect_grant import (
+        GRANT_CLOCK_SKEW_SECONDS,
+        MAX_GRANT_TTL_SECONDS,
+        grant_clock,
+    )
+
+    app_now = grant_clock() if now is None else int(now)
+    cutoff = app_now - int(MAX_GRANT_TTL_SECONDS) - int(GRANT_CLOCK_SKEW_SECONDS)
     async with conn.transaction():
         await conn.execute(
             f"SET LOCAL lock_timeout = '{int(_NONCE_PURGE_LOCK_TIMEOUT_MS)}ms'"
@@ -244,12 +254,12 @@ async def _purge_consumed_nonces(conn) -> None:
             DELETE FROM effects.consumed_nonces
             WHERE nonce IN (
                 SELECT nonce FROM effects.consumed_nonces
-                WHERE grant_exp < now() - interval '{past} seconds'
-                   OR grant_exp > now() + interval '{future} seconds'
+                WHERE grant_exp < to_timestamp($1)
                 LIMIT {int(_NONCE_PURGE_BATCH)}
                 FOR UPDATE SKIP LOCKED
             )
-            """
+            """,
+            cutoff,
         )
 
 

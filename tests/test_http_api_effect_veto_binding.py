@@ -197,6 +197,7 @@ class _RecordingConn(_FakeConn):
     def __init__(self, purge_exc=None, purge_gate=None):
         super().__init__(None, "INSERT 0 1", None)
         self.statements = []
+        self.calls = []
         self._purge_exc = purge_exc
         self._purge_gate = purge_gate
         self.purge_started = asyncio.Event()
@@ -206,6 +207,7 @@ class _RecordingConn(_FakeConn):
 
     async def execute(self, sql, *args, **_k):
         self.statements.append(sql)
+        self.calls.append((sql, args))
         if "DELETE" in sql:
             self.purge_started.set()
             if self._purge_gate is not None:
@@ -306,11 +308,25 @@ async def test_hung_purge_is_cut_off_by_its_deadline(_purge_due, monkeypatch):
     assert conn.statements[-1] == "ROLLBACK"
 
 
-@pytest.mark.asyncio
-async def test_purge_sql_keeps_live_nonces_against_real_db():
-    """Expired-past-margin and unmintable far-future rows go; live rows stay,
-    a row another transaction has locked is skipped without waiting, and a
-    replay of a live nonce is still refused after the purge."""
+def test_purge_cutoff_is_the_verifier_clock_passed_as_a_parameter():
+    """The purge compares grant_exp against a cutoff computed from the verifier's
+    clock and bound as a parameter, never against the database's now()."""
+    from src.effect_grant import GRANT_CLOCK_SKEW_SECONDS, MAX_GRANT_TTL_SECONDS
+    from src.http_routes.effects import _purge_consumed_nonces
+
+    conn = _RecordingConn()
+    with patch("src.effect_grant.grant_clock", return_value=1_000_000):
+        asyncio.run(_purge_consumed_nonces(conn))
+    sql, args = next((s, a) for s, a in conn.calls if "DELETE" in s)
+    assert "now()" not in sql.lower()
+    assert "to_timestamp($1)" in sql
+    assert args == (1_000_000 - MAX_GRANT_TTL_SECONDS - GRANT_CLOCK_SKEW_SECONDS,)
+
+
+_PURGE_PREFIX = "purge-test-"
+
+
+async def _real_db_conn():
     from tests.test_db_utils import (
         TEST_DB_URL,
         can_connect_to_test_db,
@@ -322,31 +338,63 @@ async def test_purge_sql_keeps_live_nonces_against_real_db():
 
     import asyncpg
 
-    from src.http_routes.effects import _purge_consumed_nonces
-
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
-    prefix = "purge-test-"
+    exists = await conn.fetchval("SELECT to_regclass('effects.consumed_nonces')")
+    if exists is None:
+        await conn.close()
+        pytest.skip("effects.consumed_nonces not present in governance_test")
+    await conn.execute(
+        "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", _PURGE_PREFIX + "%"
+    )
+    return conn
+
+
+async def _close_real_db_conn(conn):
     try:
-        exists = await conn.fetchval("SELECT to_regclass('effects.consumed_nonces')")
-        if exists is None:
-            pytest.skip("effects.consumed_nonces not present in governance_test")
         await conn.execute(
-            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", prefix + "%"
+            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", _PURGE_PREFIX + "%"
         )
+    finally:
+        await conn.close()
+
+
+async def _consume(conn, nonce, exp):
+    return await conn.execute(
+        "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
+        "VALUES ($1, to_timestamp($2)) ON CONFLICT (nonce) DO NOTHING",
+        nonce, int(exp),
+    )
+
+
+@pytest.mark.asyncio
+async def test_purge_sql_keeps_live_nonces_against_real_db():
+    """Only rows expired past the retention margin go; just-expired, live and
+    far-future rows stay, a row another transaction has locked is skipped
+    without waiting, and a replay of a live nonce is still refused."""
+    import time
+
+    import asyncpg
+
+    from src.effect_grant import GRANT_CLOCK_SKEW_SECONDS, MAX_GRANT_TTL_SECONDS
+    from src.http_routes.effects import _purge_consumed_nonces
+    from tests.test_db_utils import TEST_DB_URL
+
+    conn = await _real_db_conn()
+    try:
+        now = int(time.time())
+        retention = MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS
         rows = {
-            "old": "now() - interval '10 minutes'",
-            "old-locked": "now() - interval '10 minutes'",
-            "just-expired": "now() - interval '5 seconds'",
-            "live": "now() + interval '120 seconds'",
-            "far-future": "now() + interval '3650 days'",
+            "old": now - 3600,
+            "old-locked": now - 3600,
+            "past-retention": now - retention - 2,
+            "within-retention": now - retention + 2,
+            "just-expired": now - 5,
+            "live": now + 120,
+            "far-future": now + 10 * 365 * 86400,
         }
-        for name, exp_sql in rows.items():
-            await conn.execute(
-                f"INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
-                f"VALUES ($1, {exp_sql})",
-                prefix + name,
-            )
+        for name, exp in rows.items():
+            assert await _consume(conn, _PURGE_PREFIX + name, exp) == "INSERT 0 1"
 
         # Another transaction holds a row lock on one purgeable row: the purge
         # skips it rather than waiting on it.
@@ -356,30 +404,62 @@ async def test_purge_sql_keeps_live_nonces_against_real_db():
         try:
             await locker.fetchval(
                 "SELECT nonce FROM effects.consumed_nonces WHERE nonce = $1 FOR UPDATE",
-                prefix + "old-locked",
+                _PURGE_PREFIX + "old-locked",
             )
-            await asyncio.wait_for(_purge_consumed_nonces(conn), timeout=3.0)
+            await asyncio.wait_for(_purge_consumed_nonces(conn, now=now), timeout=3.0)
         finally:
             await locker_txn.rollback()
             await locker.close()
 
         left = {
-            r["nonce"][len(prefix):]
+            r["nonce"][len(_PURGE_PREFIX):]
             for r in await conn.fetch(
                 "SELECT nonce FROM effects.consumed_nonces WHERE nonce LIKE $1",
-                prefix + "%",
+                _PURGE_PREFIX + "%",
             )
         }
-        assert left == {"just-expired", "live", "old-locked"}
-
-        replay = await conn.execute(
-            "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
-            "VALUES ($1, now() + interval '120 seconds') ON CONFLICT (nonce) DO NOTHING",
-            prefix + "live",
-        )
-        assert replay.split()[-1] == "0"
+        assert left == {
+            "old-locked", "within-retention", "just-expired", "live", "far-future",
+        }
+        assert await _consume(conn, _PURGE_PREFIX + "live", now + 120) == "INSERT 0 0"
     finally:
-        await conn.execute(
-            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", prefix + "%"
-        )
-        await conn.close()
+        await _close_real_db_conn(conn)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "clock_offset,ttl",
+    [
+        (-120, 30),     # database clock 2 min ahead of the verifier
+        (-3600, 300),   # database clock an hour ahead
+        (120, 300),     # database clock 2 min behind the verifier
+        (3600, 300),    # database clock an hour behind
+    ],
+)
+async def test_purge_never_frees_a_nonce_whose_grant_still_verifies(clock_offset, ttl):
+    """Mint, verify and consume a grant on a verifier clock offset from the
+    database's, purge, then present the grant again: it still verifies, so the
+    ledger must still refuse it."""
+    from src.effect_grant import verify_effect_grant
+    from src.http_routes.effects import _purge_consumed_nonces
+
+    conn = await _real_db_conn()
+    try:
+        db_now = int(await conn.fetchval("SELECT extract(epoch FROM now())"))
+        verifier_now = db_now + clock_offset
+        fields = {"aid": PROPOSER, **_CONTENT}
+        with patch("src.effect_grant.grant_clock", return_value=verifier_now):
+            grant = mint_effect_grant(
+                ttl_seconds=ttl, nonce=_PURGE_PREFIX + "skew", **fields
+            )
+            first = verify_effect_grant(grant, **fields)
+            assert first.ok
+            assert await _consume(conn, first.nonce, first.exp) == "INSERT 0 1"
+
+            await _purge_consumed_nonces(conn)
+
+            again = verify_effect_grant(grant, **fields)
+            assert again.ok
+            assert await _consume(conn, again.nonce, again.exp) == "INSERT 0 0"
+    finally:
+        await _close_real_db_conn(conn)
