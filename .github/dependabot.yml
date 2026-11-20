@@ -49,12 +49,14 @@ updates:
       - "dependencies"
 
   - package-ecosystem: "docker"
-    # Root compose/Dockerfile + the AGE+pgvector image. Pinned base tags here
-    # (apache/age, pgvector) get bump PRs instead of silently floating; the
-    # Docker Quickstart workflow validates each bump end to end before merge.
+    # Root compose/Dockerfile, the AGE+pgvector image and the lease plane:
+    # every Dockerfile publish-container.yml releases. Their digest-pinned base
+    # images get bump PRs instead of silently floating; the Docker Quickstart
+    # workflow validates each bump end to end before merge.
     directories:
       - "/"
       - "/db/postgres"
+      - "/elixir/lease_plane"
     schedule:
       interval: "weekly"
       day: "monday"
