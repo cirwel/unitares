@@ -543,6 +543,7 @@ def _register_application_routes(
         mount_route_packs=False,
         oauth_provider=auth_config.oauth_provider,
         oauth_settings=auth_config.auth_settings,
+        oauth_setup_failed=auth_config.gate_unavailable,
     )
     register_wave3a_probe_routes(app)
     register_wave3a_admin_routes(app)

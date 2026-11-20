@@ -73,6 +73,14 @@ async def http_connectors(request):
     provider = getattr(request.state, "oauth_provider", None)
     registry = getattr(provider, "connector_registry", None)
     if registry is None:
+        if getattr(request.state, "oauth_setup_failed", False):
+            return _reply(
+                {
+                    "error": "OAuth startup failed on this server. Check the server logs and OAuth configuration, then restart.",
+                    "setup_url": "https://github.com/cirwel/unitares/blob/master/docs/integration/MCP_CLIENTS.md",
+                },
+                503,
+            )
         return _reply({"error": "OAuth is not configured on this server. Complete the public HTTPS server setup first.",
                        "setup_url": "https://github.com/cirwel/unitares/blob/master/docs/integration/MCP_CLIENTS.md"}, 503)
     if request.method == "GET":
