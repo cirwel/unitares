@@ -238,10 +238,9 @@ defmodule UnitaresLeasePlane.EffectReconcileTest do
   @tag :tmp_dir
   test "file read error does not claim a quarantine whose mark failed", %{tmp_dir: dir} do
     # A directory produces a read error without depending on Unix permissions.
-    {:error, reason} = File.read(dir)
     p = payload(dir, payload_sha256: sha("new\n"), pre_image_sha256: sha("old\n"))
 
-    assert_failed_mark(p, :quarantine, {:quarantined, {:read_error, reason}})
+    assert_failed_mark(p, :quarantine, {:quarantined, {:read_error, :not_regular_file}})
     assert File.dir?(dir)
   end
 

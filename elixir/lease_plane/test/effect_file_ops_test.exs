@@ -101,36 +101,106 @@ defmodule UnitaresLeasePlane.EffectFileOpsTest do
              Task.await(task, 5_000)
   end
 
-  test "a leaf swapped for a link after the check is not overwritten", %{tmp_dir: dir} do
+  # The tests below change the tree after the helper has walked to (and holds)
+  # the parent directory, and before it touches the leaf: the window between a
+  # check by path and an open by path that `:file` alone cannot close.
+
+  test "a leaf swapped for a dangling link after the walk creates nothing", %{tmp_dir: dir} do
     leased = Path.join(dir, "out.txt")
     File.write!(leased, "leased\n")
-    {:ok, checked} = File.lstat(leased)
+    target = Path.join(dir, "outside.txt")
 
-    other = Path.join(dir, "operator-owned.txt")
-    File.write!(other, "keep\n")
-    File.rm!(leased)
-    File.ln_s!(other, leased)
+    swap = fn ->
+      File.rm!(leased)
+      File.ln_s!(target, leased)
+    end
 
-    assert {:error, :path_changed} = EffectFileOps.overwrite_if_unchanged(leased, checked, "x")
-    assert File.read!(other) == "keep\n"
+    assert {:error, :symlink_in_path} = EffectFileOps.run_helper("write", leased, "x", swap)
+    refute File.exists?(target)
   end
 
-  test "a parent swapped for a link after the check is not overwritten", %{tmp_dir: dir} do
-    work = Path.join(dir, "work")
-    File.mkdir_p!(work)
-    leased = Path.join(work, "out.txt")
+  test "a leaf swapped for a live link after the walk is not written through", %{tmp_dir: dir} do
+    leased = Path.join(dir, "out.txt")
     File.write!(leased, "leased\n")
-    {:ok, checked} = File.lstat(leased)
+    other = Path.join(dir, "operator-owned.txt")
+    File.write!(other, "keep\n")
 
+    swap = fn ->
+      File.rm!(leased)
+      File.ln_s!(other, leased)
+    end
+
+    assert {:error, :symlink_in_path} = EffectFileOps.run_helper("write", leased, "x", swap)
+    assert File.read!(other) == "keep\n"
+
+    assert {:error, :symlink_in_path} =
+             EffectFileOps.run_helper("read", leased, "", fn -> :ok end)
+  end
+
+  test "a leaf swapped for a FIFO after the walk is refused without blocking", %{tmp_dir: dir} do
+    leased = Path.join(dir, "out.txt")
+    File.write!(leased, "leased\n")
+    on_exit(fn -> File.rm(leased) end)
+
+    swap = fn ->
+      File.rm!(leased)
+      {_, 0} = System.cmd("mkfifo", [leased])
+    end
+
+    task = Task.async(fn -> EffectFileOps.run_helper("read", leased, "", swap) end)
+    assert {:error, :not_regular_file} = Task.await(task, 5_000)
+  end
+
+  # A parent replaced by a link after the walk: `elsewhere` must never be
+  # touched. The operation stays in the directory the walk opened, which the
+  # rename moved to `work.old`.
+  defp swap_parent(dir) do
+    work = Path.join(dir, "work")
     elsewhere = Path.join(dir, "elsewhere")
     File.mkdir_p!(elsewhere)
     File.write!(Path.join(elsewhere, "out.txt"), "keep\n")
-    File.rename!(work, Path.join(dir, "work.old"))
-    File.ln_s!(elsewhere, work)
 
-    assert {:error, :path_changed} = EffectFileOps.overwrite_if_unchanged(leased, checked, "x")
-    assert File.read!(Path.join(elsewhere, "out.txt")) == "keep\n"
+    fn ->
+      File.rename!(work, Path.join(dir, "work.old"))
+      File.ln_s!(elsewhere, work)
+    end
   end
+
+  test "a new file is created in the walked directory, not through a swapped parent", %{
+    tmp_dir: dir
+  } do
+    File.mkdir_p!(Path.join(dir, "work"))
+    leased = Path.join(dir, "work/new.txt")
+
+    assert :ok = EffectFileOps.run_helper("write", leased, "payload", swap_parent(dir)) |> ok()
+    refute File.exists?(Path.join(dir, "elsewhere/new.txt"))
+    assert File.read!(Path.join(dir, "work.old/new.txt")) == "payload"
+  end
+
+  test "an overwrite lands in the walked directory, not through a swapped parent", %{
+    tmp_dir: dir
+  } do
+    File.mkdir_p!(Path.join(dir, "work"))
+    leased = Path.join(dir, "work/out.txt")
+    File.write!(leased, "leased\n")
+
+    assert :ok = EffectFileOps.run_helper("write", leased, "x", swap_parent(dir)) |> ok()
+    assert File.read!(Path.join(dir, "elsewhere/out.txt")) == "keep\n"
+    assert File.read!(Path.join(dir, "work.old/out.txt")) == "x"
+  end
+
+  test "rm unlinks in the walked directory, not through a swapped parent", %{tmp_dir: dir} do
+    File.mkdir_p!(Path.join(dir, "work"))
+    leased = Path.join(dir, "work/out.txt")
+    File.write!(leased, "leased\n")
+
+    assert :ok = EffectFileOps.run_helper("rm", leased, "", swap_parent(dir)) |> ok()
+    assert File.read!(Path.join(dir, "elsewhere/out.txt")) == "keep\n"
+    refute File.exists?(Path.join(dir, "work.old/out.txt"))
+  end
+
+  defp ok({:ok, _}), do: :ok
+  defp ok(other), do: other
 
   test "a nil pre-image is refused and creates nothing", %{tmp_dir: dir} do
     path = Path.join(dir, "out.txt")
