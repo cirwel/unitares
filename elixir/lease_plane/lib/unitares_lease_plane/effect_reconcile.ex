@@ -26,7 +26,7 @@ defmodule UnitaresLeasePlane.EffectReconcile do
   replies return `{:unresolved, ...}`; they never establish persisted recovery.
   """
 
-  alias UnitaresLeasePlane.EffectRepo
+  alias UnitaresLeasePlane.{EffectFileOps, EffectRepo}
 
   require Logger
 
@@ -118,14 +118,19 @@ defmodule UnitaresLeasePlane.EffectReconcile do
   @doc """
   SHA-256 (lowercase hex) of the file's current bytes, or `{:ok, nil}` when the
   file does not exist (a legitimate pre-image-absent state). `{:error, _}` on any
-  other read failure — the caller quarantines.
+  other read failure — the caller quarantines. A symbolic link anywhere in the
+  canonical path is such a failure (`:symlink_in_path`): hashing through it
+  would judge the surface on another file's bytes, and a dangling one would
+  read as "absent".
   """
   @spec current_file_sha(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def current_file_sha(path) do
-    case File.read(path) do
-      {:ok, bytes} -> {:ok, sha256_hex(bytes)}
-      {:error, :enoent} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
+    with :ok <- EffectFileOps.check_no_symlinks(path) do
+      case File.read(path) do
+        {:ok, bytes} -> {:ok, sha256_hex(bytes)}
+        {:error, :enoent} -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
