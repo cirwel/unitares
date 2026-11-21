@@ -1,0 +1,1 @@
+- **http:** JSON REST routes, `/mcp` POST and OAuth client registration count request bodies against a per-route byte cap and answer 413 past it. `knowledge` reads that expand a response chain share one rate budget, and model-call errors report the endpoint without credentials, query or fragment.

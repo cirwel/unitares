@@ -55,8 +55,24 @@ veto by removing the label.
   friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
   freeze was lifted by the operator on 2026-10-15 (KG decision
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
-  than holding a fix. Reserved auth, identity, scientific and
-  governance-sensitive gates are unchanged.
+  than holding a fix. Scientific and governance-sensitive gates are unchanged.
+  An auth or identity-enforcement diff is no longer held as a draft for the
+  operator (operator ruling, 2026-11-20): its gate is two reviewer families
+  outside the authors, and its owner marks it ready and labels it once both
+  have passed. On a `second_family_paths` file the `review` check enforces
+  that. `review_policy.json` deliberately leaves some files with an access
+  decision off that list (its `_boundary` note names them, for example
+  `src/mcp_handlers/decorators.py`), and a change there passes `review` on one
+  family. For an auth or identity-enforcement change in such a file the owner
+  gets the second family's review before marking ready and names both families
+  in the PR body; nothing enforces this, so the body is the record. The same
+  holds for `ready-when-validated`: do not apply it to such a PR until both
+  families have passed, because the queue promotes a declared draft as soon as
+  `review` succeeds, and here `review` succeeds on one family. With no
+  second family available, the PR waits for one or for the operator's word, as
+  it would on a listed path. The operator reviews, merges and authors no PR, so a rule
+  that parks a PR for the operator to read parks it for good; #3222 stayed a
+  draft for 13 days while each reviewer repeated that it was reserved.
 - A PR that records an operator decision also carries it to the open issues it
   touches. Before readiness, the owner lists in the PR body each open issue the
   decision parks, supersedes or unblocks, and posts a short note on each one
@@ -147,7 +163,21 @@ veto by removing the label.
   naming the successor by UNITARES agent UUID and stating separately whether
   branch writing (commits and pushes), readiness, and queue-entry are
   authorized. Record the owner's request, the operator grant's
-  source and scope, and the successor's acceptance on the PR. A shared GitHub
+  source and scope, and the successor's acceptance on the PR.
+
+  **One author family on a second-family diff** (operator ruling, 2026-11-20).
+  On a PR whose diff touches a `review_policy.json` `second_family_paths` file,
+  every committer must come from one model family. There are three families
+  and the gate needs two outside the authors, so a second author family leaves
+  one eligible reviewer, and the PR then cannot pass without an
+  [operator waiver](#second-family-review). On #3222 an OpenAI-authored auth
+  PR received commits from Google-family successors, which left Anthropic as
+  the only reviewer and the PR in draft for 13 days. A successor from another
+  family therefore takes delivery only: readiness, the queue label, finding
+  dispositions and the PR text, with no commit. Committing would also make
+  that successor's family an author and cancel any review it had given. If a
+  commit from another family is unavoidable, say on the PR first that it costs
+  a reviewer family, so the waiver is asked for once and early. A shared GitHub
   login, PR comment or UUID footer alone does not verify the request or transfer
   authority. If your own push is rejected because the remote has commits you
   did not author, somebody else is on your branch: keep your work on a local
@@ -215,7 +245,14 @@ veto by removing the label.
   named successor by UNITARES agent UUID. A direct readiness override must be
   recorded in a PR comment with its source and scope; it does not authorize
   queue entry. The grant must separately state branch-writing, readiness, and
-  queue-entry authority; one scope does not imply another. It can arrive as a
+  queue-entry authority; one scope does not imply another. One form states all
+  three at once (operator ruling, 2026-11-20): a direct operator instruction to
+  a session to handle, land, finish or take over a named PR grants
+  branch-writing, readiness and queue entry for that PR. Before this, four
+  successive successors on #3222 each held a partial or ambiguous grant and
+  stopped. The instruction grants no operator waiver and no deployment; those
+  are asked and recorded separately. A narrower instruction ("mark #N ready",
+  "fix CI on #N") grants only what it names. It can arrive as a
   verified operator instruction on the PR or a direct instruction in that successor's operator
   session. The successor must establish operator origin from that direct
   instruction or an independently established operator-only channel. GitHub
@@ -676,9 +713,9 @@ entries expire at their recorded `retry_after` UTC time.
 **Second-family review for security-sensitive paths.** A diff that touches a
 path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth, the
 MCP authorization gate, lease and effect authorization, the strong-model host
-adapter and Antigravity client, the dialectic reviewer's backends, and the
-review gate itself; `_boundary` in the file says what is deliberately left
-off) needs a passing full review from **two different model families** before
+adapter and Antigravity client, the dialectic reviewer's backends, the
+review gate itself, and every file in the governance-sensitivity manifest;
+`_boundary` in the file says what is deliberately left off) needs a passing full review from **two different model families** before
 the `review` check goes green: OpenAI (Codex, native or local), Anthropic
 (Claude) or Google. An Antigravity review counts by the model it ran, which
 its record carries (`agy` can run Gemini, Claude or GPT-OSS models); a review
@@ -1006,9 +1043,9 @@ Draft PRs cannot be queued, so mark ready first.
   readiness-only handoff, apply it only following a later verified queue-entry
   grant and fresh validation of the current head (CI green, known findings
   addressed, required sensitive-path review coverage passing). The operator
-  vetoes by removing it. The exception is a PR labelled `governance-sensitive` (see
-  `docs/dev/GOVERNANCE_SENSITIVITY.md`), touching that manifest, or coming from
-  a fork: the queue never arms it, and the operator merges it by hand. When the
+  vetoes by removing it. A PR from a fork is the exception: the queue never
+  arms it, and the operator merges it by hand. A governance-sensitive PR has
+  its own rule (next bullet). When the
   queue first sees `approved-to-merge` (within 15 minutes of application), it
   pins the head and a diff fingerprint (`master...<SHA>` added/removed lines or
   blob SHA) and arms with `--match-head-commit`. A clean base update preserves
@@ -1016,6 +1053,26 @@ Draft PRs cannot be queued, so mark ready first.
   is skipped until the label is removed and re-added. The pin catches honest
   follow-up pushes or branch mutations after approval, not hostile actors
   sharing the same credentials.
+- **Governance-sensitive PRs get a veto window (operator ruling,
+  2026-11-16).** A PR labelled `governance-sensitive`, or whose diff matches
+  the manifest in `docs/dev/GOVERNANCE_SENSITIVITY.md`, used to wait for the
+  operator to merge it by hand. The operator no longer merges, so the queue
+  arms it once all three hold: the diff touches a `review_policy.json`
+  `second_family_paths` file and `review` has passed on the current head (two
+  model families); the PR body has a line starting `Expected effect:` stating
+  the expected effect on pause and verdict rates; and 24 hours have passed
+  since the current `approved-to-merge` label went on. Removing the label
+  inside the 24 hours is the veto, and re-adding it starts them again. While
+  it waits the PR is skipped, so it never holds the slot, and the queue posts
+  one notice per head saying when the window ends or what is missing. A diff
+  touching the manifest, its checker
+  (`scripts/dev/check_governance_sensitivity.sh`) or its workflow
+  (`.github/workflows/governance-sensitivity.yml`) is never armed: the
+  operator merges it by hand. The same goes for anything the queue cannot
+  read (the manifest, the diff, the review policy, the label time).
+  `PR_QUEUE_SENSITIVE_DELEGATED=0` restores the earlier never-arm rule. The
+  window works because agents follow it, not because anything enforces it:
+  agents can act under the operator's GitHub login.
 - **Holds.** A queued PR labelled `automerge-hold` or `no-auto-merge` is not
   armed, and is disarmed if the queue had armed it. Its approval stands, so it
   returns in turn once the hold comes off: a hold pauses, removing
@@ -1096,7 +1153,9 @@ else, the script looks at every PR against `master` that carries
 - It never promotes a fork, a PR labelled `governance-sensitive`,
   `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
   governance-sensitive surface, a stacked PR, or a PR whose body does not say
-  `Classification: fix`.
+  `Classification: fix`. The veto-window route for a governance-sensitive PR
+  starts from a PR its owner marked ready and labelled, never from a
+  declaration.
 
 Lasting refusals post one notice on the PR; waiting on CI or review posts
 nothing. Findings still need their author: the route removes the wait for a
@@ -1234,6 +1293,7 @@ this entirely).
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your session will end before CI and review finish, and the PR is a `fix` you own | `gh pr edit <n> --add-label ready-when-validated` on the draft; the queue marks it ready and queues it once that content validates (section 4) |
 | Your PR is READY and you hold queue-entry authority (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| Your READY, labelled PR is governance-sensitive | Put `Expected effect: <effect on pause and verdict rates>` in the body and get `review` passing with two model families; the queue arms it 24 hours after the label went on (section 4). A diff touching the sensitivity manifest, its checker or its workflow waits for the operator's hand merge |
 | You have readiness-only authority | Mark an unlabeled draft ready, leave it unlabeled, and wait for a separate verified queue-entry grant before revalidation and labeling |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |

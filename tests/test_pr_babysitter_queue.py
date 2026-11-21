@@ -30,6 +30,7 @@ case "$1 $2" in
   "pr list")
     # A later read in the same tick may see a changed world (prs_live.json).
     if [ -f "$d/prs_live.json" ] && [ -f "$d/listed_once" ]; then cat "$d/prs_live.json"; else cat "$d/prs.json"; fi
+    [ -f "$d/listed_once" ] && : > "$d/listed_twice"
     : > "$d/listed_once"
     exit 0 ;;
   "pr view")
@@ -72,7 +73,17 @@ if [ "$1" = "api" ]; then
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       [ -f "$d/timeline_$n.fail" ] && exit 1
+      # After the tick's live re-read, the label history may have moved on.
+      if [ -f "$d/timeline_${n}_later.json" ] && [ -f "$d/listed_twice" ]; then
+        cat "$d/timeline_${n}_later.json"; exit 0
+      fi
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
+      exit 0 ;;
+    */check-runs*)
+      sha=$(sed -E 's#.*commits/([^/]+)/check-runs.*#\1#' <<<"$*")
+      [ -f "$d/checkruns_$sha.fail" ] && exit 1
+      cat "$d/checkruns_$sha.json" 2>/dev/null \
+        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}'
       exit 0 ;;
     */commits/*)
       # A later read in the same tick may see master moved (base_moved).
@@ -1942,3 +1953,403 @@ def test_a_declared_draft_missing_a_review_family_gets_its_review_requested(tmp_
     for labels in ((READY, REQUESTED), (READY, "no-auto-review")):
         calls, _ = _run(tmp_path, [_declared(labels=labels, review="ACTION_REQUIRED")], timelines={1: _declaration()})
         assert calls == [], labels
+
+
+# --- delegated landing of governance-sensitive PRs (operator ruling, 2026-11-16) -------
+# The queue may land a sensitive PR after two-family review, an `Expected
+# effect:` line in the body, and 24 hours under the approval label.
+
+
+EFFECT = "Expected effect: pause rate unchanged; guide verdicts rise slightly near the risk line."
+SENSITIVE = _files(("config/governance_config.py", "modified", "b1",
+                    "@@ -1 +1 @@\n-RISK_APPROVE_THRESHOLD = 0.3\n+RISK_APPROVE_THRESHOLD = 0.4"))
+DAY = 24 * 60
+RESERVED = (
+    "scripts/dev/governance_sensitivity_manifest.tsv",
+    "scripts/dev/check_governance_sensitivity.sh",
+    ".github/workflows/governance-sensitivity.yml",
+)
+
+
+def _delegable(tmp_path: Path, n: int = 1, *, labelled_min_ago: float = DAY + 60, head: str = "aaa",
+               policy: bool = True, **kw) -> tuple[dict, list]:
+    """A sensitive PR whose approval was pinned when the label went on."""
+    _manifest(tmp_path, "config/governance_config.py\tRISK_APPROVE_THRESHOLD\tthe risk line")
+    if policy:
+        _review_policy(tmp_path, "config/governance_config.py")
+    kw.setdefault("body", EFFECT)
+    timeline = _timeline(labelled_min_ago, labelled_min_ago + 30)
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    with (state / "approvals").open("a") as handle:
+        handle.write(f"{n} {head} {timeline[-1]['created_at']} fp\n")
+    return _pr(n, head=head, **kw), timeline
+
+
+@pytest.mark.parametrize("body", [
+    "Expected effect: Narrowing the risk band lowers the pause rate by a small amount.",
+    "Expected effect: NaN handling only; pause and verdict rates are unchanged.",
+    "Expected effect: Unknowns in the outcome term now read as held, so fewer guide verdicts.",
+    "Expected effect: Filling the missing axis stops spurious pauses for new agents.",
+])
+def test_an_effect_that_merely_starts_like_a_placeholder_is_accepted(tmp_path: Path, body: str) -> None:
+    pr, timeline = _delegable(tmp_path, body=body)
+    calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                    PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1, "aaa")]
+
+
+@pytest.mark.parametrize("body", [
+    "Expected effect: unknown at this time, to be measured",
+    "Expected effect: N/A - this is a refactor only change",
+    "Expected effect: fill in before merging this change",
+    "Expected effect: TODO: describe the pause-rate effect",
+])
+def test_a_placeholder_followed_by_more_words_is_still_a_placeholder(tmp_path: Path, body: str) -> None:
+    pr, timeline = _delegable(tmp_path, body=body)
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [] and "its body has no Expected effect: line" in out
+
+
+def test_a_sensitive_pr_is_armed_after_the_veto_window(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                    PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1, "aaa")]
+
+
+def test_a_sensitive_pr_is_not_armed_inside_the_veto_window(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path, labelled_min_ago=DAY - 30)
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="", PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert calls == notices and len(notices) == 1
+    assert "veto window open" in notices[0] and f"Removing `{LABEL}`" in notices[0]
+    ends = datetime.strptime(timeline[-1]["created_at"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=24)
+    assert ends.strftime("%Y-%m-%dT%H:%M:%SZ") in notices[0]
+    assert "pause rate unchanged" in notices[0]
+    assert "its veto window is open until" in out
+
+
+def test_a_renewed_label_restarts_the_veto_window(tmp_path: Path) -> None:
+    # Labelled two days ago, then removed and re-added an hour ago.
+    pr, timeline = _delegable(tmp_path, labelled_min_ago=60)
+    timeline.insert(0, {"event": "labeled", "label": {"name": LABEL}, "created_at": _iso(2 * DAY)})
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "its veto window is open until" in out
+
+
+def test_a_waiting_sensitive_pr_does_not_hold_the_slot(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path, labelled_min_ago=60)
+    calls, _ = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                    compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(2, "bbb")]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        "Expected effect:",
+        "Expected effect: TBD",
+        "Expected effect: none",
+        "Expected effect: <state the effect on pause and verdict rates>",
+        "The Expected effect: pause rate unchanged, verdicts unchanged, as measured.",
+    ],
+)
+def test_a_sensitive_pr_without_a_stated_effect_is_not_armed(tmp_path: Path, body: str) -> None:
+    pr, timeline = _delegable(tmp_path, body=body)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="", PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1 and "no `Expected effect:` line" in notices[0]
+    assert [c for c in calls if c not in notices] == [_arm(2, "bbb")]
+    assert "its body has no Expected effect: line" in out
+
+
+@pytest.mark.parametrize("review", ["NEUTRAL", "ACTION_REQUIRED", "FAILURE", None])
+def test_a_sensitive_pr_is_not_armed_until_review_passes(tmp_path: Path, review: str | None) -> None:
+    pr, timeline = _delegable(tmp_path, review=review)
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert not [c for c in calls if "--auto" in c]
+    if review in ("NEUTRAL", None):
+        assert calls == []
+        assert f"review={review or 'MISSING'}" in out
+
+
+def test_a_sensitive_diff_outside_two_family_review_stays_hand_merge(tmp_path: Path) -> None:
+    # Nothing in the diff is on second_family_paths, so a passing `review`
+    # would not show two model families.
+    pr, timeline = _delegable(tmp_path, policy=False)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="", PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1 and "two-family review" in notices[0] and "by hand" in notices[0]
+    assert [c for c in calls if c not in notices] == [_arm(2, "bbb")]
+    assert "outside two-family review" in out
+
+
+@pytest.mark.parametrize("policy", ["", "missing"])
+def test_delegation_fails_closed_without_a_readable_review_policy(tmp_path: Path, policy: str) -> None:
+    pr, timeline = _delegable(tmp_path)
+    calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                    PR_QUEUE_REQUIRED_CHECKS="",
+                    PR_QUEUE_REVIEW_POLICY=policy and str(tmp_path / "gone.json"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("path", RESERVED)
+@pytest.mark.parametrize("listed", [True, False])
+def test_the_manifest_its_checker_and_its_workflow_stay_hand_merge(tmp_path: Path, path: str, listed: bool) -> None:
+    # Whatever else holds: reviewed, effect stated, window long past, and
+    # whether or not the base's manifest still lists the file.
+    pr, timeline = _delegable(tmp_path)
+    if listed:
+        _manifest(tmp_path, f"{path}\t-\tthe advisory's own wiring")
+    _review_policy(tmp_path, path, "config/governance_config.py")
+    diff = _files((path, "modified", "b7", "@@ -1 +1 @@\n-a\n+b"))
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": diff, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="", PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1 and "hand-merge only" in notices[0] and path in notices[0]
+    assert [c for c in calls if c not in notices] == [_arm(2, "bbb")]
+    assert f"#1 touches {path}, which stays hand-merge only" in out
+
+
+def test_a_rename_out_of_a_hand_merge_file_still_counts(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    moved = {"files": [{"filename": "scripts/dev/elsewhere.sh", "previous_filename": RESERVED[1],
+                        "status": "renamed", "sha": "b3", "patch": "@@ -1 +1 @@\n-a\n+b"}]}
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": moved}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "hand-merge only" in out
+
+
+@pytest.mark.parametrize("broken", ["manifest", "diff", "truncated", "no-patch", "timeline"])
+def test_delegation_fails_closed(tmp_path: Path, broken: str) -> None:
+    pr, timeline = _delegable(tmp_path)
+    env: dict = {"PR_QUEUE_REQUIRED_CHECKS": ""}
+    kw: dict = {"compares": {"aaa": SENSITIVE}}
+    if broken == "manifest":
+        env["PR_QUEUE_SENSITIVITY_MANIFEST"] = str(tmp_path / "gone.tsv")
+    elif broken == "diff":
+        kw["compares"] = {"aaa": None}
+    elif broken == "truncated":
+        many = [(f"docs/{i}.md", "modified", f"b{i}", "+x") for i in range(299)]
+        kw["compares"] = {"aaa": _files(*many, *[tuple(SENSITIVE["files"][0].values())])}
+    elif broken == "no-patch":
+        # A second manifest row matches first; the unreadable one still decides.
+        _manifest(tmp_path, "tests/test_outcome_corroboration.py\t-\tanti-gaming",
+                  "config/governance_config.py\tRISK_APPROVE_THRESHOLD\tthe risk line")
+        kw["compares"] = {"aaa": _files(("tests/test_outcome_corroboration.py", "modified", "b0", "+x"),
+                                        ("config/governance_config.py", "modified", "b1", None))}
+    else:
+        kw["timeline_fails"] = (1,)
+    calls, _ = _run(tmp_path, [pr], timelines={1: timeline}, **kw, **env)
+    assert calls == []
+
+
+def test_the_old_rule_is_one_setting_away(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="",
+                      PR_QUEUE_SENSITIVE_DELEGATED="0", PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1 and "operator merges it by hand" in notices[0]
+    assert [c for c in calls if c not in notices] == [_arm(2, "bbb")]
+    assert "the operator merges it by hand; skipped" in out
+
+
+def test_the_old_rule_still_reads_the_label(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path, labels=(LABEL, "governance-sensitive"))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": PLAIN},
+                      PR_QUEUE_REQUIRED_CHECKS="", PR_QUEUE_SENSITIVE_DELEGATED="0")
+    assert calls == []
+    assert "#1 is labelled governance-sensitive; the operator merges it by hand" in out
+
+
+def test_the_label_alone_makes_a_pr_wait_out_the_window(tmp_path: Path) -> None:
+    # CI's label on a diff the manifest no longer matches is still judged as
+    # sensitive: it needs the same three conditions.
+    _review_policy(tmp_path, "docs/*")
+    for sub, age, expected in (("early", 60, []), ("late", DAY + 60, [_arm(1, "aaa")])):
+        d = tmp_path / sub
+        d.mkdir()
+        pr, timeline = _delegable(d, labelled_min_ago=age, labels=(LABEL, "governance-sensitive"), policy=False)
+        _review_policy(d, "docs/*")
+        calls, _ = _run(d, [pr], timelines={1: timeline}, compares={"aaa": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+        assert calls == expected, sub
+
+
+def test_a_veto_during_the_tick_stops_the_arming(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([_pr(1, head="aaa", labels=(), body=EFFECT)]))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert f"#1 lost {LABEL} since this tick began (a veto); not armed" in out
+
+
+def test_a_label_renewed_during_the_tick_restarts_the_window(tmp_path: Path) -> None:
+    # Removed and re-added after the tick read the label time: the label is
+    # present in the live re-read, but its 24 hours have only just begun.
+    pr, timeline = _delegable(tmp_path)
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([pr]))
+    (d / "timeline_1_later.json").write_text(json.dumps(_timeline(1, DAY + 90)))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "its veto window restarts; not armed" in out
+
+
+def test_an_unreadable_label_time_at_arming_fails_closed(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    d = tmp_path / "gh"
+    d.mkdir()
+    (d / "prs_live.json").write_text(json.dumps([pr]))
+    (d / "timeline_1_later.json").write_text("[]")
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "its veto window restarts; not armed" in out
+
+
+@pytest.mark.parametrize("review", [None, "PENDING"])
+def test_a_sensitive_pr_whose_review_is_still_being_evaluated_keeps_its_place(tmp_path: Path, review: str | None) -> None:
+    # Past its window, review not yet reported on this head (the usual state
+    # just after the queue updated its branch). It waits like any PR: letting
+    # #2 land first would move the base and send #1 round the update loop.
+    pr, timeline = _delegable(tmp_path, review=review)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert f"#1 waiting on review={review or 'MISSING'}" in out
+
+
+def test_a_skipped_or_running_review_run_does_not_hide_or_fake_a_waiver(tmp_path: Path) -> None:
+    waived = "second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny"
+    for sub_dir, runs, expected in (
+        # A later skipped run (the workflow also fires on `labeled`) must not mask the waiver.
+        ("skipped", [{"name": "review", "status": "completed", "conclusion": "success",
+                      "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+                      "output": {"title": waived}},
+                     {"name": "review", "status": "completed", "conclusion": "skipped",
+                      "started_at": "2026-01-02T00:00:00Z", "completed_at": "2026-01-02T00:00:01Z",
+                      "output": {"title": None}}], []),
+        # A superseded waived run under a newer two-family pass is not a waiver.
+        ("superseded", [{"name": "review", "status": "completed", "conclusion": "success",
+                         "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+                         "output": {"title": waived}},
+                        {"name": "review", "status": "completed", "conclusion": "success",
+                         "started_at": "2026-01-02T00:00:00Z", "completed_at": "2026-01-02T00:01:00Z",
+                         "output": {"title": "clean (codex, antigravity)"}}], [_arm(1, "aaa")]),
+    ):
+        d = tmp_path / sub_dir
+        d.mkdir()
+        pr, timeline = _delegable(d)
+        (d / "gh").mkdir()
+        (d / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
+        calls, _ = _run(d, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE}, PR_QUEUE_REQUIRED_CHECKS="")
+        assert calls == expected, sub_dir
+
+
+def _review_title(tmp_path: Path, title: str | None, sha: str = "aaa") -> None:
+    d = tmp_path / "gh"
+    d.mkdir(exist_ok=True)
+    if title is None:
+        (d / f"checkruns_{sha}.fail").write_text("")
+    else:
+        (d / f"checkruns_{sha}.json").write_text(json.dumps({"check_runs": [
+            {"name": "review", "completed_at": "2026-01-01T00:00:00Z", "output": {"title": "clean (codex)"}},
+            {"name": "review", "completed_at": "2026-01-02T00:00:00Z", "output": {"title": title}}]}))
+
+
+@pytest.mark.parametrize("title, why", [
+    ("second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny",
+     "its review passed on an operator waiver, not on two model families"),
+    (None, "its review check could not be read"),
+])
+def test_a_review_that_passed_on_a_waiver_is_not_two_families(tmp_path: Path, title, why) -> None:
+    # `review` is green either way; only its title says one family was waived.
+    pr, timeline = _delegable(tmp_path)
+    _review_title(tmp_path, title)
+    calls, out = _run(tmp_path, [pr, _pr(2, head="bbb")], timelines={1: timeline, 2: _timeline(8)},
+                      compares={"aaa": SENSITIVE, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(2, "bbb")]
+    assert why in out and "the operator merges it by hand" in out
+
+
+def test_the_waiver_wording_the_queue_looks_for_is_the_gates(tmp_path: Path) -> None:
+    gate = (Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py").read_text()
+    assert 'return ("success", f"second family waived by the operator (' in gate
+
+
+def test_a_delegated_arm_that_still_meets_its_conditions_is_left_armed(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path, n=3, armed_min_ago=20)
+    calls, _ = _run(tmp_path, [pr, _pr(4, head="ddd")], timelines={3: timeline, 4: _timeline(8)},
+                    compares={"aaa": SENSITIVE, "ddd": PLAIN}, arms={3: 20}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []  # it holds the slot
+
+
+@pytest.mark.parametrize("lost", ["review", "effect", "window", "timeline", "reserved"])
+def test_a_delegated_arm_that_loses_a_condition_is_disarmed(tmp_path: Path, lost: str) -> None:
+    kw: dict = {}
+    run_kw: dict = {"compares": {"aaa": SENSITIVE}}
+    if lost == "review":
+        kw["review"] = "NEUTRAL"
+    elif lost == "effect":
+        kw["body"] = "The effect line was edited away."
+    elif lost == "window":
+        kw["labelled_min_ago"] = 60  # re-labelled since it was armed
+    elif lost == "timeline":
+        run_kw["timeline_fails"] = (3,)
+    else:
+        run_kw["compares"] = {"aaa": _files(*[tuple(SENSITIVE["files"][0].values())],
+                                            (RESERVED[0], "modified", "b9", "+x"))}
+    pr, timeline = _delegable(tmp_path, n=3, armed_min_ago=20, **kw)
+    calls, out = _run(tmp_path, [pr], timelines={3: timeline}, arms={3: 20}, PR_QUEUE_REQUIRED_CHECKS="", **run_kw)
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "#3 armed but" in out
+
+
+def test_a_declared_draft_on_a_sensitive_diff_is_not_promoted_under_delegation(tmp_path: Path) -> None:
+    # Delegation covers a PR its owner marked ready and labelled, not an
+    # advance declaration.
+    _manifest(tmp_path, "config/governance_config.py\tRISK_APPROVE_THRESHOLD\tthe risk line")
+    _review_policy(tmp_path, "config/governance_config.py")
+    calls, out = _run(tmp_path, [_declared(head="aaa", body=f"{FIX}\n\n{EFFECT}")],
+                      timelines={1: _declaration(declared_min_ago=DAY + 60, pushed_min_ago=DAY + 90)},
+                      compares={"aaa": SENSITIVE})
+    assert calls == []
+    assert "declared ready but touches a governance-sensitive surface" in out
+
+
+def test_every_manifest_file_is_under_two_family_review() -> None:
+    # The delegated route needs `review` to mean two model families. That holds
+    # only while each manifest path is on second_family_paths, whole-file.
+    import fnmatch
+
+    manifest = (REPO / "scripts/dev/governance_sensitivity_manifest.tsv").read_text().splitlines()
+    paths = {line.split("\t")[0] for line in manifest if line.strip() and not line.startswith("#")}
+    globs = json.loads((REPO / "scripts/dev/review_policy.json").read_text())["second_family_paths"]
+    assert set(RESERVED) <= paths
+    missing = sorted(p for p in paths if not any(fnmatch.fnmatch(p, g) for g in globs))
+    assert missing == [], f"add to scripts/dev/review_policy.json second_family_paths: {missing}"
+
+
+def test_the_queue_names_the_same_hand_merge_files_as_the_docs() -> None:
+    script = SCRIPT.read_text()
+    line = next(row for row in script.splitlines() if row.startswith("HAND_MERGE_ONLY_PATHS="))
+    assert line.split("=", 1)[1].strip('"').split() == list(RESERVED)
+    doc = (REPO / "docs/dev/GOVERNANCE_SENSITIVITY.md").read_text()
+    for path in RESERVED:
+        assert (REPO / path).exists(), path
+        assert f"`{path}`" in doc, path

@@ -244,3 +244,92 @@ class TestCheckinSearchRevives:
         floor gates the semantic producer on the AGE backend, where post-blend
         scores this weak are real — the guard must still drop them."""
         assert self._run(self._node(0.02)) == []
+
+
+class TestAgeFullTextSearchHydratesWithoutNPlusOne:
+    """KnowledgeGraphAGE.full_text_search must hydrate full SQL rows directly
+    instead of issuing N sequential get_discovery() AGE Cypher scans."""
+
+    @pytest.mark.asyncio
+    async def test_sql_rows_hydrate_directly_and_carry_rank(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        db = AsyncMock()
+        db.kg_full_text_search = AsyncMock(return_value=[_row("d1", 0.81), _row("d2", 0.42)])
+        backend._get_db = AsyncMock(return_value=db)
+        backend.get_discovery = AsyncMock(side_effect=AssertionError("must not call N+1 get_discovery"))
+
+        nodes = await backend.full_text_search("coherence gate", operator="OR")
+        assert [n.id for n in nodes] == ["d1", "d2"]
+        assert [n.relevance for n in nodes] == pytest.approx([0.81, 0.42])
+        backend.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_id_only_stub_falls_back_to_get_discovery(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        db = AsyncMock()
+        db.kg_full_text_search = AsyncMock(return_value=[{"id": "stub-1", "rank": 0.6}])
+        backend._get_db = AsyncMock(return_value=db)
+        stub_node = DiscoveryNode(id="stub-1", agent_id="a", type="note", summary="hydrated")
+        backend.get_discovery = AsyncMock(return_value=stub_node)
+
+        nodes = await backend.full_text_search("coherence gate")
+        assert [n.id for n in nodes] == ["stub-1"]
+        assert nodes[0].relevance == pytest.approx(0.6)
+        backend.get_discovery.assert_awaited_once_with("stub-1")
+
+    @pytest.mark.asyncio
+    async def test_sql_hydration_overlays_age_confidence_and_provenance_chain_in_one_query(self):
+        import json
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        db = AsyncMock()
+        chain_sql = [{"agent_id": "sql-agent", "lineage_depth": 0}]
+        chain_age = [{"agent_id": "age-agent", "lineage_depth": 1}]
+        row1 = {**_row("d1", 0.9), "provenance_chain": None}
+        row2 = {**_row("d2", 0.5), "provenance_chain": chain_sql}
+        db.kg_full_text_search = AsyncMock(return_value=[row1, row2])
+        db.graph_available = AsyncMock(return_value=True)
+        db.graph_query = AsyncMock(return_value=[
+            {"id": '"d1"', "metadata": json.dumps({"confidence": 0.87, "provenance_chain": chain_age})},
+            {"id": "d2", "metadata": {"confidence": 0.65}},
+        ])
+        backend._get_db = AsyncMock(return_value=db)
+        backend.get_discovery = AsyncMock(side_effect=AssertionError("must not call N+1 get_discovery"))
+
+        nodes = await backend.full_text_search("coherence gate")
+        assert [n.id for n in nodes] == ["d1", "d2"]
+        assert nodes[0].confidence == pytest.approx(0.87)
+        assert nodes[0].provenance_chain == chain_age
+        assert nodes[1].confidence == pytest.approx(0.65)
+        assert nodes[1].provenance_chain == chain_sql
+        db.graph_query.assert_awaited_once()
+        backend.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_persist_discovery_row_writes_provenance_chain(self):
+        import json
+        from datetime import datetime, timezone
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        backend._sync_discovery_tags = AsyncMock()
+        backend._sync_discovery_edges = AsyncMock()
+        conn = AsyncMock()
+        chain = [{"agent_id": "a1", "lineage_depth": 0}]
+        node = DiscoveryNode(
+            id="d-chain",
+            agent_id="a1",
+            type="insight",
+            summary="lineage test",
+            provenance_chain=chain,
+        )
+        now = datetime.now(timezone.utc)
+        await backend._persist_discovery_row(conn, node, created_at=now, resolved_at=None)
+        sql, *params = conn.execute.call_args.args
+        assert "provenance_chain" in sql
+        assert json.dumps(chain) in params

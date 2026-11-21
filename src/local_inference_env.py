@@ -46,7 +46,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 from src.trusted_networks import is_trusted_address
 
@@ -564,16 +564,66 @@ def require_local_model(model: str | None = None) -> str:
 
 
 def display_url(url: str) -> str:
-    """``url`` without any ``user:password@`` part, for text an agent or a log
-    reader sees: a base URL can carry credentials in its userinfo."""
+    """``url`` without any ``user:password@`` part, query or fragment, for text
+    an agent or a log reader sees: a base URL can carry credentials in its
+    userinfo or as a query parameter such as ``?api_key=``."""
     parts = urlsplit(url)
-    if parts.username is None and parts.password is None:
+    has_userinfo = parts.username is not None or parts.password is not None
+    if not has_userinfo and not parts.query and not parts.fragment:
         return url
-    host = parts.hostname or ""
-    netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
-    if parts.port:
-        netloc += f":{parts.port}"
-    return urlunsplit(parts._replace(netloc=netloc))
+    netloc = parts.netloc
+    if has_userinfo:
+        host = parts.hostname or ""
+        netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
+        if parts.port:
+            netloc += f":{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc, query="", fragment=""))
+
+
+_URL_USERINFO_RE = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]+@")
+
+
+_REDACTED = "[redacted]"
+# Shorter values are left alone: replacing every "1" or "on" in an error
+# message would destroy it and protects nothing worth the name.
+_MIN_REDACTED_SECRET_LEN = 4
+
+
+def _url_secret_values(parts) -> set[str]:
+    """Query values and the password of a configured URL, raw and decoded."""
+    values: set[str] = set()
+    for pair in parts.query.split("&"):
+        _, _, raw = pair.partition("=")
+        values.update({raw, unquote_plus(raw)})
+    if parts.password:
+        values.update({parts.password, unquote_plus(parts.password)})
+    return {v for v in values if len(v) >= _MIN_REDACTED_SECRET_LEN}
+
+
+def redact_url_credentials(text: str, url: str | None = None) -> str:
+    """``text`` with the credentials ``url`` may carry removed, for provider
+    error text, which may quote the endpoint it failed to reach.
+
+    ``url`` itself is shown as :func:`display_url` shows it. Any URL on the
+    same host loses its query and fragment too, since a client appends the
+    configured query to every request path it builds, and the configured
+    query values and password are redacted wherever they appear. The
+    userinfo of every ``scheme://user:pass@`` URL is removed."""
+    if url:
+        text = text.replace(url, display_url(url))
+        parts = urlsplit(url)
+        host = parts.hostname
+        if host and (parts.query or parts.fragment):
+            same_host = re.compile(
+                r"(\b[A-Za-z][A-Za-z0-9+.\-]*://(?:[^/?#\s]*@)?\[?"
+                + re.escape(host)
+                + r"\]?(?::\d+)?[^\s?#'\"<>]*)[?#][^\s'\"<>]*",
+                re.IGNORECASE,
+            )
+            text = same_host.sub(r"\1", text)
+        for secret in sorted(_url_secret_values(parts), key=len, reverse=True):
+            text = text.replace(secret, _REDACTED)
+    return _URL_USERINFO_RE.sub(r"\1", text)
 
 
 def require_local_endpoint(url: str | None = None) -> EndpointPrivacy:

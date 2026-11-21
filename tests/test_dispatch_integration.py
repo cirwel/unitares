@@ -485,6 +485,56 @@ class TestCheckRateLimit:
         limiter.check_rate_limit.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("action_key", ["action", "op"])
+    @pytest.mark.parametrize("action", ["get", "GET", "details"])
+    async def test_response_chain_on_any_details_route_is_charged(
+        self, action_key, action
+    ):
+        """knowledge get delegates to the details reader, so it pays too."""
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (False, "Too many requests")
+        limiter.get_stats.return_value = {"calls": 60}
+        arguments = {
+            action_key: action,
+            "discovery_id": "discovery-1",
+            "include_response_chain": True,
+        }
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            unbound = await check_rate_limit("knowledge", dict(arguments), _make_ctx())
+            bound = await check_rate_limit(
+                "knowledge",
+                dict(arguments),
+                _make_ctx(bound_agent_id="bound-agent"),
+            )
+
+        assert _is_short_circuit(unbound)
+        assert _is_short_circuit(bound)
+        assert limiter.check_rate_limit.call_args_list == [
+            call(_RESPONSE_CHAIN_UNBOUND_RATE_BUCKET),
+            call("response-chain:bound:bound-agent"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_plain_get_read_remains_rate_exempt(self):
+        """A get readback without chain expansion stays browsable."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        arguments = {"action": "get", "discovery_id": "discovery-1"}
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit("knowledge", arguments, ctx)
+
+        assert result == ("knowledge", arguments, ctx)
+        limiter.check_rate_limit.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_chain_budget_does_not_block_plain_details_or_onboarding(self):
         """Only optional expansion is refused when its aggregate budget is full."""
         ctx = _make_ctx()

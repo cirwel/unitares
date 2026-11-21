@@ -28,10 +28,12 @@ import functools
 import inspect
 import json
 import os
+import time
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # Add project root to path
@@ -42,6 +44,7 @@ sys.path.insert(0, str(project_root))
 from agents.common.config import GOV_MCP_URL
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
+from unitares_sdk.errors import GovernanceToolRefused
 from unitares_sdk.utils import notify
 from agents.common.findings import (
     REACHED_GOVERNANCE,
@@ -77,6 +80,12 @@ CYCLE_TIMEOUT = int(os.getenv("HEARTBEAT_CYCLE_TIMEOUT", "120"))
 # means "a stalled draft PR exists", not "GitHub is unreachable", and those
 # notes land in the shared KG tagged `outage` where other residents read them.
 CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
+
+# Wall-clock bound on posting stalled-draft-PR findings in one cycle. What does
+# not fit is retried next cycle; see emit_stalled_pr_findings.
+STALLED_PR_EMIT_BUDGET = float(os.getenv("VIGIL_STALLED_PR_EMIT_BUDGET", "15"))
+# Undelivered closures kept for retry. Past this the oldest are dropped, logged.
+STALLED_PR_MAX_PENDING_CLOSURES = int(os.getenv("VIGIL_STALLED_PR_MAX_PENDING_CLOSURES", "100"))
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
@@ -215,6 +224,160 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
         })
 
     return notes
+
+
+def _stalled_pr_author(entry: Dict[str, Any]) -> str:
+    uuid = entry.get("author_agent_uuid") or ""
+    if not uuid:
+        return "no agent signature on the PR"
+    model = entry.get("author_model") or ""
+    return f"agent {uuid} ({model})" if model else f"agent {uuid}"
+
+
+def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
+    """Post one finding per stalled draft PR opened or closed this cycle.
+
+    Reads the edges the stalled-draft-PR check left in ``health_state`` and
+    posts a ``vigil_finding`` for each PR that entered the open set and a
+    ``vigil_resolution_finding`` for each that left it. The two share
+    ``stall_fingerprint`` so a stall can be paired with its closure, and the
+    closure carries ``outcome`` and ``open_hours``.
+
+    A post that did not reach governance is kept for the next cycle: an open
+    stays on the open list marked ``announced: False`` and is re-sent with the
+    same episode identity (so a post that was stored but whose reply was lost
+    dedups server-side, and a PR that closes before the retry still gets its
+    closure); a failed closure goes to ``stalled_pr_pending_closures`` and is
+    re-sent as it stands. Closures are not put back on the open list: the
+    closure already happened, and a PR that went red again in the meantime
+    would otherwise be read as the same stall continuing, losing both the
+    closure and the new stall. Without any of this, a governance blip would
+    leave a stall recorded as announced that nobody was told about, or closed
+    with no closure on record.
+
+    Posting is synchronous and each post can take several seconds against a
+    struggling governance, so the whole pass is bounded: after the first post
+    that fails, or once ``STALLED_PR_EMIT_BUDGET`` seconds have gone, nothing
+    more is sent this cycle and the rest is undone the same way, to be retried
+    next cycle. Otherwise fifteen stalls opening during an outage would hold
+    the heartbeat past its own timeout.
+
+    MUST NOT raise: it runs inside the heartbeat cycle.
+    """
+    counts = {"opened": 0, "resolved": 0, "failed": 0, "deferred": 0}
+    deadline = time.monotonic() + STALLED_PR_EMIT_BUDGET
+    stop = {"now": False}
+
+    def _send(**kwargs) -> Optional[str]:
+        """Post unless the pass has stopped; None means "not attempted"."""
+        if stop["now"] or time.monotonic() >= deadline:
+            stop["now"] = True
+            counts["deferred"] += 1
+            return None
+        outcome = post_finding_result(**kwargs)
+        if outcome not in REACHED_GOVERNANCE:
+            stop["now"] = True
+            counts["failed"] += 1
+        return outcome
+
+    try:
+        open_set = health_state.get("stalled_pr_open")
+        if not isinstance(open_set, dict):
+            return counts
+
+        for key, entry in list(open_set.items()):
+            if not isinstance(entry, dict) or entry.get("announced") is not False:
+                continue
+            failing = list(entry.get("failing") or [])
+            shown = ", ".join(str(f) for f in failing[:3])
+            if len(failing) > 3:
+                shown += f", +{len(failing) - 3} more"
+            stall_fp = compute_fingerprint(
+                ["vigil", "stalled_draft_pr", entry.get("repo"), entry.get("number")]
+            )
+            message = (
+                f"Stalled draft PR: {key} red for {float(entry.get('red_hours') or 0):.0f}h "
+                f"with no new run ({shown}). Author: {_stalled_pr_author(entry)}. "
+                "Nothing will merge it — re-run CI or push a fix"
+            )
+            outcome = _send(
+                event_type="vigil_finding",
+                severity="warning",
+                message=message,
+                agent_id="vigil",
+                agent_name="Vigil",
+                fingerprint=stall_fp,
+                # One post per stall episode, however long it lasts.
+                change_token=f"open:{entry.get('first_seen')}",
+                extra={
+                    "finding_type": "stalled_draft_pr",
+                    "stall_fingerprint": stall_fp,
+                    "repo": entry.get("repo"),
+                    "number": entry.get("number"),
+                    "url": entry.get("url", ""),
+                    "author_agent_uuid": entry.get("author_agent_uuid", ""),
+                    "author_model": entry.get("author_model", ""),
+                },
+            )
+            if outcome in REACHED_GOVERNANCE:
+                counts["opened"] += 1
+                entry["announced"] = True
+                notify("Vigil", message)
+
+        carried = health_state.get("stalled_pr_pending_closures")
+        carried = list(carried) if isinstance(carried, list) else []
+        still_pending: List[Dict[str, Any]] = []
+        for row in carried + list(health_state.get("stalled_pr_resolved") or []):
+            if not isinstance(row, dict):
+                continue
+            key = f"{row.get('repo')}#{row.get('number')}"
+            stall_fp = compute_fingerprint(
+                ["vigil", "stalled_draft_pr", row.get("repo"), row.get("number")]
+            )
+            hours = row.get("open_hours")
+            lasted = f"{hours:.0f}h" if isinstance(hours, (int, float)) else "an unknown time"
+            outcome = _send(
+                event_type="vigil_resolution_finding",
+                severity="info",
+                message=(
+                    f"Stalled draft PR closed: {key} is {row.get('outcome')} "
+                    f"after {lasted} on Vigil's open list"
+                ),
+                agent_id="vigil",
+                agent_name="Vigil",
+                # Its own fingerprint: sharing the stall's would let the
+                # server's per-fingerprint dedup swallow one of the pair.
+                fingerprint=compute_fingerprint(
+                    ["vigil", "stalled_draft_pr", "resolved", row.get("repo"), row.get("number")]
+                ),
+                change_token=f"resolved:{row.get('first_seen')}",
+                extra={
+                    "finding_type": "stalled_draft_pr",
+                    "stall_fingerprint": stall_fp,
+                    "repo": row.get("repo"),
+                    "number": row.get("number"),
+                    "url": row.get("url", ""),
+                    "outcome": row.get("outcome"),
+                    "open_hours": hours,
+                    # False when the stall closed before its opening finding
+                    # was ever delivered: this closure is then the only record.
+                    "stall_announced": row.get("announced") is not False,
+                    "author_agent_uuid": row.get("author_agent_uuid", ""),
+                    "author_model": row.get("author_model", ""),
+                },
+            )
+            if outcome in REACHED_GOVERNANCE:
+                counts["resolved"] += 1
+            else:
+                still_pending.append(row)
+        if len(still_pending) > STALLED_PR_MAX_PENDING_CLOSURES:
+            dropped = len(still_pending) - STALLED_PR_MAX_PENDING_CLOSURES
+            still_pending = still_pending[dropped:]
+            log(f"stalled-PR closures: dropped {dropped} oldest undelivered closure(s) at the cap")
+        health_state["stalled_pr_pending_closures"] = still_pending
+    except Exception as e:  # pragma: no cover - defensive, cycle must survive
+        log(f"stalled-PR finding emit failed: {type(e).__name__}: {e}")
+    return counts
 
 
 def _collect_health_state(
@@ -581,12 +744,29 @@ def post_archive_digest(
     )
 
 
-async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, str]:
+def _is_high_sev_permission_denial(error_code: Optional[str], message: str) -> bool:
+    """True when the server refused archiving a non-owned high-severity entry."""
+    if error_code == "PERMISSION_DENIED":
+        return True
+    if error_code == "AUTH_REQUIRED":
+        return False
+    low = (message or "").lower()
+    return "high-severity" in low and "authentication required" not in low
+
+
+async def archive_kg_entry(
+    client: GovernanceClient,
+    eid: str,
+    *,
+    resolution_notes: Optional[str] = None,
+) -> Tuple[bool, str]:
     """Archive one KG entry; high-severity entries fall back to ``closed``.
 
     Shared by auto-archive and the operator review path so both use the same
     server call and the same fallback. Returns (ok, error). Never raises.
     """
+    high_sev_refused = False
+    first_err = "unknown"
     try:
         raw = await asyncio.wait_for(
             client.call_tool("knowledge", {
@@ -596,27 +776,49 @@ async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, st
             }),
             timeout=5.0,
         )
-        # Defense: server should always return a dict, but call_tool
-        # could return None or a primitive on a malformed response.
-        # Don't attempt the high-sev fallback in that case.
+        # Defense: server should always return a dict, but mocked/malformed
+        # call_tool could return None or a primitive. Don't attempt fallback.
         if not isinstance(raw, dict):
             return False, "non-dict response"
         if raw.get("success"):
             return True, ""
-        if (raw.get("error_code") == "PERMISSION_DENIED"
-                or "high-severity" in (raw.get("error") or "").lower()):
-            raw2 = await asyncio.wait_for(
-                client.call_tool("knowledge", {
-                    "action": "update",
-                    "discovery_id": eid,
-                    "status": "closed",
-                }),
-                timeout=5.0,
-            )
-            if isinstance(raw2, dict) and raw2.get("success"):
-                return True, ""
-            return False, "high-sev close failed"
-        return False, (raw.get("error") or "unknown")[:80]
+        first_err = (raw.get("error") or "unknown")[:80]
+        high_sev_refused = _is_high_sev_permission_denial(
+            raw.get("error_code"), raw.get("error") or ""
+        )
+    except GovernanceToolRefused as exc:
+        # GovernanceClient.call_tool raises GovernanceToolRefused on any
+        # structured {"success": false} response; inspect the refusal before
+        # giving up so the high-severity -> status="closed" fallback actually
+        # runs in production (previously dead code behind `except Exception`).
+        first_err = str(exc)[:80]
+        high_sev_refused = _is_high_sev_permission_denial(exc.error_code, str(exc))
+    except Exception as e:
+        return False, type(e).__name__
+
+    if not high_sev_refused:
+        return False, first_err
+
+    fallback_notes = (
+        resolution_notes
+        or "Closed by Vigil (high-severity non-owner fallback)."
+    )
+    try:
+        raw2 = await asyncio.wait_for(
+            client.call_tool("knowledge", {
+                "action": "update",
+                "discovery_id": eid,
+                "status": "closed",
+                "closure_class": "obsolete",
+                "resolution_notes": fallback_notes,
+            }),
+            timeout=5.0,
+        )
+        if isinstance(raw2, dict) and raw2.get("success"):
+            return True, ""
+        return False, "high-sev close failed"
+    except GovernanceToolRefused:
+        return False, "high-sev close failed"
     except Exception as e:
         return False, type(e).__name__
 
@@ -718,9 +920,12 @@ class VigilAgent(GovernanceAgent):
         }
 
         try:
-            audit_result = await client.audit_knowledge(scope="open", top_n=10)
+            max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
+            audit_top_n = max(20, max_per_cycle * 3) if self.with_hygiene else 10
+            audit_result = await client.audit_knowledge(scope="open", top_n=audit_top_n)
             if audit_result.success:
                 summary["audit_run"] = True
+                summary["_audit_result"] = audit_result
                 # Server returns audit payload under `audit`, not `results`.
                 # Iterating `.results` stays empty and leaves stale_found=0 —
                 # the silent failure that hid 127 archive candidates for months.
@@ -827,7 +1032,10 @@ class VigilAgent(GovernanceAgent):
         return summary
 
     async def _run_aged_candidate_archive(
-        self, client: GovernanceClient,
+        self,
+        client: GovernanceClient,
+        *,
+        audit_result: Any = None,
     ) -> Dict[str, Any]:
         """Auto-archive KG entries that have sat in candidate_for_archive too long.
 
@@ -879,21 +1087,27 @@ class VigilAgent(GovernanceAgent):
         threshold_days = int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90"))
         max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
 
-        try:
-            result = await asyncio.wait_for(
-                client.audit_knowledge(scope="open", top_n=max_per_cycle * 3),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            summary["errors"].append("audit_timeout")
-            log("auto-archive: audit timed out after 15s; skipping cycle")
-            return summary
-        except Exception as e:
-            summary["errors"].append(f"audit_failed: {type(e).__name__}")
-            log(f"auto-archive: audit failed ({type(e).__name__}: {e}); skipping cycle")
-            return summary
+        if audit_result is not None:
+            result = audit_result
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=max_per_cycle * 3),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                summary["errors"].append("audit_timeout")
+                log("auto-archive: audit timed out after 15s; skipping cycle")
+                return summary
+            except Exception as e:
+                summary["errors"].append(f"audit_failed: {type(e).__name__}")
+                log(f"auto-archive: audit failed ({type(e).__name__}: {e}); skipping cycle")
+                return summary
 
         if not getattr(result, "success", False):
+            err = getattr(result, "error", None)
+            if isinstance(err, str) and err.startswith(("audit_timeout", "audit_failed")):
+                summary["errors"].append(err)
             return summary
 
         audit_data = getattr(result, "audit", None) or {}
@@ -915,7 +1129,14 @@ class VigilAgent(GovernanceAgent):
             eid = entry.get("id")
             if not eid:
                 continue
-            archived_ok, err = await archive_kg_entry(client, eid)
+            archived_ok, err = await archive_kg_entry(
+                client,
+                eid,
+                resolution_notes=(
+                    "Auto-closed by Vigil aged-candidate sweep "
+                    "(high-severity non-owner fallback)."
+                ),
+            )
             if not archived_ok:
                 summary["errors"].append(f"{eid[:24]}: {err}")
 
@@ -935,7 +1156,11 @@ class VigilAgent(GovernanceAgent):
         return summary
 
     async def _run_stale_opens_sweep(
-        self, client: GovernanceClient, top_n: int = 20,
+        self,
+        client: GovernanceClient,
+        top_n: int = 20,
+        *,
+        audit_result: Any = None,
     ) -> List[Dict[str, Any]]:
         """KG hygiene v1: propose-only sweep of oldest stale-open KG entries.
 
@@ -952,17 +1177,20 @@ class VigilAgent(GovernanceAgent):
         if not self.with_hygiene:
             return []
 
-        try:
-            result = await asyncio.wait_for(
-                client.audit_knowledge(scope="open", top_n=top_n),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            log("stale-opens sweep timed out after 15s; continuing cycle")
-            return []
-        except Exception as e:
-            log(f"stale-opens sweep failed ({e}); continuing cycle")
-            return []
+        if audit_result is not None:
+            result = audit_result
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=top_n),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                log("stale-opens sweep timed out after 15s; continuing cycle")
+                return []
+            except Exception as e:
+                log(f"stale-opens sweep failed ({e}); continuing cycle")
+                return []
 
         if not getattr(result, "success", False):
             return []
@@ -1100,6 +1328,9 @@ class VigilAgent(GovernanceAgent):
         for check, result in check_results:
             svc = check.service_key
             was_healthy = prev_state.get(f"{svc}_healthy", True)
+            if getattr(check, "emits_own_findings", False):
+                # Per-item lifetimes, posted from the check's detail below.
+                continue
             if not result.ok and was_healthy and result.fingerprint_key:
                 notify("Vigil", result.summary)
                 post_finding(
@@ -1111,6 +1342,9 @@ class VigilAgent(GovernanceAgent):
                     fingerprint=compute_fingerprint(["vigil", result.fingerprint_key]),
                     extra={"finding_type": result.fingerprint_key},
                 )
+
+        # --- Stalled draft PRs: one finding per PR, opened and closed ---
+        emit_stalled_pr_findings(health_state)
 
         # --- 2.5. Read Sentinel findings since last cycle, route to action ---
         # First actual coordination arc: Sentinel observes fleet-level anomalies
@@ -1172,8 +1406,33 @@ class VigilAgent(GovernanceAgent):
             if sentinel_force_audit and not self.with_audit:
                 findings.append("Groundskeeper forced by Sentinel coordination")
 
+        # Reuse groundskeeper's open-scope audit when cleanup changed nothing
+        # so a single heartbeat cycle makes 1 knowledge(audit) call instead of 3.
+        cached_audit = groundskeeper_summary.pop("_audit_result", None)
+        shared_audit = (
+            cached_audit if groundskeeper_summary.get("archived", 0) == 0 else None
+        )
+        if shared_audit is None and self.with_hygiene:
+            max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
+            try:
+                shared_audit = await asyncio.wait_for(
+                    client.audit_knowledge(scope="open", top_n=max(20, max_per_cycle * 3)),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                log("hygiene shared audit timed out after 15s; skipping stale-opens and auto-archive")
+                shared_audit = SimpleNamespace(success=False, error="audit_timeout")
+            except Exception as e:
+                log(
+                    f"hygiene shared audit failed ({type(e).__name__}: {e}); "
+                    "skipping stale-opens and auto-archive"
+                )
+                shared_audit = SimpleNamespace(
+                    success=False, error=f"audit_failed: {type(e).__name__}"
+                )
+
         # --- 4.5. KG hygiene v1: stale-opens propose-only sweep (optional) ---
-        stale_opens = await self._run_stale_opens_sweep(client)
+        stale_opens = await self._run_stale_opens_sweep(client, audit_result=shared_audit)
         cycle_now = datetime.now(timezone.utc)
         stale_lines, stale_state = stale_opens_report(stale_opens, prev_state, cycle_now)
         findings.extend(stale_lines)
@@ -1208,7 +1467,7 @@ class VigilAgent(GovernanceAgent):
         # that follow.
         try:
             auto_archive = await asyncio.wait_for(
-                self._run_aged_candidate_archive(client),
+                self._run_aged_candidate_archive(client, audit_result=shared_audit),
                 timeout=60.0,
             )
         except asyncio.TimeoutError:
@@ -1472,7 +1731,14 @@ class VigilAgent(GovernanceAgent):
                 eid = e.get("id")
                 if not eid:
                     continue
-                ok, err = await archive_kg_entry(client, eid)
+                ok, err = await archive_kg_entry(
+                    client,
+                    eid,
+                    resolution_notes=(
+                        "Closed via Vigil operator review --apply "
+                        "(high-severity non-owner fallback)."
+                    ),
+                )
                 if ok:
                     archived += 1
                     log(f"OPERATOR_ARCHIVE: {eid} (age={e.get('last_activity_days')}d)")

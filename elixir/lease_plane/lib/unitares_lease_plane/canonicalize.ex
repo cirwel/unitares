@@ -60,6 +60,14 @@ defmodule UnitaresLeasePlane.Canonicalize do
   strip + case-fold), since the lease plane does not validate file
   existence (RFC §7.12.2).
 
+  A dangling symbolic link anywhere in that missing tail is refused with
+  `:dangling_symlink`. `File.exists?/1` follows links, so the walk would
+  otherwise treat the link's own name as a missing leaf: the lease would
+  name `<dir>/<link>` while a write through it creates the link's target,
+  somewhere the lease never named. Python's non-strict `os.path.realpath`
+  resolves the dangling link to its target instead; here the lease is
+  refused, so it never silently means "whatever this link points at".
+
   ## capture:/ — comma is the member separator
 
   `capture:/` member names MUST NOT contain commas; the splitter has no escape
@@ -88,6 +96,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
           | :invalid_scheme
           | :reserved_query_string
           | :symlink_loop
+          | :dangling_symlink
 
   @doc """
   Returns `{:ok, canonical}` if `surface_id` matches the canonical scheme list
@@ -202,8 +211,9 @@ defmodule UnitaresLeasePlane.Canonicalize do
         # so a missing-file path under /var (macOS) canonicalizes to
         # /private/var/.../missing — matches Python's `os.path.realpath`
         # non-strict behavior. Per PR 7.5 council BLOCK 2.
-        resolved = nonstrict_realpath(path)
-        {:ok, "file://" <> finalize_file(resolved)}
+        with {:ok, resolved} <- nonstrict_realpath(path) do
+          {:ok, "file://" <> finalize_file(resolved)}
+        end
 
       {:error, :symlink_loop} ->
         {:error, :symlink_loop}
@@ -229,33 +239,55 @@ defmodule UnitaresLeasePlane.Canonicalize do
   # the missing tail. Mirrors Python's `os.path.realpath(path)` (non-strict)
   # behavior in the ENOENT branch. Pure Elixir — no second shell-out class.
   defp nonstrict_realpath(path) do
-    {existing, missing} = split_at_existing(path)
+    with {:ok, {existing, missing}} <- split_at_existing(path) do
+      case resolve_realpath(existing) do
+        {:ok, resolved_existing} when missing == "" ->
+          {:ok, resolved_existing}
 
-    case resolve_realpath(existing) do
-      {:ok, resolved_existing} when missing == "" ->
-        resolved_existing
+        {:ok, resolved_existing} ->
+          {:ok, Path.join(resolved_existing, missing)}
 
-      {:ok, resolved_existing} ->
-        Path.join(resolved_existing, missing)
-
-      # Even / failed to realpath — give up and return raw path.
-      {:error, _} ->
-        path
+        # Even / failed to realpath — give up and return raw path.
+        {:error, _} ->
+          {:ok, path}
+      end
     end
   end
 
-  defp split_at_existing("/"), do: {"/", ""}
+  defp split_at_existing("/"), do: {:ok, {"/", ""}}
 
   defp split_at_existing(path) do
-    if File.exists?(path) do
-      {path, ""}
-    else
-      parent = Path.dirname(path)
-      base = Path.basename(path)
-      {existing, missing} = split_at_existing(parent)
-      next_missing = if missing == "", do: base, else: Path.join(missing, base)
-      {existing, next_missing}
+    cond do
+      File.exists?(path) ->
+        {:ok, {path, ""}}
+
+      # `File.exists?/1` follows links, so a dangling link reads as absent.
+      # `lstat` sees the link itself; refuse it rather than lease its name.
+      dangling_symlink?(path) ->
+        {:error, :dangling_symlink}
+
+      true ->
+        parent = Path.dirname(path)
+        base = Path.basename(path)
+
+        with {:ok, {existing, missing}} <- split_at_existing(parent) do
+          next_missing = if missing == "", do: base, else: Path.join(missing, base)
+          {:ok, {existing, next_missing}}
+        end
     end
+  end
+
+  # A trailing slash makes `lstat` resolve through the link (and report the
+  # dangling target as absent), while `Path.dirname/1` and `Path.basename/1`
+  # ignore the slash. Inspect the entry itself, without trailing slashes.
+  defp dangling_symlink?(path) do
+    entry =
+      case String.trim_trailing(path, "/") do
+        "" -> "/"
+        trimmed -> trimmed
+      end
+
+    match?({:ok, %File.Stat{type: :symlink}}, File.lstat(entry))
   end
 
   # Strip trailing / except for root, then case-fold if FS is case-insensitive.
