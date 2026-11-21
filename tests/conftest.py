@@ -268,6 +268,7 @@ def _isolate_db_backend(monkeypatch):
     # observed as 2 surviving RuntimeWarnings after the _lm/_lo rebind fix
     # (KG bug 2026-04-10T06:27:12.501426 follow-up).
     mock_backend.get_identities_batch = AsyncMock(return_value={})
+    mock_backend.get_provisional_lineage_set = AsyncMock(return_value=set())
     # Baseline preload (src/mcp_handlers/updates/phases.py:667). Must return
     # None so the AgentBaseline.from_dict(AsyncMock) path doesn't fire — that
     # path calls `data.get('last_updated')` which on an AsyncMock returns a

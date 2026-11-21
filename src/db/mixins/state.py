@@ -618,13 +618,13 @@ WITH state_rows AS MATERIALIZED (
         date_trunc('day', s.recorded_at)::date AS day,
         s.risk_score::double precision AS state_risk,
         s.coherence::double precision AS state_coherence,
-        s.state_json,
+        s.state_json->>'verdict' AS state_verdict,
         s.state_json->'eisv_telemetry' AS envelope
     FROM core.agent_state s
     WHERE s.synthetic IS NOT TRUE
       AND s.recorded_at >= now() - make_interval(days => $1)
 ),
-extracted AS MATERIALIZED (
+extracted AS NOT MATERIALIZED (
     SELECT
         *,
         coalesce(jsonb_typeof(envelope) <> 'null', false) AS envelope_present,
@@ -716,13 +716,32 @@ extracted AS MATERIALIZED (
         CASE
             WHEN jsonb_typeof(envelope #> '{enforcement,applied}') = 'boolean'
             THEN (envelope #>> '{enforcement,applied}')::boolean
-        END AS enforcement_applied,
-        state_json->>'verdict' AS state_verdict
+        END AS enforcement_applied
     FROM state_rows
 ),
 normalized AS MATERIALIZED (
     SELECT
-        *,
+        identity_id,
+        recorded_at,
+        day,
+        envelope_present,
+        envelope_valid,
+        primary_source,
+        measurement_source,
+        is_baselined,
+        missing_inputs,
+        maturity_outcome,
+        maturity_ineligibility_reason,
+        maturity_reset_reason,
+        measurement_ready,
+        maturity_eligible,
+        maturity_would_defer,
+        maturity_actuation_enabled,
+        maturity_actuation_ready,
+        maturity_actuation_applied,
+        enforcement_basis,
+        enforcement_requested,
+        enforcement_applied,
         array_remove(ARRAY[
             CASE WHEN envelope_present AND NOT envelope_valid
                  THEN 'unsupported_envelope_schema' END,

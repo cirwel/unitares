@@ -1077,35 +1077,6 @@ async def _list_agents_full(
                 agent_info["health_status"] = health_status
                 agent_info["metrics"] = metrics
 
-    # Batch-load trust tiers for agents missing cached values (avoids N+1 queries)
-    # (S6 Option B: substrate-earned routing)
-    agents_needing_tiers = [a for a in agents_list if a["trust_tier"] is None]
-    if agents_needing_tiers:
-        try:
-            from src.identity.trust_tier_routing import resolve_trust_tier
-            from src.db import get_db as _get_db
-            db = _get_db()
-            ids_to_fetch = [a["_agent_uuid"] for a in agents_needing_tiers]
-            identities = await db.get_identities_batch(ids_to_fetch)
-            for agent_info in agents_needing_tiers:
-                aid = agent_info["_agent_uuid"]
-                identity = identities.get(aid)
-                if identity and identity.metadata:
-                    meta_obj = mcp_server.agent_metadata.get(aid)
-                    tier_info = await resolve_trust_tier(
-                        aid,
-                        identity.metadata,
-                        prefetched_tags=getattr(meta_obj, "tags", None) if meta_obj else None,
-                        prefetched_label=getattr(meta_obj, "label", None) if meta_obj else None,
-                    )
-                    agent_info["trust_tier"] = tier_info.get("name", "unknown")
-                    # Cache for next time
-                    if meta_obj:
-                        meta_obj.trust_tier = agent_info["trust_tier"]
-                        meta_obj.trust_tier_num = tier_info.get("tier", 0)
-        except Exception as e:
-            logger.debug(f"Batch trust tier lookup failed: {e}")
-
     # Sort observed agents (>=1 state row) ahead of never-observed ghosts, then
     # by recency (most recent first) within each group. Never-observed agents
     # carry last_update == created (onboard time),
@@ -1167,6 +1138,57 @@ async def _list_agents_full(
         agents_list = agents_list[offset:offset + limit]
     elif offset > 0:
         agents_list = agents_list[offset:]
+
+    # Batch-load trust tiers for returned agents missing cached values
+    # (S6 Option B: substrate-earned routing). Run AFTER pagination (and skip
+    # on summary_only) with a single batch provisional-lineage lookup so
+    # resolve_trust_tier never triggers per-agent is_lineage_provisional N+1
+    # queries across the whole fleet.
+    if not summary_only:
+        agents_needing_tiers = [a for a in agents_list if a["trust_tier"] is None]
+        if agents_needing_tiers:
+            try:
+                from src.identity.trust_tier_routing import resolve_trust_tier
+                from src.db import get_db as _get_db
+                db = _get_db()
+                ids_to_fetch = [a["_agent_uuid"] for a in agents_needing_tiers]
+                identities = await db.get_identities_batch(ids_to_fetch) or {}
+                eligible_ids = [
+                    a["_agent_uuid"]
+                    for a in agents_needing_tiers
+                    if (identity := identities.get(a["_agent_uuid"])) and identity.metadata
+                ]
+                provisional_set: set[str] | None = None
+                if eligible_ids:
+                    get_provisional = getattr(db, "get_provisional_lineage_set", None)
+                    if callable(get_provisional):
+                        fetched = await get_provisional(eligible_ids)
+                        if isinstance(fetched, (set, frozenset, list, tuple)):
+                            provisional_set = set(fetched)
+                for agent_info in agents_needing_tiers:
+                    aid = agent_info["_agent_uuid"]
+                    identity = identities.get(aid)
+                    if identity and identity.metadata:
+                        meta_obj = mcp_server.agent_metadata.get(aid)
+                        tier_info = await resolve_trust_tier(
+                            aid,
+                            identity.metadata,
+                            prefetched_tags=getattr(meta_obj, "tags", None) if meta_obj else None,
+                            prefetched_label=getattr(meta_obj, "label", None) if meta_obj else None,
+                            prefetched_provisional=(
+                                (aid in provisional_set)
+                                if provisional_set is not None
+                                else None
+                            ),
+                        )
+                        agent_info["trust_tier"] = tier_info.get("name", "unknown")
+                        # Cache for next time
+                        if meta_obj:
+                            meta_obj.trust_tier = agent_info["trust_tier"]
+                            meta_obj.trust_tier_num = tier_info.get("tier", 0)
+            except Exception as e:
+                logger.debug(f"Batch trust tier lookup failed: {e}")
+
     for agent_info in agents_list:
         agent_info.pop("_agent_uuid", None)
 
