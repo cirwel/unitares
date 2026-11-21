@@ -363,3 +363,48 @@ def findings_refusal(
     if "findings" not in scopes:
         return "agent token lacks 'findings' scope for /api/findings"
     return None
+
+
+_FINDINGS_PROVENANCE_MAC_DOMAIN = b"unitares-findings-provenance-v1|"
+
+
+def _findings_mac_key(agent_uuid: str, digest: bytes) -> bytes:
+    """Derive a per-actor, per-token HMAC key from a configured ``findings`` digest."""
+    return hashlib.sha256(
+        _FINDINGS_PROVENANCE_MAC_DOMAIN
+        + agent_uuid.lower().encode("utf-8")
+        + b"|"
+        + digest
+    ).digest()
+
+
+def findings_mac_key_for_bearer(token: Optional[str]) -> Optional[bytes]:
+    """Return the per-token HMAC key for a presented ``findings``-scoped bearer, or None."""
+    if not token:
+        return None
+    entries = configured_entries()
+    if not entries:
+        return None
+    presented = hashlib.sha256(token.encode("utf-8")).digest()
+    matched: Optional[bytes] = None
+    for grant, digest in entries:
+        if (
+            secrets.compare_digest(presented, digest)
+            and "findings" in grant.scopes
+            and matched is None
+        ):
+            matched = _findings_mac_key(grant.agent_uuid, digest)
+    return matched
+
+
+def findings_mac_keys_for_agent(agent_uuid: str) -> List[bytes]:
+    """Return per-token HMAC keys for every configured ``findings``-scoped token of ``agent_uuid``."""
+    try:
+        normalized = str(uuid.UUID(agent_uuid))
+    except (TypeError, ValueError):
+        return []
+    return [
+        _findings_mac_key(grant.agent_uuid, digest)
+        for grant, digest in configured_entries()
+        if grant.agent_uuid == normalized and "findings" in grant.scopes
+    ]

@@ -25,7 +25,6 @@ from starlette.responses import JSONResponse
 from src import http_agent_tokens
 from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
-from src.mcp_listen_config import mcp_bearer_tokens
 
 from src.http_routes import access
 from src.services.http_request_parser import (
@@ -60,45 +59,17 @@ _SERVER_OWNED_PROVENANCE_FIELDS = (
     "provenance_source",
     "provenance_mac",
 )
-_EPHEMERAL_PROVENANCE_MAC_KEY = secrets.token_bytes(32)
 
 
-def _provenance_mac_key() -> bytes:
-    """Derive the HMAC-SHA256 key authenticating audit-DB finding provenance rows.
-
-    Derives deterministically from configured server-side credentials so valid
-    tags survive restarts without introducing a new required env var, and falls
-    back to an ephemeral per-process CSPRNG key when no credentials are set.
-    """
-    parts: list[bytes] = []
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN") or ""
-    if http_api_token:
-        parts.append(b"http_api:" + http_api_token.encode("utf-8"))
-    for tok in mcp_bearer_tokens():
-        parts.append(b"mcp_bearer:" + tok.encode("utf-8"))
-    for grant, digest in http_agent_tokens.configured_entries():
-        parts.append(
-            b"agent_token:" + grant.agent_uuid.encode("utf-8") + b":" + digest
-        )
-    if not parts:
-        return _EPHEMERAL_PROVENANCE_MAC_KEY
-    h = hashlib.sha256(b"unitares.finding.provenance.mac.v1\x00")
-    for part in parts:
-        h.update(len(part).to_bytes(4, "big"))
-        h.update(part)
-    return h.digest()
-
-
-def compute_finding_provenance_mac(
+def _canonical_provenance_payload(
     *,
     provenance_source: str,
     verified_actor_agent_uuid: str,
     agent_id: str,
     event_type: str,
     message: str,
-) -> str:
-    """Compute an HMAC-SHA256 hex tag binding verified finding provenance to core event fields."""
-    canonical = json.dumps(
+) -> bytes:
+    return json.dumps(
         [
             provenance_source,
             verified_actor_agent_uuid.lower(),
@@ -109,7 +80,26 @@ def compute_finding_provenance_mac(
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    return hmac.new(_provenance_mac_key(), canonical, hashlib.sha256).hexdigest()
+
+
+def compute_finding_provenance_mac(
+    *,
+    mac_key: bytes,
+    provenance_source: str,
+    verified_actor_agent_uuid: str,
+    agent_id: str,
+    event_type: str,
+    message: str,
+) -> str:
+    """Compute a per-actor HMAC-SHA256 hex tag binding verified finding provenance to core event fields."""
+    canonical = _canonical_provenance_payload(
+        provenance_source=provenance_source,
+        verified_actor_agent_uuid=verified_actor_agent_uuid,
+        agent_id=agent_id,
+        event_type=event_type,
+        message=message,
+    )
+    return hmac.new(mac_key, canonical, hashlib.sha256).hexdigest()
 
 
 def verify_finding_provenance_mac(
@@ -121,17 +111,24 @@ def verify_finding_provenance_mac(
     event_type: str,
     message: str,
 ) -> bool:
-    """Constant-time verification of a persisted audit-DB finding provenance MAC."""
+    """Verify a persisted audit-DB provenance MAC against every configured ``findings`` token for the actor."""
     if not isinstance(mac, str) or not mac:
         return False
-    expected = compute_finding_provenance_mac(
+    keys = http_agent_tokens.findings_mac_keys_for_agent(verified_actor_agent_uuid)
+    if not keys:
+        return False
+    canonical = _canonical_provenance_payload(
         provenance_source=provenance_source,
         verified_actor_agent_uuid=verified_actor_agent_uuid,
         agent_id=agent_id,
         event_type=event_type,
         message=message,
     )
-    return hmac.compare_digest(mac, expected)
+    matched = False
+    for key in keys:
+        expected = hmac.new(key, canonical, hashlib.sha256).hexdigest()
+        matched |= hmac.compare_digest(mac, expected)
+    return matched
 
 
 def _is_shared_static_bearer(
@@ -155,8 +152,8 @@ def _is_shared_static_bearer(
 
 def _authenticate_finding_request(
     request,
-) -> tuple[Optional[JSONResponse], bool, Optional[str]]:
-    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``.
+) -> tuple[Optional[JSONResponse], bool, Optional[str], Optional[bytes]]:
+    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid, provenance_mac_key)``.
 
     Auth precedence aligns with ``src/http_routes/tools.py``:
     - A valid per-agent ``findings``-scoped token (distinct from shared static
@@ -189,16 +186,17 @@ def _authenticate_finding_request(
                 scopes=agent_grant.scopes,
             )
             if agent_refusal is None:
+                mac_key = http_agent_tokens.findings_mac_key_for_bearer(bearer)
                 logger.info(
                     "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
                     agent_grant.agent_uuid[:8],
                     agent_grant.digest_prefix,
                     "+".join(sorted(agent_grant.scopes)),
                 )
-                return None, True, agent_grant.agent_uuid
+                return None, True, agent_grant.agent_uuid, mac_key
 
     if access._check_http_auth(request, http_api_token=http_api_token):
-        return None, False, None
+        return None, False, None, None
 
     if agent_grant is not None and agent_refusal is not None:
         return (
@@ -212,9 +210,10 @@ def _authenticate_finding_request(
             ),
             False,
             None,
+            None,
         )
 
-    return access._http_unauthorized(), False, None
+    return access._http_unauthorized(), False, None, None
 
 
 def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
@@ -227,7 +226,7 @@ def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
 
 async def http_record_finding(request):
     """POST /api/findings — ingest an external finding into the event ring buffer."""
-    auth_error, provenance_verified, verified_actor_agent_uuid = (
+    auth_error, provenance_verified, verified_actor_agent_uuid, provenance_mac_key = (
         _authenticate_finding_request(request)
     )
     if auth_error is not None:
@@ -283,13 +282,15 @@ async def http_record_finding(request):
             payload["provenance_verified"] = True
             payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
             payload["provenance_source"] = PROVENANCE_SOURCE_FINDINGS_TOKEN
-            provenance_mac = compute_finding_provenance_mac(
-                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
-                verified_actor_agent_uuid=verified_actor_agent_uuid,
-                agent_id=str(payload["agent_id"]),
-                event_type=str(payload["type"]),
-                message=str(payload["message"]),
-            )
+            if provenance_mac_key is not None:
+                provenance_mac = compute_finding_provenance_mac(
+                    mac_key=provenance_mac_key,
+                    provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                    verified_actor_agent_uuid=verified_actor_agent_uuid,
+                    agent_id=str(payload["agent_id"]),
+                    event_type=str(payload["type"]),
+                    message=str(payload["message"]),
+                )
         else:
             payload["provenance_verified"] = False
             payload["verified_actor_agent_uuid"] = None

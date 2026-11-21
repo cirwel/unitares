@@ -788,3 +788,66 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
         assert by_id[bad_id]["provenance_verified"] is False
         assert by_id[bad_id]["verified_actor_agent_uuid"] is None
         assert "provenance_mac" not in by_id[bad_id]
+
+    # 4. Per-actor MAC isolation & rotation properties:
+    #    - Rotating/adding another agent's token does NOT invalidate Vigil's backfill.
+    #    - Listing a second Vigil token during rotation keeps the old row valid.
+    #    - Revoking Vigil's old token immediately fails the old row closed.
+    other_tok = "b" * 64
+    vigil_rotated_tok = "c" * 64
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        ",".join(
+            [
+                _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+                _agent_token_entry(VIGIL_UUID, vigil_rotated_tok, "findings"),
+                _agent_token_entry(OTHER_UUID, other_tok, "findings"),
+            ]
+        ),
+    )
+    # Cross-actor MAC forgery: OTHER_UUID cannot sign a row claiming VIGIL_UUID.
+    from src.http_agent_tokens import findings_mac_key_for_bearer
+    from src.http_routes.findings import compute_finding_provenance_mac
+
+    other_key = findings_mac_key_for_bearer(other_tok)
+    assert other_key is not None
+    cross_actor_row = {
+        **persisted_rows[0],
+        "event_id": "db-cross-actor-mac",
+        "details": {
+            **persisted_rows[0]["details"],
+            "provenance_mac": compute_finding_provenance_mac(
+                mac_key=other_key,
+                provenance_source="server_findings_token",
+                verified_actor_agent_uuid=VIGIL_UUID,
+                agent_id="vigil",
+                event_type="vigil_finding",
+                message=persisted_rows[0]["details"]["message"],
+            ),
+        },
+    }
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[persisted_rows[0], cross_actor_row]),
+    ):
+        r_rot = c.get("/api/events?limit=10")
+    by_rot = {e["event_id"]: e for e in r_rot.json()["events"]}
+    assert by_rot["db-1"]["provenance_verified"] is True
+    assert by_rot["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert by_rot["db-cross-actor-mac"]["provenance_verified"] is False
+    assert by_rot["db-cross-actor-mac"]["verified_actor_agent_uuid"] is None
+
+    # After revoking the old Vigil token (keeping only the new rotated token),
+    # rows signed by the revoked token fail closed on backfill.
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, vigil_rotated_tok, "findings"),
+    )
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[persisted_rows[0]]),
+    ):
+        r_revoked = c.get("/api/events?limit=10")
+    revoked_ev = r_revoked.json()["events"][0]
+    assert revoked_ev["provenance_verified"] is False
+    assert revoked_ev["verified_actor_agent_uuid"] is None
