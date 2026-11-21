@@ -122,14 +122,17 @@ compared with full-text search alone:
    - `UNITARES_HTTP_AGENT_TOKENS` — optional comma-separated
      `<agent_uuid>:sha256:<64 hex>[:<scope1+scope2>]` digests (passed through
      by `docker-compose.cloud.yml`) so remote embodied or resident agents can
-     call granted scopes on `POST /v1/tools/call` without holding a fleet-wide
-     bearer (`src/http_agent_tokens.py`). Omitted scopes default to `checkin`
-     (`process_agent_update`); optional scopes add `outcome` (`outcome_event`)
-     and `knowledge_store` (append-only non-permanent single
-     `knowledge(action='store')` with low/medium severity), with strict
-     argument allowlists on `outcome` and `knowledge_store`. Calls must pass
-     flat top-level arguments with explicit body `client_session_id` (wrapper
-     keys, `X-Agent-Id`, and `X-Session-ID`-only calls are refused).
+     call granted scopes on `POST /v1/tools/call` or `POST /api/findings`
+     without holding a fleet-wide bearer (`src/http_agent_tokens.py`). Omitted
+     scopes default to `checkin` (`process_agent_update`); optional scopes add
+     `outcome` (`outcome_event`), `knowledge_store` (append-only non-permanent
+     single `knowledge(action='store')` with low/medium severity), and
+     `findings` (`POST /api/findings` with server-verified actor provenance),
+     with strict argument allowlists on `outcome` and `knowledge_store`. Tool
+     calls must pass flat top-level arguments with explicit body
+     `client_session_id` (wrapper keys, `X-Agent-Id`, and `X-Session-ID`-only
+     calls are refused), and `findings` tokens are rejected on
+     `POST /v1/tools/call`.
    - `UNITARES_OAUTH_ISSUER_URL` / `UNITARES_OAUTH_PUBLIC_PORT` / `UNITARES_OAUTH_REQUIRED` —
      optional OAuth 2.1 configuration for hosted connectors such as Claude.ai and
      ChatGPT (`docker-compose.cloud.yml`). Keep `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false`

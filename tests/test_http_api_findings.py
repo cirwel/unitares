@@ -25,7 +25,13 @@ def clear_events():
 @pytest.fixture(autouse=True)
 def _no_http_api_token(monkeypatch):
     """Use the local trusted-network path without configuring a token."""
-    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+    for name in (
+        "UNITARES_HTTP_API_TOKEN",
+        "UNITARES_HTTP_AGENT_TOKENS",
+        "UNITARES_MCP_BEARER_TOKENS",
+        "UNITARES_REST_STRICT",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
@@ -271,3 +277,278 @@ def test_kept_original_is_itself_capped(client):
     from src.http_routes.findings import _FINGERPRINT_ORIGINAL_MAX_CHARS
     event = client.post("/api/findings", json=_finding("q" * 100_000)).json()["event"]
     assert len(event["fingerprint_original"]) == _FINGERPRINT_ORIGINAL_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# Server-verified actor provenance and `findings` agent token scope
+# ---------------------------------------------------------------------------
+
+VIGIL_UUID = "11111111-2222-4333-8444-555555555555"
+OTHER_UUID = "99999999-8888-4777-8666-555555555555"
+VIGIL_FINDINGS_TOKEN = "f" * 64
+
+
+def _agent_token_entry(agent_uuid: str, token: str, scopes: str | None = None) -> str:
+    import hashlib
+
+    base = f"{agent_uuid}:sha256:{hashlib.sha256(token.encode()).hexdigest()}"
+    return f"{base}:{scopes}" if scopes is not None else base
+
+
+def _client_for_ip(ip: str) -> TestClient:
+    from src.http_api import http_events
+
+    app = Starlette(
+        routes=[
+            Route("/api/findings", http_record_finding, methods=["POST"]),
+            Route("/api/events", http_events, methods=["GET"]),
+        ]
+    )
+    return TestClient(app, client=(ip, 50000))
+
+
+def test_strips_caller_forged_provenance_on_trusted_network(client):
+    spoofed = _finding(
+        "prov-strip-1",
+        type="vigil_finding",
+        agent_id="vigil",
+        agent_name="Vigil",
+        provenance_verified=True,
+        verified_actor_agent_uuid=VIGIL_UUID,
+    )
+    r = client.post("/api/findings", json=spoofed)
+    assert r.status_code == 200
+    ev = r.json()["event"]
+    assert ev["provenance_verified"] is False
+    assert ev["verified_actor_agent_uuid"] is None
+
+
+def test_shared_static_tokens_record_unverified_provenance(monkeypatch):
+    public_client = _client_for_ip("203.0.113.9")
+    spoofed = _finding(
+        "prov-shared-http",
+        type="vigil_finding",
+        agent_id="vigil",
+        agent_name="Vigil",
+        provenance_verified=True,
+        verified_actor_agent_uuid=VIGIL_UUID,
+    )
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "shared-local-secret")
+    r_local = public_client.post(
+        "/api/findings",
+        json=spoofed,
+        headers={"Authorization": "Bearer shared-local-secret"},
+    )
+    assert r_local.status_code == 200
+    ev_local = r_local.json()["event"]
+    assert ev_local["provenance_verified"] is False
+    assert ev_local["verified_actor_agent_uuid"] is None
+
+    monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "shared-mcp-secret")
+    r_mcp = public_client.post(
+        "/api/findings",
+        json={**spoofed, "fingerprint": "prov-shared-mcp"},
+        headers={"Authorization": "Bearer shared-mcp-secret"},
+    )
+    assert r_mcp.status_code == 200
+    ev_mcp = r_mcp.json()["event"]
+    assert ev_mcp["provenance_verified"] is False
+    assert ev_mcp["verified_actor_agent_uuid"] is None
+
+
+def test_shared_static_secret_reused_in_agent_tokens_never_verifies_provenance(monkeypatch):
+    """A shared static token must never be elevated into per-agent provenance."""
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", VIGIL_FINDINGS_TOKEN)
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    public_client = _client_for_ip("203.0.113.9")
+    r = public_client.post(
+        "/api/findings",
+        json=_finding(
+            "prov-reused-shared",
+            provenance_verified=True,
+            verified_actor_agent_uuid=VIGIL_UUID,
+        ),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r.status_code == 200
+    ev = r.json()["event"]
+    assert ev["provenance_verified"] is False
+    assert ev["verified_actor_agent_uuid"] is None
+
+
+@pytest.mark.parametrize("mode", ["loopback", "public", "strict"])
+def test_findings_scoped_agent_token_sets_verified_provenance(monkeypatch, mode):
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID.upper(), VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    if mode == "strict":
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "distinct-mcp-secret")
+    ip = "127.0.0.1" if mode == "loopback" else "203.0.113.9"
+    c = _client_for_ip(ip)
+    r = c.post(
+        "/api/findings",
+        json=_finding(
+            f"prov-verified-{mode}",
+            type="vigil_finding",
+            agent_id="vigil",
+            agent_name="Vigil",
+            provenance_verified=False,
+            verified_actor_agent_uuid=OTHER_UUID,
+        ),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r.status_code == 200
+    ev = r.json()["event"]
+    assert ev["provenance_verified"] is True
+    assert ev["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert ev["agent_id"] == "vigil"
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [None, "checkin", "outcome", "knowledge_store", "checkin+outcome+knowledge_store"],
+)
+@pytest.mark.parametrize("ip", ["127.0.0.1", "203.0.113.9"])
+def test_non_findings_agent_tokens_are_refused_with_403(monkeypatch, scopes, ip):
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, scopes),
+    )
+    c = _client_for_ip(ip)
+    r = c.post(
+        "/api/findings",
+        json=_finding(f"prov-refused-{scopes}-{ip}"),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r.status_code == 403
+    body = r.json()
+    assert body["success"] is False
+    assert body["error_type"] == "AgentTokenScope"
+    assert event_detector.get_recent_events() == []
+
+
+@pytest.mark.parametrize(
+    "extra_header",
+    [("X-Unitares-Operator", "op-secret"), ("X-Agent-Id", OTHER_UUID)],
+)
+def test_findings_token_refuses_operator_and_x_agent_id_headers(monkeypatch, extra_header):
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    c = _client_for_ip("203.0.113.9")
+    r = c.post(
+        "/api/findings",
+        json=_finding(f"prov-hdr-{extra_header[0]}"),
+        headers={
+            "Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}",
+            extra_header[0]: extra_header[1],
+        },
+    )
+    assert r.status_code == 403
+    assert r.json()["error_type"] == "AgentTokenScope"
+
+
+def test_unknown_bearer_on_public_or_strict_is_401(monkeypatch):
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    public_client = _client_for_ip("203.0.113.9")
+    r = public_client.post(
+        "/api/findings",
+        json=_finding("prov-wrong-tok"),
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert r.status_code == 401
+
+    monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "real-mcp-secret")
+    loopback_client = _client_for_ip("127.0.0.1")
+    r_strict = loopback_client.post(
+        "/api/findings",
+        json=_finding("prov-wrong-tok-strict"),
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert r_strict.status_code == 401
+
+
+def test_malformed_agent_tokens_env_fails_closed(monkeypatch):
+    monkeypatch.setenv("UNITARES_HTTP_AGENT_TOKENS", "not-a-valid-entry")
+    public_client = _client_for_ip("203.0.113.9")
+    assert (
+        public_client.post(
+            "/api/findings",
+            json=_finding("prov-bad-env-public"),
+            headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+        ).status_code
+        == 401
+    )
+    loopback_client = _client_for_ip("127.0.0.1")
+    r_local = loopback_client.post(
+        "/api/findings",
+        json=_finding(
+            "prov-bad-env-local",
+            provenance_verified=True,
+            verified_actor_agent_uuid=VIGIL_UUID,
+        ),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r_local.status_code == 200
+    ev = r_local.json()["event"]
+    assert ev["provenance_verified"] is False
+    assert ev["verified_actor_agent_uuid"] is None
+
+
+def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypatch):
+    """Both GET /api/events and WS broadcast keep top-level provenance keys intact."""
+    from src.broadcaster import broadcaster_instance
+
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+
+    ws_sent: list[dict] = []
+
+    async def _capture_ws(data: dict):
+        ws_sent.append(dict(data))
+
+    monkeypatch.setattr(broadcaster_instance, "_send_to_clients", _capture_ws)
+
+    c = _client_for_ip("127.0.0.1")
+    r = c.post(
+        "/api/findings",
+        json=_finding(
+            "prov-e2e-stream",
+            type="vigil_finding",
+            agent_id="vigil",
+            agent_name="Vigil",
+            provenance_verified=False,
+            verified_actor_agent_uuid=OTHER_UUID,
+        ),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r.status_code == 200
+
+    # 1. WebSocket payload preserves top-level provenance keys
+    assert len(ws_sent) == 1
+    assert type(ws_sent[0]["provenance_verified"]) is bool
+    assert ws_sent[0]["provenance_verified"] is True
+    assert ws_sent[0]["verified_actor_agent_uuid"] == VIGIL_UUID
+
+    # 2. REST /api/events preserves top-level provenance keys
+    with patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=[])):
+        r_events = c.get("/api/events?since=0&limit=10")
+    assert r_events.status_code == 200
+    events = r_events.json()["events"]
+    assert len(events) == 1
+    assert type(events[0]["provenance_verified"]) is bool
+    assert events[0]["provenance_verified"] is True
+    assert events[0]["verified_actor_agent_uuid"] == VIGIL_UUID

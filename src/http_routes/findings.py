@@ -13,12 +13,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from starlette.responses import JSONResponse
 
 
+from src import http_agent_tokens
 from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
@@ -46,6 +48,72 @@ _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_na
 # every later lookup by fingerprint still agree; the original is kept (capped).
 _FINGERPRINT_MAX_CHARS = 256
 _FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
+# Server-owned provenance keys: always stripped from incoming JSON and stamped
+# solely from the authenticated request credential.
+_SERVER_OWNED_PROVENANCE_FIELDS = (
+    "provenance_verified",
+    "verified_actor_agent_uuid",
+)
+
+
+def _is_shared_static_bearer(
+    bearer: Optional[str], *, http_api_token: Optional[str]
+) -> bool:
+    """True when ``bearer`` matches a shared static server token.
+
+    A shared static credential (``UNITARES_HTTP_API_TOKEN`` or a member of
+    ``UNITARES_MCP_BEARER_TOKENS``) is not actor-bound and must never be
+    elevated into per-agent verified provenance even if its digest were
+    mistakenly duplicated in ``UNITARES_HTTP_AGENT_TOKENS``.
+    """
+    if not bearer:
+        return False
+    if http_api_token and secrets.compare_digest(bearer, http_api_token):
+        return True
+    if access.mcp_bearer_required() and access.check_mcp_bearer(f"Bearer {bearer}"):
+        return True
+    return False
+
+
+def _authenticate_finding_request(
+    request,
+) -> tuple[Optional[JSONResponse], bool, Optional[str]]:
+    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    bearer = access._bearer_from_header(access._header_value(request, "authorization"))
+
+    if bearer and not _is_shared_static_bearer(bearer, http_api_token=http_api_token):
+        agent_grant = http_agent_tokens.grant_for_bearer(bearer)
+        if agent_grant is not None:
+            refusal = http_agent_tokens.findings_refusal(
+                operator_header=access._header_value(request, "x-unitares-operator") or None,
+                agent_id_header=access._header_value(request, "x-agent-id") or None,
+                scopes=agent_grant.scopes,
+            )
+            if refusal:
+                return (
+                    JSONResponse(
+                        {
+                            "success": False,
+                            "error": refusal,
+                            "error_type": "AgentTokenScope",
+                        },
+                        status_code=403,
+                    ),
+                    False,
+                    None,
+                )
+            logger.info(
+                "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
+                agent_grant.agent_uuid[:8],
+                agent_grant.digest_prefix,
+                "+".join(sorted(agent_grant.scopes)),
+            )
+            return None, True, agent_grant.agent_uuid
+
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized(), False, None
+    return None, False, None
 
 
 def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
@@ -58,9 +126,11 @@ def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
 
 async def http_record_finding(request):
     """POST /api/findings — ingest an external finding into the event ring buffer."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
+    auth_error, provenance_verified, verified_actor_agent_uuid = (
+        _authenticate_finding_request(request)
+    )
+    if auth_error is not None:
+        return auth_error
     try:
         try:
             payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
@@ -98,6 +168,17 @@ async def http_record_finding(request):
         else:
             # Only this route may set it; never trust a client-supplied one.
             payload.pop("fingerprint_original", None)
+
+        # Server-verified actor provenance: strip any caller-supplied claims
+        # first and compute strictly from the authenticated request credential.
+        # Only a per-agent bearer token with the ``findings`` scope proves an
+        # actor UUID; trusted-network bypass, dashboard sessions, and shared
+        # static bearers always record provenance_verified=False and
+        # verified_actor_agent_uuid=None.
+        for key in _SERVER_OWNED_PROVENANCE_FIELDS:
+            payload.pop(key, None)
+        payload["provenance_verified"] = bool(provenance_verified)
+        payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
 
         # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
         # release sentinel findings get their event check attached BEFORE

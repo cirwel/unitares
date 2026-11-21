@@ -15,17 +15,23 @@ append-only knowledge writes):
   ``<agent_uuid>:sha256:<64 hex>:<scope1+scope2>``.
   When the fourth scope field is omitted, the grant defaults to ``checkin``
   only so existing credentials gain no additional permissions on deploy.
-  Valid scopes are ``checkin``, ``outcome``, and ``knowledge_store``.
+  Valid scopes are ``checkin``, ``outcome``, ``knowledge_store``, and
+  ``findings``.
 - The server keeps only SHA-256 digests, so the service environment carries no
   secret. Generate a token with ``openssl rand -hex 32`` and store
   ``sha256(token)`` here.
-- Accepted only by ``POST /v1/tools/call``, in both REST postures, and only
-  when the request did not already authenticate another way. No other REST
-  route, WebSocket, or ``/mcp`` reads it.
-- Authorization, not identity. The call still resolves its caller through the
-  normal REST path using the body's explicit ``client_session_id``; the token
-  only admits a call that resolves to its own agent. It is never a binding
-  proof.
+- Accepted only by ``POST /v1/tools/call`` (for ``checkin``, ``outcome``, and
+  ``knowledge_store``) and ``POST /api/findings`` (for ``findings``), in both
+  REST postures. A ``findings``-only token cannot call any tool on
+  ``POST /v1/tools/call``, and tokens lacking ``findings`` are refused on
+  ``POST /api/findings``. No other REST route, WebSocket, or ``/mcp`` reads it.
+- On ``POST /v1/tools/call``, the token is authorization, not identity: the
+  call still resolves its caller through the normal REST path using the body's
+  explicit ``client_session_id``, and the token only admits a call that resolves
+  to its own agent. On ``POST /api/findings``, a valid ``findings``-scoped
+  token additionally stamps server-verified actor provenance
+  (``provenance_verified=True`` and ``verified_actor_agent_uuid=<agent_uuid>``)
+  onto the ingested finding event.
 - Enforces flat top-level arguments with an explicit ``client_session_id`` in
   the body across all scopes (including default ``checkin`` tokens), and
   enforces per-tool argument allowlists on ``outcome`` and ``knowledge_store``.
@@ -60,7 +66,9 @@ logger = get_logger(__name__)
 AGENT_TOKENS_ENV = "UNITARES_HTTP_AGENT_TOKENS"
 
 DEFAULT_SCOPES: FrozenSet[str] = frozenset({"checkin"})
-VALID_SCOPES: FrozenSet[str] = frozenset({"checkin", "outcome", "knowledge_store"})
+VALID_SCOPES: FrozenSet[str] = frozenset(
+    {"checkin", "outcome", "knowledge_store", "findings"}
+)
 
 # Kept for callers/tests inspecting the default un-scoped tool set.
 ALLOWED_TOOLS: FrozenSet[str] = frozenset({"process_agent_update"})
@@ -334,3 +342,19 @@ def call_refusal(
         return None
 
     return "agent tokens may call only process_agent_update (and explicitly granted outcome/knowledge_store tools)"
+
+
+def findings_refusal(
+    *,
+    operator_header: Optional[str] = None,
+    agent_id_header: Optional[str] = None,
+    scopes: FrozenSet[str] = DEFAULT_SCOPES,
+) -> Optional[str]:
+    """Why an agent-token POST /api/findings call is refused, or None to allow it."""
+    if operator_header:
+        return "agent tokens cannot be combined with an operator token"
+    if agent_id_header:
+        return "agent tokens cannot be combined with X-Agent-Id"
+    if "findings" not in scopes:
+        return "agent token lacks 'findings' scope for /api/findings"
+    return None
