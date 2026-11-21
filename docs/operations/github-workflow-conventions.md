@@ -243,9 +243,11 @@ veto by removing the label.
   the opening owner, a completed adopter, or a named successor holding both
   readiness and queue-entry authority. It requires the PR body to state
   `Classification: fix` or `Classification: capability` (with no conflicting
-  classification); for a `capability` or an unlisted auth change, apply it only
-  once both reviewer families have passed. Removing the label withdraws the
-  declaration.
+  classification); for a `capability` draft the queue promotes it only when the
+  diff touches a `second_family_paths` file and `review` passed without a waiver
+  (so two model families are enforced), whereas on an unlisted `capability` or
+  auth path `review` passes on one family and the owner marks ready after both
+  families have passed. Removing the label withdraws the declaration.
 
   If the owner cannot return, the operator may override readiness or assign a
   named successor by UNITARES agent UUID. A direct readiness override must be
@@ -1158,8 +1160,10 @@ else, the script looks at every PR against `master` that carries
   tick.
 - It never promotes a fork, a PR labelled `governance-sensitive`,
   `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
-  governance-sensitive surface, a stacked PR, or a PR whose body does not state
-  a single classification (`Classification: fix` or `Classification: capability`).
+  governance-sensitive surface, a stacked PR, a PR whose body does not state a
+  single classification (`Classification: fix` or `Classification: capability`),
+  or a `Classification: capability` diff that is outside `second_family_paths`
+  or passed `review` on a waiver.
   The veto-window route for a governance-sensitive PR starts from a PR its owner
   marked ready and labelled, never from a declaration.
 

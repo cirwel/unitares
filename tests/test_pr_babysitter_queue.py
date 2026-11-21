@@ -1839,14 +1839,30 @@ def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "body",
     [
-        "Classification: fix",
         "Classification: capability",
         "class: `capability`",
     ],
 )
-def test_a_pr_with_a_single_classification_is_promoted(tmp_path: Path, body: str) -> None:
+def test_a_capability_draft_on_a_two_family_path_is_promoted(tmp_path: Path, body: str) -> None:
+    _review_policy(tmp_path, "f")
     calls, _ = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
     assert calls == PROMOTE
+
+
+def test_a_capability_draft_outside_two_family_paths_or_waived_is_not_promoted(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "outside two-family review paths" in out
+
+    _review_policy(tmp_path, "f")
+    _review_title(
+        tmp_path,
+        "second family waived by the operator (2 changed line(s) on f; have: openai): tiny",
+        sha="sha1",
+    )
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "passed on an operator waiver" in out
 
 
 @pytest.mark.parametrize(
