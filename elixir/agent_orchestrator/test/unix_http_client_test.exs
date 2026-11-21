@@ -295,6 +295,56 @@ defmodule AgentOrchestrator.UnixHTTPClientTest do
                UnixHTTPClient.post(path, "/v1/lease/acquire", [], "{}", timeout_ms: 80)
     end
 
+    test "enforces send_timeout deadline when peer stops reading" do
+      path = tmp_socket_path("send_timeout")
+      File.rm(path)
+
+      {:ok, lsock} =
+        :gen_tcp.listen(0, [
+          :binary,
+          {:ifaddr, {:local, path}},
+          {:active, false},
+          {:recbuf, 1024}
+        ])
+
+      :ok = File.chmod(path, 0o600)
+      parent = self()
+
+      pid =
+        spawn_link(fn ->
+          send(parent, {:stalled_ready, self()})
+
+          case :gen_tcp.accept(lsock) do
+            {:ok, sock} ->
+              # Hold socket open without reading so client write blocks on full buffer.
+              Process.sleep(1_000)
+              :gen_tcp.close(sock)
+
+            _ ->
+              :ok
+          end
+        end)
+
+      assert_receive {:stalled_ready, ^pid}, 1_000
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: Process.exit(pid, :normal)
+        :gen_tcp.close(lsock)
+        File.rm(path)
+      end)
+
+      large_body = :binary.copy("x", 4_000_000)
+      started = System.monotonic_time(:millisecond)
+
+      assert {:error, :timeout} =
+               UnixHTTPClient.request("POST", path, "/v1/lease/acquire", [], large_body,
+                 timeout_ms: 80
+               )
+
+      elapsed = System.monotonic_time(:millisecond) - started
+      assert elapsed < 500
+    end
+
     test "rejects header injection and malformed request paths" do
       path = tmp_socket_path("inject")
       start_uds_server(path, fn _sock -> :ok end)

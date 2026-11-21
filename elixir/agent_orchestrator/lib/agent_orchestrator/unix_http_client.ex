@@ -15,6 +15,7 @@ defmodule AgentOrchestrator.UnixHTTPClient do
   @max_socket_path_bytes 103
   @max_header_bytes 32_768
   @max_body_bytes 1_048_576
+  @send_chunk_bytes 16_384
   @default_connect_timeout_ms 2_000
   @default_timeout_ms 5_000
   @s_ifmt 0o170000
@@ -50,24 +51,25 @@ defmodule AgentOrchestrator.UnixHTTPClient do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
     max_body_bytes = Keyword.get(opts, :max_body_bytes, @max_body_bytes)
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    effective_connect_timeout = min(connect_timeout_ms, max(timeout_ms, 0))
 
     with :ok <- validate_method(method),
          :ok <- validate_request_path(request_path),
          :ok <- validate_headers(headers),
          :ok <- validate_socket_path(socket_path, opts),
+         true <- timeout_ms > 0 || {:error, :timeout},
          {:ok, sock} <-
            :gen_tcp.connect(
              {:local, socket_path},
              0,
              [:binary, {:active, false}, {:packet, :raw}],
-             connect_timeout_ms
+             effective_connect_timeout
            ) do
-      deadline = System.monotonic_time(:millisecond) + timeout_ms
-
       try do
-        wire_request = build_request(method, request_path, headers, body)
+        wire_request = IO.iodata_to_binary(build_request(method, request_path, headers, body))
 
-        with :ok <- :gen_tcp.send(sock, wire_request),
+        with :ok <- send_bounded(sock, wire_request, deadline),
              {:ok, status, resp_headers, rest} <- read_response_head(sock, deadline),
              {:ok, resp_body} <-
                read_response_body(
@@ -82,7 +84,29 @@ defmodule AgentOrchestrator.UnixHTTPClient do
           {:ok, status, resp_headers, resp_body}
         end
       after
+        _ = :gen_tcp.shutdown(sock, :read_write)
         :gen_tcp.close(sock)
+      end
+    end
+  end
+
+  # Send in bounded chunks so OTP's inet_drv high-watermark backpressure triggers
+  # `send_timeout` during the write instead of queueing an entire multi-MB body
+  # and lingering inside `:gen_tcp.close/1` against a stalled peer.
+  defp send_bounded(_sock, <<>>, _deadline), do: :ok
+
+  defp send_bounded(sock, data, deadline) when is_binary(data) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, :timeout}
+    else
+      chunk_size = min(@send_chunk_bytes, byte_size(data))
+      <<chunk::binary-size(^chunk_size), rest::binary>> = data
+
+      with :ok <- :inet.setopts(sock, send_timeout: remaining, send_timeout_close: true),
+           :ok <- :gen_tcp.send(sock, chunk) do
+        send_bounded(sock, rest, deadline)
       end
     end
   end
