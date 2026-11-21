@@ -529,20 +529,16 @@ class ToolUsageMixin:
         Per onboard-bootstrap-checkin §4.1.
         """
         from config.governance_config import GovernanceConfig
+        from .identity import fetch_identity_id_by_agent_id
+        from .state import fetch_latest_measured_eisv_row
+
         async with self.acquire() as conn:
             try:
-                row = await conn.fetchrow(
-                    """
-                    SELECT s.state_json, s.entropy, s.integrity, s.volatility,
-                           s.coherence, s.regime
-                    FROM core.agent_state s
-                    JOIN core.identities i ON i.identity_id = s.identity_id
-                    WHERE i.agent_id = $1 AND s.epoch = $2
-                      AND s.synthetic = false
-                    ORDER BY s.recorded_at DESC
-                    LIMIT 1
-                    """,
-                    agent_id, GovernanceConfig.CURRENT_EPOCH,
+                identity_id = await fetch_identity_id_by_agent_id(conn, agent_id)
+                if identity_id is None:
+                    return None
+                row = await fetch_latest_measured_eisv_row(
+                    conn, identity_id, GovernanceConfig.CURRENT_EPOCH
                 )
                 if not row:
                     return None
@@ -588,10 +584,17 @@ class ToolUsageMixin:
         adjudication batches are not independent samples (unitares#1370), or
         None when no external outcome has a joinable claim.
         """
+        from .audit import reported_confidence_lateral_subquery_sql
+
+        claim_subquery_sql = reported_confidence_lateral_subquery_sql(
+            agent_param="$1",
+            window_hours_param="$3",
+            ref_ts_expr="ext.ts",
+        )
         async with self.acquire() as conn:
             try:
                 row = await conn.fetchrow(
-                    """
+                    f"""
                     WITH ext AS (
                         SELECT o.ts, o.is_bad, o.session_id
                         FROM audit.outcome_events o
@@ -606,18 +609,7 @@ class ToolUsageMixin:
                     scored AS (
                         SELECT ext.is_bad, ext.session_id, c.conf
                         FROM ext
-                        JOIN LATERAL (
-                            SELECT e.confidence AS conf
-                            FROM audit.events e
-                            WHERE e.agent_id = $1
-                              AND e.confidence IS NOT NULL AND e.confidence > 0
-                              AND e.event_type = 'auto_attest'
-                              AND e.payload->>'confidence_source' = 'reported'
-                              AND e.ts <= ext.ts
-                              AND e.ts > ext.ts - ($3 * interval '1 hour')
-                            ORDER BY e.ts DESC
-                            LIMIT 1
-                        ) c ON true
+                        JOIN LATERAL ({claim_subquery_sql}) c ON true
                     )
                     SELECT count(*) AS n,
                            count(DISTINCT session_id) AS n_batches,
@@ -855,3 +847,37 @@ async def fetch_outcome_evidence_aggregate_batch(
         cursor_id,
         batch_size,
     )
+
+
+def _build_eisv_telemetry_calibration_sql() -> str:
+    """Assemble the strict outcome-linked EISV calibration query from component-owned SQL."""
+    from src.grounding.outcome_anchors import anchored_outcomes_predicate
+    from .identity import identity_from_sql
+    from .state import prior_measured_state_lateral_sql
+
+    strict_anchor_sql = anchored_outcomes_predicate(table_alias="o")
+    prior_state_sql = prior_measured_state_lateral_sql(
+        identity_from_sql_fragment=identity_from_sql("i"),
+    )
+    return f"""
+SELECT
+    o.outcome_id,
+    o.ts,
+    o.agent_id,
+    o.is_bad,
+    o.detail,
+    ps.recorded_at AS prior_recorded_at,
+    ps.risk_score::double precision AS prior_risk,
+    ps.state_json #>> '{{eisv_telemetry,schema}}' AS prior_telemetry_schema,
+    ps.state_json #>> '{{eisv_telemetry,measurement_id}}' AS prior_measurement_id
+FROM audit.outcome_events o
+LEFT JOIN LATERAL (
+{prior_state_sql}
+) ps ON TRUE
+WHERE o.ts >= now() - make_interval(days => $1)
+  AND {strict_anchor_sql}
+ORDER BY o.ts
+"""
+
+
+EISV_TELEMETRY_CALIBRATION_SQL = _build_eisv_telemetry_calibration_sql()
