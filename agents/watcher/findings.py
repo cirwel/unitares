@@ -695,6 +695,9 @@ def update_finding_status(
     target_index = (
         open_matching_indices[-1] if open_matching_indices else matching_indices[-1]
     )
+    older_active_same_fp_indices = (
+        set(open_matching_indices[:-1]) if len(open_matching_indices) > 1 else set()
+    )
     target_row = findings[target_index]
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
@@ -762,6 +765,10 @@ def update_finding_status(
     if was_propagated_dup and reason != "dup":
         updated_target.pop("duplicate_of", None)
         updated_target.pop("duplicate_of_reason", None)
+        if new_status == "confirmed":
+            updated_target.pop("dismissed_at", None)
+        elif new_status == "dismissed":
+            updated_target.pop("confirmed_at", None)
     effective_reason = updated_target.get("resolution_reason")
 
     updated: list[dict[str, Any]] = []
@@ -769,6 +776,23 @@ def update_finding_status(
     for idx, f in enumerate(findings):
         if idx == target_index:
             f = updated_target
+        elif idx in older_active_same_fp_indices and new_status in (
+            "dismissed",
+            "confirmed",
+        ):
+            older_dup = {
+                **f,
+                "status": new_status,
+                "resolution_reason": "dup",
+                "duplicate_of": target_fp,
+            }
+            if new_status == "dismissed" and effective_reason:
+                older_dup["duplicate_of_reason"] = effective_reason
+            if timestamp_field:
+                older_dup[timestamp_field] = now_iso
+            if resolver_agent_id:
+                older_dup["resolved_by"] = resolver_agent_id
+            f = older_dup
         elif idx in sibling_indices_to_close:
             sibling_merged = {
                 **f,

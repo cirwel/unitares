@@ -1010,6 +1010,7 @@ class TestPersistFindingsFpCarryOver:
         assert "duplicate_of" not in wt_row
         assert "duplicate_of_reason" not in wt_row
         assert "resolution_reason" not in wt_row
+        assert "dismissed_at" not in wt_row
 
         now = datetime.now(timezone.utc)
         stats = precision_by_pattern_and_class(rows, now=now, min_weighted_n=0.5)
@@ -1020,6 +1021,85 @@ class TestPersistFindingsFpCarryOver:
         assert summary["patterns"][0]["confirmed"] == 1
         assert summary["patterns"][0]["dismissed"] == 1
         assert summary["patterns"][0]["dismissed_fp"] == 1
+        by_day = {d["day"]: d for d in summary["timeline"]}
+        today = now.date().isoformat()
+        assert by_day[today]["confirmed"] == 1
+        assert by_day[today]["dismissed"] == 1
+
+    @pytest.mark.parametrize("new_status", ["confirmed", "dismissed"])
+    def test_multiple_active_rows_with_same_fingerprint_all_close_and_count_once(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        new_status: str,
+    ):
+        """If the same fingerprint has >1 active (open/surfaced) row (e.g.
+        rescanned after 14d dedup TTL before 21d aging), resolving or
+        dismissing it closes ALL active rows for that fingerprint while
+        counting the verdict only once in calibration and summary."""
+        from agents.watcher.routes import _watcher_summary_from_rows
+
+        trees = _repo_with_worktrees(tmp_path)
+        fp = "aaaa000000000001"
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    fp,
+                    trees["main"] / "pkg/mod.py",
+                    line=3,
+                    status="surfaced",
+                    detected_at="2026-11-05T00:00:00Z",
+                ),
+                _make_row(
+                    fp,
+                    trees["main"] / "pkg/mod.py",
+                    line=3,
+                    status="open",
+                    detected_at="2026-11-20T00:00:00Z",
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        reason = "fp" if new_status == "dismissed" else "fixed"
+        assert (
+            update_finding_status(
+                fp,
+                new_status,
+                resolver_agent_id="resolver-uuid-4",
+                reason=reason,
+            )
+            == 0
+        )
+
+        rows = _read_rows(isolated_findings_state)
+        assert len(rows) == 2
+        assert all(r["status"] == new_status for r in rows)
+        # Older active row closed as dup pointing to target_fp; latest row is primary
+        assert rows[0]["resolution_reason"] == "dup"
+        assert rows[0]["duplicate_of"] == fp
+        assert rows[1]["resolution_reason"] == reason
+        assert "duplicate_of" not in rows[1]
+
+        now = datetime.now(timezone.utc)
+        stats = precision_by_pattern_and_class(rows, now=now, min_weighted_n=0.5)
+        summary = _watcher_summary_from_rows(rows, now=now, window_days=3)
+        by_day = {d["day"]: d for d in summary["timeline"]}
+        today = now.date().isoformat()
+        if new_status == "confirmed":
+            assert stats[("P006", "app")].weighted_confirmed == pytest.approx(1.0, rel=0.05)
+            assert summary["patterns"][0]["confirmed"] == 1
+            assert by_day[today]["confirmed"] == 1
+        else:
+            assert stats[("P006", "app")].weighted_dismissed == pytest.approx(1.0, rel=0.05)
+            assert summary["patterns"][0]["dismissed"] == 1
+            assert summary["patterns"][0]["dismissed_fp"] == 1
+            assert by_day[today]["dismissed"] == 1
+        assert summary["patterns"][0]["surfaced"] == 0
 
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
