@@ -18,6 +18,8 @@ import os
 import random
 import socket
 import stat
+import struct
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -202,9 +204,11 @@ def _validate_unix_socket_path(socket_path: str) -> None:
 
     Uses ``os.lstat`` (never follows symlinks) and enforces:
     - non-empty absolute path without NUL bytes
+    - parent directory is not group/world-writable unless sticky-bit protected
+      and owned by root or the current effective UID
     - not a symlink
     - socket inode (``S_ISSOCK``)
-    - owned by the current effective UID (``os.getuid()``)
+    - owned by the current effective UID (``os.geteuid()``)
     - owner-only permissions (``(st_mode & 0o077) == 0``)
     """
     if not isinstance(socket_path, str) or not socket_path or "\x00" in socket_path:
@@ -212,18 +216,72 @@ def _validate_unix_socket_path(socket_path: str) -> None:
     if not os.path.isabs(socket_path):
         raise ValueError(f"unix socket path must be absolute: {socket_path!r}")
 
+    euid = os.geteuid()
+    parent = os.path.dirname(socket_path)
+    parent_st = os.stat(parent)
+    if not stat.S_ISDIR(parent_st.st_mode):
+        raise PermissionError(f"unix socket parent is not a directory: {parent}")
+    if (stat.S_IMODE(parent_st.st_mode) & 0o022) != 0:
+        has_sticky = (parent_st.st_mode & stat.S_ISVTX) != 0
+        if not has_sticky or parent_st.st_uid not in (0, euid):
+            raise PermissionError(
+                f"unix socket parent directory is group/world-writable without sticky bit: {parent}"
+            )
+
     st = os.lstat(socket_path)
     if stat.S_ISLNK(st.st_mode):
         raise PermissionError(f"refusing symlink unix socket: {socket_path}")
     if not stat.S_ISSOCK(st.st_mode):
         raise PermissionError(f"path is not a unix socket: {socket_path}")
-    if st.st_uid != os.getuid():
+    if st.st_uid != euid:
         raise PermissionError(
-            f"unix socket not owned by current uid ({os.getuid()}): {socket_path}"
+            f"unix socket not owned by current euid ({euid}): {socket_path}"
         )
     if (stat.S_IMODE(st.st_mode) & 0o077) != 0:
         raise PermissionError(
             f"unix socket has unsafe permissions ({oct(stat.S_IMODE(st.st_mode))}): {socket_path}"
+        )
+
+
+def _read_unix_peer_uid(sock: socket.socket) -> int | None:
+    """Return kernel-attested peer effective UID on a connected AF_UNIX socket.
+
+    Uses ``LOCAL_PEERCRED`` (``struct xucred``) on macOS and ``SO_PEERCRED``
+    (``struct ucred``) on Linux. Returns ``None`` only on platforms without
+    either socket option.
+    """
+    if sys.platform == "darwin":
+        # <sys/un.h>: SOL_LOCAL = 0, LOCAL_PEERCRED = 0x001
+        # <sys/ucred.h>: struct xucred { uint32 cr_version; uint32 cr_uid; ... }
+        raw = sock.getsockopt(0, 0x001, struct.calcsize("IIh2x16I"))
+        if len(raw) < struct.calcsize("II"):
+            raise PermissionError("unexpected LOCAL_PEERCRED payload length")
+        version, peer_uid = struct.unpack_from("II", raw, 0)
+        if version != 0:
+            raise PermissionError(f"unsupported LOCAL_PEERCRED xucred version: {version}")
+        return int(peer_uid)
+
+    if sys.platform.startswith("linux"):
+        so_peercred = getattr(socket, "SO_PEERCRED", None)
+        if so_peercred is None:
+            return None
+        # <sys/socket.h>: struct ucred { pid_t pid; uid_t uid; gid_t gid; }
+        raw = sock.getsockopt(socket.SOL_SOCKET, so_peercred, struct.calcsize("iII"))
+        if len(raw) < struct.calcsize("iII"):
+            raise PermissionError("unexpected SO_PEERCRED payload length")
+        _pid, peer_uid, _gid = struct.unpack("iII", raw[: struct.calcsize("iII")])
+        return int(peer_uid)
+
+    return None
+
+
+def _verify_unix_peer_uid(sock: socket.socket, socket_path: str) -> None:
+    """Verify the connected peer's effective UID matches ours before sending headers."""
+    peer_uid = _read_unix_peer_uid(sock)
+    euid = os.geteuid()
+    if peer_uid is not None and peer_uid != euid:
+        raise PermissionError(
+            f"unix socket peer euid ({peer_uid}) does not match current euid ({euid}): {socket_path}"
         )
 
 
@@ -241,6 +299,7 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
             if self.timeout is not None:
                 sock.settimeout(self.timeout)
             sock.connect(self._socket_path)
+            _verify_unix_peer_uid(sock, self._socket_path)
         except BaseException:
             sock.close()
             raise

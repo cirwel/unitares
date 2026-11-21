@@ -541,9 +541,25 @@ defmodule UnitaresLeasePlane.Application do
   @doc false
   def tcp_disabled? do
     case System.get_env("UNITARES_LEASE_PLANE_DISABLE_TCP") do
-      "1" -> true
-      value when is_binary(value) and value != "" -> false
-      _ -> Application.get_env(:lease_plane, :http_disable_tcp, false) == true
+      nil ->
+        Application.get_env(:lease_plane, :http_disable_tcp, false) == true
+
+      raw when is_binary(raw) ->
+        case raw |> String.trim() |> String.downcase() do
+          "" ->
+            Application.get_env(:lease_plane, :http_disable_tcp, false) == true
+
+          val when val in ["1", "true", "yes", "on"] ->
+            true
+
+          val when val in ["0", "false", "no", "off"] ->
+            false
+
+          _ ->
+            raise ArgumentError,
+                  "invalid UNITARES_LEASE_PLANE_DISABLE_TCP: #{inspect(raw)} " <>
+                    "(expected one of 1, true, yes, on, 0, false, no, off)"
+        end
     end
   end
 

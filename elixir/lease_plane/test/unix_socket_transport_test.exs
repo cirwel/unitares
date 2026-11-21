@@ -384,5 +384,31 @@ defmodule UnitaresLeasePlane.UnixSocketTransportTest do
       assert [%{id: UnitaresLeasePlane.HTTP.UnixSocket}] = children
       assert LeaseApplication.resolved_http_ip() == {:local, "/run/unitares/lease.sock"}
     end
+
+    test "parses truthy/falsy UNITARES_LEASE_PLANE_DISABLE_TCP values and rejects invalid ones fail-closed" do
+      Application.put_env(:lease_plane, :http_unix_socket, "/run/unitares/lease.sock")
+
+      for truthy <- ["1", " 1 ", "true", "TRUE", "yes", "Yes", "on", " ON "] do
+        System.put_env("UNITARES_LEASE_PLANE_DISABLE_TCP", truthy)
+        assert LeaseApplication.tcp_disabled?() == true
+        assert [%{id: UnitaresLeasePlane.HTTP.UnixSocket}] = LeaseApplication.http_children()
+      end
+
+      for falsy <- ["0", " 0 ", "false", "FALSE", "no", "off"] do
+        System.put_env("UNITARES_LEASE_PLANE_DISABLE_TCP", falsy)
+        assert LeaseApplication.tcp_disabled?() == false
+
+        assert [%{id: UnitaresLeasePlane.HTTP.TCP}, %{id: UnitaresLeasePlane.HTTP.UnixSocket}] =
+                 LeaseApplication.http_children()
+      end
+
+      for invalid <- ["maybe", "tru", "2", "enabled"] do
+        System.put_env("UNITARES_LEASE_PLANE_DISABLE_TCP", invalid)
+
+        assert_raise ArgumentError, ~r/invalid UNITARES_LEASE_PLANE_DISABLE_TCP/, fn ->
+          LeaseApplication.http_children()
+        end
+      end
+    end
   end
 end

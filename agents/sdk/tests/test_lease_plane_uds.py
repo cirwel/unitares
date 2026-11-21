@@ -32,8 +32,13 @@ from unitares_sdk.lease_plane import (
     SimpleOk,
     StatusOk,
 )
+from unitares_sdk import _substrate
 from unitares_sdk.lease_plane.advisory import make_advisory_client
-from unitares_sdk.lease_plane.client import LeaseHTTPRequest, _UnixHTTPConnection
+from unitares_sdk.lease_plane.client import (
+    LeaseHTTPRequest,
+    _read_unix_peer_uid,
+    _UnixHTTPConnection,
+)
 
 
 class _RecordingUnixHTTPServer(socketserver.UnixStreamServer):
@@ -301,6 +306,11 @@ def test_uds_base_url_scheme_and_from_env_and_advisory(monkeypatch: pytest.Monke
         assert advisory_client.config.unix_socket == sock_path
         assert isinstance(advisory_client.health_check(), HealthOk)
 
+        # 4. _substrate._make_client() picks up UNITARES_LEASE_PLANE_UNIX_SOCKET
+        substrate_client = _substrate._make_client()
+        assert substrate_client.config.unix_socket == sock_path
+        assert isinstance(substrate_client.health_check(), HealthOk)
+
 
 def test_uds_preserves_error_classification() -> None:
     bearer = "expected-bearer"
@@ -431,11 +441,58 @@ def test_uds_rejects_non_socket_wrong_uid_and_malformed_paths(
     assert isinstance(malformed_health, HealthUnavailable)
     assert "ValueError" in (malformed_health.reason or "")
 
-    # Different UID must be rejected fail-closed.
+    # Different effective UID must be rejected fail-closed.
     with _uds_lease_server() as (sock_path, server):
-        monkeypatch.setattr(os, "getuid", lambda: os.lstat(sock_path).st_uid + 1)
-        with pytest.raises(PermissionError, match="not owned by current uid"):
+        monkeypatch.setattr(os, "geteuid", lambda: os.lstat(sock_path).st_uid + 1)
+        with pytest.raises(PermissionError, match="not owned by current euid"):
             _UnixHTTPConnection(sock_path, timeout=1.0).connect()
+        assert server.recorded_requests == []
+
+
+def test_uds_rejects_writable_parent_dir_without_sticky_bit() -> None:
+    with _uds_lease_server() as (sock_path, server):
+        parent = os.path.dirname(sock_path)
+        os.chmod(parent, 0o770)
+        try:
+            with pytest.raises(PermissionError, match="group/world-writable without sticky bit"):
+                _UnixHTTPConnection(sock_path, timeout=1.0).connect()
+            assert server.recorded_requests == []
+        finally:
+            os.chmod(parent, 0o700)
+
+
+def test_uds_post_connect_peer_uid_verification_blocks_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _uds_lease_server(bearer="secret-never-sent") as (sock_path, server):
+        # Sanity check: real peer UID matches current effective UID on darwin/linux.
+        conn = _UnixHTTPConnection(sock_path, timeout=1.0)
+        conn.connect()
+        try:
+            assert conn.sock is not None
+            peer_uid = _read_unix_peer_uid(conn.sock)
+            assert peer_uid == os.geteuid()
+        finally:
+            conn.close()
+
+        # Simulated TOCTOU peer UID mismatch must abort before any HTTP bytes are sent.
+        monkeypatch.setattr(
+            "unitares_sdk.lease_plane.client._read_unix_peer_uid",
+            lambda _sock: os.geteuid() + 1,
+        )
+        with pytest.raises(PermissionError, match="peer euid"):
+            _UnixHTTPConnection(sock_path, timeout=1.0).connect()
+
+        client = LeasePlaneClient(
+            LeasePlaneClientConfig(
+                bearer_token="secret-never-sent",
+                unix_socket=sock_path,
+                timeout_s=1.0,
+            )
+        )
+        health = client.health_check()
+        assert isinstance(health, HealthUnavailable)
+        assert "PermissionError" in (health.reason or "")
         assert server.recorded_requests == []
 
 
