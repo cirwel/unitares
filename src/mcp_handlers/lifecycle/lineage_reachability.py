@@ -112,29 +112,13 @@ async def _cte_ancestors(db, child_ids: set[str], depth_limit: int) -> set[str]:
     registered relationship permits a live parent (NULL counts as
     succession-eligible).
     """
+    from src.db.mixins.identity import fetch_succession_ancestors
+
     depth = max(1, min(int(depth_limit), _MAX_DEPTH))
-    sql = """
-        WITH RECURSIVE ancestors(agent_id, depth) AS (
-            SELECT i.parent_agent_id, 1
-            FROM core.identities i
-            WHERE i.agent_id = ANY($1::text[])
-              AND i.parent_agent_id IS NOT NULL
-              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
-            UNION ALL
-            SELECT i.parent_agent_id, a.depth + 1
-            FROM core.identities i
-            JOIN ancestors a ON i.agent_id = a.agent_id
-            WHERE i.parent_agent_id IS NOT NULL
-              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
-              AND a.depth < $3
-        )
-        SELECT DISTINCT agent_id FROM ancestors WHERE agent_id IS NOT NULL
-    """
     async with db.acquire() as conn:
-        rows = await conn.fetch(
-            sql, list(child_ids), list(_NON_SUCCESSION_SPAWN_REASONS), depth
+        return await fetch_succession_ancestors(
+            conn, list(child_ids), list(_NON_SUCCESSION_SPAWN_REASONS), depth
         )
-    return {r["agent_id"] for r in rows if r["agent_id"]}
 
 
 async def _age_ancestors(db, child_ids: set[str], depth_limit: int) -> set[str]:

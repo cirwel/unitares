@@ -561,51 +561,66 @@ async def read_runtime_activity(
     reflection_rows: list[Any] = []
     if agent_ids:
         from src.db import get_db
+        from src.db.mixins.identity import fetch_agent_identities_for_ids
+        from src.db.mixins.state import fetch_runtime_reflection_summary_by_identity
 
         db = get_db()
         async with db.acquire() as conn:
-            reflection_rows = await conn.fetch(
-                """
-                SELECT a.id AS agent_id,
-                       a.label,
-                       max(s.recorded_at) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class = 'agent_report'
-                       ) AS last_reflection_at,
-                       count(s.state_id) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class = 'agent_report'
-                       ) AS reflection_count,
-                       max(s.recorded_at) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class = 'substrate_interpretation'
-                       ) AS last_interpretation_at,
-                       count(s.state_id) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class = 'substrate_interpretation'
-                       ) AS interpretation_count,
-                       max(s.recorded_at) FILTER (
-                           WHERE s.synthetic = true
-                       ) AS last_bootstrap_at,
-                       count(s.state_id) FILTER (
-                           WHERE s.synthetic = true
-                       ) AS bootstrap_count,
-                       max(s.recorded_at) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class IS NULL
-                       ) AS last_unclassified_at,
-                       (array_agg(s.state_json ORDER BY s.recorded_at DESC) FILTER (
-                           WHERE s.synthetic = false
-                             AND s.epistemic_class = 'agent_report'
-                       ))[1] AS last_reflection_state
-                FROM core.agents a
-                LEFT JOIN core.identities i ON i.agent_id = a.id
-                LEFT JOIN core.agent_state s ON s.identity_id = i.identity_id
-                WHERE a.id = ANY($1::text[])
-                GROUP BY a.id, a.label
-                """,
-                agent_ids,
+            agent_rows = await fetch_agent_identities_for_ids(conn, agent_ids)
+            identity_ids = [
+                int(row["identity_id"])
+                for row in agent_rows
+                if row["identity_id"] is not None
+            ]
+            state_rows = await fetch_runtime_reflection_summary_by_identity(
+                conn, identity_ids
             )
+        state_by_identity = {int(row["identity_id"]): row for row in state_rows}
+        grouped: dict[tuple[str, Any], dict[str, Any]] = {}
+        for agent_row in agent_rows:
+            key = (agent_row["agent_id"], agent_row["label"])
+            entry = grouped.setdefault(
+                key,
+                {
+                    "agent_id": agent_row["agent_id"],
+                    "label": agent_row["label"],
+                    "last_reflection_at": None,
+                    "reflection_count": 0,
+                    "last_interpretation_at": None,
+                    "interpretation_count": 0,
+                    "last_bootstrap_at": None,
+                    "bootstrap_count": 0,
+                    "last_unclassified_at": None,
+                    "last_reflection_state": None,
+                },
+            )
+            identity_id = agent_row["identity_id"]
+            if identity_id is None:
+                continue
+            state = state_by_identity.get(int(identity_id))
+            if state is None:
+                continue
+            entry["reflection_count"] += int(state["reflection_count"] or 0)
+            entry["interpretation_count"] += int(state["interpretation_count"] or 0)
+            entry["bootstrap_count"] += int(state["bootstrap_count"] or 0)
+            for field_name in (
+                "last_interpretation_at",
+                "last_bootstrap_at",
+                "last_unclassified_at",
+            ):
+                candidate = state[field_name]
+                if candidate is not None and (
+                    entry[field_name] is None or candidate > entry[field_name]
+                ):
+                    entry[field_name] = candidate
+            candidate_refl = state["last_reflection_at"]
+            if candidate_refl is not None and (
+                entry["last_reflection_at"] is None
+                or candidate_refl > entry["last_reflection_at"]
+            ):
+                entry["last_reflection_at"] = candidate_refl
+                entry["last_reflection_state"] = state["last_reflection_state"]
+        reflection_rows = list(grouped.values())
     return summarize_runtime_activity(
         events, reflection_rows, now=now, window_hours=window_hours
     )
