@@ -883,3 +883,42 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert r_life.status_code == 200
     assert "provenance_mac" not in r_life.json()["events"][0]["details"]
     assert persisted_rows[0]["details"]["provenance_mac"] == original_mac
+
+
+@pytest.mark.asyncio
+async def test_audit_events_query_strips_provenance_mac():
+    """MCP observe(action='audit_events', include_events=True) strips internal provenance_mac."""
+    import json
+
+    from src.mcp_handlers.observability.handlers import handle_audit_events
+
+    row = {
+        "event_id": "db-audit-1",
+        "event_type": "vigil_finding",
+        "agent_id": "vigil",
+        "timestamp": "2026-11-21T03:00:00+00:00",
+        "details": {
+            "type": "vigil_finding",
+            "severity": "warning",
+            "message": "stalled PR",
+            "provenance_verified": True,
+            "verified_actor_agent_uuid": VIGIL_UUID,
+            "provenance_source": "server_findings_token",
+            "provenance_mac": "a" * 64,
+        },
+    }
+    with (
+        patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=[row])),
+        patch("src.audit_db.aggregate_audit_events_async", new=AsyncMock(return_value=[])),
+    ):
+        result = await handle_audit_events(
+            {"event_type": "vigil_finding", "include_events": True}
+        )
+    data = json.loads(result[0].text)
+    assert data["success"] is True
+    returned_details = data["events"][0]["details"]
+    assert returned_details["provenance_verified"] is True
+    assert returned_details["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert "provenance_mac" not in returned_details
+    # Source row must not be mutated in place
+    assert row["details"]["provenance_mac"] == "a" * 64

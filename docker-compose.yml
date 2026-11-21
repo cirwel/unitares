@@ -270,6 +270,10 @@ services:
       # empty, the server generates one at startup and keeps it on the
       # governance-data volume (data/secrets/). Set it only to share a key.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-}
+      # Optional HMAC secret keeping server-verified finding provenance valid
+      # across restarts on GET /api/events audit-DB backfill (empty falls back
+      # to an ephemeral per-process key that fails closed across restarts).
+      UNITARES_AUDIT_PROVENANCE_SECRET: ${UNITARES_AUDIT_PROVENANCE_SECRET:-}
       # Identity posture (v3.3.0 made strict the default). Empty keeps the
       # default: strict identity on, credentials only on proof, legacy
       # agent-{uuid12} session ids refused. The opt-outs the upgrade notes

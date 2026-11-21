@@ -133,6 +133,12 @@ compared with full-text search alone:
      `client_session_id` (wrapper keys, `X-Agent-Id`, and `X-Session-ID`-only
      calls are refused), and `findings` tokens are rejected on
      `POST /v1/tools/call`.
+   - `UNITARES_AUDIT_PROVENANCE_SECRET` — optional HMAC secret (forwarded by
+     `docker-compose.yml` and `docker-compose.cloud.yml`; generate with
+     `openssl rand -hex 32`) that keeps server-verified finding provenance
+     valid in `GET /api/events` audit-DB backfill across container restarts.
+     When unset, the server uses an ephemeral per-process key so backfilled
+     provenance fails closed after restart.
    - `UNITARES_OAUTH_ISSUER_URL` / `UNITARES_OAUTH_PUBLIC_PORT` / `UNITARES_OAUTH_REQUIRED` —
      optional OAuth 2.1 configuration for hosted connectors such as Claude.ai and
      ChatGPT (`docker-compose.cloud.yml`). Keep `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false`
