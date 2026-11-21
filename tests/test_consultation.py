@@ -2946,8 +2946,28 @@ async def test_failover_skips_over_budget_host_to_reach_later_fitting_peer(monke
         ("codex:host-adapter", 240),
         ("claude:host-adapter", 240),
     ]
-    assert any(
-        item["host_id"] == "antigravity:host-adapter"
-        and item["reason"] == "insufficient_budget"
-        for item in parsed["skipped"]
-    )
+    assert [(item["host_id"], item["reason"]) for item in parsed["skipped"]] == [
+        ("antigravity:host-adapter", "insufficient_budget"),
+    ]
+    assert all(item["reason"] in _ic.SKIP_REASONS for item in parsed["skipped"])
+    assert parsed["diagnostics"]["host_id"] == "claude:host-adapter"
+    assert parsed["failover"] == [{
+        "from_host_id": "codex:host-adapter", "reason": "quota",
+        "to_host_id": "claude:host-adapter",
+    }]
+
+
+@pytest.mark.parametrize(("remaining_s", "expected_peer", "expected_skips"), [
+    (360.0, "antigravity:host-adapter", []),
+    (240.0, "claude:host-adapter", ["antigravity:host-adapter"]),
+    (239.999, None, []),
+])
+def test_failover_attempt_budget_boundaries(monkeypatch, remaining_s, expected_peer, expected_skips):
+    peers = ("codex:host-adapter", "antigravity:host-adapter", "claude:host-adapter")
+    request = co.ConsultRequest(brief="q", requester_uuid=None, thorough_peers=peers)
+    monkeypatch.setattr(co, "host_adapter_available", lambda host_id: host_id in _ALL_HOSTS)
+
+    peer, passed = co._find_next_peer(request, [peers[0]], remaining_s=remaining_s)
+
+    assert peer == expected_peer
+    assert [item["host_id"] for item in passed] == expected_skips

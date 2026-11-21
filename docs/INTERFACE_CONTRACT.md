@@ -86,6 +86,15 @@ These are additive diagnostic fields within the existing normalized envelope;
 the capability catalog and input schemas do not change, so the interface
 contract version and digests do not move.
 
+### Thorough consultation failover
+
+The closed vocabulary for `skipped[].reason` includes `disabled`, `unconfigured`,
+`cooldown`, `excluded_family`, `egress`, and `insufficient_budget`. During
+`consult` failover, `insufficient_budget` means the host is available but its
+full attempt would exceed the remaining budget. The scan continues in the
+operator's order. It adds skips only when it finds a host to try, and records
+a single `failover` hop from the failed host to that next attempt.
+
 ## Core workflow and advanced capabilities
 
 The [capability guide](CAPABILITIES_AND_DEPLOYMENT.md) presents identity,
