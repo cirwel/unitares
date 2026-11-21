@@ -121,7 +121,7 @@ measurement (Section 6) excludes owner modules and replaces these figures.
 | `agents/chronicler/scrapers.py`, `agents/sentinel/forced_release_alarm.py` | Read-only SQL against Core tables | Resident userland: breach |
 | `agents/vigil/agent.py:82` → `scripts/eval/retrieval_eval.py:32` | Launches a script that imports `src.mcp_handlers.knowledge.handlers` | Resident userland: breach through a subprocess |
 | `agents/sentinel/phase_b_promotion.py:32` → `scripts/lease_plane/evaluate_phase_b_promotion.py` | Launches a script that opens `psycopg2` directly | Resident userland: breach through a subprocess |
-| `agents/{sentinel,vigil,watcher}/routes.py` | `src.*` imports, including a private name (`sentinel/routes.py:18` imports `_FINDING_SEVERITIES`), `lazy_mcp_server`, the broadcaster and `audit_db` | Route packs mounted in-process by `src/http_routes/packs.py`: extension code, not userland, but with unrestricted access |
+| `agents/{sentinel,vigil,watcher}/routes.py` | `src.*` imports, `lazy_mcp_server`, the broadcaster and `audit_db` | Route packs mounted in-process by `src/http_routes/packs.py`: extension code, not userland, but with unrestricted access |
 | `agents/sdk/src/unitares_sdk/lease_plane/client.py:157` | `src.perf_monitor` | Optional guarded host hook, absent outside the server checkout: not a dependency |
 
 The distinction in the last column matters: a route pack runs inside the server

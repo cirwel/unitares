@@ -802,12 +802,19 @@ class TestLoadAgentReportCadences:
         first = datetime(2026, 8, 9, 18, 0, tzinfo=timezone.utc)
         last = datetime(2026, 8, 9, 18, 10, tzinfo=timezone.utc)
         conn = MagicMock()
-        conn.fetch = AsyncMock(return_value=[{
-            "agent_id": "agent-1",
-            "report_count": 13,
-            "first_report_at": first,
-            "last_report_at": last,
-        }])
+        conn.fetch = AsyncMock(
+            side_effect=[
+                [
+                    {
+                        "identity_id": 42,
+                        "report_count": 13,
+                        "first_report_at": first,
+                        "last_report_at": last,
+                    }
+                ],
+                [{"identity_id": 42, "agent_id": "agent-1"}],
+            ]
+        )
 
         class Acquire:
             async def __aenter__(self):
@@ -831,9 +838,78 @@ class TestLoadAgentReportCadences:
                 "last_report_at": last,
             },
         }
-        sql = conn.fetch.await_args.args[0]
-        assert "= 'agent_report'" in sql
-        assert "s.synthetic = false" in sql
+        state_sql = conn.fetch.await_args_list[0].args[0]
+        assert "= 'agent_report'" in state_sql
+        assert "s.synthetic = false" in state_sql
+        identity_sql = conn.fetch.await_args_list[1].args[0]
+        assert "core.identities" in identity_sql
+
+    @pytest.mark.asyncio
+    async def test_merges_multiple_identities_for_same_agent(self):
+        t0 = datetime(2026, 8, 9, 17, 0, tzinfo=timezone.utc)
+        t1 = datetime(2026, 8, 9, 18, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 8, 9, 19, 0, tzinfo=timezone.utc)
+        conn = MagicMock()
+        conn.fetch = AsyncMock(
+            side_effect=[
+                [
+                    {"identity_id": 1, "report_count": 5, "first_report_at": t1, "last_report_at": t2},
+                    {"identity_id": 2, "report_count": 8, "first_report_at": t0, "last_report_at": t1},
+                ],
+                [
+                    {"identity_id": 1, "agent_id": "agent-1"},
+                    {"identity_id": 2, "agent_id": "agent-1"},
+                ],
+            ]
+        )
+
+        class Acquire:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *_args):
+                return False
+
+        db = MagicMock()
+        db.acquire.return_value = Acquire()
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.lifecycle.stuck import _load_agent_report_cadences
+
+            profiles = await _load_agent_report_cadences()
+
+        assert profiles == {
+            "agent-1": {
+                "report_count": 13,
+                "first_report_at": t0,
+                "last_report_at": t2,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_should_add_stuck_note_delegates_open_tag_lookup_to_kg_mixin(self):
+        conn = MagicMock()
+        conn.fetchval = AsyncMock(return_value=1)
+
+        class Acquire:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *_args):
+                return False
+
+        db = MagicMock()
+        db._pool = object()
+        db.acquire.return_value = Acquire()
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.lifecycle.stuck import _should_add_stuck_note
+
+            allowed = await _should_add_stuck_note("agent-1", None, 30.0)
+
+        assert allowed is False
+        sql, agent_arg, tag_arg = conn.fetchval.await_args.args
+        assert "knowledge.discoveries" in sql
+        assert agent_arg == "agent-1"
+        assert tag_arg == "stuck-agent"
 
 
 class TestMarginStaleCap:

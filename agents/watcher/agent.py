@@ -2572,6 +2572,7 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
                         resolver_agent_id="watcher_scan_commits",
                         reason=reason,
                         emit_resolution_event=False,
+                        propagate_copies=False,
                     )
             except FindingsStateBusy as exc:
                 log(f"scan_commits: findings lock busy: {exc}", "warning")

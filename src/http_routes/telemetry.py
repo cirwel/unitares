@@ -463,41 +463,10 @@ async def http_enforcement_divergence(request):
             days = 90
         days = max(1, min(days, 365))
         from src.db import get_db
+        from src.db.mixins.audit import fetch_pause_divergence_summary
         db = get_db()
         async with db.acquire() as conn:
-            totals = await conn.fetchrow(
-                """
-                SELECT
-                  count(*) FILTER (WHERE event_type = 'auto_attest'
-                                     AND payload->>'decision' = 'pause') AS produced,
-                  count(*) FILTER (WHERE event_type = 'auto_attest'
-                                     AND payload->>'decision' = 'pause'
-                                     AND payload->>'gap_suppressed' = 'true') AS gap_suppressed,
-                  count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
-                FROM audit.events
-                WHERE ts > now() - make_interval(days => $1)
-                  AND event_type IN ('auto_attest', 'lifecycle_paused')
-                """,
-                days,
-            )
-            last_row = await conn.fetchrow(
-                "SELECT max(ts) AS last_delivered FROM audit.events "
-                "WHERE event_type = 'lifecycle_paused'"
-            )
-            weekly = await conn.fetch(
-                """
-                SELECT to_char(date_trunc('week', ts), 'MM-DD') AS week,
-                       count(*) FILTER (WHERE event_type = 'auto_attest'
-                                          AND payload->>'decision' = 'pause') AS produced,
-                       count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
-                FROM audit.events
-                WHERE ts > now() - make_interval(days => $1)
-                  AND event_type IN ('auto_attest', 'lifecycle_paused')
-                GROUP BY date_trunc('week', ts)
-                ORDER BY date_trunc('week', ts)
-                """,
-                days,
-            )
+            totals, last_row, weekly = await fetch_pause_divergence_summary(conn, days=days)
         last_delivered = last_row["last_delivered"] if last_row else None
         return JSONResponse({
             "window_days": days,
