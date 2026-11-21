@@ -326,34 +326,46 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             for fp, row in latest_row_by_fp.items()
             if row.get("status") == "dismissed"
             and row.get("resolution_reason") == "fp"
+            and _rule_version_is_current(row)
         }
         # Existing dismissed+fp fingerprints and propagated copies of fp
-        # dismissals (for expired-dedup self-match guard). When the original
-        # row is still present, its current verdict is authoritative (so a
-        # later --resolve or --dismiss --reason stale un-suppresses the copy
-        # too); fall back to duplicate_of_reason=="fp" only when the original
-        # has been compacted away.
-        existing_suppressed_fingerprints = fp_row_fingerprints | {
-            fp
-            for fp, row in latest_row_by_fp.items()
-            if row.get("status") == "dismissed"
-            and row.get("resolution_reason") == "dup"
-            and isinstance((dup_of := row.get("duplicate_of")), str)
-            and bool(dup_of)
-            and (
-                dup_of in fp_row_fingerprints
-                if dup_of in present_fingerprints
-                else row.get("duplicate_of_reason") == "fp"
-            )
+        # dismissals (for expired-dedup self-match guard), keyed to their
+        # normalized rule_version so an obsolete rule revision never suppresses
+        # a finding from a newer rule revision. When the original row is still
+        # present, its current verdict and rule_version are authoritative; fall
+        # back to duplicate_of_reason=="fp" only when the original was compacted.
+        existing_suppressed_rule_versions: dict[str, int] = {
+            fp: _normalized_rule_version(latest_row_by_fp[fp])
+            for fp in fp_row_fingerprints
         }
+        for fp, row in latest_row_by_fp.items():
+            if fp in existing_suppressed_rule_versions:
+                continue
+            if (
+                row.get("status") == "dismissed"
+                and row.get("resolution_reason") == "dup"
+                and _rule_version_is_current(row)
+                and isinstance((dup_of := row.get("duplicate_of")), str)
+                and bool(dup_of)
+                and (
+                    (
+                        dup_of in fp_row_fingerprints
+                        and _normalized_rule_version(latest_row_by_fp[dup_of])
+                        == _normalized_rule_version(row)
+                    )
+                    if dup_of in present_fingerprints
+                    else row.get("duplicate_of_reason") == "fp"
+                )
+            ):
+                existing_suppressed_rule_versions[fp] = _normalized_rule_version(row)
 
         # Carry forward prior false-positive ("fp") dismissals across different
-        # worktrees only. Only rows with status=="dismissed" AND
-        # resolution_reason=="fp" qualify; wont_fix, out_of_scope, unclear,
-        # stale, dup, and free-text reasons are never auto-carried.
-        # Same-worktree lines and files with multiple occurrences of the same
-        # line text are never auto-dismissed.
-        fp_sources_by_key: dict[CopyGroupKey, list[tuple[str, str]]] = {}
+        # worktrees only, and only between matching current rule revisions.
+        # Only rows with status=="dismissed" AND resolution_reason=="fp"
+        # qualify; wont_fix, out_of_scope, unclear, stale, dup, and free-text
+        # reasons are never auto-carried. Same-worktree lines and files with
+        # multiple occurrences of the same line text are never auto-dismissed.
+        fp_sources_by_key: dict[CopyGroupKey, list[tuple[str, str, int]]] = {}
         existing_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
         fp_candidate_keys: set[tuple[str, str, str, str]] = set()
         git_cache: GitCache = {}
@@ -383,7 +395,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                         existing_wt_counts[(copy_key, toplevel)] += 1
                         if fp in fp_row_fingerprints:
                             fp_sources_by_key.setdefault(copy_key, []).append(
-                                (fp, toplevel)
+                                (fp, toplevel, _normalized_rule_version(row))
                             )
                             fp_candidate_keys.add(cand)
 
@@ -402,7 +414,11 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
         fresh: list[Finding] = []
         rows_to_append: list[dict[str, Any]] = []
         for f, resolved in zip(brand_new, new_resolved):
-            if f.fingerprint in existing_suppressed_fingerprints:
+            f_rule_version = _normalized_rule_version(f)
+            if (
+                f.fingerprint in existing_suppressed_rule_versions
+                and existing_suppressed_rule_versions[f.fingerprint] == f_rule_version
+            ):
                 continue
             prior_fp: str | None = None
             if resolved is not None:
@@ -411,11 +427,14 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                     new_wt_counts[(copy_key, new_toplevel)] == 1
                     and existing_wt_counts[(copy_key, new_toplevel)] == 0
                 ):
-                    for candidate_fp, source_toplevel in fp_sources_by_key.get(
-                        copy_key, []
-                    ):
+                    for (
+                        candidate_fp,
+                        source_toplevel,
+                        source_rule_version,
+                    ) in fp_sources_by_key.get(copy_key, []):
                         if (
                             source_toplevel != new_toplevel
+                            and source_rule_version == f_rule_version
                             and existing_wt_counts[(copy_key, source_toplevel)] == 1
                         ):
                             prior_fp = candidate_fp
@@ -702,10 +721,14 @@ def update_finding_status(
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
+    # Cross-worktree copy propagation applies strictly to "dismissed" verdicts:
+    # confirming/fixing a bug on one branch does not fix unmerged sibling
+    # worktrees, so "confirmed" stays branch-local.
     sibling_fps_to_close: set[str] = set()
-    if propagate_copies and new_status in ("dismissed", "confirmed"):
+    if propagate_copies and new_status == "dismissed":
         target_candidate = _copy_candidate_key(target_row)
         if target_candidate is not None:
+            target_rule_version = _normalized_rule_version(target_row)
             latest_index_by_fp: dict[str, int] = {}
             for idx, f in enumerate(findings):
                 fp = f.get("fingerprint")
@@ -717,6 +740,7 @@ def update_finding_status(
                 for fp, idx in latest_index_by_fp.items()
                 if fp != target_fp
                 and findings[idx].get("status", "open") != "aged_out"
+                and _normalized_rule_version(findings[idx]) == target_rule_version
                 and _copy_candidate_key(findings[idx]) == target_candidate
             ]
             has_open_sibling_candidate = any(
@@ -1200,10 +1224,11 @@ def _apply_floor_to_finding(
 # absolute path and line, so the same code flagged in five worktrees, or at a
 # shifted line, is five rows. ``_copy_group_key`` defines copy identity across
 # worktrees of one repository. Display-time grouping collapses copies into one
-# entry while keeping every copy's fingerprint on screen, and verdict
+# entry while keeping every copy's fingerprint on screen, and dismissal
 # propagation (``update_finding_status`` / ``persist_findings``) reuses the
-# same key so resolving or dismissing one copy closes its siblings as ``dup``
-# without double-counting governance events or calibration stats.
+# same key so dismissing one copy closes its sibling worktree copies as ``dup``
+# without double-counting governance events or calibration stats (confirmations
+# stay branch-local so fixing one branch does not close unfixed worktrees).
 # ---------------------------------------------------------------------------
 
 # Per-render cache of git lookups: ``{directory: (git common dir, worktree
@@ -1304,6 +1329,30 @@ def _git_location(
 _UNGROUPED_PATTERNS = frozenset({"R000"})
 
 CopyGroupKey = tuple[str, str, str, str, str]
+
+
+def _normalized_rule_version(finding: Mapping[str, Any] | Finding) -> int:
+    """Return a finding's integer rule_version, normalizing missing/non-int to 0."""
+    raw = (
+        finding.rule_version
+        if isinstance(finding, Finding)
+        else finding.get("rule_version")
+    )
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+
+
+def _rule_version_is_current(finding: Mapping[str, Any] | Finding) -> bool:
+    """True when the finding's pattern is either unlisted in
+    ``PATTERN_RULE_VERSIONS`` or stamped at its current rule revision.
+    """
+    pattern = (
+        str(finding.pattern or "")
+        if isinstance(finding, Finding)
+        else str(finding.get("pattern") or "")
+    )
+    if pattern in PATTERN_RULE_VERSIONS:
+        return _normalized_rule_version(finding) == PATTERN_RULE_VERSIONS[pattern]
+    return True
 
 
 def _finding_copy_fields(
