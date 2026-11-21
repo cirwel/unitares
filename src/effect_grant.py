@@ -62,6 +62,23 @@ EFFECT_GRANT_VERSION = "gnt.v1"
 # token's ~1h. A captured grant should be useless almost immediately.
 _DEFAULT_GRANT_TTL_SECONDS = 30
 _MIN_GRANT_TTL_SECONDS = 5
+# Ceiling on a grant's lifetime (exp - iat). The longest in-tree producer is
+# governed_spawn at 120s; a caller asking for more is clamped at mint, and
+# verify refuses a payload whose signed lifetime exceeds it. This also bounds
+# how long a consumed nonce must be retained in effects.consumed_nonces.
+MAX_GRANT_TTL_SECONDS = 300
+# Tolerance for an ``iat`` slightly ahead of the verifier's clock.
+GRANT_CLOCK_SKEW_SECONDS = 30
+
+
+def grant_clock() -> int:
+    """The one clock grants are minted, verified and their nonces purged on.
+
+    Anything that decides whether a grant could still verify must read this,
+    not another clock such as the database's ``now()``: two clocks that drift
+    apart let a nonce be deleted while its grant is still accepted.
+    """
+    return int(time.time())
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -127,8 +144,8 @@ def mint_effect_grant(
     if not (aid and payload_sha256 and surface and custody_mode and idempotency_key):
         return None
 
-    now = int(time.time()) if _now is None else int(_now)
-    ttl = max(_MIN_GRANT_TTL_SECONDS, int(ttl_seconds))
+    now = grant_clock() if _now is None else int(_now)
+    ttl = min(MAX_GRANT_TTL_SECONDS, max(_MIN_GRANT_TTL_SECONDS, int(ttl_seconds)))
     grant_nonce = nonce or secrets.token_urlsafe(16)
 
     payload = {
@@ -163,7 +180,9 @@ def verify_effect_grant(
     Checks, in order, all required to pass:
       1. parses as ``gnt.v1.<payload_b64>.<sig_b64>``;
       2. HMAC over the domain-separated signing input matches (constant-time);
-      3. not expired (``exp`` vs now) — effect-freshness;
+      3. not expired (``exp`` vs now) — effect-freshness — and a lifetime the
+         server could have minted: ``iat`` not ahead of now beyond the skew
+         tolerance, and ``exp - iat`` within ``MAX_GRANT_TTL_SECONDS``;
       4. every bound field equals the caller's *expected* value taken from the
          live envelope: ``aid`` (identity), ``psha`` (T1 content anchor),
          ``surf``/``cust`` (content identity), ``idem`` (audit-trail binding).
@@ -209,9 +228,19 @@ def verify_effect_grant(
     except (TypeError, ValueError):
         return EffectGrantVerification(False, "bad_exp", nonce=nonce)
 
-    now = int(time.time()) if _now is None else int(_now)
+    now = grant_clock() if _now is None else int(_now)
     if now >= exp_int:
         return EffectGrantVerification(False, "expired", nonce=nonce, exp=exp_int)
+
+    try:
+        iat_int = int(payload.get("iat"))
+    except (TypeError, ValueError):
+        return EffectGrantVerification(False, "bad_lifetime", nonce=nonce, exp=exp_int)
+    if (
+        iat_int > now + GRANT_CLOCK_SKEW_SECONDS
+        or exp_int - iat_int > MAX_GRANT_TTL_SECONDS
+    ):
+        return EffectGrantVerification(False, "bad_lifetime", nonce=nonce, exp=exp_int)
 
     # Field binding — each mismatch means the grant authorizes a *different*
     # effect (or proposer, or key) than the one being cleared. T1 lives here.
