@@ -24,6 +24,7 @@ from typing import Any
 from agents.common.findings import post_finding
 from agents.watcher._util import (
     findings_state_lock as _findings_state_lock,
+    hash_line_content,
     log,
     watcher_state_dir,
 )
@@ -124,6 +125,11 @@ class Finding:
     # is not listed. Calibration counts a listed pattern's resolutions only
     # at the current revision.
     rule_version: int = 0
+    # SHA-256[:16] hash of the unique ±5-line source context window around
+    # ``line``, stamped at persist/dismiss time when unambiguous in the source
+    # file so cross-worktree fp propagation never collapses distinct blocks
+    # sharing a generic single line (e.g. ``except Exception:``).
+    context_hash: str = ""
 
     def __post_init__(self) -> None:
         if not self.fingerprint:
@@ -360,15 +366,17 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 existing_suppressed_rule_versions[fp] = _normalized_rule_version(row)
 
         # Carry forward prior false-positive ("fp") dismissals across different
-        # worktrees only, and only between matching current rule revisions.
-        # Only rows with status=="dismissed" AND resolution_reason=="fp"
-        # qualify; wont_fix, out_of_scope, unclear, stale, dup, and free-text
-        # reasons are never auto-carried. Same-worktree lines and files with
-        # multiple occurrences of the same line text are never auto-dismissed.
-        fp_sources_by_key: dict[CopyGroupKey, list[tuple[str, str, int]]] = {}
+        # worktrees only, and only between matching current rule revisions with
+        # identical unique ±5-line source context. Only rows with
+        # status=="dismissed" AND resolution_reason=="fp" qualify; wont_fix,
+        # out_of_scope, unclear, stale, dup, and free-text reasons are never
+        # auto-carried. Same-worktree lines and files with multiple occurrences
+        # of the same line/context are never auto-dismissed.
+        fp_sources_by_key: dict[CopyGroupKey, list[tuple[str, str, int, str]]] = {}
         existing_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
         fp_candidate_keys: set[tuple[str, str, str, str]] = set()
         git_cache: GitCache = {}
+        file_cache: FileLinesCache = {}
         if brand_new:
             new_candidate_keys = {
                 ck for f in brand_new if (ck := _copy_candidate_key(f)) is not None
@@ -388,16 +396,27 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                         cand = _copy_candidate_key(row)
                         if cand is None or cand not in matching_fp_candidates:
                             continue
-                        resolved = _copy_group_key_with_worktree(row, git_cache)
+                        resolved = _copy_group_key_with_worktree(
+                            row, git_cache, allow_persisted_location=True
+                        )
                         if resolved is None:
                             continue
                         copy_key, toplevel = resolved
                         existing_wt_counts[(copy_key, toplevel)] += 1
                         if fp in fp_row_fingerprints:
-                            fp_sources_by_key.setdefault(copy_key, []).append(
-                                (fp, toplevel, _normalized_rule_version(row))
+                            source_ctx = _resolve_copy_context_hash(
+                                row, file_cache, require_live_file=False
                             )
-                            fp_candidate_keys.add(cand)
+                            if source_ctx is not None:
+                                fp_sources_by_key.setdefault(copy_key, []).append(
+                                    (
+                                        fp,
+                                        toplevel,
+                                        _normalized_rule_version(row),
+                                        source_ctx,
+                                    )
+                                )
+                                fp_candidate_keys.add(cand)
 
         new_resolved: list[tuple[CopyGroupKey, str] | None] = []
         new_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
@@ -415,26 +434,44 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
         rows_to_append: list[dict[str, Any]] = []
         for f, resolved in zip(brand_new, new_resolved):
             f_rule_version = _normalized_rule_version(f)
+            live_ctx = _extract_unique_context_hash(
+                f.file, f.line, f.line_content_hash, file_cache
+            )
             if (
                 f.fingerprint in existing_suppressed_rule_versions
                 and existing_suppressed_rule_versions[f.fingerprint] == f_rule_version
             ):
-                continue
+                prior_suppressed_ctx = str(
+                    latest_row_by_fp[f.fingerprint].get("context_hash") or ""
+                )
+                if not prior_suppressed_ctx or (
+                    live_ctx is not None and live_ctx == prior_suppressed_ctx
+                ):
+                    continue
+            row_dict = asdict(f)
+            if live_ctx and not row_dict.get("context_hash"):
+                row_dict["context_hash"] = live_ctx
             prior_fp: str | None = None
             if resolved is not None:
+                f_verified_ctx = _resolve_copy_context_hash(
+                    f, file_cache, require_live_file=True
+                )
                 copy_key, new_toplevel = resolved
                 if (
-                    new_wt_counts[(copy_key, new_toplevel)] == 1
+                    f_verified_ctx is not None
+                    and new_wt_counts[(copy_key, new_toplevel)] == 1
                     and existing_wt_counts[(copy_key, new_toplevel)] == 0
                 ):
                     for (
                         candidate_fp,
                         source_toplevel,
                         source_rule_version,
+                        source_ctx,
                     ) in fp_sources_by_key.get(copy_key, []):
                         if (
                             source_toplevel != new_toplevel
                             and source_rule_version == f_rule_version
+                            and source_ctx == f_verified_ctx
                             and existing_wt_counts[(copy_key, source_toplevel)] == 1
                         ):
                             prior_fp = candidate_fp
@@ -442,7 +479,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             if prior_fp is not None:
                 rows_to_append.append(
                     {
-                        **asdict(f),
+                        **row_dict,
                         "status": "dismissed",
                         "dismissed_at": now_iso,
                         "resolution_reason": "dup",
@@ -452,7 +489,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 )
                 continue
             fresh.append(f)
-            rows_to_append.append(asdict(f))
+            rows_to_append.append(row_dict)
 
         if rows_to_append or dedup != original_dedup:
             # Persist even if `rows_to_append` is empty, so the sweep's pruning
@@ -721,61 +758,6 @@ def update_finding_status(
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
-    # Cross-worktree copy propagation applies strictly to "dismissed" verdicts:
-    # confirming/fixing a bug on one branch does not fix unmerged sibling
-    # worktrees, so "confirmed" stays branch-local.
-    sibling_fps_to_close: set[str] = set()
-    if propagate_copies and new_status == "dismissed":
-        target_candidate = _copy_candidate_key(target_row)
-        if target_candidate is not None:
-            target_rule_version = _normalized_rule_version(target_row)
-            latest_index_by_fp: dict[str, int] = {}
-            for idx, f in enumerate(findings):
-                fp = f.get("fingerprint")
-                if isinstance(fp, str) and fp:
-                    latest_index_by_fp[fp] = idx
-
-            non_aged_candidates = [
-                (fp, findings[idx])
-                for fp, idx in latest_index_by_fp.items()
-                if fp != target_fp
-                and findings[idx].get("status", "open") != "aged_out"
-                and _normalized_rule_version(findings[idx]) == target_rule_version
-                and _copy_candidate_key(findings[idx]) == target_candidate
-            ]
-            has_open_sibling_candidate = any(
-                row.get("status", "open") in ("open", "surfaced")
-                for _fp, row in non_aged_candidates
-            )
-            if has_open_sibling_candidate:
-                git_cache: GitCache = {}
-                target_resolved = _copy_group_key_with_worktree(target_row, git_cache)
-                if target_resolved is not None:
-                    target_copy_key, target_toplevel = target_resolved
-                    wt_non_aged_counts: Counter[str] = Counter()
-                    open_by_sibling_wt: dict[str, list[str]] = {}
-                    for fp, row in non_aged_candidates:
-                        sib_resolved = _copy_group_key_with_worktree(row, git_cache)
-                        if sib_resolved is None:
-                            continue
-                        sib_copy_key, sib_toplevel = sib_resolved
-                        if sib_copy_key != target_copy_key:
-                            continue
-                        wt_non_aged_counts[sib_toplevel] += 1
-                        if (
-                            sib_toplevel != target_toplevel
-                            and row.get("status", "open") in ("open", "surfaced")
-                        ):
-                            open_by_sibling_wt.setdefault(sib_toplevel, []).append(fp)
-                    # Symmetrical with persist_findings: require zero other
-                    # non-aged_out occurrences in the target worktree, and a
-                    # single unambiguous non-aged_out open/surfaced occurrence
-                    # in each sibling worktree.
-                    if wt_non_aged_counts[target_toplevel] == 0:
-                        for sib_wt, fps in open_by_sibling_wt.items():
-                            if wt_non_aged_counts[sib_wt] == 1 and len(fps) == 1:
-                                sibling_fps_to_close.add(fps[0])
-
     was_propagated_dup = bool(str(target_row.get("duplicate_of") or "").strip())
     updated_target: dict[str, Any] = {**target_row, "status": new_status}
     if timestamp_field:
@@ -794,6 +776,91 @@ def update_finding_status(
         elif new_status == "dismissed":
             updated_target.pop("confirmed_at", None)
     effective_reason = updated_target.get("resolution_reason")
+
+    # Cross-worktree copy propagation applies strictly to "dismissed" verdicts
+    # with effective_reason == "fp" and matching unique ±5-line context hash.
+    # Non-fp dismissals (stale, wont_fix, out_of_scope, unclear, None) and
+    # confirmations stay branch-local.
+    sibling_fps_to_close: set[str] = set()
+    sibling_context_hashes: dict[str, str] = {}
+    if new_status == "dismissed" and effective_reason == "fp":
+        git_cache: GitCache = {}
+        file_cache: FileLinesCache = {}
+        target_ctx = _resolve_copy_context_hash(
+            updated_target, file_cache, require_live_file=False
+        )
+        if target_ctx and not updated_target.get("context_hash"):
+            updated_target["context_hash"] = target_ctx
+
+        # Stamp live git repo placement onto fp targets so future persist_findings
+        # carry-over still works after this source worktree is pruned.
+        live_target_loc = _git_location(str(updated_target.get("file") or ""), git_cache)
+        if live_target_loc is not None:
+            updated_target["git_common_dir"] = live_target_loc[0]
+            updated_target["worktree_toplevel"] = live_target_loc[1]
+            updated_target["repo_rel_path"] = live_target_loc[2]
+
+        if propagate_copies and target_ctx is not None:
+            target_candidate = _copy_candidate_key(updated_target)
+            if target_candidate is not None:
+                target_rule_version = _normalized_rule_version(updated_target)
+                latest_index_by_fp: dict[str, int] = {}
+                for idx, f in enumerate(findings):
+                    fp = f.get("fingerprint")
+                    if isinstance(fp, str) and fp:
+                        latest_index_by_fp[fp] = idx
+
+                non_aged_candidates = [
+                    (fp, findings[idx])
+                    for fp, idx in latest_index_by_fp.items()
+                    if fp != target_fp
+                    and findings[idx].get("status", "open") != "aged_out"
+                    and _normalized_rule_version(findings[idx]) == target_rule_version
+                    and _copy_candidate_key(findings[idx]) == target_candidate
+                ]
+                has_open_sibling_candidate = any(
+                    row.get("status", "open") in ("open", "surfaced")
+                    for _fp, row in non_aged_candidates
+                )
+                if has_open_sibling_candidate:
+                    target_resolved = _copy_group_key_with_worktree(
+                        updated_target, git_cache, allow_persisted_location=True
+                    )
+                    if target_resolved is not None:
+                        target_copy_key, target_toplevel = target_resolved
+                        wt_non_aged_counts: Counter[str] = Counter()
+                        open_by_sibling_wt: dict[str, list[tuple[str, str]]] = {}
+                        for fp, row in non_aged_candidates:
+                            sib_resolved = _copy_group_key_with_worktree(
+                                row, git_cache, allow_persisted_location=True
+                            )
+                            if sib_resolved is None:
+                                continue
+                            sib_copy_key, sib_toplevel = sib_resolved
+                            if sib_copy_key != target_copy_key:
+                                continue
+                            wt_non_aged_counts[sib_toplevel] += 1
+                            if (
+                                sib_toplevel != target_toplevel
+                                and row.get("status", "open") in ("open", "surfaced")
+                            ):
+                                sib_ctx = _resolve_copy_context_hash(
+                                    row, file_cache, require_live_file=False
+                                )
+                                if sib_ctx == target_ctx:
+                                    open_by_sibling_wt.setdefault(
+                                        sib_toplevel, []
+                                    ).append((fp, sib_ctx))
+                        # Symmetrical with persist_findings: require zero other
+                        # non-aged_out occurrences in the target worktree, and a
+                        # single unambiguous non-aged_out open/surfaced occurrence
+                        # with matching unique context in each sibling worktree.
+                        if wt_non_aged_counts[target_toplevel] == 0:
+                            for sib_wt, entries in open_by_sibling_wt.items():
+                                if wt_non_aged_counts[sib_wt] == 1 and len(entries) == 1:
+                                    sib_fp, sib_ctx = entries[0]
+                                    sibling_fps_to_close.add(sib_fp)
+                                    sibling_context_hashes[sib_fp] = sib_ctx
 
     updated: list[dict[str, Any]] = []
     closed_sibling_fps: set[str] = set()
@@ -829,6 +896,12 @@ def update_finding_status(
             }
             if new_status == "dismissed" and effective_reason:
                 sibling_merged["duplicate_of_reason"] = effective_reason
+            if (
+                isinstance(row_fp, str)
+                and row_fp in sibling_context_hashes
+                and not sibling_merged.get("context_hash")
+            ):
+                sibling_merged["context_hash"] = sibling_context_hashes[row_fp]
             if timestamp_field:
                 sibling_merged[timestamp_field] = now_iso
             if resolver_agent_id:
@@ -1329,6 +1402,129 @@ def _git_location(
 _UNGROUPED_PATTERNS = frozenset({"R000"})
 
 CopyGroupKey = tuple[str, str, str, str, str]
+FileLinesCache = dict[str, list[str] | None]
+
+_CONTEXT_WINDOW_RADIUS = 5
+
+
+def _read_file_lines_cached(
+    file_path: str, file_cache: FileLinesCache
+) -> list[str] | None:
+    if not file_path:
+        return None
+    path = Path(file_path)
+    if not path.is_absolute():
+        return None
+    key = str(path)
+    if key in file_cache:
+        return file_cache[key]
+    try:
+        if not path.is_file():
+            lines: list[str] | None = None
+        else:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = None
+    file_cache[key] = lines
+    return lines
+
+
+def _context_window_hash(lines: list[str], idx: int) -> str:
+    start = max(0, idx - _CONTEXT_WINDOW_RADIUS)
+    end = min(len(lines), idx + _CONTEXT_WINDOW_RADIUS + 1)
+    window = "\n".join(line.strip() for line in lines[start:end])
+    return hashlib.sha256(window.encode()).hexdigest()[:16]
+
+
+def _extract_unique_context_hash(
+    file_path: str,
+    line: Any,
+    line_content_hash: str,
+    file_cache: FileLinesCache,
+) -> str | None:
+    """Return a SHA-256[:16] hash of the ±5-line context around ``line`` iff
+    ``line`` still hashes to ``line_content_hash`` AND no other line in the
+    same file shares both ``line_content_hash`` and that ±5-line context hash.
+    """
+    if not line_content_hash or isinstance(line, bool):
+        return None
+    try:
+        line_no = int(line)
+    except (TypeError, ValueError):
+        return None
+    if line_no < 1:
+        return None
+
+    lines = _read_file_lines_cached(file_path, file_cache)
+    if lines is None or line_no > len(lines):
+        return None
+
+    idx = line_no - 1
+    if hash_line_content(lines[idx]) != line_content_hash:
+        return None
+
+    target_ctx = _context_window_hash(lines, idx)
+    matches = 0
+    for i, src_line in enumerate(lines):
+        if (
+            hash_line_content(src_line) == line_content_hash
+            and _context_window_hash(lines, i) == target_ctx
+        ):
+            matches += 1
+            if matches > 1:
+                return None
+    return target_ctx if matches == 1 else None
+
+
+def _resolve_copy_context_hash(
+    finding: Mapping[str, Any] | Finding,
+    file_cache: FileLinesCache,
+    *,
+    require_live_file: bool,
+) -> str | None:
+    """Resolve and verify a finding's unique ±5-line context hash.
+
+    When the live file exists (and ``path_gone`` is false), always recomputes
+    from disk and rejects any drift, ambiguity, or mismatch against a persisted
+    ``context_hash``. When the file is gone (pruned worktree) and
+    ``require_live_file`` is False, falls back to a non-empty persisted
+    ``context_hash``; otherwise fails closed with None.
+    """
+    if isinstance(finding, Finding):
+        file_path = str(finding.file or "")
+        line: Any = finding.line
+        line_content_hash = str(finding.line_content_hash or "")
+        stored_ctx = str(finding.context_hash or "")
+        path_gone = bool(finding.path_gone)
+    else:
+        file_path = str(finding.get("file") or "")
+        line = finding.get("line")
+        line_content_hash = str(finding.get("line_content_hash") or "")
+        stored_ctx = str(finding.get("context_hash") or "")
+        path_gone = bool(finding.get("path_gone"))
+
+    live_exists = False
+    if not path_gone and file_path:
+        candidate = Path(file_path)
+        if candidate.is_absolute():
+            try:
+                live_exists = candidate.is_file()
+            except OSError:
+                live_exists = False
+
+    if live_exists:
+        live_ctx = _extract_unique_context_hash(
+            file_path, line, line_content_hash, file_cache
+        )
+        if live_ctx is None:
+            return None
+        if stored_ctx and stored_ctx != live_ctx:
+            return None
+        return live_ctx
+
+    if require_live_file:
+        return None
+    return stored_ctx or None
 
 
 def _normalized_rule_version(finding: Mapping[str, Any] | Finding) -> int:
@@ -1395,16 +1591,35 @@ def _copy_candidate_key(
 def _copy_group_key_with_worktree(
     finding: Mapping[str, Any] | Finding,
     cache: GitCache,
+    *,
+    allow_persisted_location: bool = False,
 ) -> tuple[CopyGroupKey, str] | None:
     """Return ``(copy_group_key, worktree_toplevel)`` for a finding whose file
     resolves inside a git worktree, or None for ungrouped patterns (``R000``),
     missing content hashes, or unresolvable repository paths.
+
+    When ``allow_persisted_location`` is True and the worktree was pruned from
+    disk, falls back to ``(git_common_dir, worktree_toplevel, repo_rel_path)``
+    persisted on the row when the finding was dismissed as ``fp``.
     """
     pattern, content_hash, file_path, severity = _finding_copy_fields(finding)
     if not pattern or pattern in _UNGROUPED_PATTERNS or not content_hash:
         return None
     location = _git_location(file_path, cache)
     if location is None:
+        if allow_persisted_location and not isinstance(finding, Finding):
+            common_dir = finding.get("git_common_dir")
+            toplevel = finding.get("worktree_toplevel")
+            rel = finding.get("repo_rel_path")
+            if (
+                isinstance(common_dir, str)
+                and common_dir
+                and isinstance(toplevel, str)
+                and toplevel
+                and isinstance(rel, str)
+                and rel
+            ):
+                return (common_dir, rel, pattern, content_hash, severity), toplevel
         return None
     common_dir, toplevel, rel = location
     return (common_dir, rel, pattern, content_hash, severity), toplevel

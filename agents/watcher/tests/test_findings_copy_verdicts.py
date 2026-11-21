@@ -2,23 +2,31 @@
 
 Covers:
 1. ``_copy_group_key`` extraction and delegation from ``_group_copies``.
-2. ``update_finding_status`` propagation of ``dismissed`` verdicts to
+2. ``update_finding_status`` propagation of false-positive
+   (``status=="dismissed"`` AND ``effective_reason=="fp"``) verdicts to
    open/surfaced sibling copies in other worktrees as ``dup`` with
-   ``duplicate_of`` (while ``confirmed`` stays branch-local so fixing one
-   branch never closes unfixed sibling worktrees), emitting only a single
-   governance resolution event and reporting the closed worktree copy count.
-3. ``persist_findings`` carry-over of current-revision ``status=="dismissed"``
-   AND ``resolution_reason=="fp"`` (and ONLY ``"fp"``) to brand-new worktree
-   copies, writing them as ``dismissed``/``dup``/``duplicate_of`` while
-   omitting them from ``fresh`` and suppressing high-severity event emission.
-4. ``rule_version`` compatibility across both propagation and ``fp`` carry-over.
-5. ``calibration.precision_by_pattern_and_class`` and ``routes._watcher_summary_from_rows``
-   excluding propagated ``dup`` copies from resolution counts.
+   ``duplicate_of`` and ``duplicate_of_reason="fp"`` when they share the same
+   ``rule_version`` and identical unique ``±5``-line source context
+   (``context_hash``). Non-``fp`` dismissals (``stale``, ``wont_fix``,
+   ``out_of_scope``, ``unclear``, ``None``) and ``confirmed`` verdicts stay
+   branch-local.
+3. ``persist_findings`` stamping ``context_hash`` and carrying forward
+   current-revision ``fp`` dismissals to brand-new copies in other worktrees
+   (including after the source worktree is pruned) as ``dismissed``/``dup``
+   rows omitted from ``fresh`` and event emission.
+4. Multi-line context identity and source-file uniqueness failing closed on
+   different surrounding contexts or duplicate identical ``±5``-line blocks
+   even under partial scans.
+5. ``rule_version`` compatibility, expired-dedup handling, duplicate active
+   same-fingerprint row closure, explicit override metadata clearing,
+   ``calibration.precision_by_pattern_and_class``, and
+   ``routes._watcher_summary_from_rows``.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +35,7 @@ from typing import Any
 import pytest
 
 from agents.watcher import findings as watcher_findings
+from agents.watcher._util import hash_line_content
 from agents.watcher.calibration import (
     PRECISION_REASONS_TRUE_NEGATIVE,
     precision_by_pattern_and_class,
@@ -34,10 +43,15 @@ from agents.watcher.calibration import (
 from agents.watcher.findings import (
     Finding,
     _copy_group_key,
+    _extract_unique_context_hash,
     _group_copies,
     persist_findings,
     update_finding_status,
 )
+
+_DEFAULT_LINE = "    except Exception:"
+_DEFAULT_LINE_HASH = hash_line_content(_DEFAULT_LINE)
+_DEFAULT_TARGET_LINE = 10
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -60,8 +74,48 @@ def _git(*args: str, cwd: Path) -> None:
     )
 
 
-def _repo_with_worktrees(root: Path, *names: str) -> dict[str, Path]:
-    """Create a git repo at ``root/main`` plus linked worktrees ``root/wt/<name>``."""
+def _block_lines(tag: str = "alpha") -> list[str]:
+    """11-line block with ``_DEFAULT_LINE`` at offset 5 (exact ±5-line window)."""
+    return [
+        f"def handle_{tag}(item):",
+        f"    prefix_{tag} = prepare(item)",
+        f"    logger.debug('{tag}:start')",
+        "    try:",
+        f"        return run_{tag}(prefix_{tag})",
+        _DEFAULT_LINE,
+        f"        log_{tag}_failure(prefix_{tag})",
+        f"        metrics.inc('{tag}')",
+        f"        cleanup_{tag}()",
+        f"        return fallback_{tag}()",
+        f"    # end {tag}",
+    ]
+
+
+def _write_source_blocks(path: Path, blocks: list[tuple[int, str]]) -> None:
+    """Write ``path`` so each ``(target_line, tag)`` places ``_DEFAULT_LINE`` at
+    exact 1-based ``target_line`` inside a ±5-line ``_block_lines(tag)`` window.
+    """
+    lines: list[str] = []
+    for target_line, tag in sorted(blocks):
+        start_idx = target_line - 6
+        assert start_idx >= len(lines), f"overlapping or too-early target_line={target_line}"
+        while len(lines) < start_idx:
+            lines.append(f"# filler line {len(lines) + 1}")
+        lines.extend(_block_lines(tag))
+    lines.append("# trailing eof")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _repo_with_worktrees(
+    root: Path,
+    *names: str,
+    line_by_tree: dict[str, int] | None = None,
+) -> dict[str, Path]:
+    """Create a git repo at ``root/main`` plus linked worktrees ``root/wt/<name>``,
+    each holding multi-line ``pkg/mod.py`` and ``pkg/other.py`` matching
+    ``_DEFAULT_LINE_HASH`` at the configured line (default 10).
+    """
     main = root / "main"
     main.mkdir(parents=True)
     _git("init", "-q", cwd=main)
@@ -71,11 +125,11 @@ def _repo_with_worktrees(root: Path, *names: str) -> dict[str, Path]:
         wt_path = root / "wt" / name
         _git("worktree", "add", "-q", "-b", name, str(wt_path), cwd=main)
         trees[name] = wt_path
-    for tree in trees.values():
-        for rel in ("pkg/mod.py", "pkg/other.py"):
-            target = tree / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("try:\n    work()\nexcept Exception:\n    pass\n")
+    lines_map = line_by_tree or {}
+    for name, tree in trees.items():
+        target_line = lines_map.get(name, _DEFAULT_TARGET_LINE)
+        _write_source_blocks(tree / "pkg/mod.py", [(target_line, "alpha")])
+        _write_source_blocks(tree / "pkg/other.py", [(target_line, "other")])
     return {name: tree.resolve() for name, tree in trees.items()}
 
 
@@ -96,10 +150,10 @@ def _make_row(
     file_path: Path | str,
     *,
     pattern: str = "P006",
-    line: int = 3,
+    line: int = _DEFAULT_TARGET_LINE,
     severity: str = "medium",
     status: str = "open",
-    line_content_hash: str = "c0ffee000000",
+    line_content_hash: str = _DEFAULT_LINE_HASH,
     detected_at: str = "2026-11-20T12:00:00Z",
     resolution_reason: str | None = None,
     **extra: Any,
@@ -116,7 +170,7 @@ def _make_row(
         "fingerprint": fp,
         "status": status,
         "violation_class": "ENT",
-        "line_content": "except Exception:",
+        "line_content": _DEFAULT_LINE.strip(),
         "path_gone": False,
         "rule_version": 1,
     }
@@ -130,10 +184,11 @@ def _make_finding(
     file_path: Path | str,
     *,
     pattern: str = "P006",
-    line: int = 3,
+    line: int = _DEFAULT_TARGET_LINE,
     severity: str = "medium",
-    line_content_hash: str = "c0ffee000000",
+    line_content_hash: str = _DEFAULT_LINE_HASH,
     detected_at: str = "2026-11-21T00:00:00Z",
+    context_hash: str = "",
 ) -> Finding:
     return Finding(
         pattern=pattern,
@@ -145,7 +200,8 @@ def _make_finding(
         model_used="gemma4:latest",
         line_content_hash=line_content_hash,
         violation_class="ENT",
-        line_content="except Exception:",
+        line_content=_DEFAULT_LINE.strip(),
+        context_hash=context_hash,
     )
 
 
@@ -169,9 +225,9 @@ def _read_rows(state_dir: Path) -> list[dict[str, Any]]:
 
 class TestCopyGroupKey:
     def test_matches_across_worktrees_and_accepts_finding_or_dict(self, tmp_path: Path):
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 19})
         cache: dict[str, Any] = {}
-        row_main = _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3)
+        row_main = _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10)
         finding_wt = _make_finding(trees["feat-a"] / "pkg/mod.py", line=19)
 
         key_main = _copy_group_key(row_main, cache)
@@ -179,7 +235,7 @@ class TestCopyGroupKey:
 
         assert key_main is not None
         assert key_main == key_wt
-        assert key_main[1:] == ("pkg/mod.py", "P006", "c0ffee000000", "medium")
+        assert key_main[1:] == ("pkg/mod.py", "P006", _DEFAULT_LINE_HASH, "medium")
         assert Path(key_main[0]).is_dir()
 
     def test_differs_across_repositories(self, tmp_path: Path):
@@ -199,8 +255,7 @@ class TestCopyGroupKey:
     def test_returns_none_for_r000_missing_hash_or_unresolvable_paths(self, tmp_path: Path):
         trees = _repo_with_worktrees(tmp_path)
         non_git_file = tmp_path / "outside" / "pkg" / "mod.py"
-        non_git_file.parent.mkdir(parents=True)
-        non_git_file.write_text("pass\n")
+        _write_source_blocks(non_git_file, [(10, "alpha")])
 
         assert _copy_group_key(
             _make_row("r000000000000001", trees["main"] / "pkg/mod.py", pattern="R000"),
@@ -226,10 +281,10 @@ class TestCopyGroupKey:
     def test_group_copies_delegates_to_copy_group_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         rows = [
-            _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3),
-            _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=9),
+            _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10),
+            _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=15),
         ]
         calls: list[str] = []
         real_copy_group_key = watcher_findings._copy_group_key
@@ -249,38 +304,44 @@ class TestCopyGroupKey:
 
 
 # ---------------------------------------------------------------------------
-# 2. update_finding_status cross-worktree propagation
+# 2. update_finding_status cross-worktree fp propagation
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateFindingStatusPropagation:
-    def test_dismiss_propagates_to_open_and_surfaced_siblings_only(
+    def test_fp_dismiss_propagates_to_open_and_surfaced_siblings_only(
         self,
         isolated_findings_state: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ):
-        trees = _repo_with_worktrees(tmp_path / "repo-a", "feat-a", "feat-b", "feat-c")
+        trees = _repo_with_worktrees(
+            tmp_path / "repo-a",
+            "feat-a",
+            "feat-b",
+            "feat-c",
+            line_by_tree={"main": 10, "feat-a": 15, "feat-b": 42, "feat-c": 10},
+        )
         other_repo = _repo_with_worktrees(tmp_path / "repo-b")
 
         rows = [
-            _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", status="open"),
-            _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=12, status="surfaced"),
+            _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+            _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=15, status="surfaced"),
             _make_row("cccc000000000003", trees["feat-b"] / "pkg/mod.py", line=42, status="open"),
             # Must NOT be touched: already aged_out
-            _make_row("dddd000000000004", trees["feat-c"] / "pkg/mod.py", status="aged_out"),
+            _make_row("dddd000000000004", trees["feat-c"] / "pkg/mod.py", line=10, status="aged_out"),
             # Must NOT be touched: different severity
-            _make_row("eeee000000000005", trees["feat-a"] / "pkg/mod.py", line=30, severity="high"),
+            _make_row("eeee000000000005", trees["feat-a"] / "pkg/mod.py", line=15, severity="high"),
             # Must NOT be touched: different content hash
             _make_row(
                 "ffff000000000006",
                 trees["feat-a"] / "pkg/mod.py",
-                line=31,
+                line=15,
                 line_content_hash="deadbeef0000",
             ),
             # Must NOT be touched: different git repository
-            _make_row("1111000000000007", other_repo["main"] / "pkg/mod.py", status="open"),
+            _make_row("1111000000000007", other_repo["main"] / "pkg/mod.py", line=10, status="open"),
         ]
         _write_rows(isolated_findings_state, rows)
 
@@ -309,6 +370,7 @@ class TestUpdateFindingStatusPropagation:
         assert target["resolution_reason"] == "fp"
         assert "duplicate_of" not in target
         assert target["dismissed_at"].endswith("Z")
+        assert target["context_hash"]
 
         for sib_fp in ("bbbb000000000002", "cccc000000000003"):
             sib = by_fp[sib_fp]
@@ -317,6 +379,8 @@ class TestUpdateFindingStatusPropagation:
             assert sib["resolved_by"] == "resolver-uuid-1"
             assert sib["resolution_reason"] == "dup"
             assert sib["duplicate_of"] == "aaaa000000000001"
+            assert sib["duplicate_of_reason"] == "fp"
+            assert sib["context_hash"] == target["context_hash"]
 
         assert by_fp["dddd000000000004"]["status"] == "aged_out"
         assert "duplicate_of" not in by_fp["dddd000000000004"]
@@ -341,6 +405,41 @@ class TestUpdateFindingStatusPropagation:
         )
         assert stats[("P006", "app")].weighted_dismissed == pytest.approx(1.0, rel=0.05)
 
+    @pytest.mark.parametrize(
+        "non_fp_reason",
+        ["stale", "wont_fix", "out_of_scope", "unclear", "dup", "not now", None],
+    )
+    def test_non_fp_dismissal_stays_branch_local_and_leaves_siblings_open(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        non_fp_reason: str | None,
+    ):
+        """Only dismissed + effective_reason=='fp' may propagate across worktrees.
+        All non-fp dismissals stay branch-local."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=15, status="open"),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        assert (
+            update_finding_status("aaaa0000", "dismissed", reason=non_fp_reason) == 0
+        )
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["aaaa000000000001"]["status"] == "dismissed"
+        assert by_fp["bbbb000000000002"]["status"] == "open"
+        assert "duplicate_of" not in by_fp["bbbb000000000002"]
+        assert "worktree cop" not in capsys.readouterr().out
+
     @pytest.mark.parametrize("reason", ["fixed", "fixed now", None])
     def test_confirm_stays_branch_local_and_leaves_sibling_worktrees_open(
         self,
@@ -352,12 +451,12 @@ class TestUpdateFindingStatusPropagation:
     ):
         """Confirming/fixing a bug in one branch must NOT close unfixed copies
         in sibling worktrees."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         _write_rows(
             isolated_findings_state,
             [
-                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", status="open"),
-                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=8, status="surfaced"),
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=15, status="surfaced"),
             ],
         )
 
@@ -431,8 +530,7 @@ class TestUpdateFindingStatusPropagation:
         non_git_a = tmp_path / "outside-a" / "pkg" / "mod.py"
         non_git_b = tmp_path / "outside-b" / "pkg" / "mod.py"
         for path in (non_git_a, non_git_b):
-            path.parent.mkdir(parents=True)
-            path.write_text("pass\n")
+            _write_source_blocks(path, [(10, "alpha")])
 
         _write_rows(
             isolated_findings_state,
@@ -456,7 +554,7 @@ class TestUpdateFindingStatusPropagation:
 
 
 # ---------------------------------------------------------------------------
-# 3. persist_findings fp carry-over
+# 3. persist_findings fp carry-over and multi-line context identity
 # ---------------------------------------------------------------------------
 
 
@@ -467,7 +565,7 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         prior_fp = "aaaa000000000001"
         _write_rows(
             isolated_findings_state,
@@ -475,6 +573,7 @@ class TestPersistFindingsFpCarryOver:
                 _make_row(
                     prior_fp,
                     trees["main"] / "pkg/mod.py",
+                    line=10,
                     severity="high",
                     status="dismissed",
                     resolution_reason="fp",
@@ -508,6 +607,8 @@ class TestPersistFindingsFpCarryOver:
         assert appended["dismissed_at"].endswith("Z")
         assert appended["resolution_reason"] == "dup"
         assert appended["duplicate_of"] == prior_fp
+        assert appended["duplicate_of_reason"] == "fp"
+        assert appended["context_hash"]
 
         # Dedup was recorded, so a second scan of feat-a does not append again
         assert persist_findings([new_copy]) == []
@@ -543,20 +644,21 @@ class TestPersistFindingsFpCarryOver:
         prior_status: str,
         prior_reason: str | None,
     ):
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     "aaaa000000000001",
                     trees["main"] / "pkg/mod.py",
+                    line=10,
                     status=prior_status,
                     resolution_reason=prior_reason,
                 )
             ],
         )
 
-        new_copy = _make_finding(trees["feat-a"] / "pkg/mod.py", line=7)
+        new_copy = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
         fresh = persist_findings([new_copy])
 
         assert [f.fingerprint for f in fresh] == [new_copy.fingerprint]
@@ -574,7 +676,7 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         other_repo = _repo_with_worktrees(tmp_path / "other-repo")
         prior_fp = "aaaa000000000001"
         _write_rows(
@@ -583,6 +685,7 @@ class TestPersistFindingsFpCarryOver:
                 _make_row(
                     prior_fp,
                     trees["main"] / "pkg/mod.py",
+                    line=10,
                     severity="high",
                     status="dismissed",
                     resolution_reason="fp",
@@ -597,13 +700,13 @@ class TestPersistFindingsFpCarryOver:
             lambda **kwargs: emitted.append(kwargs["fingerprint"]) or True,
         )
 
-        matching_copy = _make_finding(trees["feat-a"] / "pkg/mod.py", line=10, severity="high")
+        matching_copy = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15, severity="high")
         other_repo_copy = _make_finding(
             other_repo["main"] / "pkg/mod.py", line=10, severity="high"
         )
         r000_finding = _make_finding(
             trees["feat-a"] / "pkg/mod.py",
-            line=11,
+            line=16,
             pattern="R000",
             severity="high",
         )
@@ -628,14 +731,14 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
     ):
         trees = _repo_with_worktrees(tmp_path)
-        same_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        same_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     same_finding.fingerprint,
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 )
@@ -658,7 +761,7 @@ class TestPersistFindingsFpCarryOver:
         rescanning the propagated dismissed/dup copy must refresh dedup without
         re-opening or appending a colliding duplicate-fingerprint row — whether
         or not the original fp row is still present."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         prior_fp = "aaaa000000000001"
         _write_rows(
             isolated_findings_state,
@@ -666,7 +769,7 @@ class TestPersistFindingsFpCarryOver:
                 _make_row(
                     prior_fp,
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 )
@@ -700,49 +803,6 @@ class TestPersistFindingsFpCarryOver:
         assert len(rows_after_compact) == 1
         assert rows_after_compact[0]["status"] == "dismissed"
 
-    @pytest.mark.parametrize("reason", ["stale", "unclear", "wont_fix", None])
-    def test_expired_dedup_on_non_fp_propagated_copy_resurfaces_like_target(
-        self,
-        isolated_findings_state: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        reason: str | None,
-    ):
-        """Copies propagated from non-fp dismissals (stale/unclear/wont_fix/None)
-        must NOT stay suppressed after dedup TTL expiry — they resurface on
-        rescan consistently with their target."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
-        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
-        assert len(persist_findings([main_finding, wt_finding])) == 2
-
-        monkeypatch.setattr(
-            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
-        )
-        assert (
-            update_finding_status(
-                main_finding.fingerprint, "dismissed", reason=reason
-            )
-            == 0
-        )
-
-        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
-        assert by_fp[wt_finding.fingerprint]["status"] == "dismissed"
-        assert by_fp[wt_finding.fingerprint]["resolution_reason"] == "dup"
-        assert by_fp[wt_finding.fingerprint]["duplicate_of"] == main_finding.fingerprint
-        if reason is not None:
-            assert by_fp[wt_finding.fingerprint]["duplicate_of_reason"] == reason
-        else:
-            assert "duplicate_of_reason" not in by_fp[wt_finding.fingerprint]
-
-        # Simulate dedup TTL expiry: both target and its non-fp dup copy resurface
-        (isolated_findings_state / "dedup.json").write_text("{}")
-        resurfaced = persist_findings([main_finding, wt_finding])
-        assert [f.fingerprint for f in resurfaced] == [
-            main_finding.fingerprint,
-            wt_finding.fingerprint,
-        ]
-
     @pytest.mark.parametrize(
         ("corrected_status", "corrected_reason"),
         [
@@ -762,8 +822,8 @@ class TestPersistFindingsFpCarryOver:
         copy with duplicate_of_reason=='fp') and later reclassifies the
         original (--resolve or --dismiss --reason stale), the original's live
         verdict takes precedence over the stale snapshot on the copy."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
         assert len(persist_findings([main_finding, wt_finding])) == 2
 
@@ -808,8 +868,8 @@ class TestPersistFindingsFpCarryOver:
         """Reclassifying the original finding must synchronize duplicate_of_reason
         on existing dup copies so compacting the original cannot revive a stale
         'fp' snapshot."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
         assert len(persist_findings([main_finding, wt_finding])) == 2
 
@@ -848,9 +908,9 @@ class TestPersistFindingsFpCarryOver:
         """Re-dismissing an existing fp original with reason=None preserves
         resolution_reason='fp' on the target and must preserve
         duplicate_of_reason='fp' on its sibling copies (regardless of row order)."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         # Put sibling copy BEFORE target in findings.jsonl to verify order independence
         assert len(persist_findings([wt_finding, main_finding])) == 2
 
@@ -883,18 +943,24 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """After dedup expiry resurfaces a non-fp copy as a new open row sharing
-        the same fingerprint as the historical dismissed/dup row, resolving by
-        fingerprint or unique prefix succeeds and updates only the live row."""
+        """After a propagated dup copy is unsuppressed (original reclassified)
+        and resurfaces as a new open row sharing the same fingerprint as the
+        historical dismissed/dup row, resolving by prefix succeeds and updates
+        only the live row."""
         from agents.watcher.routes import _watcher_summary_from_rows
 
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
         assert len(persist_findings([main_finding, wt_finding])) == 2
 
         monkeypatch.setattr(
             "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        # First propagate as fp, then reclassify original to stale so copy can resurface
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="fp")
+            == 0
         )
         assert (
             update_finding_status(main_finding.fingerprint, "dismissed", reason="stale")
@@ -927,7 +993,6 @@ class TestPersistFindingsFpCarryOver:
             if r["fingerprint"] == wt_finding.fingerprint
         ]
         assert len(wt_rows_after) == 2
-        # Historical dismissed/dup row preserved, live resurfaced row confirmed
         assert wt_rows_after[0]["status"] == "dismissed"
         assert wt_rows_after[0]["duplicate_of"] == main_finding.fingerprint
         assert wt_rows_after[1]["status"] == "confirmed"
@@ -949,14 +1014,14 @@ class TestPersistFindingsFpCarryOver:
         """A closed (confirmed/dismissed) occurrence in the same worktree/file
         must count toward multi-occurrence ambiguity just like an open one."""
         trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "beta"), (40, "alpha")])
+        _write_source_blocks(trees["feat-a"] / "pkg/mod.py", [(15, "alpha")])
         _write_rows(
             isolated_findings_state,
             [
-                # Source worktree has a previously confirmed line 3 AND open line 40
-                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="confirmed"),
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="confirmed"),
                 _make_row("aaaa000000000002", trees["main"] / "pkg/mod.py", line=40, status="open"),
-                # feat-a has a single open copy -> must NOT be closed (source ambiguous)
-                _make_row("bbbb000000000003", trees["feat-a"] / "pkg/mod.py", line=12, status="open"),
+                _make_row("bbbb000000000003", trees["feat-a"] / "pkg/mod.py", line=15, status="open"),
             ],
         )
         monkeypatch.setattr(
@@ -967,12 +1032,14 @@ class TestPersistFindingsFpCarryOver:
         by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
         assert by_fp["bbbb000000000003"]["status"] == "open"
 
-        # Sibling side: source has 1 row, feat-b has closed line 3 + open line 40
+        # Sibling side: source has 1 row, feat-b has closed line 10 + open line 40
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "alpha")])
+        _write_source_blocks(trees["feat-b"] / "pkg/mod.py", [(10, "beta"), (40, "alpha")])
         _write_rows(
             isolated_findings_state,
             [
-                _make_row("cccc000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
-                _make_row("dddd000000000002", trees["feat-b"] / "pkg/mod.py", line=3, status="confirmed"),
+                _make_row("cccc000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+                _make_row("dddd000000000002", trees["feat-b"] / "pkg/mod.py", line=10, status="confirmed"),
                 _make_row("dddd000000000003", trees["feat-b"] / "pkg/mod.py", line=40, status="open"),
             ],
         )
@@ -987,12 +1054,12 @@ class TestPersistFindingsFpCarryOver:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """Directly resolving or dismissing a previously propagated dup copy
-        clears duplicate_of/duplicate_of_reason (and stale resolution_reason='dup'
-        when no reason is passed) so calibration and summary count it cleanly."""
+        clears duplicate_of/duplicate_of_reason, stale resolution_reason='dup',
+        and automatic dismissed_at so calibration and summary count it cleanly."""
         from agents.watcher.routes import _watcher_summary_from_rows
 
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
         assert len(persist_findings([main_finding, wt_finding])) == 2
 
@@ -1052,14 +1119,14 @@ class TestPersistFindingsFpCarryOver:
                 _make_row(
                     fp,
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="surfaced",
                     detected_at="2026-11-05T00:00:00Z",
                 ),
                 _make_row(
                     fp,
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="open",
                     detected_at="2026-11-20T00:00:00Z",
                 ),
@@ -1083,7 +1150,6 @@ class TestPersistFindingsFpCarryOver:
         rows = _read_rows(isolated_findings_state)
         assert len(rows) == 2
         assert all(r["status"] == new_status for r in rows)
-        # Older active row closed as dup pointing to target_fp; latest row is primary
         assert rows[0]["resolution_reason"] == "dup"
         assert rows[0]["duplicate_of"] == fp
         assert rows[1]["resolution_reason"] == reason
@@ -1113,17 +1179,17 @@ class TestPersistFindingsFpCarryOver:
         capsys: pytest.CaptureFixture[str],
     ):
         """If a sibling worktree has two active rows sharing the same sibling_fp
-        (e.g. surfaced + open after a 14d dedup expiry), propagating a verdict
-        must close ALL active rows for sibling_fp so 0 active rows remain."""
+        (e.g. surfaced + open after a 14d dedup expiry), propagating an fp
+        dismissal must close ALL active rows for sibling_fp so 0 active rows remain."""
         from agents.watcher.routes import _watcher_summary_from_rows
 
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         target_fp = "aaaa000000000001"
         sibling_fp = "bbbb000000000002"
         _write_rows(
             isolated_findings_state,
             [
-                _make_row(target_fp, trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row(target_fp, trees["main"] / "pkg/mod.py", line=10, status="open"),
                 _make_row(
                     sibling_fp,
                     trees["feat-a"] / "pkg/mod.py",
@@ -1185,14 +1251,14 @@ class TestPersistFindingsFpCarryOver:
         """A P006 fp dismissal from rev 0 (or missing rule_version) must neither
         carry over across worktrees nor suppress a rev-1 P006 finding after
         dedup expiry."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
-        rev1_same_wt = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
+        rev1_same_wt = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         assert rev1_same_wt.rule_version == 1
 
         legacy_row = _make_row(
             rev1_same_wt.fingerprint,
             trees["main"] / "pkg/mod.py",
-            line=3,
+            line=10,
             status="dismissed",
             resolution_reason="fp",
         )
@@ -1223,11 +1289,11 @@ class TestPersistFindingsFpCarryOver:
     ):
         """Dismissing an obsolete rev-0 (or missing rule_version) P006 finding
         must NOT close a rev-1 P006 sibling copy in another worktree."""
-        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", line_by_tree={"feat-a": 15})
         rev0_row = _make_row(
             "aaaa000000000001",
             trees["main"] / "pkg/mod.py",
-            line=3,
+            line=10,
             status="open",
         )
         if legacy_rule_version is None:
@@ -1266,6 +1332,7 @@ class TestPersistFindingsFpCarryOver:
                 _make_row(
                     "aaaa000000000001",
                     trees["main"] / "pkg/other.py",
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 )
@@ -1280,7 +1347,7 @@ class TestPersistFindingsFpCarryOver:
 
         monkeypatch.setattr(subprocess, "run", _fail_git)
 
-        new_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        new_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
         fresh = persist_findings([new_finding])
         assert [f.fingerprint for f in fresh] == [new_finding.fingerprint]
         assert git_calls == []
@@ -1291,13 +1358,14 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
     ):
         trees = _repo_with_worktrees(tmp_path)
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     "aaaa000000000001",
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 )
@@ -1318,45 +1386,48 @@ class TestPersistFindingsFpCarryOver:
         tmp_path: Path,
     ):
         trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_source_blocks(trees["feat-a"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
+        _write_source_blocks(trees["feat-b"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     "aaaa000000000001",
                     trees["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 )
             ],
         )
 
-        # Target worktree scans two identical lines in one batch -> ambiguous.
-        a_line_3 = _make_finding(trees["feat-a"] / "pkg/mod.py", line=3)
+        # Target worktree scans two occurrences in one batch -> ambiguous.
+        a_line_10 = _make_finding(trees["feat-a"] / "pkg/mod.py", line=10)
         a_line_40 = _make_finding(trees["feat-a"] / "pkg/mod.py", line=40)
-        fresh_a = persist_findings([a_line_3, a_line_40])
+        fresh_a = persist_findings([a_line_10, a_line_40])
         assert [f.fingerprint for f in fresh_a] == [
-            a_line_3.fingerprint,
+            a_line_10.fingerprint,
             a_line_40.fingerprint,
         ]
 
         # Single occurrence in feat-b auto-dismisses, then a later second line
         # in feat-b stays open because feat-b already has an occurrence.
-        b_line_3 = _make_finding(trees["feat-b"] / "pkg/mod.py", line=3)
-        assert persist_findings([b_line_3]) == []
+        b_line_10 = _make_finding(trees["feat-b"] / "pkg/mod.py", line=10)
+        assert persist_findings([b_line_10]) == []
         b_line_40 = _make_finding(trees["feat-b"] / "pkg/mod.py", line=40)
         fresh_b2 = persist_findings([b_line_40])
         assert [f.fingerprint for f in fresh_b2] == [b_line_40.fingerprint]
 
         # Source worktree with another open occurrence -> do not auto-carry.
-        trees_c = _repo_with_worktrees(tmp_path / "repo-c", "feat-c")
+        trees_c = _repo_with_worktrees(tmp_path / "repo-c", "feat-c", line_by_tree={"feat-c": 15})
+        _write_source_blocks(trees_c["main"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     "cccc000000000001",
                     trees_c["main"] / "pkg/mod.py",
-                    line=3,
+                    line=10,
                     status="dismissed",
                     resolution_reason="fp",
                 ),
@@ -1368,13 +1439,142 @@ class TestPersistFindingsFpCarryOver:
                 ),
             ],
         )
-        c_copy = _make_finding(trees_c["feat-c"] / "pkg/mod.py", line=12)
+        c_copy = _make_finding(trees_c["feat-c"] / "pkg/mod.py", line=15)
         fresh_c = persist_findings([c_copy])
         assert [f.fingerprint for f in fresh_c] == [c_copy.fingerprint]
 
+    def test_identical_line_with_different_surrounding_context_does_not_propagate_or_carry_over(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Two branches with identical single line ('except Exception:') in the
+        same repo-relative file but DIFFERENT ±5-line surrounding contexts must
+        never propagate or auto-dismiss each other."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "alpha")])
+        _write_source_blocks(trees["feat-a"] / "pkg/mod.py", [(10, "beta")])
+        _write_source_blocks(trees["feat-b"] / "pkg/mod.py", [(10, "gamma")])
+
+        main_f = _make_finding(trees["main"] / "pkg/mod.py", line=10)
+        feat_a_f = _make_finding(trees["feat-a"] / "pkg/mod.py", line=10)
+        assert len(persist_findings([main_f, feat_a_f])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert update_finding_status(main_f.fingerprint, "dismissed", reason="fp") == 0
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[main_f.fingerprint]["status"] == "dismissed"
+        assert by_fp[feat_a_f.fingerprint]["status"] == "open"
+        assert "duplicate_of" not in by_fp[feat_a_f.fingerprint]
+
+        # persist_findings on feat-b with different surrounding context also stays open
+        feat_b_f = _make_finding(trees["feat-b"] / "pkg/mod.py", line=10)
+        fresh_b = persist_findings([feat_b_f])
+        assert [f.fingerprint for f in fresh_b] == [feat_b_f.fingerprint]
+
+    def test_duplicate_identical_context_blocks_in_one_file_fail_closed_under_partial_scan(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A file containing two identical ±5-line blocks must fail closed
+        (context_hash -> None) even when only one of them is present in
+        findings.jsonl (partial scan)."""
+        trees = _repo_with_worktrees(tmp_path, "feat-dup-target", "feat-dup-source", "feat-clean")
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "alpha")])
+        # Two identical ±5-line blocks in feat-dup-target (only line 10 scanned)
+        _write_source_blocks(
+            trees["feat-dup-target"] / "pkg/mod.py", [(10, "alpha"), (40, "alpha")]
+        )
+        assert (
+            _extract_unique_context_hash(
+                str(trees["feat-dup-target"] / "pkg/mod.py"), 10, _DEFAULT_LINE_HASH, {}
+            )
+            is None
+        )
+
+        main_f = _make_finding(trees["main"] / "pkg/mod.py", line=10)
+        dup_target_f = _make_finding(trees["feat-dup-target"] / "pkg/mod.py", line=10)
+        assert len(persist_findings([main_f, dup_target_f])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert update_finding_status(main_f.fingerprint, "dismissed", reason="fp") == 0
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        # Ambiguous target file stays open (not closed by propagation)
+        assert by_fp[dup_target_f.fingerprint]["status"] == "open"
+
+        # New scan of an ambiguous target file also does not auto-dismiss
+        dup_target_line40 = _make_finding(trees["feat-dup-target"] / "pkg/mod.py", line=40)
+        assert [f.fingerprint for f in persist_findings([dup_target_line40])] == [
+            dup_target_line40.fingerprint
+        ]
+
+        # Ambiguous source file (two identical ±5-line blocks, only 1 row) fails closed too
+        _write_source_blocks(
+            trees["feat-dup-source"] / "pkg/mod.py", [(10, "delta"), (40, "delta")]
+        )
+        _write_source_blocks(trees["feat-clean"] / "pkg/mod.py", [(10, "delta")])
+        dup_source_f = _make_finding(trees["feat-dup-source"] / "pkg/mod.py", line=10)
+        clean_f = _make_finding(trees["feat-clean"] / "pkg/mod.py", line=10)
+        assert len(persist_findings([dup_source_f, clean_f])) == 2
+        assert update_finding_status(dup_source_f.fingerprint, "dismissed", reason="fp") == 0
+        by_fp2 = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp2[clean_f.fingerprint]["status"] == "open"
+
+    def test_fp_auto_carries_after_source_worktree_is_pruned(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Identical unique ±5-line context across worktrees propagates fp and
+        continues auto-carrying to new worktrees even after the original source
+        worktree is removed/pruned from disk."""
+        trees = _repo_with_worktrees(
+            tmp_path,
+            "feat-old",
+            "feat-new",
+            "feat-diff",
+            line_by_tree={"feat-old": 10, "feat-new": 22, "feat-diff": 10},
+        )
+        _write_source_blocks(trees["feat-diff"] / "pkg/mod.py", [(10, "different")])
+
+        old_f = _make_finding(trees["feat-old"] / "pkg/mod.py", line=10)
+        assert [f.fingerprint for f in persist_findings([old_f])] == [old_f.fingerprint]
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert update_finding_status(old_f.fingerprint, "dismissed", reason="fp") == 0
+
+        # Prune the source worktree completely from disk
+        shutil.rmtree(trees["feat-old"])
+        _git("worktree", "prune", cwd=trees["main"])
+        assert not trees["feat-old"].exists()
+
+        # New worktree with identical unique ±5-line context still auto-dismisses
+        new_f = _make_finding(trees["feat-new"] / "pkg/mod.py", line=22)
+        assert persist_findings([new_f]) == []
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[new_f.fingerprint]["status"] == "dismissed"
+        assert by_fp[new_f.fingerprint]["resolution_reason"] == "dup"
+        assert by_fp[new_f.fingerprint]["duplicate_of"] == old_f.fingerprint
+        assert by_fp[new_f.fingerprint]["duplicate_of_reason"] == "fp"
+
+        # Worktree with different surrounding context still stays open
+        diff_f = _make_finding(trees["feat-diff"] / "pkg/mod.py", line=10)
+        assert [f.fingerprint for f in persist_findings([diff_f])] == [diff_f.fingerprint]
+
 
 # ---------------------------------------------------------------------------
-# 4. Regression tests for review findings (#3343 P1/P2/P3)
+# 4. Regression tests for same-worktree, commit-scan, and summary routes
 # ---------------------------------------------------------------------------
 
 
@@ -1389,10 +1589,11 @@ class TestSameWorktreeAndCommitScanAndRoutes:
         new_status: str,
     ):
         trees = _repo_with_worktrees(tmp_path)
+        _write_source_blocks(trees["main"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
         _write_rows(
             isolated_findings_state,
             [
-                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
                 _make_row("bbbb000000000002", trees["main"] / "pkg/mod.py", line=40, status="open"),
             ],
         )
@@ -1421,16 +1622,17 @@ class TestSameWorktreeAndCommitScanAndRoutes:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ):
-        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b", line_by_tree={"feat-b": 15})
+        _write_source_blocks(trees["feat-a"] / "pkg/mod.py", [(10, "alpha"), (40, "beta")])
         _write_rows(
             isolated_findings_state,
             [
-                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
-                # feat-a has two identical lines: ambiguous, do not close either
-                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+                # feat-a has two occurrences: ambiguous, do not close either
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=10, status="open"),
                 _make_row("cccc000000000003", trees["feat-a"] / "pkg/mod.py", line=40, status="open"),
                 # feat-b has a single copy: unambiguous, close it
-                _make_row("dddd000000000004", trees["feat-b"] / "pkg/mod.py", line=12, status="open"),
+                _make_row("dddd000000000004", trees["feat-b"] / "pkg/mod.py", line=15, status="open"),
             ],
         )
         monkeypatch.setattr(
@@ -1458,8 +1660,8 @@ class TestSameWorktreeAndCommitScanAndRoutes:
         _write_rows(
             isolated_findings_state,
             [
-                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
-                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=10, status="open"),
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=10, status="open"),
             ],
         )
         monkeypatch.setattr(
@@ -1551,11 +1753,9 @@ class TestSameWorktreeAndCommitScanAndRoutes:
         ]
 
         summary = _watcher_summary_from_rows(rows, now=now, window_days=3)
-        # Raw row totals remain accurate in total / by_status
         assert summary["total"] == 7
         assert summary["by_status"] == {"confirmed": 3, "dismissed": 3, "open": 1}
 
-        # Pattern resolution metrics count each unique verdict once
         assert len(summary["patterns"]) == 1
         pat = summary["patterns"][0]
         assert pat["pattern"] == "P006"
@@ -1566,8 +1766,6 @@ class TestSameWorktreeAndCommitScanAndRoutes:
         assert pat["other"] == 0
         assert pat["dismiss_ratio"] == pytest.approx(0.5)
 
-        # Daily resolution timeline counts each unique verdict once
         by_day = {d["day"]: d for d in summary["timeline"]}
         assert by_day["2026-11-21"]["confirmed"] == 1
         assert by_day["2026-11-21"]["dismissed"] == 1
-
