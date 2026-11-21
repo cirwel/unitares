@@ -232,10 +232,40 @@ def test_empty_unloaded_launchd_stub_is_skipped(census_mod, tmp_path, monkeypatc
     monkeypatch.setattr(census_mod, "HOME", tmp_path)
     launch_dir = tmp_path / "Library" / "LaunchAgents"
     launch_dir.mkdir(parents=True)
-    with (launch_dir / "com.google.keystone.agent.plist").open("wb") as handle:
-        plistlib.dump({}, handle)
+    for filename, payload in (
+        ("com.google.keystone.agent.plist", {}),
+        ("com.example.label-only.plist", {"Label": "com.example.label-only"}),
+        ("com.example.disabled-stub.plist", {"Label": "com.example.disabled-stub", "Disabled": True}),
+    ):
+        with (launch_dir / filename).open("wb") as handle:
+            plistlib.dump(payload, handle)
     _plist(tmp_path, "job.real", ["/usr/bin/true"])
     monkeypatch.setattr(census_mod, "launchd_runtime", lambda _warnings: ({}, {}))
 
     items = census_mod.collect_launchd([])
     assert [item.name for item in items] == ["job.real"]
+
+
+def test_broken_unloaded_launchd_plist_is_not_hidden(census_mod, tmp_path, monkeypatch):
+    """Unloaded plists with non-stub keys (typos or schedules without Program/ProgramArguments) surface as inactive."""
+    monkeypatch.setattr(census_mod, "HOME", tmp_path)
+    launch_dir = tmp_path / "Library" / "LaunchAgents"
+    launch_dir.mkdir(parents=True)
+    with (launch_dir / "com.unitares.typo.plist").open("wb") as handle:
+        plistlib.dump(
+            {"Label": "com.unitares.typo", "ProgramArgument": ["/usr/bin/true"]},
+            handle,
+        )
+    with (launch_dir / "com.unitares.schedule-only.plist").open("wb") as handle:
+        plistlib.dump(
+            {"Label": "com.unitares.schedule-only", "StartInterval": 300},
+            handle,
+        )
+    monkeypatch.setattr(census_mod, "launchd_runtime", lambda _warnings: ({}, {}))
+
+    items = {item.name: item for item in census_mod.collect_launchd([])}
+    assert set(items) == {"com.unitares.typo", "com.unitares.schedule-only"}
+    for name in ("com.unitares.typo", "com.unitares.schedule-only"):
+        assert items[name].status == "inactive"
+        assert "attention:launchd_unloaded" in items[name].notes
+    assert items["com.unitares.schedule-only"].cadence == "every 5m"

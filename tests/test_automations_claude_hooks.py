@@ -752,3 +752,271 @@ def test_hook_id_stays_stable_when_script_becomes_missing(census_mod, tmp_path, 
     assert len(items_after) == 1
     assert items_after[0].status == "missing"
     assert items_after[0].id == wired_id
+
+
+@pytest.mark.parametrize("with_hooks_json", [False, True])
+def test_dual_host_plugin_without_claude_hooks_key_does_not_double_list_codex_hooks(
+    census_mod, tmp_path, monkeypatch, with_hooks_json,
+):
+    """Dual-host plugin where .claude-plugin/plugin.json omits `hooks` must not emit codex-hooks.json as claude-plugin."""
+    home = tmp_path / "home"
+    claude_root = home / ".claude/plugins/cache/mkt/gov/1.0.0"
+    codex_root = home / "src/gov"
+    for root in (claude_root, codex_root):
+        _exe(root / "hooks/run-hook.cmd")
+        _exe(root / "hooks/post-activity")
+        if with_hooks_json:
+            _exe(root / "hooks/post-edit")
+            (root / "hooks/hooks.json").write_text(json.dumps({
+                "hooks": {"PostToolUse": [{"hooks": [{
+                    "type": "command",
+                    "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" post-edit --host claude',
+                }]}]}
+            }))
+        (root / ".claude-plugin").mkdir(parents=True)
+        # Manifest intentionally has NO `hooks` key.
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "gov"}))
+        (root / ".codex-plugin").mkdir(parents=True)
+        (root / ".codex-plugin/plugin.json").write_text(json.dumps({
+            "name": "gov",
+            "hooks": "./hooks/codex-hooks.json",
+        }))
+        (root / "hooks/codex-hooks.json").write_text(json.dumps({
+            "hooks": {"PostToolUse": [{"hooks": [{
+                "type": "command",
+                "command": '"${PLUGIN_ROOT}/hooks/run-hook.cmd" post-activity --host codex',
+            }]}]}
+        }))
+
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"gov@mkt": [{"installPath": str(claude_root)}]},
+    }))
+    codex_link = home / ".codex/plugins/gov"
+    codex_link.parent.mkdir(parents=True, exist_ok=True)
+    codex_link.symlink_to(codex_root, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    orphans = [i for i in items if i.status == "orphaned"]
+    assert orphans == [], orphans
+
+    codex_items = [i for i in items if "post-activity" in i.name]
+    assert len(codex_items) == 1, codex_items
+    assert codex_items[0].scheduler == "codex-plugin"
+    assert not any(
+        i.scheduler == "claude-plugin" and "post-activity" in i.name for i in items
+    )
+
+    claude_items = [i for i in items if i.scheduler == "claude-plugin"]
+    if with_hooks_json:
+        assert [i.name for i in claude_items] == ["PostToolUse: post-edit"]
+    else:
+        assert claude_items == []
+
+
+def test_apply_overrides_hook_canonical_only(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/stop.sh")
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": str(hook)}]}]}
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    assert len(items) == 1
+    canonical_id = items[0].id
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {
+            canonical_id: {
+                "owner": "operator",
+                "escalates_to": "ci",
+                "notes": ["gate:machine"],
+            }
+        }
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert warnings == []
+    assert items[0].owner == "operator"
+    assert items[0].escalates_to == "ci"
+    assert "gate:machine" in items[0].notes
+
+
+@pytest.mark.parametrize("legacy_matcher", ["None", ""])
+def test_apply_overrides_legacy_hook_id_migrates_with_warning(
+    census_mod, tmp_path, monkeypatch, legacy_matcher,
+):
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/stop.sh")
+    command = str(hook)
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    assert len(items) == 1
+    canonical_id = items[0].id
+    legacy_id = census_mod.stable_id(
+        "claude-hook", f"{settings_path}:Stop:{legacy_matcher}:{command}",
+    )
+    assert legacy_id != canonical_id
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {
+            legacy_id: {
+                "owner": "operator",
+                "notes": ["gate:machine"],
+            }
+        }
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert items[0].owner == "operator"
+    assert "gate:machine" in items[0].notes
+    assert len(warnings) == 1
+    assert f"legacy hook id {legacy_id} matched {canonical_id}" in warnings[0]
+    assert "update" in warnings[0]
+
+
+def test_apply_overrides_long_command_legacy_hook_id_does_not_self_collide(
+    census_mod, tmp_path, monkeypatch,
+):
+    """When command length exceeds stable_id's 96-char suffix, None/"" aliases dedupe to one item."""
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/stop.sh")
+    command = f"{hook} --flag {'x' * 100}"
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    assert len(items) == 1
+    legacy_id = census_mod.stable_id("claude-hook", f"{settings_path}:Stop:None:{command}")
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {legacy_id: {"owner": "operator"}}
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert items[0].owner == "operator"
+    assert len(warnings) == 1
+    assert f"matched {items[0].id}" in warnings[0]
+
+
+def test_apply_overrides_canonical_wins_over_legacy_hook_id(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/edit.sh")
+    command = str(hook)
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Write|Edit",
+                "hooks": [{"type": "command", "command": command}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    assert len(items) == 1
+    canonical_id = items[0].id
+    legacy_id = census_mod.stable_id(
+        "claude-hook", f"{settings_path}:PostToolUse:Write|Edit:{command}",
+    )
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {
+            canonical_id: {
+                "owner": "canonical-owner",
+                "notes": ["gate:machine"],
+            },
+            legacy_id: {
+                "owner": "legacy-owner",
+                "notes": ["gate:ungated"],
+            },
+        }
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert items[0].owner == "canonical-owner"
+    assert "gate:machine" in items[0].notes
+    assert "gate:ungated" not in items[0].notes
+    assert warnings == [
+        f"overrides: legacy hook id {legacy_id} ignored because canonical id {canonical_id} is also configured"
+    ]
+
+
+def test_apply_overrides_ambiguous_legacy_hook_id_does_not_misapply(
+    census_mod, tmp_path, monkeypatch,
+):
+    """Shared plugin dir loaded by both Claude and Codex yields an ambiguous legacy hook ID."""
+    home = tmp_path / "home"
+    plugin = home / ".codex/plugins/shared-plugin"
+    hook = _exe(plugin / "hooks/shared-hook")
+    hooks_json = plugin / "hooks/hooks.json"
+    command = str(hook)
+    hooks_json.write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"shared-plugin@local": [{"installPath": str(plugin)}]},
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    wired = [i for i in items if i.status == "wired"]
+    assert len(wired) == 2
+    assert {i.scheduler for i in wired} == {"claude-plugin", "codex-plugin"}
+    assert wired[0].id != wired[1].id
+
+    legacy_id = census_mod.stable_id("claude-hook", f"{hooks_json}:Stop:None:{command}")
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {
+            legacy_id: {
+                "owner": "should-not-apply",
+                "notes": ["gate:machine"],
+            }
+        }
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert all(item.owner is None for item in wired)
+    assert all("gate:machine" not in item.notes for item in wired)
+    assert len(warnings) == 1
+    assert "ambiguous" in warnings[0]
+    assert wired[0].id in warnings[0]
+    assert wired[1].id in warnings[0]

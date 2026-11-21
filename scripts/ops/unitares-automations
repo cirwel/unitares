@@ -345,7 +345,13 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
         label = str(plist.get("Label") or path.stem)
         program = plist.get("Program")
         args = [str(v) for v in plist.get("ProgramArguments") or []]
-        if not program and not args and loaded is not None and label not in loaded:
+        if (
+            not program
+            and not args
+            and not (set(plist.keys()) - {"Label", "Disabled"})
+            and loaded is not None
+            and label not in loaded
+        ):
             continue
         workdir = plist.get("WorkingDirectory")
         text = " ".join([label, command_text(args), str(workdir or "")])
@@ -869,12 +875,12 @@ def collect_github_actions(projects_root: Path, warnings: list[str]) -> list[Aut
     results: list[Automation] = []
     if not projects_root.exists():
         return results
-    excluded_parts = {
+    always_excluded = {
         "node_modules", ".venv", "venv", "_archive", ".trash",
-        "_build", "deps", "target", "dist", "build", "__pycache__",
-        ".tox", ".mypy_cache", ".pytest_cache", "cache", ".cache",
+        "__pycache__", ".tox", ".mypy_cache", ".pytest_cache", ".cache",
         "wt", "_security", "_drafts", ".ref",
     }
+    build_dir_names = {"build", "dist", "deps", "target", "cache", "_build"}
     workflow_files: list[Path] = []
     for dirpath, dirnames, _filenames in os.walk(projects_root, topdown=True):
         current = Path(dirpath)
@@ -888,7 +894,9 @@ def collect_github_actions(projects_root: Path, warnings: list[str]) -> list[Aut
             continue
         dirnames[:] = sorted(
             d for d in dirnames
-            if not d.startswith(".") and d.lower() not in excluded_parts
+            if not d.startswith(".")
+            and d.lower() not in always_excluded
+            and (d.lower() not in build_dir_names or (current / d / ".git").exists())
         )
 
     by_workflow: dict[tuple[str, str], tuple[int, Path, Path]] = {}
@@ -998,17 +1006,82 @@ def load_overrides(warnings: list[str]) -> dict[str, dict[str, Any]]:
     return overrides
 
 
+def _legacy_hook_ids(item: Automation) -> list[str]:
+    """Pre-#3314 hook IDs for a non-orphaned ``claude-hooks`` item.
+
+    Before #3314, hook IDs used
+    ``stable_id("claude-hook", f"{settings_path}:{event}:{matcher}:{command}")``
+    where an omitted matcher formatted as ``"None"`` (also tolerate ``""``
+    when no matcher note is present).
+    """
+    if item.source != "claude-hooks" or item.status == "orphaned":
+        return []
+    if not item.config_path or not item.command:
+        return []
+    event: str | None = None
+    matcher: str | None = None
+    for note in item.notes:
+        if event is None and note.startswith("event="):
+            event = note.split("=", 1)[1]
+        elif matcher is None and note.startswith("matcher="):
+            matcher = note.split("=", 1)[1]
+    if not event and item.cadence and item.cadence.startswith("on:"):
+        event = item.cadence[3:]
+    if not event:
+        return []
+    command = item.command[0]
+    matcher_candidates = [matcher] if matcher is not None else ["None", ""]
+    return unique_strings([
+        stable_id("claude-hook", f"{item.config_path}:{event}:{candidate}:{command}")
+        for candidate in matcher_candidates
+    ])
+
+
 def apply_overrides(items: list[Automation], warnings: list[str]) -> None:
+    """Apply operator overrides by canonical ID, with legacy hook ID aliases.
+
+    Hook automations use canonical IDs of the form
+    ``claude-hook:<scheduler>[:<namespace>]:<event>:<sha12>``. Unambiguous
+    pre-#3314 hook IDs still resolve and emit a migration warning naming the
+    canonical ID.
+    """
     overrides = load_overrides(warnings)
     if not overrides:
         return
 
     by_id = {item.id: item for item in items}
+    legacy_by_id: dict[str, list[Automation]] = {}
+    for item in items:
+        for legacy_id in _legacy_hook_ids(item):
+            legacy_by_id.setdefault(legacy_id, []).append(item)
+
     for automation_id, override in sorted(overrides.items()):
         item = by_id.get(automation_id)
         if item is None:
-            warnings.append(f"overrides: no automation matched {automation_id}")
-            continue
+            matches = legacy_by_id.get(automation_id, [])
+            if len(matches) == 1:
+                candidate = matches[0]
+                if candidate.id in overrides:
+                    warnings.append(
+                        f"overrides: legacy hook id {automation_id} ignored because "
+                        f"canonical id {candidate.id} is also configured"
+                    )
+                    continue
+                warnings.append(
+                    f"overrides: legacy hook id {automation_id} matched {candidate.id}; "
+                    f"update {short_path(OVERRIDES_JSON)}"
+                )
+                item = candidate
+            elif len(matches) > 1:
+                candidates = ", ".join(sorted(match.id for match in matches))
+                warnings.append(
+                    f"overrides: legacy hook id {automation_id} is ambiguous; "
+                    f"candidates: {candidates}"
+                )
+                continue
+            else:
+                warnings.append(f"overrides: no automation matched {automation_id}")
+                continue
 
         for field_name in LIST_OVERRIDE_FIELDS:
             value = override.get(field_name)
@@ -1176,7 +1249,20 @@ def _plugin_hook_declarations(root: Path, host: str) -> tuple[list[Path], list[P
         sibling = _existing_unique_paths(sibling_candidates, exclude=active_keys)
         return active, sibling
 
-    # Legacy manifest-less plugin layout (or manifest without a `hooks` key).
+    if (
+        (root / ".codex-plugin/plugin.json").is_file()
+        or (root / ".claude-plugin/plugin.json").is_file()
+    ):
+        active = _existing_unique_paths([root / "hooks/hooks.json", root / "hooks/claude-hooks.json"])
+        active_keys = {str(p.resolve()) for p in active}
+        sibling_candidates = (
+            _manifest_declared_hooks(root, ".codex-plugin/plugin.json")
+            + [root / "hooks/codex-hooks.json"]
+        )
+        sibling = _existing_unique_paths(sibling_candidates, exclude=active_keys)
+        return active, sibling
+
+    # Legacy manifest-less plugin layout (neither .claude-plugin nor .codex-plugin).
     legacy = _existing_unique_paths([
         root / rel
         for rel in ("hooks/hooks.json", "hooks/claude-hooks.json", "hooks/codex-hooks.json")
@@ -1427,6 +1513,8 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
                 warnings.append(
                     f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
                 )
+            # Canonical hook ID: claude-hook:<scheduler>[:<namespace>]:<event>:<sha12>.
+            # Legacy pre-#3314 IDs remain accepted as migration aliases in apply_overrides().
             id_key = json.dumps(
                 [scheduler, str(settings_path), namespace, event, matcher, command],
                 separators=(",", ":"),

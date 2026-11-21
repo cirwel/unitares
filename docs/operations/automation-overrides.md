@@ -35,6 +35,31 @@ rows — never one operator's live fleet, paths, or accountable principals.
 
 Entries are keyed by the census `id` (e.g. `launchd:com.example.nightly-backup`).
 
+### Hook IDs and legacy migration
+
+Session-lifecycle hooks (`source: "claude-hooks"`) use canonical IDs of the form:
+
+```text
+claude-hook:<scheduler>[:<namespace>]:<event>:<sha12>
+```
+
+where `<sha12>` is the first 12 hex characters of SHA-256 over the hook's
+`[scheduler, config_path, namespace, event, matcher, command]` tuple. Copy the
+exact canonical ID from `unitares-automations census --json --source claude-hooks`.
+
+Pre-`#3314` hook IDs (`claude-hook:<settings_path>:<event>:<matcher>:<command>`,
+subject to `stable_id` normalization and 96-character suffix truncation) remain
+accepted by `apply_overrides` as migration aliases:
+
+- **Unambiguous legacy ID only** — the override still applies, and the census
+  emits a warning naming the canonical ID so you can update
+  `automation-overrides.json`.
+- **Both canonical and legacy IDs configured** — the canonical override wins and
+  the legacy key is ignored with a warning.
+- **Ambiguous legacy ID** (for example, the same plugin hook file loaded by both
+  Claude and Codex) — the override is not applied, and a warning lists the
+  candidate canonical IDs for disambiguation.
+
 ## How it is consumed
 
 `unitares-automations` reads `UNITARES_AUTOMATION_OVERRIDES` (default
