@@ -2536,8 +2536,20 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # S13 v2-ontology gate (see _s13_freshness_gate): may refuse the bare
     # call under STRICT_IDENTITY_REQUIRED, or default force_new=true in place.
+    #
+    # A harness asking for an identity is subject to the operator's policy
+    # (src.identity.harness_onboarding). Under agent_only nothing is created
+    # for it, and it is told so on every path that would not resume an
+    # existing identity. The first is here: a harness call the freshness gate
+    # refuses would otherwise be told to retry with force_new=true, which the
+    # policy then declines.
+    harness_request = coerce_bool(arguments.get("harness_request"), default=False)
     _s13_refusal = _s13_freshness_gate(arguments)
     if _s13_refusal is not None:
+        if harness_request:
+            _declined = _harness_onboarding_refusal()
+            if _declined is not None:
+                return _declined
         return _s13_refusal
 
     # Extract optional parameters
@@ -2599,12 +2611,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         resume=resume,
     )
 
-    # A harness asking for an identity is subject to the operator's policy
-    # (src.identity.harness_onboarding). Under agent_only nothing is created
-    # for it. Here: the call asks outright for a new identity. The other place
-    # is the resolve miss below, where a resume finds nothing to resume.
+    # Harness policy, second place: the call asks outright for a new identity.
+    # The third is the resolve miss below, where a resume finds nothing to
+    # resume, and the fourth is the fresh-identity branch after it, which
+    # catches any other way the resolver came back with a new identity.
     # Resuming an existing identity creates nothing and is not declined.
-    harness_request = coerce_bool(arguments.get("harness_request"), default=False)
     if harness_request and (force_new or not resume):
         _declined = _harness_onboarding_refusal()
         if _declined is not None:
@@ -2816,6 +2827,19 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             # CRITICAL FIX (v2.5.7): Capture the fresh identity to persist it directly
             # instead of calling resolve_session_identity again (which could create a different UUID
             # if Redis caching failed silently)
+            if harness_request:
+                # The resolver came back with a new identity by a route the
+                # checks above do not see (a database error on the lookup
+                # falls through to an in-memory mint; a middleware-resolved
+                # identity can be new too). Nothing is persisted yet. Decline,
+                # and drop the session entry the resolver cached for it, or
+                # the next call under this session would resume it into being.
+                _declined = _harness_onboarding_refusal()
+                if _declined is not None:
+                    await _forget_unpersisted_identity(
+                        existing_identity.get("agent_uuid"), base_session_key
+                    )
+                    return _declined
             created_fresh_identity = True
             agent_uuid = existing_identity.get("agent_uuid")
             agent_id = existing_identity.get("agent_id", agent_uuid)
@@ -3543,6 +3567,36 @@ def _harness_onboarding_refusal():
         basis,
     )
     return success_response(harness_onboarding_declined_payload("onboard"))
+
+
+async def _forget_unpersisted_identity(agent_uuid: Any, session_key: str) -> None:
+    """Drop the session entries the resolver cached for an identity that is
+    being declined before it was persisted. Only entries that name this
+    identity are removed. Best effort: a failure here is logged, and the
+    decline still stands."""
+    if not isinstance(agent_uuid, str) or not agent_uuid:
+        return
+    try:
+        from .shared import make_client_session_id, _session_identities
+        from src.cache import get_session_cache
+
+        cache = get_session_cache()
+        for key in {session_key, make_client_session_id(agent_uuid)}:
+            if not key:
+                continue
+            held = _session_identities.get(key)
+            if isinstance(held, dict) and (
+                held.get("bound_agent_id") or held.get("agent_uuid")
+            ) == agent_uuid:
+                _session_identities.pop(key, None)
+            cached = await cache.get(key)
+            if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
+                await cache.unbind(key)
+    except Exception as exc:
+        logger.warning(
+            f"[ONBOARD] could not drop the cached session for declined identity "
+            f"{agent_uuid[:8]}...: {exc}"
+        )
 
 
 async def _record_spawned_under(agent_uuid: str, declared: Any) -> bool:
