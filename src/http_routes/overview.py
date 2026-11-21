@@ -17,6 +17,7 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.http_routes.findings import strip_internal_provenance_fields
 
 logger = get_logger(__name__)
 
@@ -519,7 +520,11 @@ async def http_incidents(request):
         producers = {}
         for et in types_to_query:
             events = await query_audit_events_async(event_type=et, order="desc", limit=limit)
-            all_events.extend(events)
+            for ev in events:
+                if isinstance(ev, dict) and isinstance(ev.get("details"), dict) and "provenance_mac" in ev["details"]:
+                    all_events.append({**ev, "details": strip_internal_provenance_fields(ev["details"])})
+                else:
+                    all_events.append(ev)
             if et in INCIDENT_PRODUCERS:
                 producers[et] = {
                     **INCIDENT_PRODUCERS[et],

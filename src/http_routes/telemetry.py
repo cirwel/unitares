@@ -20,6 +20,7 @@ from src.broadcaster import broadcaster_instance
 from src.http_routes import access
 from src.http_routes.findings import (
     PROVENANCE_SOURCE_FINDINGS_TOKEN,
+    strip_internal_provenance_fields,
     verify_finding_provenance_mac,
 )
 
@@ -394,7 +395,11 @@ async def http_events(request):
                                 verified_actor_agent_uuid=normalized_actor,
                                 agent_id=str(row["agent_id"] or ""),
                                 event_type=str(row["type"] or ""),
+                                severity=str(row["severity"] or ""),
+                                agent_name=str(row["agent_name"] or ""),
                                 message=str(row["message"] or ""),
+                                fingerprint=str(payload.get("fingerprint") or ""),
+                                timestamp=de.get("timestamp"),
                             )
                         ):
                             row["provenance_verified"] = True
@@ -581,13 +586,14 @@ async def http_lifecycle_recent(request):
 
         events = []
         for r in rows:
-            details = r.get("details") or {}
+            raw_details = r.get("details") or {}
+            details = strip_internal_provenance_fields(raw_details)
             events.append({
                 "timestamp": r.get("timestamp"),
                 "event_type": r.get("event_type"),
                 "agent_id": r.get("agent_id"),
                 "agent_label": uuid_to_label.get(r.get("agent_id"), ""),
-                "reason": details.get("reason"),
+                "reason": details.get("reason") if isinstance(details, dict) else None,
                 "details": details,
                 "event_id": r.get("event_id"),
             })

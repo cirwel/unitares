@@ -32,6 +32,7 @@ def _no_http_api_token(monkeypatch):
         "UNITARES_HTTP_AGENT_TOKENS",
         "UNITARES_MCP_BEARER_TOKENS",
         "UNITARES_REST_STRICT",
+        "UNITARES_AUDIT_PROVENANCE_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -298,12 +299,14 @@ def _agent_token_entry(agent_uuid: str, token: str, scopes: str | None = None) -
 
 
 def _client_for_ip(ip: str) -> TestClient:
-    from src.http_api import http_events
+    from src.http_api import http_events, http_incidents, http_lifecycle_recent
 
     app = Starlette(
         routes=[
             Route("/api/findings", http_record_finding, methods=["POST"]),
             Route("/api/events", http_events, methods=["GET"]),
+            Route("/api/incidents", http_incidents, methods=["GET"]),
+            Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]),
         ]
     )
     return TestClient(app, client=(ip, 50000))
@@ -688,32 +691,60 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
 
     # 3. REST /api/events (audit-DB backfill after restart) trusts provenance ONLY
     #    when provenance_source, provenance_verified=True, canonical UUID, and
-    #    HMAC provenance_mac all verify, and never exposes provenance_mac in JSON.
+    #    HMAC provenance_mac (over all displayed fields + UTC timestamp) verify,
+    #    and never exposes provenance_mac in JSON.
+    from datetime import datetime, timedelta, timezone
+
+    from src.http_routes import findings as findings_mod
+
     assert len(persisted_rows) == 1
     assert persisted_rows[0]["details"]["provenance_source"] == "server_findings_token"
     assert isinstance(persisted_rows[0]["details"].get("provenance_mac"), str)
     assert len(persisted_rows[0]["details"]["provenance_mac"]) == 64
 
-    tampered_row = {
+    orig_dt = datetime.fromisoformat(persisted_rows[0]["timestamp"])
+    shifted_dt = orig_dt.astimezone(timezone(timedelta(hours=-7)))
+    assert findings_mod.normalize_provenance_timestamp(shifted_dt) == orig_dt.isoformat()
+    # Equivalent UTC timestamp string (different offset) still verifies on backfill.
+    dt_row = {
         **persisted_rows[0],
-        "event_id": "db-tampered-message",
-        "details": {
-            **persisted_rows[0]["details"],
-            "message": "tampered after signing",
-        },
+        "event_id": "db-dt-obj",
+        "timestamp": shifted_dt.isoformat(),
     }
+    tamper_cases = [
+        ("db-tampered-message", {"message": "tampered after signing"}, {}),
+        ("db-tampered-severity", {"severity": "critical"}, {}),
+        ("db-tampered-agent-name", {"agent_name": "Impostor"}, {}),
+        ("db-tampered-fingerprint", {"fingerprint": "tampered-fp"}, {}),
+        (
+            "db-tampered-timestamp",
+            {},
+            {"timestamp": (orig_dt + timedelta(seconds=1)).isoformat()},
+        ),
+    ]
+    tampered_rows = [
+        {
+            **persisted_rows[0],
+            "event_id": eid,
+            **top_over,
+            "details": {**persisted_rows[0]["details"], **det_over},
+        }
+        for eid, det_over, top_over in tamper_cases
+    ]
     db_rows = [
         persisted_rows[0],
+        dt_row,
         {
             "event_id": "db-forged-no-mac",
             "event_type": "vigil_finding",
             "agent_id": "vigil",
-            "timestamp": "2026-11-21T01:59:45+00:00",
+            "timestamp": persisted_rows[0]["timestamp"],
             "details": {
                 "type": "vigil_finding",
-                "severity": "warning",
-                "message": "pre-deploy forged row with all 3 public strings but no MAC",
+                "severity": "high",
+                "message": "m",
                 "agent_name": "Vigil",
+                "fingerprint": "prov-e2e-stream",
                 "provenance_source": "server_findings_token",
                 "provenance_verified": True,
                 "verified_actor_agent_uuid": VIGIL_UUID,
@@ -723,131 +754,132 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
             "event_id": "db-forged-bad-mac",
             "event_type": "vigil_finding",
             "agent_id": "vigil",
-            "timestamp": "2026-11-21T01:59:30+00:00",
+            "timestamp": persisted_rows[0]["timestamp"],
             "details": {
-                "type": "vigil_finding",
-                "severity": "warning",
-                "message": "forged row with wrong MAC",
-                "agent_name": "Vigil",
-                "provenance_source": "server_findings_token",
-                "provenance_verified": True,
-                "verified_actor_agent_uuid": VIGIL_UUID,
+                **persisted_rows[0]["details"],
                 "provenance_mac": "0" * 64,
             },
         },
-        tampered_row,
+        *tampered_rows,
         {
             "event_id": "db-missing-actor",
             "event_type": "vigil_finding",
             "agent_id": "vigil",
-            "timestamp": "2026-11-21T01:59:15+00:00",
+            "timestamp": persisted_rows[0]["timestamp"],
             "details": {
-                "type": "vigil_finding",
-                "severity": "warning",
-                "message": "mismatched row with None actor",
-                "agent_name": "Vigil",
-                "provenance_source": "server_findings_token",
-                "provenance_verified": True,
+                **persisted_rows[0]["details"],
                 "verified_actor_agent_uuid": None,
-                "provenance_mac": persisted_rows[0]["details"]["provenance_mac"],
             },
         },
         {
             "event_id": "db-spoofed-nonbool",
             "event_type": "vigil_finding",
             "agent_id": "vigil",
-            "timestamp": "2026-11-21T01:59:00+00:00",
+            "timestamp": persisted_rows[0]["timestamp"],
             "details": {
-                "type": "vigil_finding",
-                "severity": "warning",
-                "message": "spoofed",
-                "agent_name": "Vigil",
-                "provenance_source": "server_findings_token",
+                **persisted_rows[0]["details"],
                 "provenance_verified": "true",
                 "verified_actor_agent_uuid": 12345,
-                "provenance_mac": persisted_rows[0]["details"]["provenance_mac"],
             },
         },
     ]
     event_detector.clear_events()
     with patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=db_rows)):
-        r_db = c.get("/api/events?limit=10")
+        r_db = c.get("/api/events?limit=20")
     assert r_db.status_code == 200
     by_id = {e["event_id"]: e for e in r_db.json()["events"]}
-    assert type(by_id["db-1"]["provenance_verified"]) is bool
-    assert by_id["db-1"]["provenance_verified"] is True
-    assert by_id["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
-    assert "provenance_mac" not in by_id["db-1"]
+    for good_id in ("db-1", "db-dt-obj"):
+        assert type(by_id[good_id]["provenance_verified"]) is bool
+        assert by_id[good_id]["provenance_verified"] is True
+        assert by_id[good_id]["verified_actor_agent_uuid"] == VIGIL_UUID
+        assert "provenance_mac" not in by_id[good_id]
     for bad_id in (
         "db-forged-no-mac",
         "db-forged-bad-mac",
         "db-tampered-message",
+        "db-tampered-severity",
+        "db-tampered-agent-name",
+        "db-tampered-fingerprint",
+        "db-tampered-timestamp",
         "db-missing-actor",
         "db-spoofed-nonbool",
     ):
-        assert by_id[bad_id]["provenance_verified"] is False
-        assert by_id[bad_id]["verified_actor_agent_uuid"] is None
+        assert by_id[bad_id]["provenance_verified"] is False, bad_id
+        assert by_id[bad_id]["verified_actor_agent_uuid"] is None, bad_id
         assert "provenance_mac" not in by_id[bad_id]
 
-    # 4. Per-actor MAC isolation & rotation properties:
-    #    - Rotating/adding another agent's token does NOT invalidate Vigil's backfill.
-    #    - Listing a second Vigil token during rotation keeps the old row valid.
-    #    - Revoking Vigil's old token immediately fails the old row closed.
-    other_tok = "b" * 64
-    vigil_rotated_tok = "c" * 64
+    # 4. Rotating UNITARES_HTTP_AGENT_TOKENS does NOT break valid backfilled rows.
     monkeypatch.setenv(
         "UNITARES_HTTP_AGENT_TOKENS",
-        ",".join(
-            [
-                _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
-                _agent_token_entry(VIGIL_UUID, vigil_rotated_tok, "findings"),
-                _agent_token_entry(OTHER_UUID, other_tok, "findings"),
-            ]
-        ),
-    )
-    # Cross-actor MAC forgery: OTHER_UUID cannot sign a row claiming VIGIL_UUID.
-    from src.http_agent_tokens import findings_mac_key_for_bearer
-    from src.http_routes.findings import compute_finding_provenance_mac
-
-    other_key = findings_mac_key_for_bearer(other_tok)
-    assert other_key is not None
-    cross_actor_row = {
-        **persisted_rows[0],
-        "event_id": "db-cross-actor-mac",
-        "details": {
-            **persisted_rows[0]["details"],
-            "provenance_mac": compute_finding_provenance_mac(
-                mac_key=other_key,
-                provenance_source="server_findings_token",
-                verified_actor_agent_uuid=VIGIL_UUID,
-                agent_id="vigil",
-                event_type="vigil_finding",
-                message=persisted_rows[0]["details"]["message"],
-            ),
-        },
-    }
-    with patch(
-        "src.audit_db.query_audit_events_async",
-        new=AsyncMock(return_value=[persisted_rows[0], cross_actor_row]),
-    ):
-        r_rot = c.get("/api/events?limit=10")
-    by_rot = {e["event_id"]: e for e in r_rot.json()["events"]}
-    assert by_rot["db-1"]["provenance_verified"] is True
-    assert by_rot["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
-    assert by_rot["db-cross-actor-mac"]["provenance_verified"] is False
-    assert by_rot["db-cross-actor-mac"]["verified_actor_agent_uuid"] is None
-
-    # After revoking the old Vigil token (keeping only the new rotated token),
-    # rows signed by the revoked token fail closed on backfill.
-    monkeypatch.setenv(
-        "UNITARES_HTTP_AGENT_TOKENS",
-        _agent_token_entry(VIGIL_UUID, vigil_rotated_tok, "findings"),
+        _agent_token_entry(VIGIL_UUID, "c" * 64, "findings"),
     )
     with patch(
         "src.audit_db.query_audit_events_async",
         new=AsyncMock(return_value=[persisted_rows[0]]),
     ):
-        r_revoked = c.get("/api/events?limit=10")
-    revoked_ev = r_revoked.json()["events"][0]
-    assert revoked_ev["provenance_verified"] is False
-    assert revoked_ev["verified_actor_agent_uuid"] is None
+        r_rot = c.get("/api/events?limit=10")
+    assert r_rot.json()["events"][0]["provenance_verified"] is True
+    assert r_rot.json()["events"][0]["verified_actor_agent_uuid"] == VIGIL_UUID
+
+    # 5. Simulated restart with UNITARES_AUDIT_PROVENANCE_SECRET unset fails closed.
+    monkeypatch.setattr(findings_mod, "_EPHEMERAL_PROVENANCE_KEY", b"R" * 32)
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[persisted_rows[0]]),
+    ):
+        r_restart_unset = c.get("/api/events?limit=10")
+    assert r_restart_unset.json()["events"][0]["provenance_verified"] is False
+    assert r_restart_unset.json()["events"][0]["verified_actor_agent_uuid"] is None
+
+    # 6. With UNITARES_AUDIT_PROVENANCE_SECRET set, verification survives restart
+    #    (independent of ephemeral key changes and agent token rotations).
+    monkeypatch.setenv("UNITARES_AUDIT_PROVENANCE_SECRET", "dedicated-server-hmac-secret")
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    persisted_rows.clear()
+    with patch("src.audit_db.append_audit_event_async", new=_capture_persist):
+        r_secret = c.post(
+            "/api/findings",
+            json=_finding(
+                "prov-secret-restart",
+                type="vigil_finding",
+                agent_id="vigil",
+                agent_name="Vigil",
+            ),
+            headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+        )
+    assert r_secret.status_code == 200
+    assert len(persisted_rows) == 1
+    # Simulate server restart + agent token rotation
+    monkeypatch.setattr(findings_mod, "_EPHEMERAL_PROVENANCE_KEY", b"S" * 32)
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, "d" * 64, "findings"),
+    )
+    event_detector.clear_events()
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[persisted_rows[0]]),
+    ):
+        r_restart_secret = c.get("/api/events?limit=10")
+    ev_after = r_restart_secret.json()["events"][0]
+    assert ev_after["provenance_verified"] is True
+    assert ev_after["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert "provenance_mac" not in ev_after
+
+    # 7. Audit-row HTTP routes (/api/incidents and /v1/lifecycle/recent) strip
+    #    provenance_mac without mutating the underlying details dict.
+    original_mac = persisted_rows[0]["details"]["provenance_mac"]
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[persisted_rows[0]]),
+    ):
+        r_inc = c.get("/api/incidents?type=vigil_finding")
+        r_life = c.get("/v1/lifecycle/recent?limit=10")
+    assert r_inc.status_code == 200
+    assert "provenance_mac" not in r_inc.json()["incidents"][0]["details"]
+    assert r_life.status_code == 200
+    assert "provenance_mac" not in r_life.json()["events"][0]["details"]
+    assert persisted_rows[0]["details"]["provenance_mac"] == original_mac

@@ -53,12 +53,50 @@ _FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
 # Server-owned provenance keys: always stripped from incoming JSON and stamped
 # solely from the authenticated request credential.
 PROVENANCE_SOURCE_FINDINGS_TOKEN = "server_findings_token"
+AUDIT_PROVENANCE_SECRET_ENV = "UNITARES_AUDIT_PROVENANCE_SECRET"
 _SERVER_OWNED_PROVENANCE_FIELDS = (
     "provenance_verified",
     "verified_actor_agent_uuid",
     "provenance_source",
     "provenance_mac",
 )
+_EPHEMERAL_PROVENANCE_KEY = secrets.token_bytes(32)
+
+
+def _provenance_hmac_key() -> bytes:
+    """Optional HMAC secret persisting server-verified finding provenance across restarts; unset fails closed after restart."""
+    raw = os.getenv(AUDIT_PROVENANCE_SECRET_ENV, "").strip()
+    if raw:
+        return hashlib.sha256(
+            b"unitares-findings-provenance-v1|" + raw.encode("utf-8")
+        ).digest()
+    return _EPHEMERAL_PROVENANCE_KEY
+
+
+def strip_internal_provenance_fields(details: object) -> object:
+    """Return a shallow copy of an audit ``details`` dict without internal ``provenance_mac``."""
+    if isinstance(details, dict) and "provenance_mac" in details:
+        return {k: v for k, v in details.items() if k != "provenance_mac"}
+    return details
+
+
+def normalize_provenance_timestamp(value: object) -> Optional[str]:
+    """Normalize a ``datetime`` or ISO-8601 string to canonical UTC ISO-8601, or None."""
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _canonical_provenance_payload(
@@ -67,7 +105,11 @@ def _canonical_provenance_payload(
     verified_actor_agent_uuid: str,
     agent_id: str,
     event_type: str,
+    severity: str,
+    agent_name: str,
     message: str,
+    fingerprint: str,
+    timestamp: str,
 ) -> bytes:
     return json.dumps(
         [
@@ -75,7 +117,11 @@ def _canonical_provenance_payload(
             verified_actor_agent_uuid.lower(),
             agent_id,
             event_type,
+            severity,
+            agent_name,
             message,
+            fingerprint,
+            timestamp,
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -84,22 +130,32 @@ def _canonical_provenance_payload(
 
 def compute_finding_provenance_mac(
     *,
-    mac_key: bytes,
     provenance_source: str,
     verified_actor_agent_uuid: str,
     agent_id: str,
     event_type: str,
+    severity: str,
+    agent_name: str,
     message: str,
+    fingerprint: str,
+    timestamp: str,
 ) -> str:
-    """Compute a per-actor HMAC-SHA256 hex tag binding verified finding provenance to core event fields."""
+    """Compute an HMAC-SHA256 hex tag binding verified finding provenance to all displayed backfill fields."""
+    normalized_ts = normalize_provenance_timestamp(timestamp)
+    if normalized_ts is None:
+        raise ValueError("Invalid timestamp for provenance MAC")
     canonical = _canonical_provenance_payload(
         provenance_source=provenance_source,
         verified_actor_agent_uuid=verified_actor_agent_uuid,
         agent_id=agent_id,
         event_type=event_type,
+        severity=severity,
+        agent_name=agent_name,
         message=message,
+        fingerprint=fingerprint,
+        timestamp=normalized_ts,
     )
-    return hmac.new(mac_key, canonical, hashlib.sha256).hexdigest()
+    return hmac.new(_provenance_hmac_key(), canonical, hashlib.sha256).hexdigest()
 
 
 def verify_finding_provenance_mac(
@@ -109,26 +165,30 @@ def verify_finding_provenance_mac(
     verified_actor_agent_uuid: str,
     agent_id: str,
     event_type: str,
+    severity: str,
+    agent_name: str,
     message: str,
+    fingerprint: str,
+    timestamp: object,
 ) -> bool:
-    """Verify a persisted audit-DB provenance MAC against every configured ``findings`` token for the actor."""
+    """Verify a persisted audit-DB provenance MAC in constant time."""
     if not isinstance(mac, str) or not mac:
         return False
-    keys = http_agent_tokens.findings_mac_keys_for_agent(verified_actor_agent_uuid)
-    if not keys:
+    normalized_ts = normalize_provenance_timestamp(timestamp)
+    if normalized_ts is None:
         return False
-    canonical = _canonical_provenance_payload(
+    expected = compute_finding_provenance_mac(
         provenance_source=provenance_source,
         verified_actor_agent_uuid=verified_actor_agent_uuid,
         agent_id=agent_id,
         event_type=event_type,
+        severity=severity,
+        agent_name=agent_name,
         message=message,
+        fingerprint=fingerprint,
+        timestamp=normalized_ts,
     )
-    matched = False
-    for key in keys:
-        expected = hmac.new(key, canonical, hashlib.sha256).hexdigest()
-        matched |= hmac.compare_digest(mac, expected)
-    return matched
+    return hmac.compare_digest(mac, expected)
 
 
 def _is_shared_static_bearer(
@@ -152,8 +212,8 @@ def _is_shared_static_bearer(
 
 def _authenticate_finding_request(
     request,
-) -> tuple[Optional[JSONResponse], bool, Optional[str], Optional[bytes]]:
-    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid, provenance_mac_key)``.
+) -> tuple[Optional[JSONResponse], bool, Optional[str]]:
+    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``.
 
     Auth precedence aligns with ``src/http_routes/tools.py``:
     - A valid per-agent ``findings``-scoped token (distinct from shared static
@@ -186,17 +246,16 @@ def _authenticate_finding_request(
                 scopes=agent_grant.scopes,
             )
             if agent_refusal is None:
-                mac_key = http_agent_tokens.findings_mac_key_for_bearer(bearer)
                 logger.info(
                     "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
                     agent_grant.agent_uuid[:8],
                     agent_grant.digest_prefix,
                     "+".join(sorted(agent_grant.scopes)),
                 )
-                return None, True, agent_grant.agent_uuid, mac_key
+                return None, True, agent_grant.agent_uuid
 
     if access._check_http_auth(request, http_api_token=http_api_token):
-        return None, False, None, None
+        return None, False, None
 
     if agent_grant is not None and agent_refusal is not None:
         return (
@@ -210,10 +269,9 @@ def _authenticate_finding_request(
             ),
             False,
             None,
-            None,
         )
 
-    return access._http_unauthorized(), False, None, None
+    return access._http_unauthorized(), False, None
 
 
 def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
@@ -226,7 +284,7 @@ def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
 
 async def http_record_finding(request):
     """POST /api/findings — ingest an external finding into the event ring buffer."""
-    auth_error, provenance_verified, verified_actor_agent_uuid, provenance_mac_key = (
+    auth_error, provenance_verified, verified_actor_agent_uuid = (
         _authenticate_finding_request(request)
     )
     if auth_error is not None:
@@ -278,19 +336,24 @@ async def http_record_finding(request):
         for key in _SERVER_OWNED_PROVENANCE_FIELDS:
             payload.pop(key, None)
         provenance_mac: Optional[str] = None
+        verified_timestamp: Optional[str] = None
         if provenance_verified and isinstance(verified_actor_agent_uuid, str):
+            verified_timestamp = datetime.now(timezone.utc).isoformat()
+            payload["timestamp"] = verified_timestamp
             payload["provenance_verified"] = True
             payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
             payload["provenance_source"] = PROVENANCE_SOURCE_FINDINGS_TOKEN
-            if provenance_mac_key is not None:
-                provenance_mac = compute_finding_provenance_mac(
-                    mac_key=provenance_mac_key,
-                    provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
-                    verified_actor_agent_uuid=verified_actor_agent_uuid,
-                    agent_id=str(payload["agent_id"]),
-                    event_type=str(payload["type"]),
-                    message=str(payload["message"]),
-                )
+            provenance_mac = compute_finding_provenance_mac(
+                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                verified_actor_agent_uuid=verified_actor_agent_uuid,
+                agent_id=str(payload["agent_id"]),
+                event_type=str(payload["type"]),
+                severity=str(payload["severity"]),
+                agent_name=str(payload["agent_name"]),
+                message=str(payload["message"]),
+                fingerprint=str(payload["fingerprint"]),
+                timestamp=verified_timestamp,
+            )
         else:
             payload["provenance_verified"] = False
             payload["verified_actor_agent_uuid"] = None
@@ -318,6 +381,7 @@ async def http_record_finding(request):
                     agent_id=stored.get("agent_id"),
                     payload=stored,
                     persist_details={"provenance_mac": provenance_mac},
+                    timestamp=verified_timestamp,
                 )
             else:
                 await broadcaster_instance.broadcast_event(

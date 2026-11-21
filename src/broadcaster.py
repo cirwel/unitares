@@ -140,6 +140,7 @@ class EISVBroadcaster:
         *,
         persist: bool = True,
         persist_details: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[str] = None,
     ):
         """Broadcast a typed governance event.
 
@@ -153,9 +154,11 @@ class EISVBroadcaster:
         event = {
             "type": event_type,
             "agent_id": agent_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
             **(payload or {}),
         }
+        if timestamp is not None:
+            event["timestamp"] = timestamp
         self.event_history.append(event)
         await self._send_to_clients(event)
 
