@@ -397,7 +397,10 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                         if cand is None or cand not in matching_fp_candidates:
                             continue
                         resolved = _copy_group_key_with_worktree(
-                            row, git_cache, allow_persisted_location=True
+                            row,
+                            git_cache,
+                            allow_persisted_location=True,
+                            max_lookups=None,
                         )
                         if resolved is None:
                             continue
@@ -425,7 +428,9 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             if fp_sources_by_key:
                 cand = _copy_candidate_key(f)
                 if cand is not None and cand in fp_candidate_keys:
-                    resolved = _copy_group_key_with_worktree(f, git_cache)
+                    resolved = _copy_group_key_with_worktree(
+                        f, git_cache, max_lookups=None
+                    )
                     if resolved is not None:
                         new_wt_counts[resolved] += 1
             new_resolved.append(resolved)
@@ -796,7 +801,9 @@ def update_finding_status(
 
         # Stamp live git repo placement onto fp targets so future persist_findings
         # carry-over still works after this source worktree is pruned.
-        live_target_loc = _git_location(str(updated_target.get("file") or ""), git_cache)
+        live_target_loc = _git_location(
+            str(updated_target.get("file") or ""), git_cache, max_lookups=None
+        )
         if live_target_loc is not None:
             updated_target["git_common_dir"] = live_target_loc[0]
             updated_target["worktree_toplevel"] = live_target_loc[1]
@@ -826,7 +833,10 @@ def update_finding_status(
                 )
                 if has_open_sibling_candidate:
                     target_resolved = _copy_group_key_with_worktree(
-                        updated_target, git_cache, allow_persisted_location=True
+                        updated_target,
+                        git_cache,
+                        allow_persisted_location=True,
+                        max_lookups=None,
                     )
                     if target_resolved is not None:
                         target_copy_key, target_toplevel = target_resolved
@@ -834,7 +844,10 @@ def update_finding_status(
                         open_by_sibling_wt: dict[str, list[tuple[str, str]]] = {}
                         for fp, row in non_aged_candidates:
                             sib_resolved = _copy_group_key_with_worktree(
-                                row, git_cache, allow_persisted_location=True
+                                row,
+                                git_cache,
+                                allow_persisted_location=True,
+                                max_lookups=None,
                             )
                             if sib_resolved is None:
                                 continue
@@ -1317,11 +1330,18 @@ GitCache = dict[str, Any]
 _GIT_LOOKUP_LIMIT = 8
 
 
-def _git_budget_spent(cache: GitCache) -> bool:
-    return len(cache) >= _GIT_LOOKUP_LIMIT
+def _git_budget_spent(
+    cache: GitCache, max_lookups: int | None = _GIT_LOOKUP_LIMIT
+) -> bool:
+    return max_lookups is not None and len(cache) >= max_lookups
 
 
-def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
+def _git_worktree_of_dir(
+    directory: Path,
+    cache: GitCache,
+    *,
+    max_lookups: int | None = _GIT_LOOKUP_LIMIT,
+) -> tuple[str, str] | None:
     """Return ``(common_dir, toplevel)`` for an existing directory, or None.
 
     The common dir identifies the repository across all of its worktrees; the
@@ -1331,7 +1351,7 @@ def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | 
     key = str(directory)
     if key in cache:
         return cache[key]
-    if _git_budget_spent(cache):
+    if _git_budget_spent(cache, max_lookups):
         return None
     info: tuple[str, str] | None = None
     try:
@@ -1367,7 +1387,10 @@ def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | 
 
 
 def _git_location(
-    file_path: str, cache: GitCache
+    file_path: str,
+    cache: GitCache,
+    *,
+    max_lookups: int | None = _GIT_LOOKUP_LIMIT,
 ) -> tuple[str, str, str] | None:
     """Return ``(common_dir, toplevel, repo_relative_path)`` for a finding's
     file, or None when it cannot be placed in a git worktree.
@@ -1387,7 +1410,7 @@ def _git_location(
         return None
     if not parent.is_dir():
         return None
-    info = _git_worktree_of_dir(parent, cache)
+    info = _git_worktree_of_dir(parent, cache, max_lookups=max_lookups)
     if info is None:
         return None
     common_dir, toplevel = info
@@ -1594,6 +1617,7 @@ def _copy_group_key_with_worktree(
     cache: GitCache,
     *,
     allow_persisted_location: bool = False,
+    max_lookups: int | None = _GIT_LOOKUP_LIMIT,
 ) -> tuple[CopyGroupKey, str] | None:
     """Return ``(copy_group_key, worktree_toplevel)`` for a finding whose file
     resolves inside a git worktree, or None for ungrouped patterns (``R000``),
@@ -1606,7 +1630,7 @@ def _copy_group_key_with_worktree(
     pattern, content_hash, file_path, severity = _finding_copy_fields(finding)
     if not pattern or pattern in _UNGROUPED_PATTERNS or not content_hash:
         return None
-    location = _git_location(file_path, cache)
+    location = _git_location(file_path, cache, max_lookups=max_lookups)
     if location is None:
         if allow_persisted_location and not isinstance(finding, Finding):
             common_dir = finding.get("git_common_dir")
@@ -1629,13 +1653,17 @@ def _copy_group_key_with_worktree(
 def _copy_group_key(
     finding: Mapping[str, Any] | Finding,
     cache: GitCache,
+    *,
+    max_lookups: int | None = _GIT_LOOKUP_LIMIT,
 ) -> CopyGroupKey | None:
     """Return ``(git_common_dir, repo_rel_path, pattern, content_hash, severity)``
     for a finding whose file resolves inside a git worktree, or None for
     ungrouped patterns (``R000``), missing content hashes, or unresolvable
     repository paths.
     """
-    resolved = _copy_group_key_with_worktree(finding, cache)
+    resolved = _copy_group_key_with_worktree(
+        finding, cache, max_lookups=max_lookups
+    )
     return None if resolved is None else resolved[0]
 
 

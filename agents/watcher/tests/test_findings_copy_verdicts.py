@@ -1759,6 +1759,66 @@ class TestPersistFindingsFpCarryOver:
         b_f = _make_finding(mod2_b, line=10)
         assert [f.fingerprint for f in persist_findings([b_f])] == [b_f.fingerprint]
 
+    def test_verdict_propagation_and_carry_over_exceed_display_git_lookup_limit(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """With > _GIT_LOOKUP_LIMIT (8) worktrees, update_finding_status fp
+        propagation and persist_findings fp carry-over must resolve ALL worktrees
+        (max_lookups=None), while display _group_copies preserves the 8-lookup cap."""
+        wt_names = [f"wt-{i:02d}" for i in range(1, 12)]  # main + 11 linked = 12 worktrees
+        trees = _repo_with_worktrees(tmp_path, *wt_names)
+
+        # Verify display _group_copies still enforces _GIT_LOOKUP_LIMIT (8)
+        display_rows = [
+            _make_row(f"d{i:015d}", trees[name] / "pkg/mod.py", line=10)
+            for i, name in enumerate(["main", *wt_names])
+        ]
+        display_cache: dict[str, Any] = {}
+        display_groups = _group_copies(display_rows, display_cache)
+        assert len(display_cache) == watcher_findings._GIT_LOOKUP_LIMIT
+        assert len(display_groups) > 1
+
+        # 1) update_finding_status closes all 10 open sibling worktrees (> 8)
+        initial_trees = ["main", *wt_names[:10]]
+        initial_findings = [
+            _make_finding(trees[name] / "pkg/mod.py", line=10)
+            for name in initial_trees
+        ]
+        assert len(persist_findings(initial_findings)) == 11
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(
+                initial_findings[0].fingerprint, "dismissed", reason="fp"
+            )
+            == 0
+        )
+        assert "10 worktree copies" in capsys.readouterr().out
+
+        rows_after_dismiss = _read_rows(isolated_findings_state)
+        assert all(r["status"] == "dismissed" for r in rows_after_dismiss)
+        assert sum(
+            1 for r in rows_after_dismiss if r.get("resolution_reason") == "dup"
+        ) == 10
+
+        # 2) persist_findings on the 12th worktree (after scanning >8 existing
+        #    worktree directories in findings.jsonl) still carries over fp
+        twelfth_finding = _make_finding(trees[wt_names[10]] / "pkg/mod.py", line=10)
+        assert persist_findings([twelfth_finding]) == []
+        rows_after_12th = _read_rows(isolated_findings_state)
+        assert len(rows_after_12th) == 12
+        last_row = rows_after_12th[-1]
+        assert last_row["fingerprint"] == twelfth_finding.fingerprint
+        assert last_row["status"] == "dismissed"
+        assert last_row["resolution_reason"] == "dup"
+        assert last_row["duplicate_of"] == initial_findings[0].fingerprint
+
 
 # ---------------------------------------------------------------------------
 # 4. Regression tests for same-worktree, commit-scan, and summary routes
