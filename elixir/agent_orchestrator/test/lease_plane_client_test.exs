@@ -17,6 +17,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
     :lease_plane_bearer_token,
     :governance_url,
     :governance_api_token,
+    :governance_api_tokens,
     :lease_identity_proof,
     :lease_holder_agent_uuid,
     :require_lease_identity_proof,
@@ -34,6 +35,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
     Application.put_env(:agent_orchestrator, :lease_plane_base_url, "http://127.0.0.1:8788")
     Application.put_env(:agent_orchestrator, :governance_url, "http://127.0.0.1:8767")
     Application.put_env(:agent_orchestrator, :governance_api_token, nil)
+    Application.put_env(:agent_orchestrator, :governance_api_tokens, [])
     Application.put_env(:agent_orchestrator, :lease_identity_proof, nil)
     Application.put_env(:agent_orchestrator, :lease_holder_agent_uuid, nil)
     Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
@@ -407,6 +409,100 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
                LeasePlaneClient.acquire("agent:/ex-mcp", @holder_uuid, "remote_heartbeat", 60)
 
       assert_receive {:attest_path, "/v1/lease-holder/attest"}
+    end
+
+    test "falls back to second governance bearer token on 401 (strict mode) but not on 200 or 403" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("gov_fallback", fn _req ->
+          {200, %{ok: true, lease: %{lease_id: "lease-strict-ok"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+      Application.put_env(:agent_orchestrator, :governance_api_token, "local-http-tok")
+
+      Application.put_env(:agent_orchestrator, :governance_api_tokens, [
+        "local-http-tok",
+        "strict-mcp-tok"
+      ])
+
+      # Case 1: local mode accepts first token -> single request, no fallback
+      local_gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:local_auth, req.headers["authorization"]})
+          decoded = Jason.decode!(req.raw_body)
+          token = "lat.v1." <> Base.url_encode64(decoded["body_sha256"], padding: false) <> ".sig"
+          {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: token}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :governance_url, local_gov_url)
+
+      assert {:ok, "lease-strict-ok"} =
+               LeasePlaneClient.acquire("agent:/ex-local", @holder_uuid, "remote_heartbeat", 60)
+
+      assert_receive {:local_auth, "Bearer local-http-tok"}
+      refute_receive {:local_auth, _}
+
+      # Case 2: UNITARES_REST_STRICT=1 rejects HTTP API token with 401 and accepts MCP bearer token
+      strict_gov_url =
+        start_tcp_http_server(fn req ->
+          auth = req.headers["authorization"]
+          send(test_pid, {:strict_auth, auth})
+
+          if auth == "Bearer strict-mcp-tok" do
+            decoded = Jason.decode!(req.raw_body)
+
+            token =
+              "lat.v1." <> Base.url_encode64(decoded["body_sha256"], padding: false) <> ".sig"
+
+            {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: token}}
+          else
+            {401, %{ok: false, error: "unauthorized"}}
+          end
+        end)
+
+      Application.put_env(:agent_orchestrator, :governance_url, strict_gov_url)
+
+      assert {:ok, "lease-strict-ok"} =
+               LeasePlaneClient.acquire("agent:/ex-strict", @holder_uuid, "remote_heartbeat", 60)
+
+      assert_receive {:strict_auth, "Bearer local-http-tok"}
+      assert_receive {:strict_auth, "Bearer strict-mcp-tok"}
+      refute_receive {:strict_auth, _}
+
+      # Case 3: 403 (identity_proof_invalid) does NOT retry with second token
+      forbidden_gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:forbidden_auth, req.headers["authorization"]})
+          {403, %{ok: false, error: "identity_proof_invalid"}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :governance_url, forbidden_gov_url)
+
+      assert {:error, {:identity_attestation_failed, {:attestation_http_status, 403}}} =
+               LeasePlaneClient.acquire("agent:/ex-403", @holder_uuid, "remote_heartbeat", 60)
+
+      assert_receive {:forbidden_auth, "Bearer local-http-tok"}
+      refute_receive {:forbidden_auth, _}
+
+      # Case 4: both tokens return 401 -> fails closed without leaking tokens
+      all_401_gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:all_401_auth, req.headers["authorization"]})
+          {401, %{ok: false, error: "unauthorized"}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :governance_url, all_401_gov_url)
+
+      assert {:error, {:identity_attestation_failed, {:attestation_http_status, 401}}} =
+               LeasePlaneClient.acquire("agent:/ex-401", @holder_uuid, "remote_heartbeat", 60)
+
+      assert_receive {:all_401_auth, "Bearer local-http-tok"}
+      assert_receive {:all_401_auth, "Bearer strict-mcp-tok"}
+      refute_receive {:all_401_auth, _}
     end
 
     test "passes through pre-minted lat.v1 attestation and rejects malformed lat.v1 tokens" do

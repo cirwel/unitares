@@ -215,7 +215,7 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   defp mint_attestation(source_proof, method, path, raw_body, holder_agent_uuid, opts) do
     with {:ok, gov_base} <- validate_governance_url(governance_url(opts)),
-         {:ok, auth_headers} <- governance_headers(opts) do
+         {:ok, header_candidates} <- governance_header_candidates(opts) do
       url = gov_base <> "/v1/lease-holder/attest"
       body_sha256 = :crypto.hash(:sha256, raw_body) |> Base.encode16(case: :lower)
 
@@ -229,19 +229,39 @@ defmodule AgentOrchestrator.LeasePlaneClient do
         |> maybe_put_holder(holder_agent_uuid)
 
       attest_payload = Jason.encode!(attest_map)
-      headers = [{~c"accept", ~c"application/json"} | auth_headers]
-      request = {String.to_charlist(url), headers, ~c"application/json", attest_payload}
 
-      case :httpc.request(:post, request, http_options(url, opts), body_format: :binary) do
-        {:ok, {{_http, 200, _reason}, _resp_headers, resp_body}} ->
-          parse_attestation_response(resp_body, holder_agent_uuid)
+      post_attestation_with_fallback(
+        url,
+        attest_payload,
+        header_candidates,
+        holder_agent_uuid,
+        opts
+      )
+    end
+  end
 
-        {:ok, {{_http, status, _reason}, _resp_headers, _resp_body}} ->
-          {:error, {:attestation_http_status, status}}
+  defp post_attestation_with_fallback(
+         url,
+         attest_payload,
+         [auth_headers | rest],
+         holder_agent_uuid,
+         opts
+       ) do
+    headers = [{~c"accept", ~c"application/json"} | auth_headers]
+    request = {String.to_charlist(url), headers, ~c"application/json", attest_payload}
 
-        {:error, reason} ->
-          {:error, {:attestation_unreachable, reason}}
-      end
+    case :httpc.request(:post, request, http_options(url, opts), body_format: :binary) do
+      {:ok, {{_http, 200, _reason}, _resp_headers, resp_body}} ->
+        parse_attestation_response(resp_body, holder_agent_uuid)
+
+      {:ok, {{_http, 401, _reason}, _resp_headers, _resp_body}} when rest != [] ->
+        post_attestation_with_fallback(url, attest_payload, rest, holder_agent_uuid, opts)
+
+      {:ok, {{_http, status, _reason}, _resp_headers, _resp_body}} ->
+        {:error, {:attestation_http_status, status}}
+
+      {:error, reason} ->
+        {:error, {:attestation_unreachable, reason}}
     end
   end
 
@@ -362,27 +382,53 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       Application.get_env(:agent_orchestrator, :governance_url, @default_governance_url)
   end
 
-  defp governance_headers(opts) do
-    token =
-      Keyword.get(opts, :governance_api_token) ||
-        Application.get_env(:agent_orchestrator, :governance_api_token)
+  defp governance_header_candidates(opts) do
+    raw_tokens =
+      case Keyword.fetch(opts, :governance_api_token) do
+        {:ok, token} ->
+          [token]
 
-    case token do
-      nil ->
-        {:ok, []}
+        :error ->
+          primary = Application.get_env(:agent_orchestrator, :governance_api_token)
+          configured = Application.get_env(:agent_orchestrator, :governance_api_tokens, [])
+          [primary | List.wrap(configured)]
+      end
 
-      "" ->
-        {:ok, []}
+    case normalize_governance_tokens(raw_tokens) do
+      {:ok, []} ->
+        {:ok, [[]]}
 
-      value when is_binary(value) ->
+      {:ok, tokens} ->
+        {:ok,
+         Enum.map(tokens, fn token ->
+           [{~c"authorization", String.to_charlist("Bearer " <> token)}]
+         end)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp normalize_governance_tokens(raw_tokens) do
+    raw_tokens
+    |> Enum.reduce_while({:ok, []}, fn
+      nil, {:ok, acc} ->
+        {:cont, {:ok, acc}}
+
+      value, {:ok, acc} when is_binary(value) ->
         if String.contains?(value, ["\r", "\n", <<0>>]) do
-          {:error, :invalid_governance_token}
+          {:halt, {:error, :invalid_governance_token}}
         else
-          {:ok, [{~c"authorization", String.to_charlist("Bearer " <> value)}]}
+          trimmed = String.trim(value)
+          if trimmed == "", do: {:cont, {:ok, acc}}, else: {:cont, {:ok, acc ++ [trimmed]}}
         end
 
-      _other ->
-        {:error, :invalid_governance_token}
+      _other, _acc ->
+        {:halt, {:error, :invalid_governance_token}}
+    end)
+    |> case do
+      {:ok, tokens} -> {:ok, Enum.uniq(tokens)}
+      {:error, reason} -> {:error, reason}
     end
   end
 

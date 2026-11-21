@@ -18,6 +18,21 @@ first_nonempty_env = fn names ->
   end)
 end
 
+nonempty_unique_env = fn names ->
+  names
+  |> Enum.flat_map(fn name ->
+    case System.get_env(name) do
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed != "", do: [trimmed], else: []
+
+      _ ->
+        []
+    end
+  end)
+  |> Enum.uniq()
+end
+
 config :agent_orchestrator,
   lease_plane_base_url: System.get_env("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788"),
   lease_plane_unix_socket_path:
@@ -33,6 +48,8 @@ config :agent_orchestrator,
       "http://127.0.0.1:8767",
   governance_api_token:
     first_nonempty_env.(["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]),
+  governance_api_tokens:
+    nonempty_unique_env.(["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]),
   # Optional standing identity proof (continuity token) exchanged per lease
   # mutation for a short-lived request-bound `lat.v1` attestation, plus optional
   # matching default holder UUID for presence leases.

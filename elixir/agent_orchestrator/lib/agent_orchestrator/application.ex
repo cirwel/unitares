@@ -175,10 +175,16 @@ defmodule AgentOrchestrator.Application do
     put_env_if_present(:lease_plane_bearer_token, ["LEASE_PLANE_BEARER_TOKEN"])
     put_env_if_present(:governance_url, ["UNITARES_GOVERNANCE_URL", "GOVERNANCE_URL"])
 
-    put_env_if_present(:governance_api_token, [
-      "UNITARES_HTTP_API_TOKEN",
-      "UNITARES_MCP_BEARER_TOKEN"
-    ])
+    gov_tokens =
+      collect_nonempty_env([
+        "UNITARES_HTTP_API_TOKEN",
+        "UNITARES_MCP_BEARER_TOKEN"
+      ])
+
+    if gov_tokens != [] do
+      Application.put_env(:agent_orchestrator, :governance_api_tokens, gov_tokens)
+      Application.put_env(:agent_orchestrator, :governance_api_token, hd(gov_tokens))
+    end
 
     put_env_if_present(:lease_identity_proof, [
       "AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF",
@@ -217,18 +223,24 @@ defmodule AgentOrchestrator.Application do
   end
 
   defp put_env_if_present(app_key, env_names) do
-    case Enum.find_value(env_names, fn name ->
-           case System.get_env(name) do
-             value when is_binary(value) ->
-               trimmed = String.trim(value)
-               if trimmed != "", do: trimmed, else: nil
-
-             _ ->
-               nil
-           end
-         end) do
-      nil -> :ok
-      value -> Application.put_env(:agent_orchestrator, app_key, value)
+    case collect_nonempty_env(env_names) do
+      [first | _rest] -> Application.put_env(:agent_orchestrator, app_key, first)
+      [] -> :ok
     end
+  end
+
+  defp collect_nonempty_env(env_names) do
+    env_names
+    |> Enum.flat_map(fn name ->
+      case System.get_env(name) do
+        value when is_binary(value) ->
+          trimmed = String.trim(value)
+          if trimmed != "", do: [trimmed], else: []
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.uniq()
   end
 end
