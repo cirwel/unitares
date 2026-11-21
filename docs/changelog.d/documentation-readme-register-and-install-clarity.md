@@ -1,0 +1,1 @@
+- **README:** tighten landing-page register, unpack `#install` stack and lifecycle-update guidance, deduplicate cross-section repetition, and align companion-plugin client coverage with Claude Code, Codex, and ChatGPT.
