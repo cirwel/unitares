@@ -1,9 +1,11 @@
 """Where the local model lives: one resolver for every local-model reader.
 
 The server (``call_model``/consult, the in-process dialectic reviewer, knowledge
-synthesis, check-in enrichments) and the agent processes (the orchestrated
-dialectic reviewer's ``local`` backend, ``agents/local_resident``) all resolve
-the endpoint and model here, so one setting moves every reader.
+synthesis, check-in enrichments) and the orchestrated dialectic reviewer's
+``local`` backend resolve the endpoint and model here, so one setting moves
+every reader. ``agents/local_resident`` uses the standalone client mirror
+``agents/common/local_inference_env.py`` (component boundary rule B1), kept in
+behavioral parity by ``tests/test_local_resident_scaffold.py``.
 
 Settings (the documented names):
 

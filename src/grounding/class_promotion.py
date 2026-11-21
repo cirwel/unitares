@@ -93,31 +93,19 @@ async def promote_engaged_ephemeral(
         from src.db import get_db
         db = get_db()
 
-    status_clause = "" if include_archived else "AND status = 'active'"
-    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
-
-    # NULLIF guards against an empty-string ``total_updates`` (which would
-    # crash ``::int``). The cast still raises on a non-numeric value, but
-    # ``total_updates`` is initialized at agent_storage.create_agent and
-    # only ever bumped by a counter — non-numeric there indicates corruption
-    # we want to surface, not silently exclude.
-    total_updates_expr = "COALESCE(NULLIF(metadata->>'total_updates', '')::int, 0)"
+    from src.db.mixins.identity import (
+        fetch_ephemeral_promotion_candidates,
+        sweep_promote_ephemeral_identities,
+    )
 
     if dry_run:
-        select_sql = f"""
-            SELECT agent_id,
-                   metadata->>'label' AS label,
-                   {total_updates_expr} AS total_updates
-            FROM core.identities
-            WHERE metadata->'tags' @> $2::jsonb
-              AND {total_updates_expr} >= $1
-              {status_clause}
-            ORDER BY {total_updates_expr} DESC
-            {limit_clause}
-        """
         async with db.acquire() as conn:
-            candidates = await conn.fetch(
-                select_sql, threshold, PROMOTION_SOURCE_JSONB
+            candidates = await fetch_ephemeral_promotion_candidates(
+                conn,
+                threshold=threshold,
+                source_jsonb=PROMOTION_SOURCE_JSONB,
+                include_archived=include_archived,
+                limit=limit,
             )
         return {
             "promoted": 0,
@@ -141,53 +129,15 @@ async def promote_engaged_ephemeral(
     # (``i.metadata->'tags' @> ...``) protects against the (small)
     # window between candidate selection and update where another
     # transaction could drop the ephemeral tag.
-    sweep_sql = f"""
-        WITH candidates AS (
-            SELECT agent_id,
-                   metadata->>'label' AS label,
-                   {total_updates_expr} AS total_updates
-            FROM core.identities
-            WHERE metadata->'tags' @> $2::jsonb
-              AND {total_updates_expr} >= $1
-              {status_clause}
-            ORDER BY {total_updates_expr} DESC
-            {limit_clause}
-            FOR UPDATE SKIP LOCKED
-        ),
-        promoted AS (
-            UPDATE core.identities i
-            SET metadata = jsonb_set(
-                    i.metadata,
-                    ARRAY['tags'],
-                    COALESCE((i.metadata->'tags') - $3::text, '[]'::jsonb) || $4::jsonb
-                ),
-                updated_at = NOW()
-            FROM candidates c
-            WHERE i.agent_id = c.agent_id
-              AND i.metadata->'tags' @> $2::jsonb
-            RETURNING i.agent_id
-        )
-        SELECT
-            (SELECT COUNT(*) FROM promoted) AS promoted_count,
-            COALESCE((SELECT array_agg(agent_id) FROM promoted), ARRAY[]::text[]) AS promoted_ids,
-            COALESCE((
-                SELECT json_agg(row_to_json(c))
-                FROM (
-                    SELECT agent_id, label, total_updates
-                    FROM candidates
-                    ORDER BY total_updates DESC
-                    LIMIT 10
-                ) c
-            ), '[]'::json) AS sample
-    """
-
     async with db.acquire() as conn:
-        row = await conn.fetchrow(
-            sweep_sql,
-            threshold,
-            PROMOTION_SOURCE_JSONB,
-            PROMOTION_SOURCE_TAG,
-            PROMOTION_TARGET_JSONB,
+        row = await sweep_promote_ephemeral_identities(
+            conn,
+            threshold=threshold,
+            source_jsonb=PROMOTION_SOURCE_JSONB,
+            source_tag=PROMOTION_SOURCE_TAG,
+            target_jsonb=PROMOTION_TARGET_JSONB,
+            include_archived=include_archived,
+            limit=limit,
         )
 
     if row is None:
@@ -273,23 +223,18 @@ async def stamp_untagged_identities(
         from src.db import get_db
         db = get_db()
 
+    from src.db.mixins.identity import (
+        fetch_untagged_identities,
+        stamp_untagged_identity_batch,
+    )
     from src.grounding.onboard_classifier import default_tags_for_onboard
 
-    status_clause = "" if include_archived else "AND status = 'active'"
-    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
-
-    select_sql = f"""
-        SELECT agent_id, metadata->>'label' AS label
-        FROM core.identities
-        WHERE (metadata->'tags' IS NULL
-               OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
-          {status_clause}
-        ORDER BY created_at DESC
-        {limit_clause}
-    """
-
     async with db.acquire() as conn:
-        rows = await conn.fetch(select_sql)
+        rows = await fetch_untagged_identities(
+            conn,
+            include_archived=include_archived,
+            limit=limit,
+        )
 
         sample = []
         stamped_count = 0
@@ -316,17 +261,13 @@ async def stamp_untagged_identities(
                 "dry_run": True,
             }
 
-        update_sql = """
-            UPDATE core.identities
-            SET metadata = jsonb_set(metadata, ARRAY['tags'], $2::jsonb),
-                updated_at = NOW()
-            WHERE agent_id = ANY($1::text[])
-              AND (metadata->'tags' IS NULL
-                   OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
-        """
         for tag_tuple, agent_ids in plans.items():
             tags_jsonb = json.dumps(list(tag_tuple))
-            await conn.execute(update_sql, agent_ids, tags_jsonb)
+            await stamp_untagged_identity_batch(
+                conn,
+                agent_ids=agent_ids,
+                tags_jsonb=tags_jsonb,
+            )
             stamped_count += len(agent_ids)
 
     return {
