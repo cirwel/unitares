@@ -676,3 +676,290 @@ class TestPersistFindingsFpCarryOver:
         fresh = persist_findings([new_finding])
         assert [f.fingerprint for f in fresh] == [new_finding.fingerprint]
         assert git_calls == []
+
+    def test_same_worktree_second_occurrence_is_not_auto_dismissed(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+    ):
+        trees = _repo_with_worktrees(tmp_path)
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    "aaaa000000000001",
+                    trees["main"] / "pkg/mod.py",
+                    line=3,
+                    status="dismissed",
+                    resolution_reason="fp",
+                )
+            ],
+        )
+
+        same_wt_line_40 = _make_finding(trees["main"] / "pkg/mod.py", line=40)
+        fresh = persist_findings([same_wt_line_40])
+
+        assert [f.fingerprint for f in fresh] == [same_wt_line_40.fingerprint]
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[same_wt_line_40.fingerprint]["status"] == "open"
+        assert "duplicate_of" not in by_fp[same_wt_line_40.fingerprint]
+
+    def test_ambiguous_multi_occurrence_in_target_or_source_is_not_auto_dismissed(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+    ):
+        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    "aaaa000000000001",
+                    trees["main"] / "pkg/mod.py",
+                    line=3,
+                    status="dismissed",
+                    resolution_reason="fp",
+                )
+            ],
+        )
+
+        # Target worktree scans two identical lines in one batch -> ambiguous.
+        a_line_3 = _make_finding(trees["feat-a"] / "pkg/mod.py", line=3)
+        a_line_40 = _make_finding(trees["feat-a"] / "pkg/mod.py", line=40)
+        fresh_a = persist_findings([a_line_3, a_line_40])
+        assert [f.fingerprint for f in fresh_a] == [
+            a_line_3.fingerprint,
+            a_line_40.fingerprint,
+        ]
+
+        # Single occurrence in feat-b auto-dismisses, then a later second line
+        # in feat-b stays open because feat-b already has an occurrence.
+        b_line_3 = _make_finding(trees["feat-b"] / "pkg/mod.py", line=3)
+        assert persist_findings([b_line_3]) == []
+        b_line_40 = _make_finding(trees["feat-b"] / "pkg/mod.py", line=40)
+        fresh_b2 = persist_findings([b_line_40])
+        assert [f.fingerprint for f in fresh_b2] == [b_line_40.fingerprint]
+
+        # Source worktree with another open occurrence -> do not auto-carry.
+        trees_c = _repo_with_worktrees(tmp_path / "repo-c", "feat-c")
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    "cccc000000000001",
+                    trees_c["main"] / "pkg/mod.py",
+                    line=3,
+                    status="dismissed",
+                    resolution_reason="fp",
+                ),
+                _make_row(
+                    "cccc000000000002",
+                    trees_c["main"] / "pkg/mod.py",
+                    line=40,
+                    status="open",
+                ),
+            ],
+        )
+        c_copy = _make_finding(trees_c["feat-c"] / "pkg/mod.py", line=12)
+        fresh_c = persist_findings([c_copy])
+        assert [f.fingerprint for f in fresh_c] == [c_copy.fingerprint]
+
+
+# ---------------------------------------------------------------------------
+# 4. Regression tests for review findings (#3343 P1/P2/P3)
+# ---------------------------------------------------------------------------
+
+
+class TestSameWorktreeAndCommitScanAndRoutes:
+    @pytest.mark.parametrize("new_status", ["dismissed", "confirmed"])
+    def test_same_worktree_identical_lines_do_not_close_each_other(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        new_status: str,
+    ):
+        trees = _repo_with_worktrees(tmp_path)
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("bbbb000000000002", trees["main"] / "pkg/mod.py", line=40, status="open"),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        rc = update_finding_status(
+            "aaaa0000",
+            new_status,
+            resolver_agent_id="resolver-uuid-1",
+            reason="fp" if new_status == "dismissed" else "fixed",
+        )
+        assert rc == 0
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["aaaa000000000001"]["status"] == new_status
+        assert by_fp["bbbb000000000002"]["status"] == "open"
+        assert "duplicate_of" not in by_fp["bbbb000000000002"]
+        assert "worktree cop" not in capsys.readouterr().out
+
+    def test_ambiguous_multi_occurrence_sibling_worktree_is_not_closed(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
+                # feat-a has two identical lines: ambiguous, do not close either
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("cccc000000000003", trees["feat-a"] / "pkg/mod.py", line=40, status="open"),
+                # feat-b has a single copy: unambiguous, close it
+                _make_row("dddd000000000004", trees["feat-b"] / "pkg/mod.py", line=12, status="open"),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        assert update_finding_status("aaaa0000", "dismissed", reason="fp") == 0
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["aaaa000000000001"]["status"] == "dismissed"
+        assert by_fp["bbbb000000000002"]["status"] == "open"
+        assert by_fp["cccc000000000003"]["status"] == "open"
+        assert by_fp["dddd000000000004"]["status"] == "dismissed"
+        assert by_fp["dddd000000000004"]["duplicate_of"] == "aaaa000000000001"
+        assert "1 worktree copy" in capsys.readouterr().out
+
+    def test_scan_commits_leaves_sibling_worktree_copies_open(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        import agents.watcher.agent as watcher_agent
+
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("bbbb000000000002", trees["feat-a"] / "pkg/mod.py", line=3, status="open"),
+            ],
+        )
+        monkeypatch.setattr(
+            watcher_agent, "FINDINGS_FILE", isolated_findings_state / "findings.jsonl"
+        )
+        monkeypatch.setattr(watcher_agent, "_post_resolution_event", lambda *a, **kw: None)
+
+        real_run = subprocess.run
+        fake_log = f"{'deadbeef' * 5}\x00fix(mod): handle error\x00fixes aaaa000000000001\x1e"
+
+        def _selective_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "log":
+                return subprocess.CompletedProcess(cmd, 0, stdout=fake_log, stderr="")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(watcher_agent.subprocess, "run", _selective_run)
+
+        resolved = watcher_agent.scan_commits(since="14 days ago")
+        assert resolved == 1
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["aaaa000000000001"]["status"] == "confirmed"
+        assert by_fp["bbbb000000000002"]["status"] == "open"
+        assert "duplicate_of" not in by_fp["bbbb000000000002"]
+
+    def test_watcher_summary_excludes_propagated_dup_from_resolutions(self):
+        from agents.watcher.routes import _watcher_summary_from_rows
+
+        now = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
+        ts = "2026-11-21T10:00:00Z"
+        rows = [
+            _make_row(
+                "aaaa000000000001",
+                "/repo/main/pkg/mod.py",
+                status="confirmed",
+                detected_at=ts,
+                confirmed_at=ts,
+            ),
+            _make_row(
+                "bbbb000000000002",
+                "/repo/wt-a/pkg/mod.py",
+                status="confirmed",
+                detected_at=ts,
+                confirmed_at=ts,
+                resolution_reason="dup",
+                duplicate_of="aaaa000000000001",
+            ),
+            _make_row(
+                "cccc000000000003",
+                "/repo/wt-b/pkg/mod.py",
+                status="confirmed",
+                detected_at=ts,
+                confirmed_at=ts,
+                resolution_reason="dup",
+                duplicate_of="aaaa000000000001",
+            ),
+            _make_row(
+                "dddd000000000004",
+                "/repo/main/pkg/other.py",
+                status="dismissed",
+                detected_at=ts,
+                dismissed_at=ts,
+                resolution_reason="fp",
+            ),
+            _make_row(
+                "eeee000000000005",
+                "/repo/wt-a/pkg/other.py",
+                status="dismissed",
+                detected_at=ts,
+                dismissed_at=ts,
+                resolution_reason="dup",
+                duplicate_of="dddd000000000004",
+            ),
+            _make_row(
+                "ffff000000000006",
+                "/repo/wt-b/pkg/other.py",
+                status="dismissed",
+                detected_at=ts,
+                dismissed_at=ts,
+                resolution_reason="dup",
+                duplicate_of="dddd000000000004",
+            ),
+            _make_row(
+                "9999000000000007",
+                "/repo/main/pkg/open.py",
+                status="open",
+                detected_at=ts,
+            ),
+        ]
+
+        summary = _watcher_summary_from_rows(rows, now=now, window_days=3)
+        # Raw row totals remain accurate in total / by_status
+        assert summary["total"] == 7
+        assert summary["by_status"] == {"confirmed": 3, "dismissed": 3, "open": 1}
+
+        # Pattern resolution metrics count each unique verdict once
+        assert len(summary["patterns"]) == 1
+        pat = summary["patterns"][0]
+        assert pat["pattern"] == "P006"
+        assert pat["confirmed"] == 1
+        assert pat["dismissed"] == 1
+        assert pat["dismissed_fp"] == 1
+        assert pat["surfaced"] == 1
+        assert pat["other"] == 0
+        assert pat["dismiss_ratio"] == pytest.approx(0.5)
+
+        # Daily resolution timeline counts each unique verdict once
+        by_day = {d["day"]: d for d in summary["timeline"]}
+        assert by_day["2026-11-21"]["confirmed"] == 1
+        assert by_day["2026-11-21"]["dismissed"] == 1
+

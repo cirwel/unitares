@@ -312,11 +312,24 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             dedup[f.fingerprint] = now
             brand_new.append(f)
 
-        # Carry forward prior false-positive ("fp") dismissals across worktree
-        # copies. Only rows with status=="dismissed" AND resolution_reason=="fp"
-        # qualify; wont_fix, out_of_scope, unclear, stale, dup, and free-text
-        # reasons are never auto-carried.
-        fp_copy_map: dict[CopyGroupKey, str] = {}
+        # Existing dismissed+fp fingerprints (for expired-dedup self-match guard).
+        existing_fp_fingerprints = {
+            fp
+            for row in existing_rows
+            if row.get("status") == "dismissed"
+            and row.get("resolution_reason") == "fp"
+            and isinstance((fp := row.get("fingerprint")), str)
+            and fp
+        }
+
+        # Carry forward prior false-positive ("fp") dismissals across different
+        # worktrees only. Only rows with status=="dismissed" AND
+        # resolution_reason=="fp" qualify; wont_fix, out_of_scope, unclear,
+        # stale, dup, and free-text reasons are never auto-carried.
+        # Same-worktree lines and files with multiple occurrences of the same
+        # line text are never auto-dismissed.
+        fp_sources_by_key: dict[CopyGroupKey, list[tuple[str, str]]] = {}
+        existing_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
         fp_candidate_keys: set[tuple[str, str, str, str]] = set()
         git_cache: GitCache = {}
         if brand_new:
@@ -324,44 +337,82 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 ck for f in brand_new if (ck := _copy_candidate_key(f)) is not None
             }
             if new_candidate_keys:
-                for row in existing_rows:
-                    if (
-                        row.get("status") != "dismissed"
-                        or row.get("resolution_reason") != "fp"
-                    ):
-                        continue
-                    prior_fp = row.get("fingerprint")
-                    if not isinstance(prior_fp, str) or not prior_fp:
-                        continue
-                    cand = _copy_candidate_key(row)
-                    if cand is None or cand not in new_candidate_keys:
-                        continue
-                    copy_key = _copy_group_key(row, git_cache)
-                    if copy_key is not None:
-                        fp_copy_map.setdefault(copy_key, prior_fp)
-                        fp_candidate_keys.add(cand)
+                matching_fp_candidates = {
+                    cand
+                    for row in existing_rows
+                    if row.get("status") == "dismissed"
+                    and row.get("resolution_reason") == "fp"
+                    and isinstance(row.get("fingerprint"), str)
+                    and row.get("fingerprint")
+                    and (cand := _copy_candidate_key(row)) is not None
+                    and cand in new_candidate_keys
+                }
+                if matching_fp_candidates:
+                    for row in existing_rows:
+                        if row.get("status") == "aged_out":
+                            continue
+                        cand = _copy_candidate_key(row)
+                        if cand is None or cand not in matching_fp_candidates:
+                            continue
+                        resolved = _copy_group_key_with_worktree(row, git_cache)
+                        if resolved is None:
+                            continue
+                        copy_key, toplevel = resolved
+                        existing_wt_counts[(copy_key, toplevel)] += 1
+                        if (
+                            row.get("status") == "dismissed"
+                            and row.get("resolution_reason") == "fp"
+                        ):
+                            prior_fp = row.get("fingerprint")
+                            if isinstance(prior_fp, str) and prior_fp:
+                                fp_sources_by_key.setdefault(copy_key, []).append(
+                                    (prior_fp, toplevel)
+                                )
+                                fp_candidate_keys.add(cand)
+
+        new_resolved: list[tuple[CopyGroupKey, str] | None] = []
+        new_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
+        for f in brand_new:
+            resolved = None
+            if fp_sources_by_key:
+                cand = _copy_candidate_key(f)
+                if cand is not None and cand in fp_candidate_keys:
+                    resolved = _copy_group_key_with_worktree(f, git_cache)
+                    if resolved is not None:
+                        new_wt_counts[resolved] += 1
+            new_resolved.append(resolved)
 
         fresh: list[Finding] = []
         rows_to_append: list[dict[str, Any]] = []
-        for f in brand_new:
+        for f, resolved in zip(brand_new, new_resolved):
+            if f.fingerprint in existing_fp_fingerprints:
+                continue
             prior_fp: str | None = None
-            if fp_copy_map:
-                cand = _copy_candidate_key(f)
-                if cand is not None and cand in fp_candidate_keys:
-                    copy_key = _copy_group_key(f, git_cache)
-                    if copy_key is not None:
-                        prior_fp = fp_copy_map.get(copy_key)
+            if resolved is not None:
+                copy_key, new_toplevel = resolved
+                if (
+                    new_wt_counts[(copy_key, new_toplevel)] == 1
+                    and existing_wt_counts[(copy_key, new_toplevel)] == 0
+                ):
+                    for candidate_fp, source_toplevel in fp_sources_by_key.get(
+                        copy_key, []
+                    ):
+                        if (
+                            source_toplevel != new_toplevel
+                            and existing_wt_counts[(copy_key, source_toplevel)] == 1
+                        ):
+                            prior_fp = candidate_fp
+                            break
             if prior_fp is not None:
-                if prior_fp != f.fingerprint:
-                    rows_to_append.append(
-                        {
-                            **asdict(f),
-                            "status": "dismissed",
-                            "dismissed_at": now_iso,
-                            "resolution_reason": "dup",
-                            "duplicate_of": prior_fp,
-                        }
-                    )
+                rows_to_append.append(
+                    {
+                        **asdict(f),
+                        "status": "dismissed",
+                        "dismissed_at": now_iso,
+                        "resolution_reason": "dup",
+                        "duplicate_of": prior_fp,
+                    }
+                )
                 continue
             fresh.append(f)
             rows_to_append.append(asdict(f))
@@ -559,6 +610,7 @@ def update_finding_status(
     *,
     emit_resolution_event: bool = True,
     updated_finding_sink: list[dict[str, Any]] | None = None,
+    propagate_copies: bool = True,
 ) -> int:
     """Mark a finding as ``new_status`` by fingerprint prefix.
 
@@ -617,20 +669,45 @@ def update_finding_status(
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
-    target_candidate: tuple[str, str, str, str] | None = None
-    target_copy_key: CopyGroupKey | None = None
-    git_cache: GitCache = {}
-    if new_status in ("dismissed", "confirmed"):
+    sibling_fps_to_close: set[str] = set()
+    if propagate_copies and new_status in ("dismissed", "confirmed"):
         target_candidate = _copy_candidate_key(target_row)
         if target_candidate is not None:
-            has_sibling_candidate = any(
-                f.get("fingerprint") != target_fp
+            candidate_rows = [
+                f
+                for f in findings
+                if f.get("fingerprint") != target_fp
                 and f.get("status", "open") in ("open", "surfaced")
                 and _copy_candidate_key(f) == target_candidate
-                for f in findings
-            )
-            if has_sibling_candidate:
-                target_copy_key = _copy_group_key(target_row, git_cache)
+            ]
+            if candidate_rows:
+                git_cache: GitCache = {}
+                target_resolved = _copy_group_key_with_worktree(target_row, git_cache)
+                if target_resolved is not None:
+                    target_copy_key, target_toplevel = target_resolved
+                    same_wt_other_open = False
+                    by_sibling_wt: dict[str, list[str]] = {}
+                    for f in candidate_rows:
+                        sib_fp = f.get("fingerprint")
+                        if not isinstance(sib_fp, str) or not sib_fp:
+                            continue
+                        sib_resolved = _copy_group_key_with_worktree(f, git_cache)
+                        if sib_resolved is None:
+                            continue
+                        sib_copy_key, sib_toplevel = sib_resolved
+                        if sib_copy_key != target_copy_key:
+                            continue
+                        if sib_toplevel == target_toplevel:
+                            # Never close another occurrence in the same
+                            # worktree, and treat cross-worktree mapping as
+                            # ambiguous when the target file has >1 live match.
+                            same_wt_other_open = True
+                            continue
+                        by_sibling_wt.setdefault(sib_toplevel, []).append(sib_fp)
+                    if not same_wt_other_open:
+                        for fps in by_sibling_wt.values():
+                            if len(fps) == 1:
+                                sibling_fps_to_close.add(fps[0])
 
     updated: list[dict[str, Any]] = []
     updated_target: dict[str, Any] | None = None
@@ -646,12 +723,7 @@ def update_finding_status(
                 merged["resolution_reason"] = reason
             f = merged
             updated_target = merged
-        elif (
-            target_copy_key is not None
-            and f.get("status", "open") in ("open", "surfaced")
-            and _copy_candidate_key(f) == target_candidate
-            and _copy_group_key(f, git_cache) == target_copy_key
-        ):
+        elif f.get("fingerprint") in sibling_fps_to_close:
             sibling_merged = {
                 **f,
                 "status": new_status,
@@ -1183,6 +1255,24 @@ def _copy_candidate_key(
     return (pattern, content_hash, severity, Path(file_path).name)
 
 
+def _copy_group_key_with_worktree(
+    finding: Mapping[str, Any] | Finding,
+    cache: GitCache,
+) -> tuple[CopyGroupKey, str] | None:
+    """Return ``(copy_group_key, worktree_toplevel)`` for a finding whose file
+    resolves inside a git worktree, or None for ungrouped patterns (``R000``),
+    missing content hashes, or unresolvable repository paths.
+    """
+    pattern, content_hash, file_path, severity = _finding_copy_fields(finding)
+    if not pattern or pattern in _UNGROUPED_PATTERNS or not content_hash:
+        return None
+    location = _git_location(file_path, cache)
+    if location is None:
+        return None
+    common_dir, toplevel, rel = location
+    return (common_dir, rel, pattern, content_hash, severity), toplevel
+
+
 def _copy_group_key(
     finding: Mapping[str, Any] | Finding,
     cache: GitCache,
@@ -1192,13 +1282,8 @@ def _copy_group_key(
     ungrouped patterns (``R000``), missing content hashes, or unresolvable
     repository paths.
     """
-    pattern, content_hash, file_path, severity = _finding_copy_fields(finding)
-    if not pattern or pattern in _UNGROUPED_PATTERNS or not content_hash:
-        return None
-    location = _git_location(file_path, cache)
-    if location is None:
-        return None
-    return (location[0], location[2], pattern, content_hash, severity)
+    resolved = _copy_group_key_with_worktree(finding, cache)
+    return None if resolved is None else resolved[0]
 
 
 def _group_copies(

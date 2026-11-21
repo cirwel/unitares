@@ -79,16 +79,22 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         severity = str(row.get("severity") or "?")
         by_status[status] += 1
 
+        is_propagated_dup = (
+            str(row.get("resolution_reason") or "") == "dup"
+            or bool(row.get("duplicate_of"))
+        )
+
         bucket = by_pattern[pattern]
         if status in ("confirmed", "dismissed"):
-            bucket[status] += 1
-            # A dismissal with reason "fp" is a *confirmed false positive* the
-            # verifier/operator caught — the detector fired on a known-benign
-            # shape. Tracking it separately lets the panel tell "FP filters
-            # working" apart from "rule produces no signal" (see findings.py
-            # DISMISSAL_REASONS / PRECISION_REASONS_TRUE_NEGATIVE).
-            if status == "dismissed" and str(row.get("resolution_reason") or "") == "fp":
-                bucket["dismissed_fp"] += 1
+            if not is_propagated_dup:
+                bucket[status] += 1
+                # A dismissal with reason "fp" is a *confirmed false positive* the
+                # verifier/operator caught — the detector fired on a known-benign
+                # shape. Tracking it separately lets the panel tell "FP filters
+                # working" apart from "rule produces no signal" (see findings.py
+                # DISMISSAL_REASONS / PRECISION_REASONS_TRUE_NEGATIVE).
+                if status == "dismissed" and str(row.get("resolution_reason") or "") == "fp":
+                    bucket["dismissed_fp"] += 1
         elif status in ("surfaced", "open"):
             bucket["surfaced"] += 1
             by_severity[severity] += 1
@@ -101,10 +107,13 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
 
         # Resolution timestamps written by update_finding_status:
         # confirmed_at / dismissed_at (ISO 8601, UTC).
-        for key, kind in (("confirmed_at", "confirmed"), ("dismissed_at", "dismissed")):
-            ts = _parse_date(row.get(key))
-            if ts and ts.date() >= window_start:
-                resolutions_daily[ts.date().isoformat()][kind] += 1
+        # Exclude propagated worktree-copy dup rows so closing one finding across
+        # N worktrees does not inflate the daily resolution series.
+        if not is_propagated_dup:
+            for key, kind in (("confirmed_at", "confirmed"), ("dismissed_at", "dismissed")):
+                ts = _parse_date(row.get(key))
+                if ts and ts.date() >= window_start:
+                    resolutions_daily[ts.date().isoformat()][kind] += 1
 
     # Pattern table — include confirm/dismiss ratio for noise detection
     patterns_out = []
