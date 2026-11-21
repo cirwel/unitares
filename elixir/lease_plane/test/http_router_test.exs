@@ -2323,6 +2323,215 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                })
     end
 
+    test "pre-084 issuerless rows and unpinned handoffs fail closed under multi-issuer config and work under single-issuer",
+         ctx do
+      holder = random_uuid()
+      recipient = random_uuid()
+
+      # Seed an active pre-084 (holder_issuer=nil, holder_subject=nil) lease directly via Repo
+      assert {:ok, legacy_lease, :new} =
+               UnitaresLeasePlane.Repo.acquire(%{
+                 surface_id: ctx.surface,
+                 holder_agent_uuid: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "remote_heartbeat",
+                 ttl_s: 60
+               })
+
+      assert legacy_lease.holder_issuer == nil
+      assert legacy_lease.holder_subject == nil
+
+      # With 2 trusted issuers configured, mutating an issuerless row fails closed (503)
+      multi_renew_b =
+        post_attested(
+          "/v1/lease/renew",
+          %{lease_id: legacy_lease.lease_id},
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          holder,
+          ctx.now
+        )
+
+      assert multi_renew_b.status == 503
+      assert parsed(multi_renew_b)["reason"] == "identity_verification_unavailable"
+
+      # With 1 trusted issuer configured, mutating the same issuerless row succeeds
+      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+        "operator-a" => "https://operator-a.example/keys"
+      })
+
+      single_renew_a =
+        post_attested(
+          "/v1/lease/renew",
+          %{lease_id: legacy_lease.lease_id},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          holder,
+          ctx.now
+        )
+
+      assert single_renew_a.status == 200
+
+      # Create an unpinned handoff offer (no to_holder_issuer) while single-issuer
+      offer =
+        post_attested(
+          "/v1/lease/handoff/offer",
+          %{lease_id: legacy_lease.lease_id, to_holder_agent_uuid: recipient, ttl_s: 45},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          holder,
+          ctx.now
+        )
+
+      assert offer.status == 200
+      handoff_id = parsed(offer)["handoff_id"]
+
+      # Re-enable 2 trusted issuers: accepting an unpinned handoff fails closed (503)
+      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+        "operator-a" => "https://operator-a.example/keys",
+        "operator-b" => "https://operator-b.example/keys"
+      })
+
+      multi_accept =
+        post_attested(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          recipient,
+          ctx.now
+        )
+
+      assert multi_accept.status == 503
+      assert parsed(multi_accept)["reason"] == "identity_verification_unavailable"
+
+      # Back to single-issuer: unpinned handoff accept succeeds and persists verified principal
+      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+        "operator-a" => "https://operator-a.example/keys"
+      })
+
+      single_accept =
+        post_attested(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          recipient,
+          ctx.now
+        )
+
+      assert single_accept.status == 200
+
+      status =
+        :get
+        |> conn("/v1/lease/status?surface_id=#{URI.encode_www_form(ctx.surface)}")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert parsed(status)["lease"]["holder_issuer"] == "operator-a"
+      assert parsed(status)["lease"]["holder_subject"] == recipient
+    end
+
+    test "pre-084 issuerless row allows attested idempotent reacquire (and substrate update) only under single-issuer config",
+         ctx do
+      rand = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+      resident_surface = "resident:/test_elixir_pre084_#{rand}"
+      on_exit(fn -> cleanup_surface(resident_surface) end)
+
+      holder = random_uuid()
+
+      # Seed pre-084 (nil, nil) resident lease
+      assert {:ok, legacy_lease, :new} =
+               UnitaresLeasePlane.Repo.acquire(%{
+                 surface_id: resident_surface,
+                 holder_agent_uuid: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "local_beam",
+                 ttl_s: 60
+               })
+
+      assert legacy_lease.holder_issuer == nil
+      assert legacy_lease.holder_subject == nil
+
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+      reacquire_body =
+        acquire_body(resident_surface, holder_agent_uuid: holder)
+        |> Map.put(:substrate_state, %{"sensor" => %{"status" => "healthy"}})
+        |> Map.put(:substrate_state_observed_at, observed_at)
+
+      # Multi-issuer (2 trusted issuers): attested reacquire on pre-084 (nil, nil) row -> 409 held_by_other
+      multi_reacq =
+        post_attested(
+          "/v1/lease/acquire",
+          reacquire_body,
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          holder,
+          ctx.now
+        )
+
+      assert multi_reacq.status == 409
+      assert parsed(multi_reacq)["error"] == "held_by_other"
+
+      # Single-issuer (1 trusted issuer): attested reacquire with distinct subject STILL conflicts (409)
+      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+        "operator-a" => "https://operator-a.example/keys"
+      })
+
+      distinct_reacq =
+        post_attested(
+          "/v1/lease/acquire",
+          Map.put(reacquire_body, :holder_subject, "different-subject"),
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          "different-subject",
+          ctx.now
+        )
+
+      assert distinct_reacq.status == 409
+      assert parsed(distinct_reacq)["error"] == "held_by_other"
+
+      # Single-issuer: attested reacquire for (operator-a, holder_uuid) succeeds :idempotent and updates substrate
+      single_reacq =
+        post_attested(
+          "/v1/lease/acquire",
+          reacquire_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          holder,
+          ctx.now
+        )
+
+      assert single_reacq.status == 200
+      single_body = parsed(single_reacq)
+      assert single_body["idempotent"] == true
+      assert single_body["lease"]["lease_id"] == legacy_lease.lease_id
+      assert single_body["lease"]["holder_issuer"] == nil
+      assert single_body["lease"]["holder_subject"] == nil
+      assert single_body["lease"]["substrate_state"] == %{"sensor" => %{"status" => "healthy"}}
+
+      # Direct Repo.acquire/1 without allow_legacy_row_attested_reacquire remains fail-closed
+      assert {:error, :held_by_other, _info} =
+               UnitaresLeasePlane.Repo.acquire(%{
+                 surface_id: resident_surface,
+                 holder_agent_uuid: holder,
+                 holder_issuer: "operator-a",
+                 holder_subject: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "local_beam",
+                 ttl_s: 60
+               })
+    end
+
     test "invalid holder_subject and handoff principal fields return 422 schema_invalid", ctx do
       bad_acquire =
         post_json_without_proof(

@@ -128,9 +128,16 @@ defmodule UnitaresLeasePlane.Repo do
       is_nil(p_issuer) and is_nil(p_subject) and
         Map.get(p, :allow_unverified_principal_fallback, false) == true
 
+    legacy_row_attested_reacquire? =
+      is_nil(existing_issuer) and is_nil(existing_subject) and
+        is_binary(p_issuer) and is_binary(p_subject) and
+        p_subject == held and
+        Map.get(p, :allow_legacy_row_attested_reacquire, false) == true
+
     same_principal? =
       (existing_issuer == p_issuer and existing_subject == p_subject) or
-        unverified_fallback?
+        unverified_fallback? or
+        legacy_row_attested_reacquire?
 
     if held == p.holder_agent_uuid and same_principal? do
       # RFC §7.13: idempotent re-acquire from the same holder MUST update

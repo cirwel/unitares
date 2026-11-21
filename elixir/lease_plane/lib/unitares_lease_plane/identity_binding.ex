@@ -309,6 +309,15 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
+  @doc "True when at most one trusted attestation issuer is configured."
+  @spec single_or_no_trusted_issuer?() :: boolean()
+  def single_or_no_trusted_issuer? do
+    case Application.get_env(:lease_plane, :trusted_identity_issuers, %{}) do
+      trusted when is_map(trusted) -> map_size(trusted) <= 1
+      _ -> false
+    end
+  end
+
   @doc "The configured binding mode; `:log` when unset."
   @spec mode() :: :off | :log | :enforce
   def mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :log)
@@ -421,6 +430,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     attestation? = is_binary(proof) and String.starts_with?(proof, "lat.v1.")
     expected_issuer = Keyword.get(opts, :expected_issuer)
     require_attestation? = Keyword.get(opts, :require_attestation, false) == true
+    allow_multiple_issuers? = Keyword.get(opts, :allow_multiple_issuers, true) == true
 
     cond do
       not is_nil(expected_issuer) and not is_binary(expected_issuer) ->
@@ -437,7 +447,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
           expected_subject,
           proof,
           request_context,
-          allow_multiple_issuers: true,
+          allow_multiple_issuers: allow_multiple_issuers?,
           expected_issuer: expected_issuer
         )
 

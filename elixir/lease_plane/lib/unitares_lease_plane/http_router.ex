@@ -90,6 +90,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                IdentityBinding.proof_from_conn(conn),
                kind,
                IdentityBinding.request_context(conn),
+               allow_multiple_issuers: true,
                require_attestation: distinct_subject?
              ) do
           {:ok, nil} when distinct_subject? ->
@@ -100,6 +101,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
               params
               |> attach_verified_principal(principal)
               |> maybe_allow_unverified_principal_fallback(kind)
+              |> maybe_allow_legacy_row_attested_reacquire()
 
             acquire_authorized(conn, acquire_params)
 
@@ -1084,7 +1086,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                  IdentityBinding.proof_from_conn(conn),
                  lease.surface_kind,
                  IdentityBinding.request_context(conn),
-                 expected_issuer: expected_issuer
+                 expected_issuer: expected_issuer,
+                 allow_multiple_issuers: is_binary(expected_issuer)
                ) do
             {:ok, _principal} -> :ok
             {:error, reason} -> {:error, reason}
@@ -1124,7 +1127,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                 lease.surface_kind,
                 IdentityBinding.request_context(conn),
                 expected_issuer: recipient_issuer,
-                require_attestation: distinct_subject?
+                require_attestation: distinct_subject?,
+                allow_multiple_issuers: is_binary(recipient_issuer)
               )
 
             {:error, :not_found} ->
@@ -1159,6 +1163,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       params
     else
       Map.put(params, :allow_unverified_principal_fallback, true)
+    end
+  end
+
+  defp maybe_allow_legacy_row_attested_reacquire(params) do
+    if IdentityBinding.single_or_no_trusted_issuer?() do
+      Map.put(params, :allow_legacy_row_attested_reacquire, true)
+    else
+      params
     end
   end
 

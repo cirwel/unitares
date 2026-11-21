@@ -404,6 +404,37 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
              IdentityBinding.authorize_lease_principal(subject, token, "agent", ctx)
 
     assert {:error, :identity_verification_unavailable} =
+             IdentityBinding.authorize_lease_principal(
+               subject,
+               token,
+               "agent",
+               ctx,
+               allow_multiple_issuers: false
+             )
+
+    refute IdentityBinding.single_or_no_trusted_issuer?()
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+      "operator-a" => "https://a.example/keys"
+    })
+
+    assert IdentityBinding.single_or_no_trusted_issuer?()
+
+    assert {:ok, %{issuer: "operator-a", subject: ^subject}} =
+             IdentityBinding.authorize_lease_principal(
+               subject,
+               token,
+               "agent",
+               ctx,
+               allow_multiple_issuers: false
+             )
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+      "operator-a" => "https://a.example/keys",
+      "operator-b" => "https://b.example/keys"
+    })
+
+    assert {:error, :identity_verification_unavailable} =
              IdentityBinding.authorize(subject, token, "dialectic_beam", ctx)
 
     assert {:error, :identity_verification_unavailable} =
