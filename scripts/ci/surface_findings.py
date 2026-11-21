@@ -268,7 +268,15 @@ def collect_watcher(paths: Sequence[str]) -> tuple[list[Finding], str]:
         if spec is None or spec.loader is None:
             raise ImportError(f"cannot load {agent_path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Registered before execution: a module that defines dataclasses under
+        # `from __future__ import annotations` resolves its own name through
+        # sys.modules while it is still being executed.
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
         scan_file = module.scan_file
     except Exception as e:  # pragma: no cover - import guarded for CI
         return [], f"watcher agent import failed: {e}"

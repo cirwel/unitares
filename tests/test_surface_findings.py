@@ -124,6 +124,38 @@ def test_watcher_collector_skips_without_a_configured_agent(mod, monkeypatch):
     assert "UNITARES_WATCHER_AGENT" in note
 
 
+def test_watcher_collector_loads_an_external_agent_with_dataclasses(mod, monkeypatch, tmp_path):
+    """The external agent is loaded from a file path. A module that defines a
+    dataclass under postponed annotations looks itself up in sys.modules while
+    it executes, so the loader must register it first."""
+    agent = tmp_path / "agent.py"
+    agent.write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Finding:\n"
+        "    pattern: str\n    file: str\n    line: int\n    hint: str\n"
+        "    severity: str = 'high'\n"
+        "def scan_file(path):\n"
+        "    return [Finding('P001', path, 3, 'fire-and-forget task')]\n"
+    )
+    target = tmp_path / "x.py"
+    target.write_text("x = 1\n")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setenv("UNITARES_WATCHER_AGENT", str(agent))
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    findings, note = mod.collect_watcher([str(target)])
+    assert note == "1 findings"
+    assert findings[0].rule == "P001" and findings[0].line == 3
+
+
 def test_unknown_collector_noted_not_crashed(mod):
     report = mod.run(["nope"], paths=[], enable_watcher=False)
     assert "unknown collector" in report.collectors["nope"]
