@@ -2,16 +2,18 @@
 
 Covers:
 1. ``_copy_group_key`` extraction and delegation from ``_group_copies``.
-2. ``update_finding_status`` propagation of ``dismissed`` and ``confirmed``
-   verdicts to open/surfaced sibling copies across worktrees as ``dup`` with
-   ``duplicate_of``, emitting only a single governance resolution event and
-   reporting the closed worktree copy count on stdout.
-3. ``persist_findings`` carry-over of ``status=="dismissed"`` AND
-   ``resolution_reason=="fp"`` (and ONLY ``"fp"``) to brand-new worktree
+2. ``update_finding_status`` propagation of ``dismissed`` verdicts to
+   open/surfaced sibling copies in other worktrees as ``dup`` with
+   ``duplicate_of`` (while ``confirmed`` stays branch-local so fixing one
+   branch never closes unfixed sibling worktrees), emitting only a single
+   governance resolution event and reporting the closed worktree copy count.
+3. ``persist_findings`` carry-over of current-revision ``status=="dismissed"``
+   AND ``resolution_reason=="fp"`` (and ONLY ``"fp"``) to brand-new worktree
    copies, writing them as ``dismissed``/``dup``/``duplicate_of`` while
    omitting them from ``fresh`` and suppressing high-severity event emission.
-4. ``calibration.precision_by_pattern_and_class`` excluding propagated
-   ``dup`` copies from both TN and TP counts.
+4. ``rule_version`` compatibility across both propagation and ``fp`` carry-over.
+5. ``calibration.precision_by_pattern_and_class`` and ``routes._watcher_summary_from_rows``
+   excluding propagated ``dup`` copies from resolution counts.
 """
 
 from __future__ import annotations
@@ -339,13 +341,17 @@ class TestUpdateFindingStatusPropagation:
         )
         assert stats[("P006", "app")].weighted_dismissed == pytest.approx(1.0, rel=0.05)
 
-    def test_confirm_propagates_to_sibling_with_single_event_and_calibration_dedup(
+    @pytest.mark.parametrize("reason", ["fixed", "fixed now", None])
+    def test_confirm_stays_branch_local_and_leaves_sibling_worktrees_open(
         self,
         isolated_findings_state: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        reason: str | None,
     ):
+        """Confirming/fixing a bug in one branch must NOT close unfixed copies
+        in sibling worktrees."""
         trees = _repo_with_worktrees(tmp_path, "feat-a")
         _write_rows(
             isolated_findings_state,
@@ -365,7 +371,7 @@ class TestUpdateFindingStatusPropagation:
             "aaaa0000",
             "confirmed",
             resolver_agent_id="resolver-uuid-2",
-            reason="fixed",
+            reason=reason,
         )
         assert rc == 0
 
@@ -374,23 +380,21 @@ class TestUpdateFindingStatusPropagation:
         sib = by_fp["bbbb000000000002"]
 
         assert target["status"] == "confirmed"
-        assert target["resolution_reason"] == "fixed"
         assert "duplicate_of" not in target
+        if reason is not None:
+            assert target["resolution_reason"] == reason
 
-        assert sib["status"] == "confirmed"
-        assert sib["confirmed_at"] == target["confirmed_at"]
-        assert sib["resolved_by"] == "resolver-uuid-2"
-        assert sib["resolution_reason"] == "dup"
-        assert sib["duplicate_of"] == "aaaa000000000001"
-        assert "dismissed_at" not in sib
+        assert sib["status"] == "surfaced"
+        assert "confirmed_at" not in sib
+        assert "duplicate_of" not in sib
+        assert "resolution_reason" not in sib
 
         assert posted == ["aaaa000000000001"]
 
         stdout = capsys.readouterr().out
         assert "ok: aaaa000000000001 → confirmed " in stdout
-        assert "1 worktree copy" in stdout
+        assert "worktree cop" not in stdout
 
-        # Calibration counts target once, excluding propagated confirmed dup
         stats = precision_by_pattern_and_class(
             list(by_fp.values()),
             now=datetime.now(timezone.utc),
@@ -1170,6 +1174,84 @@ class TestPersistFindingsFpCarryOver:
         assert summary["patterns"][0]["dismissed"] == 1
         assert summary["patterns"][0]["dismissed_fp"] == 1
         assert summary["patterns"][0]["surfaced"] == 0
+
+    @pytest.mark.parametrize("legacy_rule_version", [0, None])
+    def test_obsolete_rule_version_fp_does_not_carry_over_or_suppress_current_revision(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        legacy_rule_version: int | None,
+    ):
+        """A P006 fp dismissal from rev 0 (or missing rule_version) must neither
+        carry over across worktrees nor suppress a rev-1 P006 finding after
+        dedup expiry."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        rev1_same_wt = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        assert rev1_same_wt.rule_version == 1
+
+        legacy_row = _make_row(
+            rev1_same_wt.fingerprint,
+            trees["main"] / "pkg/mod.py",
+            line=3,
+            status="dismissed",
+            resolution_reason="fp",
+        )
+        if legacy_rule_version is None:
+            legacy_row.pop("rule_version", None)
+        else:
+            legacy_row["rule_version"] = legacy_rule_version
+        _write_rows(isolated_findings_state, [legacy_row])
+
+        # Cross-worktree rev-1 P006 finding must NOT be auto-dismissed
+        rev1_other_wt = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert rev1_other_wt.rule_version == 1
+        fresh_other = persist_findings([rev1_other_wt])
+        assert [f.fingerprint for f in fresh_other] == [rev1_other_wt.fingerprint]
+
+        # Same-fingerprint rev-1 P006 finding after dedup expiry must NOT be suppressed
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        fresh_same = persist_findings([rev1_same_wt])
+        assert [f.fingerprint for f in fresh_same] == [rev1_same_wt.fingerprint]
+
+    @pytest.mark.parametrize("legacy_rule_version", [0, None])
+    def test_update_finding_status_on_obsolete_rule_version_does_not_close_current_sibling(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        legacy_rule_version: int | None,
+    ):
+        """Dismissing an obsolete rev-0 (or missing rule_version) P006 finding
+        must NOT close a rev-1 P006 sibling copy in another worktree."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        rev0_row = _make_row(
+            "aaaa000000000001",
+            trees["main"] / "pkg/mod.py",
+            line=3,
+            status="open",
+        )
+        if legacy_rule_version is None:
+            rev0_row.pop("rule_version", None)
+        else:
+            rev0_row["rule_version"] = legacy_rule_version
+
+        rev1_row = _make_row(
+            "bbbb000000000002",
+            trees["feat-a"] / "pkg/mod.py",
+            line=15,
+            status="open",
+            rule_version=1,
+        )
+        _write_rows(isolated_findings_state, [rev0_row, rev1_row])
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        assert update_finding_status("aaaa0000", "dismissed", reason="fp") == 0
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["aaaa000000000001"]["status"] == "dismissed"
+        assert by_fp["bbbb000000000002"]["status"] == "open"
+        assert "duplicate_of" not in by_fp["bbbb000000000002"]
 
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
