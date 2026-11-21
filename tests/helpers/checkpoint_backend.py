@@ -5,8 +5,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.checkpoints import CheckpointAssessmentClaim, CheckpointReceipt
+from src.checkpoints import (
+    CHECKPOINT_ACTIVITY_LIMIT, CheckpointActivity, CheckpointAssessmentClaim,
+    CheckpointReceipt,
+)
 from src.db.base import IdentityRecord
+from src.db.mixins.identity import IdentityMixin
 
 
 @pytest.fixture
@@ -45,23 +49,50 @@ def durable_checkpoint_backend(_isolate_db_backend):
 
     async def accept_checkpoint(
         *, agent_id, identity_id, idempotency_key, request_payload,
-        report_excerpt, provenance, attempt_id,
+        report_excerpt, provenance, attempt_id, record_activity=False,
     ):
         identity = identities[agent_id]
         assert identity.identity_id == identity_id and identity.status == "active"
         assert idempotency_key is None, "This handler fixture models only unkeyed calls"
         assert isinstance(request_payload, bytes)
         previous = streams.get(identity_id)
+        now = datetime.now(timezone.utc)
+        activity = None
+        if record_activity:
+            prior = IdentityMixin._checkpoint_activity({
+                "metadata": identity.metadata, "last_activity_at": identity.last_activity_at,
+            })
+            stamp = now.isoformat()
+            activity = CheckpointActivity(
+                total_updates=prior.total_updates, last_update=stamp,
+                recent_update_timestamps=(prior.recent_update_timestamps + (stamp,))[-CHECKPOINT_ACTIVITY_LIMIT:],
+                recent_decisions=(prior.recent_decisions + ("not_assessed",))[-CHECKPOINT_ACTIVITY_LIMIT:],
+                neutral_updates=prior.neutral_updates + 1,
+            )
+            identity.metadata.update({
+                "neutral_updates": activity.neutral_updates,
+                "recent_update_timestamps": list(activity.recent_update_timestamps),
+                "recent_decisions": list(activity.recent_decisions),
+            })
+            identity.last_activity_at = identity.updated_at = now
         receipt = CheckpointReceipt(
             checkpoint_id=str(uuid4()), identity_id=identity_id,
             seq=previous.seq + 1 if previous else 1,
             prev_checkpoint_id=previous.checkpoint_id if previous else None,
-            recorded_at=datetime.now(timezone.utc), accepted_attempt_id=attempt_id,
-            replayed=False, retry_safe=False,
+            recorded_at=now, accepted_attempt_id=attempt_id,
+            replayed=False, retry_safe=False, activity=activity,
         )
         streams[identity_id] = receipt
         receipts[receipt.checkpoint_id] = receipt
         return receipt
+
+    async def get_checkpoint_activity(agent_id):
+        identity = identities.get(agent_id)
+        if identity is None:
+            return None
+        return IdentityMixin._checkpoint_activity({
+            "metadata": identity.metadata, "last_activity_at": identity.last_activity_at,
+        })
 
     async def claim_assessment(*, checkpoint_id, assessor):
         assert checkpoint_id in receipts and checkpoint_id not in claims
@@ -84,6 +115,7 @@ def durable_checkpoint_backend(_isolate_db_backend):
         (row for row in identities.values() if row.identity_id == identity_id), None,
     )
     db.accept_checkpoint.side_effect = accept_checkpoint
+    db.get_checkpoint_activity.side_effect = get_checkpoint_activity
     db.claim_checkpoint_assessment.side_effect = claim_assessment
     db.finish_checkpoint_assessment.side_effect = finish_assessment
     return db

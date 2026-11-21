@@ -272,11 +272,17 @@ def _within_recovery_grace(meta, now: datetime) -> bool:
 
 
 def _recent_rapid_timestamps(values: list[str], now: datetime) -> list[str]:
+    # astimezone preserves the existing local interpretation of naive clock
+    # values and converts offset-bearing checkpoint/EISV stamps by instant.
+    # Use one UTC clock for both the filter and the pure rules' pair deltas;
+    # naive-minus-aware previously raised TypeError and silently excluded them.
+    now = now.astimezone(timezone.utc)
     recent = []
     for value in values:
         try:
-            if (now - datetime.fromisoformat(value)).total_seconds() <= 30.0:
-                recent.append(value)
+            timestamp = datetime.fromisoformat(value).astimezone(timezone.utc)
+            if (now - timestamp).total_seconds() <= 30.0:
+                recent.append(timestamp.isoformat())
         except (ValueError, TypeError):
             continue
     return recent

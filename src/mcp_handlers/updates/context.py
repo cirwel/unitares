@@ -79,6 +79,8 @@ class UpdateContext:
     checkpoint_unconfirmed: bool = False
     checkpoint_assessment: Any = None
     checkpoint_assessment_status: str | None = None
+    # Captured from operator configuration once, never from request fields.
+    checkin_assessor: str = "eisv"
 
     # ── Response accumulator (Phase 6) ─────────────────────────────
     response_data: Dict[str, Any] = field(default_factory=dict)

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.4.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.5.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1347,3 +1347,38 @@ Accept neutral durable check-in checkpoints and optional identity-scoped idempot
   consuming receipts should distinguish capture, assessment execution and the
   independent assessment-state acknowledgement. Hash-pinning clients should
   inspect the two updated schemas and refresh their pins.
+
+## 2.5.0 (2026-11-03)
+
+Allow operator-selected receipt-only check-ins and annotate deliveries without
+assessment independently of historical assessor selection.
+
+- **What changed:** operators may select `UNITARES_CHECKIN_ASSESSOR=none` with
+  observe posture to accept check-ins without invoking EISV. A fresh accepted
+  checkpoint carries exactly `assessment={status: "not_requested", reason:
+  "disabled_by_operator", automatic_replay: false}`. It carries no assessor,
+  completion claim, decision, metrics, prediction or assessment-state write
+  acknowledgement. The friendly `sync_state` response retains `success`,
+  `tool` and neutral `next_action` acknowledgement guidance in every response
+  mode, including full output.
+- **Compatibility:** the unset/default selector and explicit `eisv` retain
+  synchronous assessment. The selector is operator configuration, not a tool
+  parameter. Invalid configuration and `none` with enforce posture refuse the
+  check-in before acceptance. Identity, authorization, applied lifecycle holds
+  and cooldown admission remain authoritative. Successful receipt-only capture
+  acknowledges acceptance without supplying operational permission.
+- **Replay:** every keyed replay now carries exactly `assessment={status:
+  "not_repeated", automatic_replay: false}`, without an assessor or completion
+  claim. This describes the current delivery: the neutral checkpoint does not
+  record the original assessor selection. Changing the operator selector
+  between deliveries never repeats assessment or changes the accepted content
+  hash. Clients must not infer the original mode from a replay annotation.
+- **Schema digests:** the catalog remains the same 51 capabilities. No tool,
+  action, input schema or description changes, so every `input_schema_sha256`
+  and `surface_sha256` remains unchanged. This compatible output addition
+  advances the negotiated version while retaining the document and lifecycle
+  envelope schema families.
+- **Client action:** no mandatory request change or hash re-pin. Receipt
+  consumers should accept the two assessorless annotations and treat omitted
+  assessment output as absent. Operators opting into receipt-only check-ins
+  must select `none` explicitly; the deployment default remains `eisv`.

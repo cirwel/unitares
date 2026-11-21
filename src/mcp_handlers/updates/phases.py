@@ -713,6 +713,47 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
 
 # ─── Phase 3: Validate Inputs ──────────────────────────────────────────
 
+def _normalize_checkpoint_response_text(ctx: UpdateContext) -> None:
+    # Response Text — Pydantic schema defines Optional[str] with default None,
+    # so the key is always present (possibly as None). Coerce None → "" so
+    # downstream string ops (re.findall, .lower(), slicing) stay safe.
+    ctx.response_text = ctx.arguments.get("response_text") or ""
+
+
+def _normalize_checkpoint_epistemic_class(ctx: UpdateContext) -> None:
+    # Epistemic class: forward-only storage label for the state row. Pydantic
+    # validates the public schema; this fallback keeps non-schema internal
+    # callers on the honest default.
+    # ⛔ Do NOT "fix" this default by flipping it to a substrate class.
+    #
+    # The coercion is real and it is the mechanism by which the ledger
+    # over-labels automation as agent voice: a caller that omits the field is
+    # recorded as having claimed authorship. But `agent_report` is ~80.3% of
+    # all state rows, so changing the default silently RECLASSIFIES history —
+    # every stored row keeps its old label while new rows get a new one, and
+    # any series that spans the change quietly switches units mid-flight.
+    #
+    # The fix is at the CALLER: residents now state their class explicitly
+    # (unitares_sdk.agent.GovernanceAgent.epistemic_class defaults to
+    # substrate_interpretation, and checkin() omits the field when unset).
+    # Keep this default until every producer is explicit, then retire it in a
+    # dated change that says so — not as a side effect.
+    raw_epistemic_class = ctx.arguments.get("epistemic_class") or "agent_report"
+    if raw_epistemic_class not in _ALLOWED_EPISTEMIC_CLASSES:
+        logger.warning(
+            "Unknown epistemic_class %r on process_agent_update; defaulting to agent_report",
+            raw_epistemic_class,
+        )
+        raw_epistemic_class = "agent_report"
+    ctx.epistemic_class = raw_epistemic_class
+
+
+def normalize_checkpoint_inputs(ctx: UpdateContext) -> None:
+    """Normalize neutral report fields without assessment transformations."""
+    _normalize_checkpoint_response_text(ctx)
+    _normalize_checkpoint_epistemic_class(ctx)
+
+
 def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     """Extract and transform validated parameters to context BEFORE acquiring lock.
     (Pydantic handles the actual validation in middleware, so these values
@@ -720,10 +761,7 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
 
     Returns an early-exit error response (None if successful).
     """
-    # Response Text — Pydantic schema defines Optional[str] with default None,
-    # so the key is always present (possibly as None). Coerce None → "" so
-    # downstream string ops (re.findall, .lower(), slicing) stay safe.
-    ctx.response_text = ctx.arguments.get("response_text") or ""
+    _normalize_checkpoint_response_text(ctx)
 
     # Complexity (coerce to float — Pydantic schema accepts str|float|None)
     raw_complexity = ctx.arguments.get("complexity", 0.5)
@@ -762,31 +800,7 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     # apply_confidence_correction and its tests stay intact for that rebuild.
     ctx.calibration_correction_info = None
 
-    # Epistemic class: forward-only storage label for the state row. Pydantic
-    # validates the public schema; this fallback keeps non-schema internal
-    # callers on the honest default.
-    # ⛔ Do NOT "fix" this default by flipping it to a substrate class.
-    #
-    # The coercion is real and it is the mechanism by which the ledger
-    # over-labels automation as agent voice: a caller that omits the field is
-    # recorded as having claimed authorship. But `agent_report` is ~80.3% of
-    # all state rows, so changing the default silently RECLASSIFIES history —
-    # every stored row keeps its old label while new rows get a new one, and
-    # any series that spans the change quietly switches units mid-flight.
-    #
-    # The fix is at the CALLER: residents now state their class explicitly
-    # (unitares_sdk.agent.GovernanceAgent.epistemic_class defaults to
-    # substrate_interpretation, and checkin() omits the field when unset).
-    # Keep this default until every producer is explicit, then retire it in a
-    # dated change that says so — not as a side effect.
-    raw_epistemic_class = ctx.arguments.get("epistemic_class") or "agent_report"
-    if raw_epistemic_class not in _ALLOWED_EPISTEMIC_CLASSES:
-        logger.warning(
-            "Unknown epistemic_class %r on process_agent_update; defaulting to agent_report",
-            raw_epistemic_class,
-        )
-        raw_epistemic_class = "agent_report"
-    ctx.epistemic_class = raw_epistemic_class
+    _normalize_checkpoint_epistemic_class(ctx)
 
     # Low-assurance identity should not drive high-confidence updates.
     if ctx.identity_assurance.get("tier") == "weak" and ctx.confidence is not None:
@@ -1386,13 +1400,11 @@ async def _persist_inferred_purpose_async(agent_id: str, purpose: str) -> None:
         logger.debug(f"Could not persist inferred purpose (deferred): {e}")
 
 
-async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
-    """Ensure agent exists, run agent-state mutations, call ODE update.
+async def ensure_locked_agent(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
+    """Resolve metadata and credentials under the agent lock, without EISV.
 
-    Must be called inside the agent lock context manager.
-    Caller must have already invoked prepare_unlocked_inputs(ctx) so
-    ctx.agent_state and ctx.policy_warnings are populated.
-    Returns an early-exit error response, or None to continue.
+    Preserve the existing strict-identity refusal and legacy creation fallback.
+    Returns an early-exit response, or None when admission can continue.
     """
     mcp_server = ctx.mcp_server
 
@@ -1502,6 +1514,26 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         except Exception:
             ctx.meta = mcp_server.agent_metadata.get(ctx.agent_id)
             ctx.api_key = ctx.meta.api_key if ctx.meta else None
+
+    if getattr(ctx.meta, "_checkpoint_activity_unconfirmed", False) is True:
+        from src.services.checkpoint_service import refresh_checkpoint_activity
+        await refresh_checkpoint_activity(ctx)
+
+    return None
+
+
+async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
+    """Ensure agent exists, run agent-state mutations, call ODE update.
+
+    Must be called inside the agent lock context manager.
+    Caller must have already invoked prepare_unlocked_inputs(ctx) so
+    ctx.agent_state and ctx.policy_warnings are populated.
+    Returns an early-exit error response, or None to continue.
+    """
+    early = await ensure_locked_agent(ctx)
+    if early is not None:
+        return early
+    mcp_server = ctx.mcp_server
 
     # Capture previous void state for CIRS
     ctx.previous_void_active = False

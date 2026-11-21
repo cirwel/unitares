@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 import uuid
+from dataclasses import replace
 
 from src.checkpoints import (
     CheckpointAssessmentClaim, CheckpointConflict, CheckpointProvenance,
@@ -76,8 +77,13 @@ class CheckpointMixin:
         self, *, agent_id: str, identity_id: int, idempotency_key: str | None,
         request_payload: bytes | str, report_excerpt: str | None,
         provenance: CheckpointProvenance, attempt_id: str,
+        record_activity: bool = False,
     ) -> CheckpointReceipt:
         """Commit one neutral occurrence, its order, and its event atomically.
+
+        ``record_activity`` additionally commits neutral admission history in
+        this transaction. It is internal opt-in for check-ins without an
+        assessor; the existing assessed path retains its own accounting.
 
         Exceptions propagate: a connection failure/cancellation can follow a
         committed transaction. Retry with the original explicit key and bytes;
@@ -152,6 +158,11 @@ class CheckpointMixin:
                         "WHERE identity_id = $1", identity_id, row["seq"], row["checkpoint_id"],
                     )
                     result = checkpoint_receipt(row, replayed=False, retry_safe=retry_safe)
+                    if record_activity:
+                        activity = await self.record_checkpoint_activity(
+                            conn, agent_id, row["recorded_at"],
+                        )
+                        result = replace(result, activity=activity)
             return result
 
     async def claim_checkpoint_assessment(

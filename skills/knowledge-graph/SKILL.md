@@ -7,6 +7,7 @@ last_verified: "2026-10-16"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_notices.py
+  - unitares/src/services/update_workflow_service.py
   - unitares/db/postgres/migrations/074_knowledge_change_notices.sql
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
@@ -36,6 +37,12 @@ source_files:
 ## What It Is
 
 The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL: the relational rows are the canonical store. The Docker quickstart runs the AGE backend (`UNITARES_KNOWLEDGE_BACKEND=age`), which also writes the graph over those rows; a native install with the variable unset resolves to the `postgres` backend, which keeps the rows and full-text search without the graph. The AGE extension itself is required by the server either way. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+
+A `sync_state` checkpoint records a report separately from a knowledge-graph
+discovery. A receipt-only check-in, whether the operator disabled assessment
+or the request replayed an accepted checkpoint, does not run assessment-time
+memory enrichment. Missing suggestions do not show that no relevant knowledge
+exists: use the explicit search and contribution workflows below.
 
 ## Search Before Creating
 

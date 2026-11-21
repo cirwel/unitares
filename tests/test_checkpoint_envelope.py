@@ -109,6 +109,7 @@ def _assert_no_operational_fields(payload):
     forbidden = {
         "action", "decision", "action_summary", "state_summary",
         "risk_summary", "metrics", "prediction_id", "recovery_hint", "legacy_diagnostics",
+        "verdict", "current_state",
     }
     assert forbidden.isdisjoint(payload)
     assert payload["next_action"] == _ACK_NEXT_ACTION
@@ -166,13 +167,95 @@ async def test_replayed_checkpoint_satisfies_lifecycle_success_contract_without_
     assert envelope["success"] is True
     assert envelope["tool"] == "sync_state"
     assert envelope["checkpoint"]["idempotent_replay"] is True
+    assert envelope["checkpoint"]["assessment"] == {
+        "status": "not_repeated", "automatic_replay": False,
+    }
     _assert_no_operational_fields(envelope)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", _MODES)
+@pytest.mark.parametrize("nested", [False, True])
+async def test_disabled_assessor_receipt_is_neutral_despite_stale_state(mode, nested):
+    source = parse_result(_service_result("accepted", "full"))
+    source["checkpoint"]["assessment"] = {
+        "status": "not_requested", "reason": "disabled_by_operator",
+        "automatic_replay": False,
+    }
+    source.update(
+        prediction_id="stale-prediction", decision={"action": "proceed"},
+        verdict="proceed", current_state={"E": 0.9}, metrics={"risk_score": 0.1},
+        next_action="Keep working", private_blob="x" * 20_000,
+        state_persistence=StatePersistenceReceipt(41).to_dict(),
+    )
+    # The valid annotation alone must select the neutral envelope, without
+    # relying on a second assessment_repeated flag to suppress stale state.
+    source.pop("assessment_repeated", None)
+    payload = source
+    if nested:
+        payload = {
+            "success": True, "raw_governance": source,
+            "prediction_id": "outer-stale-prediction", "decision": {"action": "proceed"},
+            "checkpoint": {"status": "outer-stale-receipt"},
+        }
+
+    envelope = await _normalize(_result(payload), mode)
+
+    assert set(LIFECYCLE_SUCCESS_REQUIRED_FIELDS) <= envelope.keys()
+    assert envelope["success"] is True
+    assert envelope["tool"] == "sync_state"
+    assert envelope["checkpoint"] == source["checkpoint"]
+    _assert_no_operational_fields(envelope)
+    encoded = json.dumps(envelope)
+    assert "state_persistence" not in encoded
+    assert "stale-prediction" not in encoded
+    assert "private_blob" not in encoded
+    assert len(encoded) < 2500
+
+
+@pytest.mark.parametrize(
+    ("replayed", "assessment"),
+    [
+        (True, {"status": "not_requested", "reason": "disabled_by_operator", "automatic_replay": False}),
+        (False, {"status": "not_repeated", "automatic_replay": False}),
+        (False, {"status": "not_requested", "automatic_replay": False}),
+        (False, {"status": "not_requested", "reason": "caller_requested", "automatic_replay": False}),
+        (False, {"status": "not_requested", "reason": "disabled_by_operator", "automatic_replay": 0}),
+        (False, {"status": "not_requested", "reason": "disabled_by_operator", "automatic_replay": True}),
+        (False, {"status": "not_requested", "reason": "disabled_by_operator", "automatic_replay": False, "assessor": "eisv-sync-v1"}),
+        (False, {"status": "not_requested", "reason": "disabled_by_operator", "automatic_replay": False, "completion_means": "execution_returned; effects_are_not_atomic"}),
+        (True, {"status": "not_repeated", "automatic_replay": 0}),
+        (True, {"status": "not_repeated", "automatic_replay": False, "assessor": "eisv-sync-v1"}),
+        (True, {"status": "not_repeated", "automatic_replay": False, "reason": "disabled_by_operator"}),
+        (True, {"status": "completed", "automatic_replay": False, "assessor": "eisv-sync-v1"}),
+    ],
+)
+@pytest.mark.parametrize("mode", _MODES)
+def test_assessorless_annotations_require_exact_shape_and_matching_replay(replayed, assessment, mode):
+    source = parse_result(_service_result("accepted", "full"))
+    source["checkpoint"]["idempotent_replay"] = replayed
+    source["checkpoint"]["assessment"] = assessment
+    source.update(
+        prediction_id="stale-prediction", decision={"action": "proceed"},
+        state_persistence=StatePersistenceReceipt(41).to_dict(),
+    )
+
+    envelope = build_experience_envelope(
+        "sync_state", "process_agent_update", source, {"response_mode": mode},
+    )
+
+    assert "assessment" not in envelope["checkpoint"]
+    if "raw_governance" in envelope:
+        assert "assessment" not in envelope["raw_governance"]["checkpoint"]
+    _assert_no_operational_fields(envelope)
+    assert "state_persistence" not in json.dumps(envelope)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["replay", "failed", "unconfirmed"])
 @pytest.mark.parametrize("nested", [False, True])
-async def test_receipt_only_projection_discards_stale_state_even_in_full_mode(kind, nested):
+@pytest.mark.parametrize("mode", _MODES)
+async def test_receipt_only_projection_discards_stale_state_in_all_modes(kind, nested, mode):
     source = parse_result(_service_result(kind))
     source.update(
         prediction_id="stale-prediction", decision={"action": "proceed"},
@@ -186,7 +269,7 @@ async def test_receipt_only_projection_discards_stale_state_even_in_full_mode(ki
             "checkpoint": {"status": "outer-stale-receipt"},
         }
 
-    envelope = await _normalize(_result(payload), "full")
+    envelope = await _normalize(_result(payload), mode)
 
     assert envelope["checkpoint"] == source["checkpoint"]
     _assert_no_operational_fields(envelope)

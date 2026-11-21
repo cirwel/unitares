@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -515,3 +515,45 @@ class TestAutoInitiateDialecticRecovery:
         assert meta.paused_at == pause_token
         persist.assert_not_awaited()
         resume.assert_not_awaited()
+
+
+class TestRapidTimestampNormalization:
+    """UTC checkpoint stamps and legacy local stamps share the existing window."""
+
+    def test_aware_naive_and_offset_stamps_keep_same_thirty_second_window(self):
+        from src.agent_loop_detection import _recent_rapid_timestamps
+
+        now = datetime(2026, 11, 3, 12, 0, 0).astimezone()
+        values = [
+            (now - timedelta(seconds=30)).replace(tzinfo=None).isoformat(),
+            (now - timedelta(seconds=10)).astimezone(timezone.utc).isoformat(),
+            (now - timedelta(seconds=5)).astimezone(timezone(timedelta(hours=9))).isoformat(),
+            (now - timedelta(seconds=30, microseconds=1)).astimezone(timezone.utc).isoformat(),
+            "not-a-timestamp",
+        ]
+
+        recent = _recent_rapid_timestamps(values, now.replace(tzinfo=None))
+
+        assert recent == [
+            (now - timedelta(seconds=seconds)).astimezone(timezone.utc).isoformat()
+            for seconds in (30, 10, 5)
+        ]
+        assert _recent_rapid_timestamps(values, now) == recent
+
+    def test_mixed_aware_and_naive_activity_triggers_same_rapid_pair_rule(self):
+        now = datetime.now().astimezone()
+        stamps = [
+            (now - timedelta(seconds=0.2)).replace(tzinfo=None).isoformat(),
+            (now - timedelta(seconds=0.1)).astimezone(timezone.utc).isoformat(),
+            now.astimezone(timezone(timedelta(hours=9))).isoformat(),
+        ]
+        meta = _make_metadata(recent_timestamps=stamps, recent_decisions=["not_assessed"] * 3)
+        with (
+            patch("src.agent_loop_detection.agent_metadata", {"neutral-agent": meta}),
+            patch("src.agent_process_mgmt.SERVER_START_TIME", datetime.now() - timedelta(hours=1)),
+        ):
+            from src.agent_loop_detection import detect_loop_pattern
+            detected, reason = detect_loop_pattern("neutral-agent")
+
+        assert detected is True
+        assert "Rapid-fire updates detected" in reason

@@ -406,3 +406,78 @@ historical review record remain unchanged. Tests must preserve object identity,
 input key presence, admission/capture/invocation order, failure and cancellation
 behavior, policy effects and existing workflow receipts; they do not establish
 production timing equivalence or complete instrument preservation.
+
+## Operator-selected check-in assessor (2026-11-03 increment)
+
+`UNITARES_CHECKIN_ASSESSOR` is read once at workflow entry. Unset means `eisv`;
+the only explicit values are exactly `eisv` and `none`. Blank, whitespace,
+case variants and unknown values fail the check-in with
+`CHECKIN_CONFIGURATION_ERROR` before identity preparation or checkpoint writes.
+The setting is process environment configuration, never a request parameter or
+agent preference. Configuration is validated on each check-in, not at boot.
+The phase log records the captured assessor for each request, including `none`
+windows; the immutable checkpoint does not record historical mode selection.
+
+The default `eisv` path retains its existing preparation, admission, separate
+acceptance and claim transactions, synchronous assessment and effects. `none`
+keeps identity resolution, onboarding/resume, exact-token pause TTL expiry,
+the same agent lock and authenticated admission. Admission captures policy
+posture once; `none` requires that posture to be `observe`. `enforce` is refused
+before checkpoint acceptance, including keyed calls, rather than silently
+disabling circuit-breaker authority. Existing admission gates still precede
+receipt recovery; the lower-level authenticated receipt lookup remains a read.
+
+After admission, `none` atomically commits the checkpoint, stream order, neutral
+outbox row and identity activity. The identity owner increments `total_updates`,
+updates activity time, and appends the time and `not_assessed` marker to the
+bounded loop history. That marker is activity, not permission to proceed.
+Fresh acceptance supplies the committed snapshot for the in-process cache;
+none-mode admission refreshes durable activity first. An unconfirmed acceptance
+marks the cache for refresh even if the next request selects EISV. Replay never
+increments activity. A failure or cancellation may follow COMMIT, so only a
+retry with the original explicit key and content can safely recover the receipt.
+Activity and checkpoint rollback together if either write fails.
+
+A fresh success reports:
+
+```json
+{"assessment":{"status":"not_requested","reason":"disabled_by_operator","automatic_replay":false}}
+```
+
+All response modes carry the same neutral acknowledgement, without a policy
+action, metrics, prediction, outcome or legacy state-persistence receipt. A
+post-acceptance response/cache failure preserves the accepted receipt and uses
+`CHECKPOINT_FOLLOWUP_FAILED`, not an assessment-failure claim. Cancellation
+propagates. Replay in either mode reports only
+`{"status":"not_repeated","automatic_replay":false}` inside `assessment`.
+It does not attest to any historical assessor or historical mode. Switching
+back to EISV never causes a previously accepted keyed checkpoint to be assessed;
+assessment of a new report requires a new occurrence/key. The original key
+and submitted-content HMAC are independent of operator mode.
+
+`none` does not prepare or invoke EISV, create/hydrate/save a monitor, claim or
+finish assessment, run grounding, generate predictions, derive automatic
+outcomes/evidence from the check-in, or execute assessment enrichments. It
+therefore creates no new EISV-derived pauses or circuit-breaker triggers.
+Identity creation's existing default-class metadata stamp and independent
+presence/lifecycle operations remain. Explicit outcome and knowledge tools
+keep their own contracts. Report excerpts retain the existing bounded,
+credential-scrubbed policy; disabling estimation does not disable retention.
+
+This is optional check-in execution, not an EISV-free package or server install.
+Other tools and legacy readers still import or expose historical EISV state.
+Those historical estimates do not become current merely because neutral
+activity advances; reader/view cutover and neutral live-dashboard delivery
+remain separate work. There is no asynchronous outbox consumer or automatic
+assessment recovery. No production configuration, deployment, registered
+cutoff, archived input or scientific read changes in this increment.
+
+The public-path tests exposed one pre-existing loop-admission defect required
+to make this contract real: `_recent_rapid_timestamps` compared a naive local
+clock to timezone-aware timestamps, caught the resulting `TypeError`, and
+silently omitted them. Both EISV and checkpoint activity write UTC-aware
+timestamps. The parser now converts offset-bearing values to the same local
+clock as legacy naive stamps before applying the existing rapid rules. This
+restores detection in both modes; thresholds and startup/recovery exemptions
+are unchanged. It is an intentional default-path bug fix, not a claim of exact
+behavioral equivalence for the whole diff.
