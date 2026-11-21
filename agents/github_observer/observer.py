@@ -351,7 +351,10 @@ class UnitaresEventWriter:
             if exc.code in (400, 413):
                 return "rejected"
             if exc.code == 422:
-                if _error_reason(exc) == "observed_at in the future":
+                reason = _error_reason(exc)
+                if reason is None:
+                    return "failed"
+                if reason == "observed_at in the future":
                     return "future_timestamp"
                 return "rejected"
             if exc.code == 403:

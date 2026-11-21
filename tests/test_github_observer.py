@@ -1577,7 +1577,7 @@ def test_writer_handles_incomplete_read_in_http_error_body():
             pass
 
     event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
-    for code, expected in ((422, "rejected"), (403, "failed")):
+    for code, expected in ((422, "failed"), (403, "failed")):
         def opener(request, timeout=None, _code=code):
             raise urllib.error.HTTPError(request.full_url, _code, "err", {}, CutOffBody())
 
