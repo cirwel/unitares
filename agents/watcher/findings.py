@@ -702,7 +702,7 @@ def update_finding_status(
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
-    sibling_indices_to_close: set[int] = set()
+    sibling_fps_to_close: set[str] = set()
     if propagate_copies and new_status in ("dismissed", "confirmed"):
         target_candidate = _copy_candidate_key(target_row)
         if target_candidate is not None:
@@ -713,7 +713,7 @@ def update_finding_status(
                     latest_index_by_fp[fp] = idx
 
             non_aged_candidates = [
-                (fp, idx, findings[idx])
+                (fp, findings[idx])
                 for fp, idx in latest_index_by_fp.items()
                 if fp != target_fp
                 and findings[idx].get("status", "open") != "aged_out"
@@ -721,7 +721,7 @@ def update_finding_status(
             ]
             has_open_sibling_candidate = any(
                 row.get("status", "open") in ("open", "surfaced")
-                for _fp, _idx, row in non_aged_candidates
+                for _fp, row in non_aged_candidates
             )
             if has_open_sibling_candidate:
                 git_cache: GitCache = {}
@@ -729,8 +729,8 @@ def update_finding_status(
                 if target_resolved is not None:
                     target_copy_key, target_toplevel = target_resolved
                     wt_non_aged_counts: Counter[str] = Counter()
-                    open_by_sibling_wt: dict[str, list[int]] = {}
-                    for _fp, idx, row in non_aged_candidates:
+                    open_by_sibling_wt: dict[str, list[str]] = {}
+                    for fp, row in non_aged_candidates:
                         sib_resolved = _copy_group_key_with_worktree(row, git_cache)
                         if sib_resolved is None:
                             continue
@@ -742,15 +742,15 @@ def update_finding_status(
                             sib_toplevel != target_toplevel
                             and row.get("status", "open") in ("open", "surfaced")
                         ):
-                            open_by_sibling_wt.setdefault(sib_toplevel, []).append(idx)
+                            open_by_sibling_wt.setdefault(sib_toplevel, []).append(fp)
                     # Symmetrical with persist_findings: require zero other
                     # non-aged_out occurrences in the target worktree, and a
                     # single unambiguous non-aged_out open/surfaced occurrence
                     # in each sibling worktree.
                     if wt_non_aged_counts[target_toplevel] == 0:
-                        for sib_wt, indices in open_by_sibling_wt.items():
-                            if wt_non_aged_counts[sib_wt] == 1 and len(indices) == 1:
-                                sibling_indices_to_close.add(indices[0])
+                        for sib_wt, fps in open_by_sibling_wt.items():
+                            if wt_non_aged_counts[sib_wt] == 1 and len(fps) == 1:
+                                sibling_fps_to_close.add(fps[0])
 
     was_propagated_dup = bool(str(target_row.get("duplicate_of") or "").strip())
     updated_target: dict[str, Any] = {**target_row, "status": new_status}
@@ -772,7 +772,7 @@ def update_finding_status(
     effective_reason = updated_target.get("resolution_reason")
 
     updated: list[dict[str, Any]] = []
-    closed_copies = 0
+    closed_sibling_fps: set[str] = set()
     for idx, f in enumerate(findings):
         if idx == target_index:
             f = updated_target
@@ -793,7 +793,10 @@ def update_finding_status(
             if resolver_agent_id:
                 older_dup["resolved_by"] = resolver_agent_id
             f = older_dup
-        elif idx in sibling_indices_to_close:
+        elif (
+            (row_fp := f.get("fingerprint")) in sibling_fps_to_close
+            and f.get("status", "open") in ("open", "surfaced")
+        ):
             sibling_merged = {
                 **f,
                 "status": new_status,
@@ -807,7 +810,8 @@ def update_finding_status(
             if resolver_agent_id:
                 sibling_merged["resolved_by"] = resolver_agent_id
             f = sibling_merged
-            closed_copies += 1
+            if isinstance(row_fp, str):
+                closed_sibling_fps.add(row_fp)
         elif f.get("duplicate_of") == target_fp:
             # Keep duplicate_of_reason synchronized with the target's effective
             # stored resolution_reason (not just the optional reason arg) so
@@ -820,6 +824,7 @@ def update_finding_status(
                 synced.pop("duplicate_of_reason", None)
             f = synced
         updated.append(f)
+    closed_copies = len(closed_sibling_fps)
     _write_findings_atomic(updated)
     if updated_finding_sink is not None and updated_target is not None:
         updated_finding_sink.append(updated_target)

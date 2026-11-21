@@ -1101,6 +1101,76 @@ class TestPersistFindingsFpCarryOver:
             assert by_day[today]["dismissed"] == 1
         assert summary["patterns"][0]["surfaced"] == 0
 
+    def test_propagating_to_sibling_with_multiple_active_rows_closes_all_of_them(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """If a sibling worktree has two active rows sharing the same sibling_fp
+        (e.g. surfaced + open after a 14d dedup expiry), propagating a verdict
+        must close ALL active rows for sibling_fp so 0 active rows remain."""
+        from agents.watcher.routes import _watcher_summary_from_rows
+
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        target_fp = "aaaa000000000001"
+        sibling_fp = "bbbb000000000002"
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(target_fp, trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row(
+                    sibling_fp,
+                    trees["feat-a"] / "pkg/mod.py",
+                    line=15,
+                    status="surfaced",
+                    detected_at="2026-11-05T00:00:00Z",
+                ),
+                _make_row(
+                    sibling_fp,
+                    trees["feat-a"] / "pkg/mod.py",
+                    line=15,
+                    status="open",
+                    detected_at="2026-11-20T00:00:00Z",
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        assert (
+            update_finding_status(
+                target_fp, "dismissed", resolver_agent_id="resolver-uuid-5", reason="fp"
+            )
+            == 0
+        )
+
+        rows = _read_rows(isolated_findings_state)
+        assert len(rows) == 3
+        active = [r for r in rows if r["status"] in ("open", "surfaced")]
+        assert active == []
+
+        sib_rows = [r for r in rows if r["fingerprint"] == sibling_fp]
+        assert len(sib_rows) == 2
+        for sib in sib_rows:
+            assert sib["status"] == "dismissed"
+            assert sib["resolution_reason"] == "dup"
+            assert sib["duplicate_of"] == target_fp
+            assert sib["duplicate_of_reason"] == "fp"
+            assert sib["resolved_by"] == "resolver-uuid-5"
+
+        assert "1 worktree copy" in capsys.readouterr().out
+
+        now = datetime.now(timezone.utc)
+        stats = precision_by_pattern_and_class(rows, now=now, min_weighted_n=0.5)
+        assert stats[("P006", "app")].weighted_dismissed == pytest.approx(1.0, rel=0.05)
+        summary = _watcher_summary_from_rows(rows, now=now, window_days=3)
+        assert summary["patterns"][0]["dismissed"] == 1
+        assert summary["patterns"][0]["dismissed_fp"] == 1
+        assert summary["patterns"][0]["surfaced"] == 0
+
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
         isolated_findings_state: Path,
