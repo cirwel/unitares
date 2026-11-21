@@ -281,3 +281,194 @@ class TestScribeStoreGate:
         empty = {"anomalies": []}
         assert anomaly_items(empty) == []
         assert "no anomalous agents" in format_anomalies(empty)
+
+
+class TestClientLocalInferenceEnvParity:
+    """`agents.common.local_inference_env` must stay in exact behavioral parity
+    with `src.local_inference_env` without importing `src.*`."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:11434/v1",
+            "http://host.docker.internal:11434/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://192.168.1.5:11434/v1",
+            "http://10.0.0.2:11434/v1",
+            "http://172.16.5.4:11434/v1",
+            "http://[::ffff:127.0.0.1]:11434/v1",
+            "http://[fe80::1%25eth0]:11434/v1",
+            "https://api.example.com/v1",
+            "http://203.0.113.10:11434/v1",
+            "http://100.64.0.1:11434/v1",
+            "not-a-url",
+        ],
+    )
+    def test_classify_endpoint_matches_server(self, url, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        for var in (
+            "UNITARES_MODEL_PRIVACY",
+            "UNITARES_MODEL_LOCAL_HOSTS",
+            "UNITARES_TRUSTED_NETWORKS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        c = client_env.classify_endpoint(url)
+        s = server_env.classify_endpoint(url)
+        assert c.privacy == s.privacy
+        assert c.is_local == s.is_local
+        assert c.host == s.host
+
+    def test_env_overrides_match_server(self, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
+        assert client_env.classify_endpoint("http://100.64.0.5:11434/v1").is_local is True
+        assert (
+            client_env.classify_endpoint("http://100.64.0.5:11434/v1").privacy
+            == server_env.classify_endpoint("http://100.64.0.5:11434/v1").privacy
+        )
+
+        monkeypatch.setenv("UNITARES_MODEL_LOCAL_HOSTS", "gpu.lan")
+        assert client_env.classify_endpoint("http://gpu.lan:11434/v1").is_local is True
+        assert (
+            client_env.classify_endpoint("http://gpu.lan:11434/v1").privacy
+            == server_env.classify_endpoint("http://gpu.lan:11434/v1").privacy
+        )
+
+        monkeypatch.setenv("UNITARES_MODEL_PRIVACY", "external")
+        assert client_env.classify_endpoint("http://localhost:11434/v1").is_local is False
+        assert (
+            client_env.classify_endpoint("http://localhost:11434/v1").privacy
+            == server_env.classify_endpoint("http://localhost:11434/v1").privacy
+        )
+
+    def test_no_redirect_http_client_refuses_redirects(self):
+        from agents.common import local_inference_env as client_env
+
+        assert client_env.no_redirect_http_client().follow_redirects is False
+        assert client_env.no_redirect_http_client(asynchronous=False).follow_redirects is False
+        assert client_env.no_redirect_http_client(local=False).follow_redirects is False
+
+    @pytest.mark.parametrize(
+        "raw_value",
+        [
+            None,
+            "",
+            "   ",
+            "localhost:11434",
+            "http://gpu.lan:11434",
+            "http://gpu.lan:11434/",
+            "http://gpu.lan:11434/v1/",
+            "https://proxy.example.com/openai/",
+        ],
+    )
+    def test_model_base_url_matches_server(self, raw_value, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        if raw_value is None:
+            monkeypatch.delenv("UNITARES_MODEL_BASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("UNITARES_MODEL_BASE_URL", raw_value)
+
+        assert client_env.model_base_url() == server_env.model_base_url()
+
+    @pytest.mark.parametrize("raw_value", [None, "", "   ", "gemma4:e4b", "  qwen3:8b  "])
+    def test_default_local_model_matches_server(self, raw_value, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        if raw_value is None:
+            monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        else:
+            monkeypatch.setenv("UNITARES_MODEL_ID", raw_value)
+
+        assert client_env.default_local_model() == server_env.default_local_model()
+
+    def test_setting_aliases_table_and_resolution_match_server(self, monkeypatch, caplog):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        assert [
+            (a.old, a.new, a.removed_in) for a in client_env.SETTING_ALIASES
+        ] == [
+            (a.old, a.new, a.removed_in) for a in server_env.SETTING_ALIASES
+        ]
+
+        monkeypatch.setattr(
+            client_env,
+            "SETTING_ALIASES",
+            (
+                client_env.SettingAlias("UNITARES_LEGACY_BASE_TEST", "UNITARES_MODEL_BASE_URL", "v99.0"),
+                client_env.SettingAlias("UNITARES_LEGACY_MODEL_TEST", "UNITARES_MODEL_ID", "v99.0"),
+            ),
+        )
+        monkeypatch.setattr(
+            server_env,
+            "SETTING_ALIASES",
+            (
+                server_env.SettingAlias("UNITARES_LEGACY_BASE_TEST", "UNITARES_MODEL_BASE_URL", "v99.0"),
+                server_env.SettingAlias("UNITARES_LEGACY_MODEL_TEST", "UNITARES_MODEL_ID", "v99.0"),
+            ),
+        )
+        monkeypatch.setattr(client_env, "_warned_disagreements", set())
+        monkeypatch.setattr(server_env, "_warned_disagreements", set())
+
+        # Alias fallback when primary is unset
+        monkeypatch.delenv("UNITARES_MODEL_BASE_URL", raising=False)
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.setenv("UNITARES_LEGACY_BASE_TEST", "http://gpu.lan:11434")
+        monkeypatch.setenv("UNITARES_LEGACY_MODEL_TEST", "legacy-model:latest")
+
+        assert client_env.model_base_url() == server_env.model_base_url() == "http://gpu.lan:11434/v1"
+        assert client_env.default_local_model() == server_env.default_local_model() == "legacy-model:latest"
+
+        # Primary wins over disagreeing alias and logs redacted warning once
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://user:secret@primary.lan:11434")
+        with caplog.at_level("WARNING", logger=client_env.logger.name):
+            assert client_env.model_base_url() == server_env.model_base_url()
+            assert client_env.model_base_url() == "http://user:secret@primary.lan:11434/v1"
+
+        warnings = [r.getMessage() for r in caplog.records if r.name == client_env.logger.name]
+        assert len(warnings) == 1
+        assert "disagree" in warnings[0]
+        assert "secret" not in warnings[0]
+
+    @pytest.mark.parametrize(
+        "cidr_value,expected_fragment",
+        [
+            ("0.0.0.0/0", "0.0.0.0/0 trusts every caller"),
+            ("::/0", "::/0 trusts every caller"),
+            ("0.0.0.0/1,128.0.0.0/1", "0.0.0.0/0 trusts every caller"),
+            ("::ffff:0:0/96", "trusts every caller over IPv4 on a dual-stack bind"),
+        ],
+    )
+    def test_wildcard_trusted_network_warning_matches_server(
+        self, cidr_value, expected_fragment, monkeypatch, caplog
+    ):
+        from agents.common import local_inference_env as client_env
+        from src import trusted_networks as server_tn
+
+        monkeypatch.setattr(client_env, "_extra_networks_cache", ("", ()))
+        monkeypatch.setattr(server_tn, "_extra_networks_cache", ("", ()))
+        monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", cidr_value)
+
+        with caplog.at_level("WARNING"):
+            client_env.extra_trusted_networks()
+            # Second call with identical env must hit cache and not re-warn.
+            client_env.extra_trusted_networks()
+            server_tn.extra_trusted_networks()
+
+        client_msgs = [
+            r.getMessage() for r in caplog.records if r.name == client_env.logger.name
+        ]
+        server_msgs = [
+            r.getMessage() for r in caplog.records if r.name == server_tn.logger.name
+        ]
+        assert any(expected_fragment in m for m in client_msgs)
+        assert client_msgs == server_msgs

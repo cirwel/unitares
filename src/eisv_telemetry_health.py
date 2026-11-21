@@ -18,7 +18,6 @@ from src.eisv_telemetry import EISV_TELEMETRY_SCHEMA
 from src.grounding.outcome_anchors import (
     DEFAULT_FIXTURE_RULE,
     is_scraped_only_exclusion,
-    anchored_outcomes_predicate,
     is_structurally_controlled_fixture,
 )
 
@@ -70,35 +69,7 @@ _CALIBRATION_BINS = (
 
 
 from src.db.mixins.state import EISV_TELEMETRY_STATE_HEALTH_SQL
-
-
-_STRICT_ANCHOR_SQL = anchored_outcomes_predicate(table_alias="o")
-EISV_TELEMETRY_CALIBRATION_SQL = f"""
-SELECT
-    o.outcome_id,
-    o.ts,
-    o.agent_id,
-    o.is_bad,
-    o.detail,
-    ps.recorded_at AS prior_recorded_at,
-    ps.risk_score::double precision AS prior_risk,
-    ps.state_json #>> '{{eisv_telemetry,schema}}' AS prior_telemetry_schema,
-    ps.state_json #>> '{{eisv_telemetry,measurement_id}}' AS prior_measurement_id
-FROM audit.outcome_events o
-LEFT JOIN LATERAL (
-    SELECT s.recorded_at, s.risk_score, s.state_json
-    FROM core.identities i
-    JOIN core.agent_state s ON s.identity_id = i.identity_id
-    WHERE i.agent_id = o.agent_id
-      AND s.synthetic IS NOT TRUE
-      AND s.recorded_at <= o.ts - ($2::double precision * INTERVAL '1 minute')
-    ORDER BY s.recorded_at DESC
-    LIMIT 1
-) ps ON TRUE
-WHERE o.ts >= now() - make_interval(days => $1)
-  AND {_STRICT_ANCHOR_SQL}
-ORDER BY o.ts
-"""
+from src.db.mixins.tool_usage import EISV_TELEMETRY_CALIBRATION_SQL
 
 
 def _get(row: Any, key: str, default: Any = None) -> Any:

@@ -142,7 +142,7 @@ def reserved_hold(pr: dict) -> None:
     classification = re.search(r"\b(?:classification|class)\s*:\s*[*` ]*(fix|capability)\b",
                                pr["body"], re.IGNORECASE)
     if classification is None or classification[1].lower() != "fix":
-        raise Parked("Declare Classification: fix; capability readiness needs its operator ruling.")
+        raise Parked("Declare Classification: fix; capability readiness requires two reviewer families outside the authors on the manual PR path.")
     # The contract delegates docs, tests and tooling delivery. Runtime auth or
     # identity changes can require an operator decision even when absent from
     # the narrower governance-sensitivity manifest. Do not infer that decision.

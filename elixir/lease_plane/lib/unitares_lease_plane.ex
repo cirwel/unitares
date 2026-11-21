@@ -72,8 +72,14 @@ defmodule UnitaresLeasePlane do
       Repo.renew(lease_id, substrate_state, substrate_observed_at)
     else
       case LeaseSupervisor.holder_for(lease_id) do
-        {:ok, pid} -> LeaseHolder.renew(pid)
-        :error -> Repo.renew(lease_id)
+        {:ok, pid} ->
+          call_holder_or_fallback(
+            fn -> LeaseHolder.renew(pid) end,
+            fn -> Repo.renew(lease_id) end
+          )
+
+        :error ->
+          Repo.renew(lease_id)
       end
     end
   end
@@ -85,8 +91,14 @@ defmodule UnitaresLeasePlane do
   @spec release(binary(), String.t()) :: :ok | {:error, term()}
   def release(lease_id, release_reason \\ "normal") do
     case LeaseSupervisor.holder_for(lease_id) do
-      {:ok, pid} -> LeaseHolder.release(pid, release_reason)
-      :error -> Repo.release(lease_id, release_reason)
+      {:ok, pid} ->
+        call_holder_or_fallback(
+          fn -> LeaseHolder.release(pid, release_reason) end,
+          fn -> Repo.release(lease_id, release_reason) end
+        )
+
+      :error ->
+        Repo.release(lease_id, release_reason)
     end
   end
 
@@ -122,5 +134,14 @@ defmodule UnitaresLeasePlane do
           :ok | {:error, term()}
   def handoff_accept(handoff_id, principal \\ nil) do
     HandoffServer.accept(handoff_id, principal)
+  end
+
+  defp call_holder_or_fallback(call_fun, fallback_fun) do
+    call_fun.()
+  catch
+    :exit, {:noproc, _} -> fallback_fun.()
+    :exit, {:normal, _} -> fallback_fun.()
+    :exit, {:shutdown, _} -> fallback_fun.()
+    :exit, {{:shutdown, _}, _} -> fallback_fun.()
   end
 end

@@ -554,11 +554,13 @@ class PostgresBackend(
             return {"status": "error", "error": "Pool not initialized"}
 
         async with self.acquire() as conn:
+            from .mixins.identity import IDENTITY_COUNT_SCALAR_SQL
+
             # Single query for schema version and counts (also proves connectivity)
-            row = await conn.fetchrow("""
+            row = await conn.fetchrow(f"""
                 SELECT
                     (SELECT MAX(version) FROM core.schema_migrations) AS schema_version,
-                    (SELECT COUNT(*) FROM core.identities) AS identity_count,
+                    {IDENTITY_COUNT_SCALAR_SQL} AS identity_count,
                     (SELECT COUNT(*) FROM core.sessions WHERE is_active = TRUE) AS active_session_count
             """)
             version = row["schema_version"]
