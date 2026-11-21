@@ -388,7 +388,7 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       Application.get_env(:agent_orchestrator, :governance_url, @default_governance_url)
   end
 
-  defp loopback_url?(url) when is_binary(url) do
+  defp normalized_url_host(url) when is_binary(url) do
     case URI.parse(String.trim(url)) do
       %URI{host: host} when is_binary(host) and host != "" ->
         host
@@ -396,21 +396,35 @@ defmodule AgentOrchestrator.LeasePlaneClient do
         |> String.trim_leading("[")
         |> String.trim_trailing("]")
         |> String.downcase()
-        |> loopback_host?()
 
       _ ->
-        false
+        nil
     end
   end
 
-  defp secure_or_loopback_url?(url) when is_binary(url) do
+  defp loopback_url?(url) when is_binary(url) do
+    case normalized_url_host(url) do
+      host when is_binary(host) -> loopback_host?(host)
+      nil -> false
+    end
+  end
+
+  defp allowed_governance_transport?(url) when is_binary(url) do
     case URI.parse(String.trim(url)) do
       %URI{scheme: scheme, host: host}
       when is_binary(scheme) and is_binary(host) and host != "" ->
+        normalized_host = normalized_url_host(url)
+
         case String.downcase(scheme) do
-          "https" -> true
-          "http" -> loopback_url?(url)
-          _ -> false
+          "https" ->
+            true
+
+          "http" ->
+            is_binary(normalized_host) and
+              (loopback_host?(normalized_host) or insecure_governance_host?(normalized_host))
+
+          _ ->
+            false
         end
 
       _ ->
@@ -420,7 +434,7 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   @doc false
   def governance_header_candidates(gov_base, opts \\ []) when is_binary(gov_base) do
-    if not secure_or_loopback_url?(gov_base) do
+    if not allowed_governance_transport?(gov_base) do
       {:ok, [[]]}
     else
       raw_tokens = resolve_governance_tokens(gov_base, opts)

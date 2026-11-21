@@ -552,7 +552,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       refute_receive {:strict_first_auth, _}
     end
 
-    test "orders MCP bearer first for remote https:// targets and strips Bearer headers on cleartext non-loopback http://" do
+    test "orders MCP bearer first for remote https:// and allowlisted Compose http:// targets while rejecting unallowlisted cleartext http://" do
       Application.put_env(:agent_orchestrator, :governance_api_token, "local-http-tok")
       Application.put_env(:agent_orchestrator, :governance_mcp_token, "remote-mcp-tok")
       Application.put_env(:agent_orchestrator, :governance_rest_strict, nil)
@@ -560,7 +560,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       Application.put_env(
         :agent_orchestrator,
         :insecure_governance_hosts,
-        MapSet.new(["gov.internal"])
+        MapSet.new(["governance-mcp"])
       )
 
       # Remote HTTPS defaults to strict ordering: [mcp_token, api_token]
@@ -569,6 +569,16 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
                 [{~c"authorization", ~c"Bearer remote-mcp-tok"}],
                 [{~c"authorization", ~c"Bearer local-http-tok"}]
               ]} = LeasePlaneClient.governance_header_candidates("https://gov.example.test")
+
+      # Explicitly allowlisted Docker Compose internal host receives MCP bearer first
+      assert {:ok, "http://governance-mcp:8767"} =
+               LeasePlaneClient.validate_governance_url("http://governance-mcp:8767")
+
+      assert {:ok,
+              [
+                [{~c"authorization", ~c"Bearer remote-mcp-tok"}],
+                [{~c"authorization", ~c"Bearer local-http-tok"}]
+              ]} = LeasePlaneClient.governance_header_candidates("http://governance-mcp:8767")
 
       # Explicit strict=false overrides remote default
       assert {:ok,
@@ -594,17 +604,37 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
                 ]} = LeasePlaneClient.governance_header_candidates(loopback)
       end
 
-      # Cleartext non-loopback HTTP NEVER carries Bearer credentials even if allowlisted or passed explicitly
-      assert {:ok, "http://gov.internal:8767"} =
-               LeasePlaneClient.validate_governance_url("http://gov.internal:8767")
+      # Unallowlisted cleartext non-loopback HTTP fails closed in URL validation
+      # AND never emits Bearer credentials from governance_header_candidates/2
+      assert {:error, :insecure_governance_url} =
+               LeasePlaneClient.validate_governance_url("http://untrusted.example.test:8767")
 
       assert {:ok, [[]]} =
-               LeasePlaneClient.governance_header_candidates("http://gov.internal:8767")
+               LeasePlaneClient.governance_header_candidates("http://untrusted.example.test:8767")
 
       assert {:ok, [[]]} =
                LeasePlaneClient.governance_header_candidates(
-                 "http://gov.internal:8767",
+                 "http://untrusted.example.test:8767",
                  governance_api_token: "explicit-should-not-traverse-cleartext"
+               )
+
+      # End-to-end acquire against unallowlisted cleartext non-loopback HTTP fails closed
+      # before transmitting any Bearer token or identity_proof
+      Application.put_env(
+        :agent_orchestrator,
+        :governance_url,
+        "http://untrusted.example.test:8767"
+      )
+
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:error, {:identity_attestation_failed, :insecure_governance_url}} =
+               LeasePlaneClient.acquire(
+                 "agent:/ex-cleartext",
+                 @holder_uuid,
+                 "remote_heartbeat",
+                 60
                )
 
       # Explicit :governance_api_tokens override remains supported on secure/loopback URLs
