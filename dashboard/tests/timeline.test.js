@@ -215,6 +215,37 @@ describe("Timeline tab", () => {
     expect(t.doc.querySelector("#tl-mount img")).toBeNull();
     expect(t.names()[0]).toContain("<img");
   });
+
+  it("renders external GitHub events neutrally without alarm classes and shows details", async () => {
+    const r = fixture(2);
+    r.events.push({
+      kind: "external",
+      ts: iso(2),
+      agent_id: uid(0),
+      event_id: "ext-1",
+      event_type: "github.ci_result",
+      fingerprint: "100#42:ci:700:1",
+      repo: "example/repo",
+      pr: 42,
+      workflow: "CI",
+      conclusion: "failure",
+      failed_jobs: ["smoke"],
+      head_sha: "abc1234",
+      producer: "github_observer",
+    });
+    const t = await mount(r);
+    const mark = t.rows()[0].querySelector(".tl-mk.external");
+    expect(mark).not.toBeNull();
+    expect(mark.classList.contains("bad")).toBe(false);
+    expect(mark.classList.contains("pause")).toBe(false);
+    mark.click();
+    const detail = t.doc.getElementById("tl-detail").textContent;
+    expect(detail).toContain("CI · CI · failure");
+    expect(detail).toContain("example/repo");
+    expect(detail).toContain("#42");
+    expect(detail).toContain("smoke");
+    expect(detail).toContain("100#42:ci:700:1");
+  });
 });
 
 describe("DATA.timeline", () => {
@@ -283,7 +314,7 @@ describe("live stream frames", () => {
     const t = await mount(fixture(5));
     visible(t);
     const before = t.calls.length;
-    for (const type of ["eisv_update", "eisv_update", "lifecycle_paused", "knowledge_write", "dialectic_resolved"]) {
+    for (const type of ["eisv_update", "eisv_update", "lifecycle_paused", "knowledge_write", "dialectic_resolved", "github.ci_result"]) {
       expect(t.dom.window.Timeline.applyEvent({ type, agent_id: uid(0) })).toBe(true);
     }
     await settle(t.dom);
