@@ -110,12 +110,22 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       {:ok, sock} ->
         try do
           req = read_http_request(sock)
-          {status, resp_body} = handler.(req)
+
+          {status, extra_headers, resp_body} =
+            case handler.(req) do
+              {s, h, b} -> {s, h, b}
+              {s, b} -> {s, [], b}
+            end
+
           body_bin = if is_binary(resp_body), do: resp_body, else: Jason.encode!(resp_body)
+
+          extra_wire =
+            Enum.map_join(extra_headers, "", fn {k, v} -> "#{k}: #{v}\r\n" end)
 
           wire =
             "HTTP/1.1 #{status} OK\r\n" <>
               "Content-Type: application/json\r\n" <>
+              extra_wire <>
               "Content-Length: #{byte_size(body_bin)}\r\n" <>
               "Connection: close\r\n\r\n" <>
               body_bin
@@ -505,8 +515,9 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       refute_receive {:all_401_auth, _}
     end
 
-    test "passes through pre-minted lat.v1 attestation and rejects malformed lat.v1 tokens" do
+    test "refuses pre-supplied lat.v1 token when required and drops it with sanitized warning when optional" do
       test_pid = self()
+      pre_signed = "lat.v1.fake-payload-secret.sig"
 
       socket_path =
         start_uds_http_server("preminted", fn req ->
@@ -515,27 +526,90 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
         end)
 
       Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
 
-      assert {:ok, "lease-pre"} =
+      assert {:error, {:identity_attestation_failed, :pre_signed_attestation_not_supported}} =
                LeasePlaneClient.acquire(
                  "agent:/ex-pre",
                  @holder_uuid,
                  "remote_heartbeat",
                  60,
-                 identity_proof: "lat.v1.payload.sig"
+                 identity_proof: pre_signed
                )
 
+      refute_receive {:lease_req, _}
+
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, "lease-pre"} =
+                   LeasePlaneClient.acquire(
+                     "agent:/ex-pre",
+                     @holder_uuid,
+                     "remote_heartbeat",
+                     60,
+                     identity_proof: pre_signed
+                   )
+        end)
+
+      assert log =~ "pre_signed_attestation_not_supported"
+      refute log =~ pre_signed
       assert_receive {:lease_req, req}
-      assert req.headers["x-unitares-identity-proof"] == "lat.v1.payload.sig"
+      refute Map.has_key?(req.headers, "x-unitares-identity-proof")
+    end
 
-      assert {:error, {:identity_attestation_failed, :malformed_attestation}} =
+    test "does not follow HTTP 307 redirects on governance attestation or lease requests" do
+      test_pid = self()
+
+      trap_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:trap_hit, req})
+          {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: "lat.v1.stolen.sig"}}
+        end)
+
+      redirect_gov_url =
+        start_tcp_http_server(fn _req ->
+          {307, [{"Location", trap_url <> "/steal"}], %{ok: false}}
+        end)
+
+      socket_path =
+        start_uds_http_server("redir_attest", fn req ->
+          send(test_pid, {:unexpected_lease_req, req})
+          {200, %{ok: true, lease: %{lease_id: "nope"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, redirect_gov_url)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:error, {:identity_attestation_failed, {:attestation_http_status, 307}}} =
+               LeasePlaneClient.acquire("agent:/ex-redir", @holder_uuid, "remote_heartbeat", 60)
+
+      refute_receive {:trap_hit, _}
+      refute_receive {:unexpected_lease_req, _}
+
+      # Also confirm TCP lease requests do not follow redirects.
+      redirect_lease_url =
+        start_tcp_http_server(fn _req ->
+          {307, [{"Location", trap_url <> "/steal-lease"}], %{ok: false}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, nil)
+      Application.put_env(:agent_orchestrator, :lease_plane_base_url, redirect_lease_url)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, nil)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
+
+      assert {:error, {:lease_plane_unexpected, 307, _}} =
                LeasePlaneClient.acquire(
-                 "agent:/ex-pre",
+                 "agent:/ex-redir-tcp",
                  @holder_uuid,
                  "remote_heartbeat",
-                 60,
-                 identity_proof: "lat.v1.bad\r\nheader"
+                 60
                )
+
+      refute_receive {:trap_hit, _}
     end
   end
 

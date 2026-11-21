@@ -186,11 +186,17 @@ defmodule AgentOrchestrator.LeasePlaneClient do
           {:ok, nil}
         end
 
-      @attestation_prefix <> _ = token ->
-        if valid_attestation_token?(token) do
-          {:ok, token}
+      @attestation_prefix <> _ ->
+        if require_proof? do
+          {:error, {:identity_attestation_failed, :pre_signed_attestation_not_supported}}
         else
-          {:error, {:identity_attestation_failed, :malformed_attestation}}
+          Logger.warning(
+            "lease identity attestation skipped for #{path} " <>
+              "(:pre_signed_attestation_not_supported); sending request without " <>
+              "x-unitares-identity-proof"
+          )
+
+          {:ok, nil}
         end
 
       source_proof ->
@@ -460,7 +466,12 @@ defmodule AgentOrchestrator.LeasePlaneClient do
   defp http_options(url, opts) do
     timeout_ms = Keyword.get(opts, :timeout_ms, 5_000)
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, 2_000)
-    base = [timeout: timeout_ms, connect_timeout: connect_timeout_ms]
+
+    base = [
+      timeout: timeout_ms,
+      connect_timeout: connect_timeout_ms,
+      autoredirect: false
+    ]
 
     if URI.parse(url).scheme == "https" do
       ssl = [
