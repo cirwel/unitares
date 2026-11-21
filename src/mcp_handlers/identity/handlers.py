@@ -3576,30 +3576,35 @@ async def _forget_unpersisted_identity(agent_uuid: Any, session_key: str) -> Non
     decline still stands."""
     if not isinstance(agent_uuid, str) or not agent_uuid:
         return
-    try:
-        from .persistence import _REDIS_WRITE_TIMEOUT
-        from .shared import make_client_session_id, _session_identities
-        from src.cache import get_session_cache
+    from .persistence import _REDIS_WRITE_TIMEOUT
+    from .shared import make_client_session_id, _session_identities
 
-        cache = get_session_cache()
-        for key in {session_key, make_client_session_id(agent_uuid)}:
-            if not key:
-                continue
-            held = _session_identities.get(key)
-            if isinstance(held, dict) and (
-                held.get("bound_agent_id") or held.get("agent_uuid")
-            ) == agent_uuid:
-                _session_identities.pop(key, None)
-            # Bounded like every Redis await on this path: a stalled cache
-            # must not turn the decline into a timeout of the whole onboard.
+    keys = [key for key in {session_key, make_client_session_id(agent_uuid)} if key]
+    # The in-process entries first, and all of them: this needs no I/O, so a
+    # cache that stalls below cannot leave one behind for the next call to
+    # resume.
+    for key in keys:
+        held = _session_identities.get(key)
+        if isinstance(held, dict) and (
+            held.get("bound_agent_id") or held.get("agent_uuid")
+        ) == agent_uuid:
+            _session_identities.pop(key, None)
+    # Then the shared cache, each key on its own and each await bounded like
+    # every Redis await on this path: a stalled cache must not turn the
+    # decline into a timeout of the whole onboard.
+    for key in keys:
+        try:
+            from src.cache import get_session_cache
+
+            cache = get_session_cache()
             cached = await asyncio.wait_for(cache.get(key), timeout=_REDIS_WRITE_TIMEOUT)
             if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
                 await asyncio.wait_for(cache.unbind(key), timeout=_REDIS_WRITE_TIMEOUT)
-    except (Exception, asyncio.TimeoutError) as exc:
-        logger.warning(
-            f"[ONBOARD] could not drop the cached session for declined identity "
-            f"{agent_uuid[:8]}...: {exc}"
-        )
+        except (Exception, asyncio.TimeoutError) as exc:
+            logger.warning(
+                f"[ONBOARD] could not drop the cached session for declined identity "
+                f"{agent_uuid[:8]}...: {exc}"
+            )
 
 
 async def _record_spawned_under(agent_uuid: str, declared: Any) -> bool:

@@ -2341,12 +2341,47 @@ class TestHandleOnboardV2:
             async def unbind(self, key):
                 await _asyncio.sleep(30)
 
+        from src.mcp_handlers.identity.shared import _session_identities, make_client_session_id
+
         monkeypatch.setattr("src.mcp_handlers.identity.persistence._REDIS_WRITE_TIMEOUT", 0.05)
         monkeypatch.setattr("src.cache.get_session_cache", lambda: _Stalled())
-        await _asyncio.wait_for(
-            identity_handlers._forget_unpersisted_identity(str(uuid.uuid4()), "agent:/thread-stalled"),
-            timeout=2,
-        )
+        minted = str(uuid.uuid4())
+        keys = ["agent:/thread-stalled", make_client_session_id(minted)]
+        for key in keys:
+            _session_identities[key] = {"bound_agent_id": minted}
+        try:
+            await _asyncio.wait_for(
+                identity_handlers._forget_unpersisted_identity(minted, keys[0]), timeout=2,
+            )
+            # Both in-process entries are gone whichever key the cache stalled on.
+            assert not any(key in _session_identities for key in keys)
+        finally:
+            for key in keys:
+                _session_identities.pop(key, None)
+
+    @pytest.mark.asyncio
+    async def test_forgetting_a_declined_identity_leaves_other_identities_alone(self, monkeypatch):
+        from src.mcp_handlers.identity import handlers as identity_handlers
+        from src.mcp_handlers.identity.shared import _session_identities
+
+        unbound = []
+
+        class _Cache:
+            async def get(self, key):
+                return {"agent_id": "someone-else"}
+
+            async def unbind(self, key):
+                unbound.append(key)
+
+        monkeypatch.setattr("src.cache.get_session_cache", lambda: _Cache())
+        key = "agent:/thread-shared"
+        _session_identities[key] = {"bound_agent_id": "someone-else"}
+        try:
+            await identity_handlers._forget_unpersisted_identity(str(uuid.uuid4()), key)
+            assert _session_identities[key] == {"bound_agent_id": "someone-else"}
+            assert unbound == []
+        finally:
+            _session_identities.pop(key, None)
 
     @pytest.mark.asyncio
     async def test_agent_only_server_still_resumes_an_identity_for_a_harness(
