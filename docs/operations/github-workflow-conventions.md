@@ -55,25 +55,28 @@ veto by removing the label.
   decision `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments
   rather than holding a fix. Scientific and governance-sensitive gates are
   unchanged. Neither an auth or identity-enforcement diff (operator ruling,
-  2026-11-20) nor a `capability` PR (including one that adds a tool, alias,
-  action, instrument or model channel against `docs/integration/INTENT_MAP.md`;
-  operator ruling, 2026-11-21) is held as a draft for the operator: its gate is
-  two reviewer families outside the authors, and its owner marks it ready and
-  labels it once both have passed. On a `second_family_paths` file the `review`
-  check enforces that. `review_policy.json` deliberately leaves some files with
-  an access decision or capability surface off that list (its `_boundary` note
-  names them, for example `src/mcp_handlers/decorators.py`), and a change there
-  passes `review` on one family. For a `capability` or an auth or
-  identity-enforcement change in such a file the owner gets the second family's
-  review before marking ready and names both families in the PR body; nothing
-  enforces this, so the body is the record. The same holds for
+  2026-11-20, KG decision `2026-11-20T03:06:05.977062+00:00`, #3310) nor a
+  `capability` PR (including one that adds a tool, alias, action, instrument or
+  model channel against `docs/integration/INTENT_MAP.md`; operator ruling,
+  2026-11-21, KG decision `2026-11-21T09:46:38.842814+00:00`) is held as a
+  draft for the operator: its gate is two reviewer families outside the
+  authors, and its owner marks it ready and labels it once both have passed. On
+  a `second_family_paths` file the `review` check enforces that.
+  `review_policy.json` deliberately leaves some files with an access decision
+  off that list (its `_boundary` note names them, for example
+  `src/mcp_handlers/decorators.py`), and most capability surfaces sit outside it
+  too, so a change there passes `review` on one family. For a `capability` or an
+  auth or identity-enforcement change in such a file the owner gets the second
+  family's review before marking ready and names both families in the PR body;
+  nothing enforces this, so the body is the record. The same holds for
   `ready-when-validated`: do not apply it to such a PR until both families have
   passed, because the queue promotes a declared draft as soon as `review`
   succeeds, and here `review` succeeds on one family. With no second family
   available, the PR waits for one or for the operator's word, as it would on a
-  listed path. The operator reviews, merges and authors no PR, so a rule that
-  parks a PR for the operator to read parks it for good; #3222 stayed a draft
-  for 13 days while each reviewer repeated that it was reserved.
+  listed path. The operator reviews, merges and authors no PR (KG decision
+  `2026-11-18T17:35:13.386619+00:00`), so a rule that parks a PR for the
+  operator to read parks it for good; #3222 stayed a draft for 13 days while
+  each reviewer repeated that it was reserved.
 - A PR that records an operator decision also carries it to the open issues it
   touches. Before readiness, the owner lists in the PR body each open issue the
   decision parks, supersedes or unblocks, and posts a short note on each one
