@@ -10,11 +10,14 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import http.client
 import ipaddress
 import json
 import logging
 import os
 import random
+import socket
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -78,6 +81,36 @@ class LeasePlaneClientConfig:
     # Plain HTTP may receive a continuity credential only on loopback or at one
     # of these exact hostnames. HTTPS remains the default for every remote host.
     insecure_governance_hosts: tuple[str, ...] = ()
+    # Local Unix domain socket path for the lease plane (overrides TCP
+    # base_url when set). Also honored when base_url uses the unix:///path
+    # scheme or via LeasePlaneClientConfig.from_env().
+    unix_socket: str | None = None
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        timeout_s: float = 1.0,
+        identity_legacy_fallback: bool = False,
+        insecure_governance_hosts: tuple[str, ...] = (),
+    ) -> LeasePlaneClientConfig:
+        """Build a client config from standard lease-plane environment variables."""
+        base_url = (
+            os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").strip()
+            or "http://127.0.0.1:8788"
+        )
+        unix_socket = os.getenv("UNITARES_LEASE_PLANE_UNIX_SOCKET", "").strip() or None
+        bearer_token = os.getenv("LEASE_PLANE_BEARER_TOKEN", "").strip() or None
+        force_release_token = os.getenv("LEASE_FORCE_RELEASE_TOKEN", "").strip() or None
+        return cls(
+            base_url=base_url,
+            bearer_token=bearer_token,
+            force_release_token=force_release_token,
+            timeout_s=timeout_s,
+            identity_legacy_fallback=identity_legacy_fallback,
+            insecure_governance_hosts=insecure_governance_hosts,
+            unix_socket=unix_socket,
+        )
 
 
 @dataclass(frozen=True)
@@ -87,6 +120,7 @@ class LeaseHTTPRequest:
     headers: dict[str, str]
     json_body: dict[str, Any] | None
     timeout_s: float
+    unix_socket: str | None = None
 
 
 LeaseTransport = Callable[[LeaseHTTPRequest], Mapping[str, Any]]
@@ -163,7 +197,139 @@ def _record_lease_rpc_latency(
     record_ms(f"lease_plane.client.{op}.{outcome}", elapsed_ms)
 
 
+def _validate_unix_socket_path(socket_path: str) -> None:
+    """Validate a Unix domain socket path fail-closed before connecting.
+
+    Uses ``os.lstat`` (never follows symlinks) and enforces:
+    - non-empty absolute path without NUL bytes
+    - not a symlink
+    - socket inode (``S_ISSOCK``)
+    - owned by the current effective UID (``os.getuid()``)
+    - owner-only permissions (``(st_mode & 0o077) == 0``)
+    """
+    if not isinstance(socket_path, str) or not socket_path or "\x00" in socket_path:
+        raise ValueError("unix socket path must be a non-empty path without NUL bytes")
+    if not os.path.isabs(socket_path):
+        raise ValueError(f"unix socket path must be absolute: {socket_path!r}")
+
+    st = os.lstat(socket_path)
+    if stat.S_ISLNK(st.st_mode):
+        raise PermissionError(f"refusing symlink unix socket: {socket_path}")
+    if not stat.S_ISSOCK(st.st_mode):
+        raise PermissionError(f"path is not a unix socket: {socket_path}")
+    if st.st_uid != os.getuid():
+        raise PermissionError(
+            f"unix socket not owned by current uid ({os.getuid()}): {socket_path}"
+        )
+    if (stat.S_IMODE(st.st_mode) & 0o077) != 0:
+        raise PermissionError(
+            f"unix socket has unsafe permissions ({oct(stat.S_IMODE(st.st_mode))}): {socket_path}"
+        )
+
+
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    """Stdlib HTTP/1.1 connection over a fail-closed validated AF_UNIX socket."""
+
+    def __init__(self, socket_path: str, timeout: float | None = None) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self) -> None:
+        _validate_unix_socket_path(self._socket_path)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            if self.timeout is not None:
+                sock.settimeout(self.timeout)
+            sock.connect(self._socket_path)
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+def _resolve_unix_socket(config: LeasePlaneClientConfig) -> str | None:
+    """Resolve the configured Unix socket path, if any.
+
+    Explicit ``config.unix_socket`` wins; otherwise a ``unix:///path``
+    ``config.base_url`` selects UDS. Malformed ``unix://`` URLs (e.g. non-empty
+    netloc or relative path) return a non-absolute value so ``connect()`` fails
+    closed rather than silently falling back to TCP.
+    """
+    if config.unix_socket is not None:
+        cleaned = config.unix_socket.strip()
+        if cleaned:
+            return cleaned
+
+    raw_base = (config.base_url or "").strip()
+    if raw_base.startswith("unix://"):
+        parsed = urllib.parse.urlsplit(raw_base)
+        if (
+            parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path
+            or not os.path.isabs(parsed.path)
+        ):
+            return f"{parsed.netloc}{parsed.path}" if parsed.netloc else ""
+        return parsed.path
+
+    return None
+
+
+def _decode_http_response(status: int, reason: str, raw: bytes) -> Mapping[str, Any]:
+    """Decode an HTTP response body into the lease-plane envelope dict."""
+    if status >= 400:
+        if raw:
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                if isinstance(payload, Mapping):
+                    return payload
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+        if status in (401, 403):
+            return {"ok": False, "error": "permission_denied", "reason": str(reason)}
+        return {"ok": False, "error": "service_unavailable"}
+
+    if not raw:
+        return {"ok": False, "error": "schema_invalid", "detail": "empty response body"}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {"ok": False, "error": "schema_invalid", "detail": "response was not JSON"}
+    if not isinstance(payload, Mapping):
+        return {"ok": False, "error": "schema_invalid", "detail": "response was not an object"}
+    return payload
+
+
+def _unix_http_transport(request: LeaseHTTPRequest, socket_path: str) -> Mapping[str, Any]:
+    body = _wire_json_bytes(request.json_body)
+    parsed = urllib.parse.urlsplit(request.url)
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+
+    conn = _UnixHTTPConnection(socket_path, timeout=request.timeout_s)
+    try:
+        conn.request(
+            request.method,
+            target,
+            body=body,
+            headers=dict(request.headers),
+        )
+        response = conn.getresponse()
+        status = response.status
+        reason = response.reason
+        raw = response.read()
+    finally:
+        conn.close()
+
+    return _decode_http_response(status, reason, raw)
+
+
 def _urllib_transport(request: LeaseHTTPRequest) -> Mapping[str, Any]:
+    if request.unix_socket is not None:
+        return _unix_http_transport(request, request.unix_socket)
+
     body = _wire_json_bytes(request.json_body)
 
     req = urllib.request.Request(
@@ -174,29 +340,13 @@ def _urllib_transport(request: LeaseHTTPRequest) -> Mapping[str, Any]:
     )
     try:
         with urllib.request.urlopen(req, timeout=request.timeout_s) as response:
+            status = getattr(response, "status", 200) or 200
+            reason = getattr(response, "reason", "OK") or "OK"
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        raw = exc.read()
-        if raw:
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-                if isinstance(payload, Mapping):
-                    return payload
-            except json.JSONDecodeError:
-                pass
-        if exc.code in (401, 403):
-            return {"ok": False, "error": "permission_denied", "reason": str(exc.reason)}
-        return {"ok": False, "error": "service_unavailable"}
+        return _decode_http_response(exc.code, str(exc.reason), exc.read())
 
-    if not raw:
-        return {"ok": False, "error": "schema_invalid", "detail": "empty response body"}
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError:
-        return {"ok": False, "error": "schema_invalid", "detail": "response was not JSON"}
-    if not isinstance(payload, Mapping):
-        return {"ok": False, "error": "schema_invalid", "detail": "response was not an object"}
-    return payload
+    return _decode_http_response(status, reason, raw)
 
 
 def _wire_json_bytes(json_body: dict[str, Any] | None) -> bytes | None:
@@ -751,7 +901,7 @@ class LeasePlaneClient:
         omitted, falls back to the client's configured timeout.
         """
         path = "/v1/health"
-        url = self.config.base_url.rstrip("/") + path
+        url, unix_socket = self._build_lease_url(path)
         headers = {"Accept": "application/json"}
         if self.config.bearer_token:
             headers["Authorization"] = f"Bearer {self.config.bearer_token}"
@@ -762,6 +912,7 @@ class LeasePlaneClient:
             headers=headers,
             json_body=None,
             timeout_s=timeout_s if timeout_s is not None else self.config.timeout_s,
+            unix_socket=unix_socket,
         )
         try:
             payload = self._transport(request)
@@ -796,6 +947,18 @@ class LeasePlaneClient:
                 reason=f"response failed validation: {exc.errors()!r}",
             )
 
+    def _build_lease_url(
+        self,
+        path: str,
+        query: dict[str, str] | None = None,
+    ) -> tuple[str, str | None]:
+        unix_socket = _resolve_unix_socket(self.config)
+        base = "http://localhost" if unix_socket is not None else self.config.base_url.rstrip("/")
+        url = base + path
+        if query:
+            url = url + "?" + urllib.parse.urlencode(query)
+        return url, unix_socket
+
     def _request_json(
         self,
         method: str,
@@ -806,9 +969,7 @@ class LeasePlaneClient:
         authorization_token: str | None = None,
         identity_proof: str | None = None,
     ) -> Mapping[str, Any]:
-        url = self.config.base_url.rstrip("/") + path
-        if query:
-            url = url + "?" + urllib.parse.urlencode(query)
+        url, unix_socket = self._build_lease_url(path, query=query)
 
         headers = {"Accept": "application/json"}
         if json_body is not None:
@@ -838,6 +999,7 @@ class LeasePlaneClient:
             headers=headers,
             json_body=json_body,
             timeout_s=self.config.timeout_s,
+            unix_socket=unix_socket,
         )
         wire_body = _wire_json_bytes(json_body)
         _body_bytes = len(wire_body) if wire_body is not None else None

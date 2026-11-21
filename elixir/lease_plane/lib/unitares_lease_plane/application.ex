@@ -230,27 +230,64 @@ defmodule UnitaresLeasePlane.Application do
     :ok
   end
 
-  defp http_children do
+  @doc false
+  def http_children do
     if Application.get_env(:lease_plane, :start_http, true) do
-      port =
-        parse_http_port(
-          System.get_env("UNITARES_LEASE_PLANE_HTTP_PORT"),
-          Application.get_env(:lease_plane, :http_port, 8788)
-        )
+      unix_socket = resolved_unix_socket()
+      disable_tcp? = tcp_disabled?()
 
-      ip =
-        parse_http_ip(
-          System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
-          Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
-        )
+      validate_http_transport!(disable_tcp?, unix_socket)
 
-      [
-        {Bandit, plug: UnitaresLeasePlane.HTTPRouter, ip: ip, port: port}
-      ]
+      tcp_children =
+        if disable_tcp? do
+          []
+        else
+          port =
+            parse_http_port(
+              System.get_env("UNITARES_LEASE_PLANE_HTTP_PORT"),
+              Application.get_env(:lease_plane, :http_port, 8788)
+            )
+
+          ip =
+            parse_http_ip(
+              System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+              Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+            )
+
+          [
+            Supervisor.child_spec(
+              {Bandit, plug: UnitaresLeasePlane.HTTPRouter, ip: ip, port: port},
+              id: UnitaresLeasePlane.HTTP.TCP
+            )
+          ]
+        end
+
+      uds_children =
+        if is_binary(unix_socket) do
+          [
+            Supervisor.child_spec(
+              {UnitaresLeasePlane.UnixSocket,
+               socket_path: unix_socket, plug: UnitaresLeasePlane.HTTPRouter},
+              id: UnitaresLeasePlane.HTTP.UnixSocket
+            )
+          ]
+        else
+          []
+        end
+
+      tcp_children ++ uds_children
     else
       []
     end
   end
+
+  defp validate_http_transport!(true, nil) do
+    raise ArgumentError,
+          "lease_plane boot refused: UNITARES_LEASE_PLANE_DISABLE_TCP=1 requires " <>
+            "UNITARES_LEASE_PLANE_UNIX_SOCKET (or config :lease_plane, http_unix_socket:) to be set."
+  end
+
+  defp validate_http_transport!(_disable_tcp?, _unix_socket), do: :ok
 
   defp worker_children do
     if Application.get_env(:lease_plane, :start_workers, true) do
@@ -465,12 +502,49 @@ defmodule UnitaresLeasePlane.Application do
   # for http_children/0 to refuse; here it reads as "not known to be exposed".
   @doc false
   def resolved_http_ip do
-    parse_http_ip(
-      System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
-      Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
-    )
+    case {tcp_disabled?(), resolved_unix_socket()} do
+      {true, socket_path} when is_binary(socket_path) ->
+        {:local, socket_path}
+
+      _ ->
+        parse_http_ip(
+          System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+          Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+        )
+    end
   rescue
     ArgumentError -> nil
+  end
+
+  @doc false
+  def resolved_unix_socket do
+    raw =
+      case System.get_env("UNITARES_LEASE_PLANE_UNIX_SOCKET") do
+        value when is_binary(value) ->
+          trimmed = String.trim(value)
+          if trimmed == "", do: nil, else: trimmed
+
+        nil ->
+          nil
+      end
+
+    case raw || Application.get_env(:lease_plane, :http_unix_socket) do
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc false
+  def tcp_disabled? do
+    case System.get_env("UNITARES_LEASE_PLANE_DISABLE_TCP") do
+      "1" -> true
+      value when is_binary(value) and value != "" -> false
+      _ -> Application.get_env(:lease_plane, :http_disable_tcp, false) == true
+    end
   end
 
   defp beyond_loopback?({127, _, _, _}), do: false
