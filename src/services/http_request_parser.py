@@ -9,6 +9,12 @@ from typing import Any, Mapping, MutableMapping
 
 MAX_HTTP_TOOL_REQUEST_SIZE = 10 * 1024 * 1024
 MAX_HTTP_TOOL_ARGUMENTS = 100
+# Caps for the other JSON REST routes. Auth and control bodies (passkey
+# assertions, hub exchanges, lease and effect proofs) are a few KB; ingest
+# bodies (findings, metrics, bridge and observation events) stay well under
+# a megabyte.
+MAX_HTTP_SMALL_JSON_BODY = 64 * 1024
+MAX_HTTP_INGEST_JSON_BODY = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -38,8 +44,22 @@ def normalize_http_tool_name(body: Mapping[str, Any], mcp_server_name: str) -> s
     )
 
 
-def validate_http_tool_content_length(content_length: str | None) -> int | None:
+def _body_too_large(max_bytes: int) -> HttpToolRequestError:
+    payload: dict[str, Any] = {
+        "success": False,
+        "error": "Request body too large",
+        "max_bytes": max_bytes,
+    }
+    if max_bytes >= 1024 * 1024:
+        payload["max_size_mb"] = max_bytes // (1024 * 1024)
+    return HttpToolRequestError(payload, status_code=413)
+
+
+def validate_http_tool_content_length(
+    content_length: str | None, max_bytes: int | None = None
+) -> int | None:
     """Validate a declared body length, returning it when present."""
+    limit = MAX_HTTP_TOOL_REQUEST_SIZE if max_bytes is None else max_bytes
     if content_length is None:
         return None
     try:
@@ -52,41 +72,96 @@ def validate_http_tool_content_length(content_length: str | None) -> int | None:
         raise HttpToolRequestError(
             {"success": False, "error": "Invalid Content-Length header"}
         )
-    if size > MAX_HTTP_TOOL_REQUEST_SIZE:
-        raise HttpToolRequestError(
-            {
-                "success": False,
-                "error": "Request body too large",
-                "max_size_mb": MAX_HTTP_TOOL_REQUEST_SIZE // (1024 * 1024),
-            },
-            status_code=413,
-        )
+    if size > limit:
+        raise _body_too_large(limit)
     return size
 
 
-async def read_bounded_json_body(request: Any) -> Any:
+async def read_bounded_json_body(request: Any, max_bytes: int | None = None) -> Any:
     """Read and decode JSON while enforcing the byte cap on the actual stream.
 
     ``Content-Length`` is only an early rejection hint. Chunked requests and
     requests with a missing declaration are counted as they arrive so Starlette
     never buffers an arbitrarily large body before this boundary can reject it.
+    ``max_bytes`` defaults to the REST tool cap; routes with small bodies pass
+    a tighter one.
     """
-    validate_http_tool_content_length(request.headers.get("content-length"))
+    limit = MAX_HTTP_TOOL_REQUEST_SIZE if max_bytes is None else max_bytes
+    validate_http_tool_content_length(request.headers.get("content-length"), limit)
     chunks: list[bytes] = []
     received = 0
     async for chunk in request.stream():
         received += len(chunk)
-        if received > MAX_HTTP_TOOL_REQUEST_SIZE:
-            raise HttpToolRequestError(
-                {
-                    "success": False,
-                    "error": "Request body too large",
-                    "max_size_mb": MAX_HTTP_TOOL_REQUEST_SIZE // (1024 * 1024),
-                },
-                status_code=413,
-            )
+        if received > limit:
+            raise _body_too_large(limit)
         chunks.append(chunk)
     return json.loads(b"".join(chunks))
+
+
+async def read_bounded_asgi_body(
+    scope: Mapping[str, Any], receive: Any, max_bytes: int | None = None
+) -> Any:
+    """Read a raw ASGI request body under a byte cap and return a replaying receive.
+
+    For handlers that read the whole body themselves (the MCP SDK's
+    transport and client registration). Raises the 413 ``HttpToolRequestError``
+    as soon as the declared or counted length passes the cap, so at most the
+    cap plus one server-delivered message is held. A disconnect mid-body
+    ends the read early and is replayed after the body received so far.
+
+    The body is coalesced as it arrives and replayed as one message, so
+    holding and replaying it costs time and memory linear in its bytes, not
+    in how many messages it came in.
+    """
+    limit = MAX_HTTP_TOOL_REQUEST_SIZE if max_bytes is None else max_bytes
+    for key, value in scope.get("headers") or ():
+        if key.lower() == b"content-length":
+            try:
+                declared = int(value)
+            except (TypeError, ValueError):
+                break
+            if declared > limit:
+                raise _body_too_large(limit)
+            break
+    body = bytearray()
+    saw_body = False
+    terminal: Any = None
+    while True:
+        message = await receive()
+        if message.get("type") != "http.request":
+            terminal = message
+            break
+        saw_body = True
+        body += message.get("body", b"")
+        if len(body) > limit:
+            raise _body_too_large(limit)
+        if not message.get("more_body", False):
+            break
+
+    pending: list[Any] = []
+    if saw_body:
+        pending.append(
+            {
+                "type": "http.request",
+                "body": bytes(body),
+                "more_body": terminal is not None,
+            }
+        )
+    if terminal is not None:
+        pending.append(terminal)
+    del body
+    position = 0
+
+    async def replay() -> Any:
+        nonlocal position
+        if position < len(pending):
+            message = pending[position]
+            pending[position] = None
+            position += 1
+            return message
+        return await receive()
+
+    return replay
 
 
 def parse_http_tool_request(
