@@ -113,6 +113,69 @@ def test_ttl_floor_enforced():
     assert v.ok is True
 
 
+def test_ttl_ceiling_enforced():
+    # a caller-requested lifetime above the ceiling is clamped down at mint
+    grant = eg.mint_effect_grant(ttl_seconds=10**9, _now=1_000_000, **_FIELDS)
+    v = eg.verify_effect_grant(grant, _now=1_000_000, **_FIELDS)
+    assert v.ok is True
+    assert v.exp == 1_000_000 + eg.MAX_GRANT_TTL_SECONDS
+    late = eg.verify_effect_grant(
+        grant, _now=1_000_000 + eg.MAX_GRANT_TTL_SECONDS, **_FIELDS
+    )
+    assert late.ok is False and late.reason == "expired"
+
+
+def _hand_signed(**payload_overrides):
+    """A correctly signed grant whose payload the server's mint would not write."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    payload = {
+        "v": 1,
+        "aid": _FIELDS["aid"],
+        "psha": _FIELDS["payload_sha256"],
+        "surf": _FIELDS["surface"],
+        "cust": _FIELDS["custody_mode"],
+        "idem": _FIELDS["idempotency_key"],
+        "nonce": "hand-signed-nonce",
+        "iat": 1_000_000,
+        "exp": 1_000_030,
+    }
+    payload.update(payload_overrides)
+    payload = {k: v for k, v in payload.items() if v is not None}
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    payload_b64 = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    sig = hmac.new(_SECRET, eg._signing_input(payload_b64), hashlib.sha256).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode().rstrip("=")
+    return f"{eg.EFFECT_GRANT_VERSION}.{payload_b64}.{sig_b64}"
+
+
+def test_hand_signed_baseline_verifies():
+    v = eg.verify_effect_grant(_hand_signed(), _now=1_000_001, **_FIELDS)
+    assert v.ok is True
+
+
+def test_verify_rejects_overlong_lifetime():
+    grant = _hand_signed(exp=1_000_000 + 10 * 365 * 86400)
+    v = eg.verify_effect_grant(grant, _now=1_000_001, **_FIELDS)
+    assert v.ok is False and v.reason == "bad_lifetime"
+
+
+def test_verify_rejects_future_iat():
+    # a lifetime within the ceiling, but issued well ahead of the verifier's clock
+    grant = _hand_signed(iat=2_000_000, exp=2_000_030)
+    v = eg.verify_effect_grant(grant, _now=1_000_001, **_FIELDS)
+    assert v.ok is False and v.reason == "bad_lifetime"
+
+
+def test_verify_rejects_missing_iat():
+    grant = _hand_signed(iat=None)
+    v = eg.verify_effect_grant(grant, _now=1_000_001, **_FIELDS)
+    assert v.ok is False and v.reason == "bad_lifetime"
+
+
 # ── tamper resistance ───────────────────────────────────────────────────────
 
 def test_tampered_signature_fails():

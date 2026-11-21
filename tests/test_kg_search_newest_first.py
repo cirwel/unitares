@@ -26,7 +26,7 @@ import pytest
 import pytest_asyncio
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers
+from src.mcp_handlers.knowledge import handlers, search_helpers
 from src.mcp_handlers.knowledge.handlers import (
     _SearchParameterError,
     _parse_knowledge_search_request,
@@ -100,7 +100,7 @@ async def _search(db, **arguments):
     graph = _pg_graph(db)
     with patch.object(handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
          patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
+         patch.object(search_helpers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
         result = await handlers.handle_search_knowledge_graph(arguments)
     return json.loads(result[0].text)
 
@@ -300,7 +300,7 @@ class TestSearchHandlerNewestFirst:
             "exclude_agent_labels": ["excluded-writer"],
         })
         state = handlers._KnowledgeSearchState(request=request, graph=_pg_graph(seeded_db))
-        with patch.object(handlers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
+        with patch.object(search_helpers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
             await handlers._run_text_search(state)
         assert [d.id for d in state.results] == [NEW_WEAK.id]
         assert NEW_WEAK.id in state.fts_anchor_ids

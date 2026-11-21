@@ -19,6 +19,10 @@
 #   UNITARES_WATCHER_SWEEP_ROOTS  colon-separated roots to walk
 #                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
+#   UNITARES_WATCHER_SWEEP_MAX_TRIES
+#                                 scans of one version of a file that may fail
+#                                 to complete before the sweep stops retrying
+#                                 it (default: 3)
 #   UNITARES_WATCHER_SWEEP_MAX_WINDOW_H
 #                                 oldest edit the sweep will go back for, in
 #                                 hours (default: 48). See "Window" below.
@@ -62,6 +66,8 @@ if [[ -z "$ROOTS" ]]; then
     exit 2
 fi
 MAX_FILES="${UNITARES_WATCHER_SWEEP_MAX:-40}"
+MAX_TRIES="${UNITARES_WATCHER_SWEEP_MAX_TRIES:-3}"
+case "$MAX_TRIES" in ''|*[!0-9]*|0) MAX_TRIES=3 ;; esac
 MAX_WINDOW_H="${UNITARES_WATCHER_SWEEP_MAX_WINDOW_H:-48}"
 case "$MAX_WINDOW_H" in ''|*[!0-9]*) MAX_WINDOW_H=48 ;; esac
 SWEEP_REVIEW="${UNITARES_WATCHER_SWEEP_REVIEW:-0}"
@@ -199,20 +205,25 @@ if [[ "$TOTAL" -eq 0 ]]; then
 fi
 
 # One scan of one file (or region). `--file PATH` first, so the concurrency
-# count above sees the pattern scan and the review scan alike.
+# count above sees the pattern scan and the review scan alike. The status is
+# the scan's: non-zero when a region was not scanned (`--exit-incomplete`) or
+# the process died.
 scan_one() {
     local target="$1"
     shift
     if [[ "$SWEEP_REVIEW" == "1" ]]; then
-        "$PY" "${WATCHER_AGENT}" --file "$target" --all "$@" >/dev/null 2>&1
+        "$PY" "${WATCHER_AGENT}" --file "$target" --exit-incomplete --all "$@" >/dev/null 2>&1
     else
-        "$PY" "${WATCHER_AGENT}" --file "$target" "$@" >/dev/null 2>&1
+        "$PY" "${WATCHER_AGENT}" --file "$target" --exit-incomplete "$@" >/dev/null 2>&1
     fi
 }
 
 SCANNED=0
 SKIPPED_HOOK=0
 SKIPPED_DONE=0
+INCOMPLETE=0
+RETRY_PENDING=0
+GAVE_UP=0
 mkdir -p "$DONE_DIR"
 while IFS= read -r FILE_PATH; do
     [[ -z "$FILE_PATH" ]] && continue
@@ -227,6 +238,7 @@ while IFS= read -r FILE_PATH; do
     FILE_HASH=$(printf '%s' "$FILE_PATH" | shasum -a 256 | cut -c1-16)
     LOCK_FILE="${LOCK_DIR}/${FILE_HASH}.lock"
     DONE_FILE="${DONE_DIR}/${FILE_HASH}"
+    TRIES_FILE="${DONE_FILE}.tries"
     # `-nt`, not `stat -f %m`: that form is BSD-only, and on GNU stat it
     # prints filesystem text that the numeric comparison then aborts on.
     if [[ -f "$LOCK_FILE" && ! "$FILE_PATH" -nt "$LOCK_FILE" ]]; then
@@ -254,30 +266,73 @@ while IFS= read -r FILE_PATH; do
     touch "$LOCK_FILE"
     touch "$DONE_FILE"
 
+    # Failed attempts recorded for an older version of the file do not count
+    # against this one.
+    if [[ -f "$TRIES_FILE" && "$FILE_PATH" -nt "$TRIES_FILE" ]]; then
+        rm -f "$TRIES_FILE"
+    fi
+
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
     REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
+    SCAN_OK=1
     if [[ -z "$REGIONS" ]]; then
-        scan_one "$FILE_PATH"
+        scan_one "$FILE_PATH" || SCAN_OK=0
     else
         while IFS= read -r REGION; do
             [[ -z "$REGION" ]] && continue
-            scan_one "$FILE_PATH" --region "$REGION"
+            scan_one "$FILE_PATH" --region "$REGION" || SCAN_OK=0
         done <<< "$REGIONS"
     fi
     SCANNED=$(( SCANNED + 1 ))
+
+    # A scan that did not run is not a scan. Until this check the marker
+    # stayed whatever happened, so a file the model was too busy for was
+    # skipped for the rest of the window and then fell out of it. Both claims
+    # are withdrawn so the next sweep tries again, up to MAX_TRIES per version
+    # of the file. Past that the marker stays: a file whose scan always fails
+    # must not take a slot in every sweep.
+    if [[ "$SCAN_OK" -eq 1 ]]; then
+        rm -f "$TRIES_FILE"
+    else
+        INCOMPLETE=$(( INCOMPLETE + 1 ))
+        printf 'x\n' >> "$TRIES_FILE"
+        # Date the count at the pre-scan stamp, not at this write: an edit that
+        # landed while the scan was running is then newer than the count and
+        # starts its own.
+        touch -r "$DONE_FILE" "$TRIES_FILE"
+        TRIES=$(grep -c . "$TRIES_FILE" 2>/dev/null || true)
+        if [[ "${TRIES:-0}" -lt "$MAX_TRIES" ]]; then
+            rm -f "$DONE_FILE" "$LOCK_FILE"
+            RETRY_PENDING=$(( RETRY_PENDING + 1 ))
+        else
+            GAVE_UP=$(( GAVE_UP + 1 ))
+            log "gave up on ${FILE_PATH} after ${TRIES} scans that did not complete; it waits for its next edit"
+        fi
+    fi
 done <<< "$CANDIDATES"
 
 # Advance the watermark only after a completed pass. If the cap truncated the
 # work, hold the old watermark so the remainder is picked up next sweep; the
 # markers in DONE_DIR are what make that sweep start where this one stopped.
 # They describe the held window only, so they go when the watermark moves.
+#
+# A file waiting for a retry holds the watermark as well; advancing would
+# leave it older than the window. The hold is bounded by MAX_TRIES.
+if [[ "$INCOMPLETE" -gt 0 ]]; then
+    INCOMPLETE_NOTE=", ${INCOMPLETE} scans did not complete (${RETRY_PENDING} to retry, ${GAVE_UP} given up)"
+else
+    INCOMPLETE_NOTE=""
+fi
 if [[ "$SCANNED" -ge "$MAX_FILES" ]]; then
     rm -f "$PENDING_STATE"
-    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
+    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped${INCOMPLETE_NOTE}"
+elif [[ "$RETRY_PENDING" -gt 0 ]]; then
+    rm -f "$PENDING_STATE"
+    log "${TOTAL} changed, scanned ${SCANNED} (watermark held for ${RETRY_PENDING} to retry), ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped${INCOMPLETE_NOTE}"
 else
     mv -f "$PENDING_STATE" "$STATE_FILE"
     rm -rf "$DONE_DIR"
-    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped"
+    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${SKIPPED_DONE} already scanned in this window, ${UNEDITED} unedited checkout files skipped${INCOMPLETE_NOTE}"
 fi
 
 exit 0

@@ -54,6 +54,9 @@ class _Request:
     async def json(self):
         return self._body
 
+    async def stream(self):
+        yield json.dumps(self._body).encode()
+
 
 class _Context:
     def __init__(self, value):

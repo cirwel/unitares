@@ -6,6 +6,9 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
     * `:off` — explicit compatibility posture; no identity proof is inspected.
     * `:log` — verify when a proof is present and log failures, but allow.
+      The default when `UNITARES_LEASE_IDENTITY_BINDING` is unset, so an
+      unconfigured plane still records unproven mutations instead of
+      inspecting nothing.
     * `:enforce` — every lease mutation requires a governance-verified proof
       bound to the UUID that owns (or will own) the lease.
 
@@ -130,8 +133,8 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     do: {:error, :identity_proof_invalid}
 
   @spec parse_mode(String.t() | nil) :: :off | :log | :enforce
-  def parse_mode(nil), do: :off
-  def parse_mode(""), do: :off
+  def parse_mode(nil), do: :log
+  def parse_mode(""), do: :log
 
   def parse_mode(value) when is_binary(value) do
     case String.downcase(String.trim(value)) do
@@ -237,7 +240,46 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
-  defp mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :off)
+  @doc "The configured binding mode; `:log` when unset."
+  @spec mode() :: :off | :log | :enforce
+  def mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :log)
+
+  @doc "The surface kinds under binding: `:all`, or the configured kinds sorted."
+  @spec bound_surface_kinds() :: :all | [String.t()] | String.t()
+  def bound_surface_kinds do
+    case Application.get_env(:lease_plane, :identity_bound_surface_kinds, :all) do
+      :all -> :all
+      %MapSet{} = kinds -> kinds |> MapSet.to_list() |> Enum.sort()
+      kinds when is_list(kinds) -> Enum.sort(kinds)
+      # Not a set `required_for_surface?/1` understands: it binds nothing.
+      other -> inspect(other)
+    end
+  end
+
+  @doc """
+  Operator-facing description of a posture weaker than enforcement on every
+  surface kind, or `nil` when every lease mutation must carry a verified proof.
+  Logged at boot and reported on `/v1/health`; it changes no decision.
+  """
+  @spec posture_warning() :: String.t() | nil
+  def posture_warning do
+    case {mode(), bound_surface_kinds()} do
+      {:enforce, :all} ->
+        nil
+
+      {:enforce, kinds} when is_list(kinds) ->
+        "lease identity binding enforces only surface kinds [#{Enum.join(kinds, ",")}]; " <>
+          "mutations on every other kind are accepted without a verified identity proof"
+
+      {:enforce, other} ->
+        "lease identity binding has an unrecognised surface-kind set (#{other}); " <>
+          "no surface kind is enforced"
+
+      {mode, _kinds} ->
+        "lease identity binding mode is #{mode}: lease mutations are accepted " <>
+          "without a verified identity proof"
+    end
+  end
 
   defp effective_mode(surface_kind) do
     if required_for_surface?(surface_kind), do: mode(), else: :off
