@@ -1135,7 +1135,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                        IdentityBinding.request_context(conn),
                        expected_issuer: recipient_issuer,
                        require_attestation: distinct_recipient_subject?,
-                       allow_multiple_issuers: true
+                       allow_multiple_issuers: is_binary(recipient_issuer)
                      ) do
                   {:ok, nil} when distinct_recipient_subject? ->
                     {:error, :identity_proof_invalid}
@@ -1645,6 +1645,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       not (is_binary(to_holder_agent_uuid) and byte_size(to_holder_agent_uuid) > 0) ->
         {:error, "to_holder_agent_uuid required"}
+
+      is_nil(to_holder_issuer) and not IdentityBinding.single_or_no_trusted_issuer?() ->
+        {:error, "to_holder_issuer required when multiple trusted issuers are configured"}
 
       not is_nil(to_holder_issuer) and not valid_principal_component?(to_holder_issuer) ->
         {:error, "to_holder_issuer must be a non-empty string up to 256 bytes without whitespace"}

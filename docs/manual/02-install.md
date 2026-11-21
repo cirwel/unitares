@@ -160,7 +160,10 @@ handing ownership over through identity-checked mutations, and releasing it.
 The local proof uses one operator and a deployment-specific audience. Lease
 rows (`/v1/lease/*`) persist verified `(holder_issuer, holder_subject)`
 principals and `UNITARES_LEASE_TRUSTED_ISSUERS` supports up to 32 trusted
-issuers for lease acquire, lifecycle mutations, and handoff. Non-lease routes
+issuers for lease acquire, lifecycle mutations, and handoff. When
+`UNITARES_LEASE_TRUSTED_ISSUERS` configures more than one issuer,
+`POST /v1/lease/handoff/offer` requires `to_holder_issuer` to identify the
+recipient's issuer (single-issuer installs keep it optional). Non-lease routes
 (`/v1/msg/*` and `/v1/dialectic/*`) still permit at most one trusted issuer for
 `lat.v1.` attestations (returning `503 identity_verification_unavailable` when
 more than one trusted issuer is configured) until their tables also persist

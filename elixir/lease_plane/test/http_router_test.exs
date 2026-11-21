@@ -2323,7 +2323,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                })
     end
 
-    test "pre-084 issuerless rows fail closed on mutation under multi-issuer config while unpinned handoff accepts persist recipient principal",
+    test "pre-084 issuerless rows and unpinned handoffs fail closed under multi-issuer config while single-issuer stays compatible",
          ctx do
       holder = random_uuid()
       recipient = random_uuid()
@@ -2357,7 +2357,41 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert multi_renew_b.status == 503
       assert parsed(multi_renew_b)["reason"] == "identity_verification_unavailable"
 
-      # With 1 trusted issuer configured, mutating the same issuerless row succeeds
+      # With 2 trusted issuers configured, /v1/lease/handoff/offer omitting to_holder_issuer
+      # returns 422 schema_invalid before touching auth/nonces
+      missing_issuer_offer =
+        post_json_without_proof("/v1/lease/handoff/offer", %{
+          lease_id: legacy_lease.lease_id,
+          to_holder_agent_uuid: recipient,
+          ttl_s: 45
+        })
+
+      assert missing_issuer_offer.status == 422
+      assert parsed(missing_issuer_offer)["error"] == "schema_invalid"
+
+      assert parsed(missing_issuer_offer)["detail"] ==
+               "to_holder_issuer required when multiple trusted issuers are configured"
+
+      # Defense-in-depth: an unpinned offer created directly via HandoffServer.offer/3
+      # fails closed (503) on /v1/lease/handoff/accept under 2 trusted issuers
+      assert {:ok, direct_handoff_id} =
+               UnitaresLeasePlane.HandoffServer.offer(legacy_lease.lease_id, recipient, 45)
+
+      multi_unpinned_accept =
+        post_attested(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: direct_handoff_id},
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          recipient,
+          ctx.now
+        )
+
+      assert multi_unpinned_accept.status == 503
+      assert parsed(multi_unpinned_accept)["reason"] == "identity_verification_unavailable"
+
+      # With 1 trusted issuer configured, mutating the same issuerless row and unpinned handoff succeed
       Application.put_env(:lease_plane, :trusted_identity_issuers, %{
         "operator-a" => "https://operator-a.example/keys"
       })
@@ -2375,7 +2409,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert single_renew_a.status == 200
 
-      # Create an unpinned (no to_holder_issuer) subject-only handoff offer
+      # Create an unpinned (no to_holder_issuer) subject-only handoff offer under single-issuer config
       offer =
         post_attested(
           "/v1/lease/handoff/offer",
@@ -2394,12 +2428,6 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert offer.status == 200
       handoff_id = parsed(offer)["handoff_id"]
-
-      # Re-enable 2 trusted issuers:
-      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
-        "operator-a" => "https://operator-a.example/keys",
-        "operator-b" => "https://operator-b.example/keys"
-      })
 
       # Distinct to_holder_subject refuses unattested accept in :enforce/:hybrid (legacy proof), :log, and :off
       legacy_accept =
@@ -2428,22 +2456,22 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert off_unattested_accept.status == 403
       assert parsed(off_unattested_accept)["reason"] == "identity_proof_invalid"
 
-      # Under :enforce with 2 trusted issuers, unpinned / subject-only handoff accept succeeds
+      # Under :enforce with 1 trusted issuer, unpinned / subject-only handoff accept succeeds
       # and persists the accepting recipient's verified (issuer, subject) on the new lease row
       Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
 
-      multi_accept =
+      single_accept =
         post_attested(
           "/v1/lease/handoff/accept",
           %{handoff_id: handoff_id},
-          "operator-b",
-          "kid-b",
-          ctx.priv_b,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
           recipient_subject,
           ctx.now
         )
 
-      assert multi_accept.status == 200
+      assert single_accept.status == 200
 
       status =
         :get
@@ -2453,7 +2481,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       new_lease = parsed(status)["lease"]
       assert new_lease["holder_agent_uuid"] == recipient
-      assert new_lease["holder_issuer"] == "operator-b"
+      assert new_lease["holder_issuer"] == "operator-a"
       assert new_lease["holder_subject"] == recipient_subject
     end
 
