@@ -41,6 +41,7 @@ additions merge cleanly. -->
 | `UNITARES_ACTOR_WORK_TOOL_STATS` | `'1'` | Return True when behavioral tool stats read clean actor DB work tools | src/behavioral_sensor.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
+| `UNITARES_ALLOW_NO_CONTINUITY_SECRET` | `None (no reader fallback)` | Whether the operator chose to run without a continuity key | src/continuity_secret.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
@@ -113,6 +114,7 @@ additions merge cleanly. -->
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
+| `UNITARES_EXTERNAL_TRUSTED_GITHUB_APPS` | `''` | Comma-separated APP_ID:BOT_ACTOR_ID or BOT_ACTOR_ID allowlist for external PR authors. | src/http_routes/external_events.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_APPLY` | `''` | Whether a baselined absolute-floor breach forces at least "caution" (UNITARES_FLOOR_BREACH_CAUTION_APPLY) | src/behavioral_assessment.py |
@@ -190,7 +192,7 @@ additions merge cleanly. -->
 | `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
-| `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
+| `UNITARES_OPERATOR_TOKEN` | varies: `None (no reader fallback)` (agents/github_observer/observer.py); `''` (agents/watcher/agent.py) | read by main() | agents/github_observer/observer.py, agents/watcher/agent.py |
 | `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
 | `UNITARES_ORCHESTRATOR_PROFILES` | `''` | Whether spawns go out as the orchestrator's launch profiles | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |
@@ -249,5 +251,6 @@ additions merge cleanly. -->
 | `UNITARES_TRUSTED_NETWORKS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/trusted_networks.py) | Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS) | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/trusted_networks.py |
 | `UNITARES_TRUSTED_SUBSTRATE_MARKERS` | `''` | Substrate markers the operator adds to the built-in set (UNITARES_TRUSTED_SUBSTRATE_MARKERS) | src/outcome_corroboration.py |
 | `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
+| `UNITARES_URL` | `None (no reader fallback)` | read by main() | agents/github_observer/observer.py |
 | `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
 | `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |

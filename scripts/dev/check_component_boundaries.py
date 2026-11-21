@@ -143,6 +143,7 @@ TABLE_OWNERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("elixir/lease_plane/lib/unitares_lease_plane/dialectic_saga.ex",),
     ),
     "audit.events": (COMPONENTS["audit"], ()),
+    "audit.external_event_fingerprints": (COMPONENTS["audit"], ()),
     "audit.outcome_events": (COMPONENTS["outcomes"], ()),
     "audit.outcome_prediction_bindings": (COMPONENTS["outcomes"], ()),
     "audit.outcome_calibration_deliveries": (COMPONENTS["outcomes"], ()),

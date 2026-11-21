@@ -10,7 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.mcp_handlers.knowledge import handlers  # noqa: E402
+from src.mcp_handlers.knowledge import handlers, search_helpers  # noqa: E402
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope  # noqa: E402
 from src.storage.knowledge_graph_age import KnowledgeGraphAGE  # noqa: E402
 
@@ -26,7 +26,7 @@ def evaluate(path):
     sizes, pages = [], []
     # No storage reads or model calls. Frozen write-time attribution is kept;
     # a missing historical label uses this deterministic display fallback.
-    with patch.object(handlers, "_resolve_agent_display", return_value={"display_name": "writer"}):
+    with patch.object(search_helpers, "_resolve_agent_display", return_value={"display_name": "writer"}):
         for raw in snapshot["documents"]:
             if raw.get("status") in {"archived", "cold"}:
                 continue

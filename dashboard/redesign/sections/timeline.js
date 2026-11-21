@@ -61,6 +61,18 @@
     unknown: { mark: "Declared lineage", row: "declared lineage from", name: "declared, kind not registered" },
   };
 
+  function externalTitle(e) {
+    const pr = e.pr != null ? `PR #${e.pr}` : "PR";
+    const t = e.event_type || "";
+    if (t === "github.pr_opened") return `${pr} opened`;
+    if (t === "github.pr_merged") return `${pr} merged`;
+    if (t === "github.pr_closed") return `${pr} closed`;
+    if (t === "github.pr_reopened") return `${pr} reopened`;
+    if (t === "github.ci_result") return `CI · ${e.workflow || e.app || "check"} · ${e.conclusion || "completed"}`;
+    if (t === "github.review_record") return `Review · ${e.reviewer || e.key || "gate"} · ${e.verdict || "recorded"}`;
+    return `GitHub · ${t || "event"}`;
+  }
+
   const KIND_TITLE = {
     checkin: (e) => e.authored_by === "agent" ? `Check-in · ${e.action || "unknown"}` : "Hook observation",
     outcome: (e) => `Outcome · ${e.is_bad ? "failed" : "passed"}`,
@@ -68,6 +80,7 @@
     lineage: (e) => RELATION_TEXT[e.relation || "unknown"].mark,
     lifecycle: (e) => String(e.event_type || "lifecycle").replace(/^lifecycle_/, "").replace(/_/g, " "),
     dialectic: () => "Dialectic review",
+    external: externalTitle,
     pause: () => "Paused",
   };
   const title = (e) => (KIND_TITLE[e.kind] || (() => e.kind))(e);
@@ -95,7 +108,7 @@
     // that adds or drops other events.
     BY_KEY = {};
     const keep = (e) => {
-      const key = [e.kind, e.agent_id, e.ts, e.event_id || e.outcome_id || e.session_id || e.authored_by || ""].join("|");
+      const key = [e.kind, e.agent_id, e.ts, e.event_id || e.fingerprint || e.outcome_id || e.session_id || e.authored_by || ""].join("|");
       BY_KEY[key] = e;
       return key;
     };
@@ -242,6 +255,30 @@
         rows[0] = ["Agent", name(e.parent_agent_id)];
       } else if (e.kind === "lifecycle") {
         rows.push(["Event", String(e.event_type || "—").replace(/_/g, " ")], ["Reason", e.reason || "—"]);
+      } else if (e.kind === "external") {
+        rows.push(
+          ["Event", e.event_type || "—"],
+          ["Repository", e.repo || "—"],
+          ["PR", e.pr != null ? `#${e.pr}` : "—"]
+        );
+        if (e.event_type === "github.ci_result") {
+          rows.push(["Workflow", e.workflow || e.app || "—"], ["Conclusion", e.conclusion || "—"]);
+          if (Array.isArray(e.failed_jobs) && e.failed_jobs.length) {
+            rows.push(["Failed jobs", e.failed_jobs.join(", ")]);
+          }
+        } else if (e.event_type === "github.review_record") {
+          rows.push(
+            ["Reviewer", e.reviewer || "—"],
+            ["Key", e.key || "—"],
+            ["Verdict", e.verdict || "—"],
+            ["Findings", e.findings != null ? String(e.findings) : "—"],
+            ["Disposed", e.disposed === true ? "yes" : e.disposed === false ? "no" : "—"]
+          );
+        }
+        const head = e.head_sha || e.head_sha_at_observation || e.merge_commit_sha;
+        if (head) rows.push(["Head SHA", head]);
+        if (e.fingerprint) rows.push(["Fingerprint", e.fingerprint]);
+        if (e.producer) rows.push(["Producer", e.producer]);
       }
     }
     return `<div class="panel-head" style="margin-bottom:var(--space-3)"><h2>${esc(title(e))}</h2></div>
@@ -274,6 +311,7 @@
         <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
         <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage (subagent or successor)</span>
         <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
+        <span><span class="tl-mk external"><span class="tl-dot"></span></span>github event</span>
         <span><span class="tl-band pause"></span>paused</span>
         <span><span class="tl-band dialectic"></span>dialectic review</span>
       </div>
@@ -357,7 +395,7 @@
   // shows (knowledge_read, identity_*, dashboard_*). Frames that can change
   // the view queue at most one refetch per LIVE_MIN_MS; everything is reported
   // handled so the shell's doorbell never refetches on top.
-  const RELEVANT = /^(?:eisv_update$|lifecycle_|knowledge_write$|dialectic_)/;
+  const RELEVANT = /^(?:eisv_update$|lifecycle_|knowledge_write$|dialectic_|github\.)/;
   const LIVE_MIN_MS = 15000;
   let lastLive = 0;
   let liveTimer = null;

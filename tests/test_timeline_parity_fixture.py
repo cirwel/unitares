@@ -37,6 +37,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from src.broadcaster import verdict_of
+from src.http_routes.external_events import EXTERNAL_GITHUB_EVENT_TYPES
 from src.http_routes.telemetry import _LIFECYCLE_EVENT_TYPES
 from src.http_routes.timeline import _SUMMARY_CHARS, http_timeline
 
@@ -158,6 +159,14 @@ def test_frame_cases_follow_the_server_rules(client, case):
     elif frame_type == "knowledge_write":
         assert result == "mark"
         assert case["mark"]["summary"] == _served_summary(client, frame["summary"])
+    elif frame_type in EXTERNAL_GITHUB_EVENT_TYPES:
+        assert result == "mark"
+        mark = case["mark"]
+        assert mark["kind"] == "external"
+        assert mark["event_type"] == frame_type
+        assert mark["fingerprint"] == frame.get("fingerprint")
+        assert mark["repo"] == frame.get("repo")
+        assert mark["pr"] == frame.get("pr")
     else:
         assert result == "drop"
 
@@ -172,3 +181,12 @@ def test_every_history_lifecycle_type_has_a_frame_case():
         c["frame"]["type"] for c in FRAMES["cases"] if c["result"] == "mark_and_doorbell"
     }
     assert mapped == set(_LIFECYCLE_EVENT_TYPES)
+
+
+def test_every_external_event_type_has_a_frame_case():
+    mapped = {
+        c["frame"]["type"]
+        for c in FRAMES["cases"]
+        if c["result"] == "mark" and c.get("mark", {}).get("kind") == "external"
+    }
+    assert mapped == set(EXTERNAL_GITHUB_EVENT_TYPES)

@@ -88,6 +88,115 @@ class AuditMixin:
                 )
                 return False
 
+    async def record_external_event(
+        self,
+        *,
+        fingerprint: str,
+        event_type: str,
+        agent_id: str,
+        ts: datetime,
+        producer: str,
+        payload: Dict[str, Any],
+    ) -> tuple[bool, Optional[str], datetime]:
+        """Atomically claim `fingerprint` and persist an external `audit.events` row.
+
+        Returns `(inserted, event_id, stored_ts)`. Duplicate fingerprints return
+        `(False, None, ts_utc)` without modifying `audit.events`. If a partition
+        for `ts_utc` is missing, creates that monthly partition (or falls back
+        to `now` and marks ``timestamp_adjusted``/``original_observed_at`` in the
+        stored payload) inside the same outer transaction so a failed insert
+        never burns the fingerprint.
+        """
+        import asyncpg
+
+        now = datetime.now(timezone.utc)
+        ts_utc = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+        event_ts = ts_utc
+
+        event_id = uuid.uuid4()
+
+        def _encoded_payload(is_adjusted: bool) -> str:
+            row_payload = dict(payload)
+            if is_adjusted:
+                row_payload["timestamp_adjusted"] = True
+                row_payload["original_observed_at"] = ts_utc.isoformat()
+            return json.dumps(row_payload)
+
+        async def _insert_audit_row(conn, row_ts: datetime, row_payload_json: str) -> None:
+            await conn.execute(
+                """
+                INSERT INTO audit.events (ts, event_id, agent_id, session_id, event_type, confidence, payload, raw_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                row_ts,
+                event_id,
+                agent_id,
+                None,
+                event_type,
+                1.0,
+                row_payload_json,
+                None,
+            )
+
+        async with self.acquire() as conn:
+            async with conn.transaction():
+                claimed = await conn.fetchval(
+                    """
+                    INSERT INTO audit.external_event_fingerprints
+                        (fingerprint, event_type, agent_id, event_id, event_ts, producer)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (fingerprint) DO NOTHING
+                    RETURNING fingerprint
+                    """,
+                    fingerprint,
+                    event_type,
+                    agent_id,
+                    event_id,
+                    event_ts,
+                    producer,
+                )
+                if claimed is None:
+                    return False, None, event_ts
+
+                payload_json = _encoded_payload(False)
+                try:
+                    async with conn.transaction():
+                        await _insert_audit_row(conn, event_ts, payload_json)
+                except asyncpg.exceptions.CheckViolationError:
+                    created = False
+                    try:
+                        async with conn.transaction():
+                            await conn.fetchval(
+                                "SELECT audit.create_events_partition($1, $2)",
+                                event_ts.year,
+                                event_ts.month,
+                            )
+                            created = True
+                    except Exception:
+                        created = False
+
+                    if created:
+                        try:
+                            async with conn.transaction():
+                                await _insert_audit_row(conn, event_ts, payload_json)
+                        except asyncpg.exceptions.CheckViolationError:
+                            created = False
+
+                    if not created:
+                        event_ts = now
+                        await conn.execute(
+                            """
+                            UPDATE audit.external_event_fingerprints
+                            SET event_ts = $1
+                            WHERE fingerprint = $2
+                            """,
+                            event_ts,
+                            fingerprint,
+                        )
+                        await _insert_audit_row(conn, event_ts, _encoded_payload(True))
+
+        return True, str(event_id), event_ts
+
     async def append_audit_event(self, event: AuditEvent) -> bool:
         async with self.acquire() as conn:
             try:

@@ -415,20 +415,31 @@ async def main():
             file=sys.stderr, flush=True,
         )
 
-    from src.continuity_secret import ensure_generated_secret
+    from src.continuity_secret import hold_for_server, no_secret_allowed
     from src.insecure_defaults import (
         published_default_refusal,
         running_in_container,
         startup_warnings,
     )
 
+    # Judged before bootstrap, like the refusals below. Without a key, session
+    # ids fall back to a form anyone who knows a UUID can compute.
     try:
-        ensure_generated_secret()
+        hold_for_server()
     except OSError as exc:
+        if not no_secret_allowed():
+            print(
+                f"[FastMCP] ERROR: Refusing to start: no usable continuity token secret ({exc}). "
+                "Set UNITARES_CONTINUITY_TOKEN_SECRET or make the secret file writable "
+                "and private to the server's user. "
+                "UNITARES_ALLOW_NO_CONTINUITY_SECRET=1 runs without one.",
+                file=sys.stderr, flush=True,
+            )
+            raise SystemExit(1)
         print(
-            f"[FastMCP] WARNING: could not create the continuity token secret ({exc}). "
-            "Continuity tokens and effect grants are disabled until "
-            "UNITARES_CONTINUITY_TOKEN_SECRET is set or the file can be written.",
+            f"[FastMCP] WARNING: running without a continuity token secret ({exc}), as "
+            "UNITARES_ALLOW_NO_CONTINUITY_SECRET allows. Continuity tokens and effect "
+            "grants are disabled, and session ids are derivable from agent UUIDs.",
             file=sys.stderr, flush=True,
         )
 

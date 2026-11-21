@@ -604,6 +604,7 @@ defmodule PortalWeb.TimelineLive do
         <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
         <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage</span>
         <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
+        <span><span class="tl-mk external"><span class="tl-dot"></span></span>github event</span>
         <span>
           <span class="tl-mk group alert"><span class="tl-dot">3</span></span>events close together, coloured by the most notable
         </span>

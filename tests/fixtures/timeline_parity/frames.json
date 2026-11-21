@@ -298,6 +298,208 @@
         "timestamp": "2026-10-24T04:16:18.847670+00:00"
       },
       "result": "drop"
+    },
+    {
+      "name": "github.pr_opened maps to external",
+      "frame": {
+        "type": "github.pr_opened",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:00:00+00:00",
+        "fingerprint": "100#42:opened",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:00:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T12:00:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.pr_opened",
+        "fingerprint": "100#42:opened",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:00:00Z"
+      }
+    },
+    {
+      "name": "github.pr_merged maps to external",
+      "frame": {
+        "type": "github.pr_merged",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T13:00:00+00:00",
+        "fingerprint": "100#42:state:99",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "merge_commit_sha": "def5678",
+        "observed_at": "2026-11-19T13:00:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T13:00:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.pr_merged",
+        "fingerprint": "100#42:state:99",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "merge_commit_sha": "def5678",
+        "observed_at": "2026-11-19T13:00:00Z"
+      }
+    },
+    {
+      "name": "github.pr_closed maps to external",
+      "frame": {
+        "type": "github.pr_closed",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:30:00+00:00",
+        "fingerprint": "100#42:state:97",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:30:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T12:30:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.pr_closed",
+        "fingerprint": "100#42:state:97",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:30:00Z"
+      }
+    },
+    {
+      "name": "github.pr_reopened maps to external",
+      "frame": {
+        "type": "github.pr_reopened",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:45:00+00:00",
+        "fingerprint": "100#42:state:98",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:45:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T12:45:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.pr_reopened",
+        "fingerprint": "100#42:state:98",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha_at_observation": "abc1234",
+        "observed_at": "2026-11-19T12:45:00Z"
+      }
+    },
+    {
+      "name": "github.ci_result maps to external",
+      "frame": {
+        "type": "github.ci_result",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:15:00+00:00",
+        "fingerprint": "100#42:ci:700:1",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha": "abc1234",
+        "source": "actions",
+        "workflow": "CI",
+        "run_id": 700,
+        "attempt": 1,
+        "conclusion": "failure",
+        "failed_jobs": ["test"],
+        "observed_at": "2026-11-19T12:15:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T12:15:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.ci_result",
+        "fingerprint": "100#42:ci:700:1",
+        "repo": "example/repo",
+        "pr": 42,
+        "head_sha": "abc1234",
+        "source": "actions",
+        "workflow": "CI",
+        "run_id": 700,
+        "attempt": 1,
+        "conclusion": "failure",
+        "failed_jobs": ["test"],
+        "observed_at": "2026-11-19T12:15:00Z"
+      }
+    },
+    {
+      "name": "github.review_record maps to external",
+      "frame": {
+        "type": "github.review_record",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:20:00+00:00",
+        "fingerprint": "100#42:review:555",
+        "repo": "example/repo",
+        "pr": 42,
+        "key": "codex",
+        "verdict": "FINDINGS",
+        "findings": 2,
+        "disposed": false,
+        "reviewer": "codex:gpt-5",
+        "head_sha": "abc1234",
+        "raw": true,
+        "comment_id": 555,
+        "observed_at": "2026-11-19T12:20:00Z"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "external",
+        "ts": "2026-11-19T12:20:00+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "github.review_record",
+        "fingerprint": "100#42:review:555",
+        "repo": "example/repo",
+        "pr": 42,
+        "key": "codex",
+        "verdict": "FINDINGS",
+        "findings": 2,
+        "disposed": false,
+        "reviewer": "codex:gpt-5",
+        "head_sha": "abc1234",
+        "raw": true,
+        "comment_id": 555,
+        "observed_at": "2026-11-19T12:20:00Z"
+      }
+    },
+    {
+      "name": "github.unknown_event dropped",
+      "frame": {
+        "type": "github.unknown_event",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-11-19T12:25:00+00:00"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "github.ci_result without agent_id dropped",
+      "frame": {
+        "type": "github.ci_result",
+        "timestamp": "2026-11-19T12:25:00+00:00",
+        "fingerprint": "100#42:ci:701:1"
+      },
+      "result": "drop"
     }
   ]
 }

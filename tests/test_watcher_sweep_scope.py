@@ -133,7 +133,7 @@ def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path, relative_roo
 
     assert result.returncode == 0, result.stderr
     scans = [c for c in calls.read_text().splitlines() if c.startswith(f"{agent} --file ")]
-    assert scans == [f"{agent} --file {root / 'edited.py'}"], scans
+    assert scans == [f"{agent} --file {root / 'edited.py'} --exit-incomplete"], scans
     assert "1 unedited checkout files skipped" in log.read_text()
 
 
@@ -169,6 +169,10 @@ def _scan_calls(calls, agent):
     return [c for c in calls.read_text().splitlines() if c.startswith(f"{agent} --file ")]
 
 
+def _scanned_paths(calls, agent):
+    return [c.split(" --file ")[1].split(" --exit-incomplete")[0] for c in _scan_calls(calls, agent)]
+
+
 def test_sweep_runs_the_pattern_scan_only_by_default(tmp_path):
     """Review findings come from no rule and nothing calibrates them, so an
     unattended sweep does not produce them unless asked to."""
@@ -178,7 +182,7 @@ def test_sweep_runs_the_pattern_scan_only_by_default(tmp_path):
     result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
-    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'}"]
+    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'} --exit-incomplete"]
 
 
 def test_sweep_runs_the_review_scan_when_opted_in(tmp_path):
@@ -189,7 +193,7 @@ def test_sweep_runs_the_review_scan_when_opted_in(tmp_path):
     result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
-    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'} --all"]
+    assert _scan_calls(calls, agent) == [f"{agent} --file {root / 'a.py'} --exit-incomplete --all"]
 
 
 def test_many_candidates_do_not_stall_the_sweep(tmp_path):
@@ -264,7 +268,7 @@ def test_a_capped_sweep_resumes_where_the_last_one_stopped(tmp_path):
     assert state.stat().st_mtime == watermark, "watermark held while the cap is hit"
     sweep()
 
-    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    scanned = _scanned_paths(calls, agent)
     assert sorted(scanned) == sorted(str(root / n) for n in ("a.py", "b.py", "c.py", "d.py", "e.py")), scanned
     assert state.stat().st_mtime > watermark, "a pass that finishes under the cap advances it"
     assert not (state.parent / "watcher-sweep.done").exists()
@@ -280,7 +284,7 @@ def test_a_file_edited_after_its_scan_is_scanned_again_in_the_same_window(tmp_pa
     subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
     first = _scan_calls(calls, agent)
     assert len(first) == 1
-    scanned_first = Path(first[0].split(" --file ")[1])
+    scanned_first = Path(_scanned_paths(calls, agent)[0])
     time.sleep(1.1)  # past the marker's mtime at one-second resolution
     scanned_first.write_text("a = 2\n")
     for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
@@ -289,7 +293,7 @@ def test_a_file_edited_after_its_scan_is_scanned_again_in_the_same_window(tmp_pa
     subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
     subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=True)
 
-    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    scanned = _scanned_paths(calls, agent)
     assert scanned.count(str(scanned_first)) == 2, scanned
 
 
@@ -347,7 +351,7 @@ def test_an_edit_made_while_its_scan_is_running_is_scanned_again(tmp_path):
     sweep()
     sweep()
 
-    scanned = [c.split(" --file ")[1] for c in _scan_calls(calls, agent)]
+    scanned = _scanned_paths(calls, agent)
     assert len(scanned) == 2 and scanned[0] == scanned[1], scanned
 
 
@@ -367,3 +371,146 @@ def test_a_fresh_hook_lock_still_skips_the_file(tmp_path):
     assert result.returncode == 0, result.stderr
     assert len(_scan_calls(calls, agent)) == 1
     assert "1 already covered by hook" in log.read_text()
+
+
+def _failing_scans(env, calls, agent, marker):
+    """Scans exit 75 (a region was not scanned) while ``marker`` exists."""
+    import sys
+
+    Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
+        f'  "{agent} --file "*) if [ -e "{marker}" ]; then exit 75; fi ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+
+
+def _sweep_and_expire_locks(env):
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    for lock in Path(env["UNITARES_WATCHER_LOCK_DIR"]).glob("*.lock"):
+        lock.unlink()
+
+
+def test_a_scan_that_did_not_run_is_retried_by_the_next_sweep(tmp_path):
+    """#3318: the marker was kept whatever the scan's outcome, so a file the
+    model was too busy for was skipped for the rest of the window, and once
+    the watermark advanced it was older than the window."""
+    env, calls, agent, log, root, state = _scanning_env(tmp_path)
+    busy = tmp_path / "busy"
+    busy.touch()
+    _failing_scans(env, calls, agent, busy)
+    (root / "a.py").write_text("a = 1\n")
+    watermark = state.stat().st_mtime
+
+    _sweep_and_expire_locks(env)
+
+    assert state.stat().st_mtime == watermark, "held: advancing would drop the file from the window"
+    assert "1 scans did not complete (1 to retry, 0 given up)" in log.read_text()
+
+    busy.unlink()
+    _sweep_and_expire_locks(env)
+
+    assert _scanned_paths(calls, agent) == [str(root / "a.py")] * 2
+    assert state.stat().st_mtime > watermark
+    assert not (state.parent / "watcher-sweep.done").exists()
+
+    _sweep_and_expire_locks(env)
+    assert len(_scan_calls(calls, agent)) == 2, "a scan that ran is not repeated"
+
+
+def test_a_failed_scan_does_not_leave_the_hook_lock_behind(tmp_path):
+    """The sweep's own lock would otherwise read as "the hook covered this"
+    on the next sweep and mark the file done without a scan."""
+    env, calls, agent, _log, root, _state = _scanning_env(tmp_path)
+    busy = tmp_path / "busy"
+    busy.touch()
+    _failing_scans(env, calls, agent, busy)
+    (root / "a.py").write_text("a = 1\n")
+
+    for _ in range(2):
+        result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    assert len(_scan_calls(calls, agent)) == 2
+
+
+def test_a_scan_that_never_completes_is_given_up_after_the_retry_bound(tmp_path):
+    """Unbounded retry is what #3317 removed: a file whose scan always fails
+    must not take a slot in every sweep, or hold the watermark for good."""
+    env, calls, agent, log, root, state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX_TRIES"] = "2"
+    busy = tmp_path / "busy"
+    busy.touch()
+    _failing_scans(env, calls, agent, busy)
+    (root / "a.py").write_text("a = 1\n")
+    watermark = state.stat().st_mtime
+
+    _sweep_and_expire_locks(env)
+    assert state.stat().st_mtime == watermark
+    _sweep_and_expire_locks(env)
+
+    assert state.stat().st_mtime > watermark, "giving up releases the watermark"
+    assert f"gave up on {root / 'a.py'} after 2 scans" in log.read_text()
+
+    _sweep_and_expire_locks(env)
+    assert len(_scan_calls(calls, agent)) == 2
+
+
+def test_an_edit_resets_the_retry_count(tmp_path):
+    env, calls, agent, log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX_TRIES"] = "2"
+    busy = tmp_path / "busy"
+    busy.touch()
+    _failing_scans(env, calls, agent, busy)
+    target = root / "a.py"
+    target.write_text("a = 1\n")
+
+    _sweep_and_expire_locks(env)
+    time.sleep(1.1)
+    target.write_text("a = 2\n")
+    _sweep_and_expire_locks(env)
+
+    assert "gave up" not in log.read_text(), "the second failure is the first for this version"
+    assert log.read_text().count("(1 to retry, 0 given up)") == 2
+
+
+def test_an_edit_during_a_failed_scan_starts_its_own_retry_count(tmp_path):
+    """Review finding on this change (codex, P2): the count was dated when the
+    failure was recorded, after the scan, so an edit made while the scan was
+    running looked older than the count and inherited its failures."""
+    import sys
+
+    env, calls, agent, log, root, _state = _scanning_env(tmp_path)
+    env["UNITARES_WATCHER_SWEEP_MAX_TRIES"] = "3"
+    target = root / "a.py"
+    target.write_text("a = 1\n")
+    # Every scan fails; the second one's target is edited while it runs.
+    Path(env["UNITARES_WATCHER_PYTHON"]).write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        f'  "-m agents.watcher.sweep_filter"*) exec "{sys.executable}" "$@" ;;\n'
+        f'  "{agent} --file "*)\n'
+        f'    if [ -e "{tmp_path}/second" ] && [ ! -e "{tmp_path}/edited" ]; then\n'
+        f'      sleep 1.2; echo "a = 2" > "$3"; : > "{tmp_path}/edited"; fi\n'
+        f'    : > "{tmp_path}/second"; exit 75 ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+
+    _sweep_and_expire_locks(env)
+    _sweep_and_expire_locks(env)
+    # Two failures so far, both of the old text. The third scan reads the new
+    # text and is its first failure, not the old version's third.
+    _sweep_and_expire_locks(env)
+    assert "gave up" not in log.read_text()
+    _sweep_and_expire_locks(env)
+    assert "gave up" not in log.read_text()
+    _sweep_and_expire_locks(env)
+
+    assert f"gave up on {target} after 3 scans" in log.read_text()
+    assert _scanned_paths(calls, agent) == [str(target)] * 5
