@@ -262,6 +262,30 @@ async def test_every_refusal_status_passes_through():
 
 
 @pytest.mark.asyncio
+async def test_a_harness_onboarding_decline_passes_through_the_start_session_alias():
+    """An adapter calls start_session. The decline must reach it with
+    ``refused`` and ``status`` at the top level and no onboarding envelope
+    telling it to save an identity it was not given."""
+    from src.identity.harness_onboarding import harness_onboarding_declined_payload
+    from src.mcp_handlers.response_base import success_response
+
+    raw = success_response(harness_onboarding_declined_payload("onboard"))
+    out = await apply_experience_envelope(
+        "onboard", {"force_new": True, "harness_request": True}, _ctx("start_session"), raw
+    )
+    d = json.loads(out[0].text)
+    assert d["refused"] is True
+    assert d["status"] == "harness_onboarding_declined"
+    assert d["tool"] == "start_session"
+    assert d["policy"] == "agent_only" and "hint" in d
+    for absent in ("next_action", "state_summary", "raw_governance", "agent_uuid", "uuid"):
+        assert absent not in d, absent
+
+    canonical = await apply_experience_envelope("onboard", {}, _ctx("onboard"), raw)
+    assert canonical is raw
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_success_is_still_enveloped():
     """The refusal guard must not swallow normal payloads: only the
     ``rollout_flag`` marker may divert, and nothing else writes it."""

@@ -126,6 +126,19 @@ def harness_onboarding_declined_payload(tool_name: str) -> dict[str, Any]:
     }
 
 
+def is_harness_onboarding_declined(payload: object) -> bool:
+    """True when ``payload`` is the decline built above.
+
+    The friendly-tool envelope reads it so a decline reaches the caller as
+    itself and is not rebuilt into an ordinary onboarding response.
+    """
+    return (
+        isinstance(payload, dict)
+        and payload.get("refused") is True
+        and payload.get("status") == HARNESS_ONBOARDING_DECLINED
+    )
+
+
 def normalize_spawned_under(
     value: Any, *, now: Optional[datetime] = None
 ) -> Optional[dict[str, Any]]:

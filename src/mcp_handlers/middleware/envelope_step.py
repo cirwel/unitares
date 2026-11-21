@@ -1891,6 +1891,13 @@ async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, 
         # computed before identity is proven, so there is nothing to lose.
         if identity_refusal_status(payload) is not None:
             return _refusal_with_friendly_tool(payload, invoked, result)
+        # The harness-onboarding decline is a refusal of the same kind: the
+        # caller must see `refused` and `status` at the top level, not an
+        # onboarding envelope telling it to save credentials it was not given.
+        from src.identity.harness_onboarding import is_harness_onboarding_declined
+
+        if is_harness_onboarding_declined(payload):
+            return _refusal_with_friendly_tool(payload, invoked, result)
 
         envelope = build_experience_envelope(
             invoked,
