@@ -25,17 +25,14 @@ async def _should_add_stuck_note(agent_id: str, meta, note_cooldown_minutes: flo
     """Check if we should add a stuck note (no existing open note + cooldown respected)."""
     try:
         from src.db import get_db
+        from src.db.mixins.knowledge_graph import has_open_discovery_with_tag
+
         db = get_db()
         if hasattr(db, '_pool') and db._pool:
             async with db.acquire() as conn:
-                existing_note = await conn.fetchval("""
-                    SELECT 1 FROM knowledge.discoveries
-                    WHERE agent_id = $1
-                    AND tags @> ARRAY['stuck-agent']
-                    AND status = 'open'
-                    LIMIT 1
-                """, agent_id)
-                if existing_note:
+                if await has_open_discovery_with_tag(
+                    conn, agent_id=agent_id, tag="stuck-agent"
+                ):
                     return False
     except Exception:
         pass
@@ -202,30 +199,45 @@ async def _load_agent_report_cadences() -> dict[str, dict[str, Any]]:
     signal and never blocks margin/pattern detection.
     """
     from src.db import get_db
+    from src.db.mixins.identity import fetch_agent_ids_by_identity_ids
+    from src.db.mixins.state import fetch_authored_report_cadences_by_identity
 
     async with get_db().acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT i.agent_id,
-                   count(*)::int AS report_count,
-                   min(s.recorded_at) AS first_report_at,
-                   max(s.recorded_at) AS last_report_at
-            FROM core.agent_state s
-            JOIN core.identities i ON i.identity_id = s.identity_id
-            WHERE s.synthetic = false
-              AND coalesce(s.epistemic_class,
-                           s.state_json->>'epistemic_class') = 'agent_report'
-            GROUP BY i.agent_id
-            """
-        )
-    return {
-        row["agent_id"]: {
-            "report_count": int(row["report_count"] or 0),
-            "first_report_at": row["first_report_at"],
-            "last_report_at": row["last_report_at"],
-        }
-        for row in rows
-    }
+        state_rows = await fetch_authored_report_cadences_by_identity(conn)
+        identity_ids = [
+            int(row["identity_id"])
+            for row in state_rows
+            if row.get("identity_id") is not None
+        ]
+        id_to_agent = await fetch_agent_ids_by_identity_ids(conn, identity_ids)
+
+    cadences: dict[str, dict[str, Any]] = {}
+    for row in state_rows:
+        identity_id = row.get("identity_id")
+        agent_id = id_to_agent.get(int(identity_id)) if identity_id is not None else None
+        if not agent_id:
+            continue
+        count = int(row["report_count"] or 0)
+        first_at = row["first_report_at"]
+        last_at = row["last_report_at"]
+        existing = cadences.get(agent_id)
+        if existing is None:
+            cadences[agent_id] = {
+                "report_count": count,
+                "first_report_at": first_at,
+                "last_report_at": last_at,
+            }
+        else:
+            existing["report_count"] += count
+            if first_at is not None and (
+                existing["first_report_at"] is None or first_at < existing["first_report_at"]
+            ):
+                existing["first_report_at"] = first_at
+            if last_at is not None and (
+                existing["last_report_at"] is None or last_at > existing["last_report_at"]
+            ):
+                existing["last_report_at"] = last_at
+    return cadences
 
 
 def _agent_age_minutes(meta, current_time) -> float | None:

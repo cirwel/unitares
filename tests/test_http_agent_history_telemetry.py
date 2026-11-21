@@ -27,9 +27,17 @@ class _Acquire:
 
 
 class _DB:
-    def __init__(self, rows):
+    def __init__(self, rows, *, identity_ids=(1,)):
+        self._rows = rows
+        self._identity_ids = list(identity_ids)
         self.conn = type("Conn", (), {})()
-        self.conn.fetch = AsyncMock(return_value=rows)
+
+        async def _fetch(sql, *args):
+            if "FROM core.identities" in sql:
+                return [{"identity_id": iid} for iid in self._identity_ids]
+            return self._rows
+
+        self.conn.fetch = AsyncMock(side_effect=_fetch)
 
     def acquire(self):
         return _Acquire(self.conn)
@@ -212,8 +220,9 @@ def test_history_envelope_modes_preserve_points(option, envelope_indexes):
             if "telemetry_envelope" in point] == envelope_indexes
     assert all("telemetry" in point for point in payload["points"])
     assert payload["telemetry_included"] is bool(envelope_indexes)
-    # One query serves both trajectory statistics and every envelope mode.
-    assert db.conn.fetch.await_count == 1
+    # One identity resolution query + one state query serves both trajectory
+    # statistics and every envelope mode.
+    assert db.conn.fetch.await_count == 2
 
 
 def test_latest_envelope_does_not_substitute_an_older_measurement():
@@ -249,6 +258,16 @@ def test_missing_history_has_no_invented_duration_cadence_or_slopes():
     assert context["slopes_per_hour"] == dict.fromkeys("EISV")
 
 
+def test_unknown_agent_skips_state_history_query():
+    db = _DB([_row()], identity_ids=())
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        payload = _client().get("/v1/agents/unknown-agent/history").json()
+    assert payload["points"] == []
+    assert payload["trajectory_context"]["status"] == "no_observations"
+    assert db.conn.fetch.await_count == 1
+
+
 async def _query_fixture_history(fixture_rows, mode="recent", limit=3):
     """Run the endpoint's actual SQL over inline data, in a read-only transaction.
 
@@ -272,13 +291,9 @@ async def _query_fixture_history(fixture_rows, mode="recent", limit=3):
             )
         assert response.status_code == 200
         sql, *arguments = db.conn.fetch.call_args.args
-        sql = sql.replace("core.identities", "fixture_identities").replace(
-            "core.agent_state", "fixture_states"
-        )
+        sql = sql.replace("core.agent_state", "fixture_states")
         fixture_ctes = """
-            WITH fixture_identities AS (
-                SELECT 1::bigint AS identity_id, 'agent-1'::text AS agent_id
-            ), fixture_states AS (
+            WITH fixture_states AS (
                 SELECT * FROM jsonb_to_recordset($4::jsonb) AS fixture(
                     state_id bigint, identity_id bigint, recorded_at timestamptz,
                     integrity real, entropy real, volatility real, coherence real,
@@ -439,3 +454,39 @@ async def test_statistics_preserve_missing_values_and_exclude_bootstrap_rows():
     assert context["transitions"]["unknown_maturity_observations"] == 1
     assert context["slope_observations"] == {"E": 2, "I": 3, "S": 3, "V": 3}
     assert payload["points"][0]["E"] is None
+
+
+def test_pause_divergence_endpoint_reads_via_audit_mixin():
+    from src.http_routes.telemetry import http_enforcement_divergence
+
+    last_ts = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    conn = type("Conn", (), {})()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"produced": 12, "gap_suppressed": 7, "delivered": 3},
+            {"last_delivered": last_ts},
+        ]
+    )
+    conn.fetch = AsyncMock(
+        return_value=[{"week": "11-16", "produced": 4, "delivered": 1}]
+    )
+
+    class _DivDB:
+        def acquire(self):
+            return _Acquire(conn)
+
+    app = Starlette(
+        routes=[Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"])]
+    )
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=_DivDB()):
+        resp = TestClient(app).get("/v1/enforcement/divergence?days=30")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["window_days"] == 30
+    assert body["produced_pauses"] == 12
+    assert body["gap_suppressed"] == 7
+    assert body["delivered_pauses"] == 3
+    assert body["last_delivered_at"] == last_ts.isoformat()
+    assert body["weekly"] == [{"week": "11-16", "produced": 4, "delivered": 1}]

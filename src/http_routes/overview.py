@@ -55,6 +55,9 @@ async def http_agent_history(request):
     )
     try:
         from src.db import get_db
+        from src.db.mixins.identity import resolve_identity_ids_for_agent_handle
+        from src.db.mixins.state import fetch_agent_history_rows
+
         db = get_db()
         async with db.acquire() as conn:
             # Identity resolution: check-in history is keyed by the agent's UUID
@@ -62,152 +65,13 @@ async def http_agent_history(request):
             # whose suffix is that UUID's prefix. Match exact id OR the UUID identity
             # whose prefix == the structured id's trailing 8 hex. The numbered CTE
             # carries the total so the panel can tell how much history exists.
-            rows = await conn.fetch(
-                """
-                WITH ids AS (
-                    SELECT identity_id FROM core.identities WHERE agent_id = $1
-                    UNION
-                    SELECT identity_id FROM core.identities
-                     WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
-                       AND agent_id ~ '^[0-9a-f]{8}-'
-                       AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
-                ),
-                numbered AS (
-                    SELECT s.state_id, s.recorded_at,
-                           (s.state_json->>'E')::real AS e,
-                           s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
-                           s.coherence, s.risk_score, s.state_json,
-                           coalesce(s.epistemic_class,
-                                    s.state_json->>'epistemic_class') AS epistemic_class,
-                           (jsonb_typeof(s.state_json->'eisv_telemetry') = 'object')
-                               AS telemetry_available,
-                           coalesce(s.state_json #>>
-                               '{eisv_telemetry,measurement,primary,source}',
-                               'unknown') AS primary_source,
-                           jsonb_build_array(
-                               s.state_json #>> '{eisv_telemetry,measurement,coherence,source}',
-                               s.state_json #>> '{eisv_telemetry,measurement,coherence,role}'
-                           ) AS coherence_producer,
-                           s.state_json->'eisv_instrument'->>'id' AS instrument_id,
-                           coalesce(s.state_json #>>
-                               '{eisv_telemetry,policy_evaluation,maturity_gate,measurement_phase}',
-                               s.state_json #>>
-                               '{eisv_telemetry,measurement,behavioral,warmup,phase}',
-                               'unknown') AS maturity_phase,
-                           row_number() OVER (ORDER BY s.recorded_at, s.state_id) AS rn,
-                           count(*) OVER () AS total,
-                           count(*) FILTER (
-                               WHERE coalesce(s.epistemic_class,
-                                              s.state_json->>'epistemic_class') = 'agent_report'
-                           ) OVER () AS agent_report_total,
-                           count(*) FILTER (
-                               WHERE coalesce(s.epistemic_class,
-                                              s.state_json->>'epistemic_class')
-                                     IN ('substrate_observation', 'substrate_interpretation')
-                           ) OVER () AS substrate_total,
-                           count(*) FILTER (
-                               WHERE jsonb_typeof(s.state_json->'eisv_telemetry') = 'object'
-                           ) OVER () AS telemetry_total
-                    FROM core.agent_state s
-                    WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
-                ),
-                requested AS (
-                    -- Select the requested observation window BEFORE sampling.
-                    -- For mode=all, chart decimation must not enlarge cadence
-                    -- gaps or remove observations from the regression.
-                    SELECT *, CASE WHEN primary_source = 'behavioral' THEN
-                        coalesce(state_json #>>
-                            '{eisv_telemetry,measurement,behavioral,observation_source}',
-                            state_json #>>
-                            '{eisv_telemetry,measurement,submitted_sensor,source}',
-                            primary_source)
-                        ELSE primary_source END AS measurement_source
-                    FROM numbered
-                    WHERE $3 = 'all' OR rn > total - $2
-                ),
-                timed AS (
-                    SELECT *,
-                        extract(epoch FROM (recorded_at - min(recorded_at) OVER ()))
-                            ::double precision / 3600.0 AS elapsed_hours,
-                        extract(epoch FROM (recorded_at - lag(recorded_at) OVER w))
-                            ::double precision AS gap_seconds,
-                        lag(primary_source) OVER w AS previous_primary_source,
-                        lag(measurement_source) OVER w AS previous_measurement_source,
-                        lag(coherence_producer) OVER w AS previous_coherence_producer,
-                        lag(instrument_id) OVER w AS previous_instrument_id,
-                        lag(maturity_phase) OVER w AS previous_maturity_phase
-                    FROM requested
-                    WINDOW w AS (ORDER BY rn)
-                ),
-                segmented AS (
-                    -- Count boundaries BEFORE decimation: an A -> B -> A
-                    -- excursion must still break the line if B is not plotted.
-                    -- IDs are local to this response, not instrument identities.
-                    SELECT *,
-                        sum(CASE WHEN primary_source IS DISTINCT FROM previous_primary_source
-                            OR measurement_source IS DISTINCT FROM previous_measurement_source
-                            OR instrument_id IS DISTINCT FROM previous_instrument_id
-                            THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS eisv_segment,
-                        sum(CASE WHEN coherence_producer IS DISTINCT FROM previous_coherence_producer
-                            OR instrument_id IS DISTINCT FROM previous_instrument_id
-                            THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS coherence_segment
-                    FROM timed
-                ),
-                trajectory AS (
-                    SELECT jsonb_build_object(
-                        'observations', count(*),
-                        'first_observed_at', min(recorded_at),
-                        'last_observed_at', max(recorded_at),
-                        'elapsed_seconds', CASE WHEN count(*) > 1 THEN
-                            extract(epoch FROM (max(recorded_at) - min(recorded_at)))
-                            ELSE NULL END,
-                        'cadence', jsonb_build_object(
-                            'gap_count', count(gap_seconds),
-                            'zero_gap_count', count(*) FILTER (WHERE gap_seconds = 0),
-                            'median_seconds', percentile_cont(0.5)
-                                WITHIN GROUP (ORDER BY gap_seconds),
-                            'p95_seconds', percentile_cont(0.95)
-                                WITHIN GROUP (ORDER BY gap_seconds),
-                            'max_seconds', max(gap_seconds)),
-                        'transitions', jsonb_build_object(
-                            'primary_source', count(*) FILTER (
-                                WHERE previous_primary_source IS NOT NULL
-                                AND primary_source <> previous_primary_source),
-                            'measurement_source', count(*) FILTER (
-                                WHERE previous_measurement_source IS NOT NULL
-                                AND measurement_source <> previous_measurement_source),
-                            'maturity_phase', count(*) FILTER (
-                                WHERE previous_maturity_phase IS NOT NULL
-                                AND maturity_phase <> previous_maturity_phase),
-                            'unknown_source_observations', count(*) FILTER (
-                                WHERE measurement_source = 'unknown'),
-                            'unknown_maturity_observations', count(*) FILTER (
-                                WHERE maturity_phase = 'unknown')),
-                        'slopes_per_hour', jsonb_build_object(
-                            'E', regr_slope(e, elapsed_hours),
-                            'I', regr_slope(i, elapsed_hours),
-                            'S', regr_slope(s_entropy, elapsed_hours),
-                            'V', regr_slope(v, elapsed_hours)),
-                        'slope_observations', jsonb_build_object(
-                            'E', regr_count(e, elapsed_hours),
-                            'I', regr_count(i, elapsed_hours),
-                            'S', regr_count(s_entropy, elapsed_hours),
-                            'V', regr_count(v, elapsed_hours))
-                    ) AS trajectory_stats
-                    FROM timed
+            identity_ids = await resolve_identity_ids_for_agent_handle(conn, agent_id)
+            rows = (
+                await fetch_agent_history_rows(
+                    conn, identity_ids=identity_ids, limit=limit, mode=mode
                 )
-                SELECT segmented.recorded_at, e, i, s_entropy, v, coherence, risk_score,
-                       state_json, epistemic_class, telemetry_available, total,
-                       agent_report_total, substrate_total, telemetry_total,
-                       trajectory_stats, eisv_segment, coherence_segment
-                FROM segmented CROSS JOIN trajectory
-                WHERE CASE WHEN $3 = 'all'
-                           THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
-                           ELSE true
-                      END
-                ORDER BY rn
-                """,
-                agent_id, limit, mode,
+                if identity_ids
+                else []
             )
         total = rows[0]["total"] if rows else 0
         agent_report_total = rows[0]["agent_report_total"] if rows else 0
