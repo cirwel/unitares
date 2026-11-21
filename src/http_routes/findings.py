@@ -78,42 +78,65 @@ def _is_shared_static_bearer(
 def _authenticate_finding_request(
     request,
 ) -> tuple[Optional[JSONResponse], bool, Optional[str]]:
-    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``."""
+    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``.
+
+    Auth precedence aligns with ``src/http_routes/tools.py``:
+    - A valid per-agent ``findings``-scoped token (distinct from shared static
+      bearers and without ``X-Unitares-Operator`` / ``X-Agent-Id`` headers)
+      authenticates in both REST postures and on both trusted and untrusted
+      networks, stamping ``provenance_verified=True`` and
+      ``verified_actor_agent_uuid=<agent_uuid>``.
+    - Otherwise, standard ``access._check_http_auth(...)`` applies (trusted-
+      network bypass in local posture, shared static bearer, or dashboard
+      session) with ``provenance_verified=False`` and
+      ``verified_actor_agent_uuid=None`` so trusted-network callers carrying a
+      non-``findings`` token (e.g. a resident's ``checkin`` token) are not
+      broken while never receiving verified provenance.
+    - When ``access._check_http_auth(...)`` denies the request (untrusted IP or
+      ``UNITARES_REST_STRICT=1``), a recognized agent token that failed
+      ``findings_refusal(...)`` returns 403 ``AgentTokenScope``; everything
+      else returns 401.
+    """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     bearer = access._bearer_from_header(access._header_value(request, "authorization"))
 
+    agent_grant = None
+    agent_refusal = None
     if bearer and not _is_shared_static_bearer(bearer, http_api_token=http_api_token):
         agent_grant = http_agent_tokens.grant_for_bearer(bearer)
         if agent_grant is not None:
-            refusal = http_agent_tokens.findings_refusal(
+            agent_refusal = http_agent_tokens.findings_refusal(
                 operator_header=access._header_value(request, "x-unitares-operator") or None,
                 agent_id_header=access._header_value(request, "x-agent-id") or None,
                 scopes=agent_grant.scopes,
             )
-            if refusal:
-                return (
-                    JSONResponse(
-                        {
-                            "success": False,
-                            "error": refusal,
-                            "error_type": "AgentTokenScope",
-                        },
-                        status_code=403,
-                    ),
-                    False,
-                    None,
+            if agent_refusal is None:
+                logger.info(
+                    "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
+                    agent_grant.agent_uuid[:8],
+                    agent_grant.digest_prefix,
+                    "+".join(sorted(agent_grant.scopes)),
                 )
-            logger.info(
-                "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
-                agent_grant.agent_uuid[:8],
-                agent_grant.digest_prefix,
-                "+".join(sorted(agent_grant.scopes)),
-            )
-            return None, True, agent_grant.agent_uuid
+                return None, True, agent_grant.agent_uuid
 
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized(), False, None
-    return None, False, None
+    if access._check_http_auth(request, http_api_token=http_api_token):
+        return None, False, None
+
+    if agent_grant is not None and agent_refusal is not None:
+        return (
+            JSONResponse(
+                {
+                    "success": False,
+                    "error": agent_refusal,
+                    "error_type": "AgentTokenScope",
+                },
+                status_code=403,
+            ),
+            False,
+            None,
+        )
+
+    return access._http_unauthorized(), False, None
 
 
 def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:

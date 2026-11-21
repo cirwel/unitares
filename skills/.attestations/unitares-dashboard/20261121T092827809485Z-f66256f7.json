@@ -1,0 +1,41 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-11-21T09:28:27Z",
+  "verified_date": "2026-11-21",
+  "verifier": "gemini: re-checked skills/unitares-dashboard/SKILL.md against src/http_routes/telemetry.py audit-DB backfill provenance pass-through (dashboard endpoints/views unchanged)",
+  "source_digests": {
+    "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
+    "unitares/dashboard/package.json": "6ec22f988af49425",
+    "unitares/dashboard/redesign/app.html": "aaa47bf0c9727a5a",
+    "unitares/dashboard/redesign/data.js": "9881c91f045f94f1",
+    "unitares/dashboard/redesign/sections/connectors.js": "541c5fa3dba14b3d",
+    "unitares/dashboard/redesign/sections/discoveries.js": "2adb8b060e6d6744",
+    "unitares/dashboard/redesign/sections/eisv.js": "a7a678c31726f94f",
+    "unitares/dashboard/redesign/sections/knowledge-flow.js": "c8f60496ac6b245f",
+    "unitares/dashboard/redesign/sections/landing.js": "3248181369d783aa",
+    "unitares/dashboard/redesign/sections/risk.js": "21a582a7b27757fe",
+    "unitares/dashboard/redesign/sections/security.js": "770574b870eef481",
+    "unitares/dashboard/redesign/snapshot.js": "663fcf8dede3b3db",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "5cf2d3484b008032",
+    "unitares/dashboard/tests/app-extensions.test.js": "d8edb0bc93a917f1",
+    "unitares/dashboard/tests/connectors.test.js": "01d23eda2e684163",
+    "unitares/dashboard/tests/landing-agent-first.test.js": "0c4b061aed6f6550",
+    "unitares/dashboard/tests/risk-history.test.js": "29a3974763326e8b",
+    "unitares/src/dashboard_auth.py": "2fd0963dc806f921",
+    "unitares/src/governance_trend.py": "78c232e8c94332cc",
+    "unitares/src/http_api.py": "d447cec5463f73be",
+    "unitares/src/http_routes/connectors.py": "4397034d3c844dc7",
+    "unitares/src/http_routes/dashboard.py": "0c00830ee2f2a569",
+    "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
+    "unitares/src/http_routes/telemetry.py": "b96cc7b8c446fc62",
+    "unitares/src/oauth_connectors.py": "370658a9f3414d3b"
+  },
+  "skill_digest": "ed8c417af389aaf4",
+  "superseded_digests": {
+    "unitares/src/http_routes/telemetry.py": [
+      "162ce2acbd69262e"
+    ]
+  }
+}

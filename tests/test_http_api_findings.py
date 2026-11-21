@@ -15,10 +15,12 @@ from src.http_api import http_record_finding
 def clear_events():
     event_detector.clear_events()
     event_detector._recent_fingerprints.clear()
+    event_detector._change_tokens.clear()
     event_detector._event_counter = 0
     yield
     event_detector.clear_events()
     event_detector._recent_fingerprints.clear()
+    event_detector._change_tokens.clear()
     event_detector._event_counter = 0
 
 
@@ -414,16 +416,24 @@ def test_findings_scoped_agent_token_sets_verified_provenance(monkeypatch, mode)
     "scopes",
     [None, "checkin", "outcome", "knowledge_store", "checkin+outcome+knowledge_store"],
 )
-@pytest.mark.parametrize("ip", ["127.0.0.1", "203.0.113.9"])
-def test_non_findings_agent_tokens_are_refused_with_403(monkeypatch, scopes, ip):
+@pytest.mark.parametrize("mode", ["public", "strict_loopback"])
+def test_non_findings_agent_tokens_are_refused_with_403_on_untrusted_or_strict(
+    monkeypatch, scopes, mode
+):
     monkeypatch.setenv(
         "UNITARES_HTTP_AGENT_TOKENS",
         _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, scopes),
     )
+    if mode == "strict_loopback":
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "distinct-mcp-secret")
+        ip = "127.0.0.1"
+    else:
+        ip = "203.0.113.9"
     c = _client_for_ip(ip)
     r = c.post(
         "/api/findings",
-        json=_finding(f"prov-refused-{scopes}-{ip}"),
+        json=_finding(f"prov-refused-{scopes}-{mode}"),
         headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
     )
     assert r.status_code == 403
@@ -431,6 +441,31 @@ def test_non_findings_agent_tokens_are_refused_with_403(monkeypatch, scopes, ip)
     assert body["success"] is False
     assert body["error_type"] == "AgentTokenScope"
     assert event_detector.get_recent_events() == []
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5"])
+def test_trusted_network_resident_with_checkin_token_falls_back_unverified(
+    monkeypatch, ip
+):
+    """Trusted-network callers carrying a non-findings agent token stay unblocked but unverified."""
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "checkin"),
+    )
+    c = _client_for_ip(ip)
+    r = c.post(
+        "/api/findings",
+        json=_finding(
+            f"prov-trusted-checkin-{ip}",
+            provenance_verified=True,
+            verified_actor_agent_uuid=VIGIL_UUID,
+        ),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r.status_code == 200
+    ev = r.json()["event"]
+    assert ev["provenance_verified"] is False
+    assert ev["verified_actor_agent_uuid"] is None
 
 
 @pytest.mark.parametrize(
@@ -453,6 +488,82 @@ def test_findings_token_refuses_operator_and_x_agent_id_headers(monkeypatch, ext
     )
     assert r.status_code == 403
     assert r.json()["error_type"] == "AgentTokenScope"
+
+    # On trusted local network, forbidden headers still never yield verified provenance.
+    local_c = _client_for_ip("127.0.0.1")
+    r_local = local_c.post(
+        "/api/findings",
+        json=_finding(f"prov-hdr-local-{extra_header[0]}"),
+        headers={
+            "Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}",
+            extra_header[0]: extra_header[1],
+        },
+    )
+    assert r_local.status_code == 200
+    ev_local = r_local.json()["event"]
+    assert ev_local["provenance_verified"] is False
+    assert ev_local["verified_actor_agent_uuid"] is None
+
+
+@pytest.mark.parametrize("with_change_token", [False, True])
+def test_unverified_and_other_actor_posts_cannot_dedup_verified_actor(
+    monkeypatch, with_change_token
+):
+    """Unverified or different-actor posts must never shadow a verified actor's finding."""
+    other_findings_token = "e" * 64
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        ",".join(
+            [
+                _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+                _agent_token_entry(OTHER_UUID, other_findings_token, "findings"),
+            ]
+        ),
+    )
+    c = _client_for_ip("127.0.0.1")
+    fp = f"vigil-predictable-fp-{with_change_token}"
+    base_extra = {"type": "vigil_finding", "agent_id": "vigil", "agent_name": "Vigil"}
+    if with_change_token:
+        base_extra["change_token"] = "open:1000000.0"
+
+    # 1. Unverified caller posts first with the predictable Vigil fingerprint
+    r_unverified = c.post("/api/findings", json=_finding(fp, **base_extra))
+    assert r_unverified.status_code == 200
+    assert r_unverified.json()["deduped"] is False
+    assert r_unverified.json()["event"]["provenance_verified"] is False
+
+    # 2. Another verified actor posts with the same fingerprint
+    r_other = c.post(
+        "/api/findings",
+        json=_finding(fp, **base_extra),
+        headers={"Authorization": f"Bearer {other_findings_token}"},
+    )
+    assert r_other.status_code == 200
+    assert r_other.json()["deduped"] is False
+    assert r_other.json()["event"]["provenance_verified"] is True
+    assert r_other.json()["event"]["verified_actor_agent_uuid"] == OTHER_UUID
+
+    # 3. Vigil's real findings-scoped post is NOT deduped by either prior post
+    r_vigil = c.post(
+        "/api/findings",
+        json=_finding(fp, **base_extra),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r_vigil.status_code == 200
+    body_vigil = r_vigil.json()
+    assert body_vigil["deduped"] is False
+    assert body_vigil["event"]["provenance_verified"] is True
+    assert body_vigil["event"]["verified_actor_agent_uuid"] == VIGIL_UUID
+
+    # 4. A repeat post by Vigil itself IS still deduped cleanly
+    r_vigil_dup = c.post(
+        "/api/findings",
+        json=_finding(fp, **base_extra),
+        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+    )
+    assert r_vigil_dup.status_code == 200
+    assert r_vigil_dup.json()["deduped"] is True
+    assert r_vigil_dup.json()["event"] is None
 
 
 def test_unknown_bearer_on_public_or_strict_is_401(monkeypatch):
@@ -507,7 +618,7 @@ def test_malformed_agent_tokens_env_fails_closed(monkeypatch):
 
 
 def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypatch):
-    """Both GET /api/events and WS broadcast keep top-level provenance keys intact."""
+    """GET /api/events (ring + audit-DB backfill) and WS broadcast keep top-level provenance."""
     from src.broadcaster import broadcaster_instance
 
     monkeypatch.setenv(
@@ -516,25 +627,38 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     )
 
     ws_sent: list[dict] = []
+    persisted_rows: list[dict] = []
 
     async def _capture_ws(data: dict):
         ws_sent.append(dict(data))
 
+    async def _capture_persist(audit_event: dict):
+        persisted_rows.append(
+            {
+                "event_id": f"db-{len(persisted_rows) + 1}",
+                "event_type": audit_event["event_type"],
+                "agent_id": audit_event["agent_id"],
+                "timestamp": audit_event["timestamp"],
+                "details": audit_event["details"],
+            }
+        )
+
     monkeypatch.setattr(broadcaster_instance, "_send_to_clients", _capture_ws)
 
     c = _client_for_ip("127.0.0.1")
-    r = c.post(
-        "/api/findings",
-        json=_finding(
-            "prov-e2e-stream",
-            type="vigil_finding",
-            agent_id="vigil",
-            agent_name="Vigil",
-            provenance_verified=False,
-            verified_actor_agent_uuid=OTHER_UUID,
-        ),
-        headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
-    )
+    with patch("src.audit_db.append_audit_event_async", new=_capture_persist):
+        r = c.post(
+            "/api/findings",
+            json=_finding(
+                "prov-e2e-stream",
+                type="vigil_finding",
+                agent_id="vigil",
+                agent_name="Vigil",
+                provenance_verified=False,
+                verified_actor_agent_uuid=OTHER_UUID,
+            ),
+            headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+        )
     assert r.status_code == 200
 
     # 1. WebSocket payload preserves top-level provenance keys
@@ -543,7 +667,7 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert ws_sent[0]["provenance_verified"] is True
     assert ws_sent[0]["verified_actor_agent_uuid"] == VIGIL_UUID
 
-    # 2. REST /api/events preserves top-level provenance keys
+    # 2. REST /api/events (in-memory ring) preserves top-level provenance keys
     with patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=[])):
         r_events = c.get("/api/events?since=0&limit=10")
     assert r_events.status_code == 200
@@ -552,3 +676,34 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert type(events[0]["provenance_verified"]) is bool
     assert events[0]["provenance_verified"] is True
     assert events[0]["verified_actor_agent_uuid"] == VIGIL_UUID
+
+    # 3. REST /api/events (audit-DB backfill after restart) preserves top-level
+    #    provenance keys from the persisted row and coerces non-bool values fail-closed.
+    assert len(persisted_rows) == 1
+    db_rows = [
+        persisted_rows[0],
+        {
+            "event_id": "db-spoofed-nonbool",
+            "event_type": "vigil_finding",
+            "agent_id": "vigil",
+            "timestamp": "2026-11-21T01:59:00+00:00",
+            "details": {
+                "type": "vigil_finding",
+                "severity": "warning",
+                "message": "spoofed",
+                "agent_name": "Vigil",
+                "provenance_verified": "true",
+                "verified_actor_agent_uuid": 12345,
+            },
+        },
+    ]
+    event_detector.clear_events()
+    with patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=db_rows)):
+        r_db = c.get("/api/events?limit=10")
+    assert r_db.status_code == 200
+    by_id = {e["event_id"]: e for e in r_db.json()["events"]}
+    assert type(by_id["db-1"]["provenance_verified"]) is bool
+    assert by_id["db-1"]["provenance_verified"] is True
+    assert by_id["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert by_id["db-spoofed-nonbool"]["provenance_verified"] is False
+    assert by_id["db-spoofed-nonbool"]["verified_actor_agent_uuid"] is None

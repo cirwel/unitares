@@ -347,7 +347,9 @@ async def http_events(request):
                             continue
                     # Reshape audit row → dashboard event shape
                     payload = de.get("details", {})
-                    events.append({
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    row = {
                         "type": payload.get("type", de.get("event_type", "")),
                         "severity": payload.get("severity", "info"),
                         "message": payload.get("message", de.get("event_type", "")),
@@ -355,7 +357,17 @@ async def http_events(request):
                         "agent_name": payload.get("agent_name", ""),
                         "timestamp": de.get("timestamp"),
                         "event_id": de_id,
-                    })
+                    }
+                    if "provenance_verified" in payload:
+                        row["provenance_verified"] = (
+                            payload["provenance_verified"] is True
+                        )
+                    if "verified_actor_agent_uuid" in payload:
+                        raw_actor = payload["verified_actor_agent_uuid"]
+                        row["verified_actor_agent_uuid"] = (
+                            raw_actor if isinstance(raw_actor, str) else None
+                        )
+                    events.append(row)
                 events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
                 events = events[:limit]
             except Exception as db_err:

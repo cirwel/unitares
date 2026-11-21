@@ -176,18 +176,22 @@ class GovernanceEventDetector:
         # Monotonically increasing event ID counter
         self._event_counter: int = 0
         # Fingerprint-based dedup for externally recorded findings.
-        # Key: fingerprint string. Value: datetime of last emit.
-        self._recent_fingerprints: Dict[str, datetime] = {}
+        # Key: (verified_actor_agent_uuid | None, fingerprint). Partitioning by
+        # provenance trust tier and verified actor ensures an unverified caller
+        # (or another agent) cannot shadow a subsequent server-verified finding
+        # for the same predictable fingerprint. Value: datetime of last emit.
+        self._recent_fingerprints: Dict[Tuple[Optional[str], str], datetime] = {}
         self._dedup_window_seconds: int = 1800  # 30 minutes
         # Change-token dedup for *persisting* conditions (emit-on-change).
-        # Key: fingerprint string. Value: last-emitted change token.
+        # Key: (verified_actor_agent_uuid | None, fingerprint). Value: last-emitted
+        # change token.
         # Unlike the time window above, this suppression does NOT lapse with
         # elapsed time — only when the underlying data changes. This is the
         # correct dedup for a frozen condition: an idle agent's one-time
         # historical risk_spike must not re-fire every sweep once the 30-min
         # window elapses, or it re-fires as fresh noise forever. Bounded
         # by (#agents x #condition types) ever seen; capped below.
-        self._change_tokens: Dict[str, str] = {}
+        self._change_tokens: Dict[Tuple[Optional[str], str], str] = {}
         self._max_change_tokens: int = 5000
 
     def seed_known_agents(self, agents: list[tuple[str, str]]) -> int:
@@ -388,6 +392,23 @@ class GovernanceEventDetector:
 
         return events
 
+    @staticmethod
+    def _dedup_key(
+        event: Dict[str, Any], fingerprint: str
+    ) -> Tuple[Optional[str], str]:
+        """Partition dedup state by provenance trust tier and verified actor UUID.
+
+        Unverified events share the ``None`` tier, while ``provenance_verified=True``
+        events key on their canonical verified actor UUID so an unverified or
+        different-actor post with a predictable fingerprint can never suppress a
+        verified actor's finding.
+        """
+        if event.get("provenance_verified") is True:
+            actor = event.get("verified_actor_agent_uuid")
+            if isinstance(actor, str) and actor.strip():
+                return (actor.strip().lower(), fingerprint)
+        return (None, fingerprint)
+
     def record_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Append an externally-sourced event (e.g. a finding) to the ring buffer.
@@ -404,27 +425,32 @@ class GovernanceEventDetector:
         once the 30-minute window lapses. A token-bearing event emits exactly
         once per distinct underlying condition, however many sweeps observe it.
 
+        Dedup keys are partitioned by server-verified provenance tier and
+        ``verified_actor_agent_uuid`` so an unverified post (or another actor's
+        post) cannot shadow a subsequent ``provenance_verified=True`` finding.
+
         Stamps ``event_id`` and ``timestamp`` in-place and returns the stored dict.
         """
         fingerprint = event.get("fingerprint")
         if not fingerprint or not isinstance(fingerprint, str):
             return None
 
+        dedup_key = self._dedup_key(event, fingerprint)
         now = datetime.now(timezone.utc)
         change_token = event.get("change_token")
         if change_token is not None:
             # Emit-on-change path: time-independent suppression of an unchanged
             # persisting condition. Keyed purely on whether the data moved.
-            if self._change_tokens.get(fingerprint) == change_token:
+            if self._change_tokens.get(dedup_key) == change_token:
                 return None
-            self._change_tokens[fingerprint] = change_token
+            self._change_tokens[dedup_key] = change_token
             if len(self._change_tokens) > self._max_change_tokens:
                 # Drop ~10% oldest by insertion order to bound memory.
                 drop = max(1, self._max_change_tokens // 10)
                 for stale_fp in list(self._change_tokens)[:drop]:
                     del self._change_tokens[stale_fp]
         else:
-            last_seen = self._recent_fingerprints.get(fingerprint)
+            last_seen = self._recent_fingerprints.get(dedup_key)
             if last_seen is not None:
                 age_seconds = (now - last_seen).total_seconds()
                 if age_seconds < self._dedup_window_seconds:
@@ -435,7 +461,7 @@ class GovernanceEventDetector:
             self._recent_fingerprints = {
                 fp: ts for fp, ts in self._recent_fingerprints.items() if ts > cutoff
             }
-            self._recent_fingerprints[fingerprint] = now
+            self._recent_fingerprints[dedup_key] = now
 
         if "timestamp" not in event:
             event["timestamp"] = now.isoformat()
