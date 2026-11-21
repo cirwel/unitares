@@ -160,6 +160,7 @@ additions merge cleanly. -->
 | `UNITARES_LEASE_IDENTITY_BINDING` | `None (no reader fallback)` | Whether identity is enforced for the BEAM-routed dialectic controls. | src/mcp_handlers/dialectic/beam_resolve_client.py |
 | `UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS` | `None (no reader fallback)` | Whether identity is enforced for the BEAM-routed dialectic controls. | src/mcp_handlers/dialectic/beam_resolve_client.py |
 | `UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS` | `''` | Resolve a governance URL without sending credentials over remote HTTP. | agents/sdk/src/unitares_sdk/lease_plane/client.py |
+| `UNITARES_LEASE_PLANE_UNIX_SOCKET` | `''` | Build a lease-plane client lazily | agents/sdk/src/unitares_sdk/_substrate.py, agents/sdk/src/unitares_sdk/lease_plane/advisory.py, agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LEGACY_SESSION_IDS` | `'refuse'` | How presented legacy agent-{uuid12} ids are treated: refuse, log or accept. | src/mcp_handlers/identity/stable_session.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |

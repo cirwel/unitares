@@ -1,0 +1,1 @@
+- **background tasks:** removed the dead `identity_cache_warmup()` startup task from `src/background_maintenance_tasks.py` and `src/background_tasks.py` (#3323). `transport_binding_cache_warmup()` already warms `transport_binding:*` entries at boot without re-enabling weak `sticky:<ip_ua>` bindings from `session:*` keys.
