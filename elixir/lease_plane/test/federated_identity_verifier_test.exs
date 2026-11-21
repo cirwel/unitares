@@ -45,6 +45,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
     end)
 
     Application.put_env(:lease_plane, :identity_clock, fn -> vector["now"] end)
+
     Application.put_env(
       :lease_plane,
       :identity_attestation_audience,
@@ -156,7 +157,9 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
              )
   end
 
-  test "runtime configuration also refuses multiple trusted issuers", %{vector: vector} do
+  test "runtime configuration still refuses multiple trusted issuers on verify/3", %{
+    vector: vector
+  } do
     Application.put_env(:lease_plane, :trusted_identity_issuers, %{
       vector["issuer"] => "https://operator-a.example/keys",
       "operator-b" => "https://operator-b.example/keys"
@@ -167,6 +170,127 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
                vector["holder_agent_uuid"],
                vector["token"],
                request_context(vector)
+             )
+  end
+
+  test "verify_principal/4 supports multiple trusted issuers and returns verified principal", %{
+    vector: vector
+  } do
+    {pub_b, priv_b} = :crypto.generate_key(:eddsa, :ed25519)
+    kid_b = "kid-b-1"
+    jwk_a = hd(vector["jwks"]["keys"])
+    pub_a = Base.url_decode64!(jwk_a["x"], padding: false)
+    kid_a = jwk_a["kid"]
+    context = request_context(vector)
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+      vector["issuer"] => "https://operator-a.example/keys",
+      "operator-b" => "https://operator-b.example/keys"
+    })
+
+    Application.put_env(:lease_plane, :operator_key_fetcher, fn issuer, kid, _url ->
+      cond do
+        issuer == vector["issuer"] and kid == kid_a -> {:ok, pub_a}
+        issuer == "operator-b" and kid == kid_b -> {:ok, pub_b}
+        true -> {:error, :invalid}
+      end
+    end)
+
+    OperatorKeyCache.evict_issuer(vector["issuer"])
+    OperatorKeyCache.evict_issuer("operator-b")
+
+    assert {:ok, %{issuer: issuer_a, subject: subject_a}} =
+             FederatedIdentityVerifier.verify_principal(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               context,
+               allow_multiple_issuers: true
+             )
+
+    assert issuer_a == vector["issuer"]
+    assert subject_a == vector["holder_agent_uuid"]
+
+    token_b =
+      sign_attestation(
+        "operator-b",
+        kid_b,
+        priv_b,
+        vector["holder_agent_uuid"],
+        vector["jwks"]["audience"],
+        context,
+        vector["now"]
+      )
+
+    assert {:ok, %{issuer: "operator-b", subject: subject_b}} =
+             FederatedIdentityVerifier.verify_principal(
+               vector["holder_agent_uuid"],
+               token_b,
+               context,
+               allow_multiple_issuers: true
+             )
+
+    assert subject_b == vector["holder_agent_uuid"]
+  end
+
+  test "verify_principal/4 rejects expected_issuer mismatch before fetching keys or consuming nonce",
+       %{vector: vector} do
+    {:ok, fetch_count} = Agent.start_link(fn -> 0 end)
+    {:ok, consume_count} = Agent.start_link(fn -> 0 end)
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+      vector["issuer"] => "https://operator-a.example/keys",
+      "operator-b" => "https://operator-b.example/keys"
+    })
+
+    Application.put_env(:lease_plane, :operator_key_fetcher, fn _, _, _ ->
+      Agent.update(fetch_count, &(&1 + 1))
+      {:error, :should_not_be_called}
+    end)
+
+    Application.put_env(:lease_plane, :identity_nonce_consumer, fn _, _, _ ->
+      Agent.update(consume_count, &(&1 + 1))
+      :ok
+    end)
+
+    OperatorKeyCache.evict_issuer(vector["issuer"])
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.verify_principal(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector),
+               allow_multiple_issuers: true,
+               expected_issuer: "operator-b"
+             )
+
+    assert Agent.get(fetch_count, & &1) == 0
+    assert Agent.get(consume_count, & &1) == 0
+  end
+
+  test "verify_principal/4 refuses more than 32 trusted issuers and whitespace subjects", %{
+    vector: vector
+  } do
+    too_many =
+      for i <- 1..33, into: %{} do
+        {"issuer-#{i}", "https://issuer-#{i}.example/keys"}
+      end
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, too_many)
+
+    assert {:error, :too_many_trusted_identity_issuers} =
+             FederatedIdentityVerifier.verify_principal(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector),
+               allow_multiple_issuers: true
+             )
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.verify_principal(
+               "bad subject",
+               vector["token"],
+               request_context(vector),
+               allow_multiple_issuers: true
              )
   end
 
@@ -266,6 +390,30 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
              )
 
     assert Agent.get(fetch_count, & &1) == 1
+  end
+
+  defp sign_attestation(issuer, kid, private_key, subject, audience, context, now) do
+    claims = %{
+      "v" => 1,
+      "typ" => "lease-attestation",
+      "alg" => "EdDSA",
+      "iss" => issuer,
+      "kid" => kid,
+      "aud" => audience,
+      "sub" => subject,
+      "mth" => context.method,
+      "pth" => context.path,
+      "bsha" => context.body_sha256,
+      "iat" => now,
+      "nbf" => now,
+      "exp" => now + 30,
+      "jti" => Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+    }
+
+    payload_b64 = claims |> Jason.encode!() |> Base.url_encode64(padding: false)
+    signing_input = "lat.v1." <> payload_b64
+    sig = :crypto.sign(:eddsa, :none, signing_input, [private_key, :ed25519])
+    signing_input <> "." <> Base.url_encode64(sig, padding: false)
   end
 
   defp request_context(vector) do

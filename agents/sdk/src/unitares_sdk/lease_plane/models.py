@@ -63,6 +63,8 @@ class LeaseRecord(BaseModel):
     surface_id: str = Field(min_length=1)
     surface_kind: str = Field(min_length=1)
     holder_agent_uuid: UUID
+    holder_issuer: str | None = None
+    holder_subject: str | None = None
     holder_class: HolderClass
     holder_kind: HolderKind
     heartbeat_required: bool
@@ -97,6 +99,23 @@ class LeaseRecord(BaseModel):
             self.substrate_state_observed_at,
             where="LeaseRecord",
         )
+        return self
+
+    @model_validator(mode="after")
+    def _holder_principal_pair_coherent(self) -> "LeaseRecord":
+        if (self.holder_issuer is None) != (self.holder_subject is None):
+            raise ValueError(
+                "LeaseRecord: holder_issuer and holder_subject must be both set or both unset"
+            )
+        if self.holder_issuer is not None and self.holder_subject is not None:
+            for field_name, value in (
+                ("holder_issuer", self.holder_issuer),
+                ("holder_subject", self.holder_subject),
+            ):
+                if not (1 <= len(value) <= 256) or any(ch.isspace() for ch in value):
+                    raise ValueError(
+                        f"LeaseRecord: {field_name} must be 1..256 chars without whitespace"
+                    )
         return self
 
 

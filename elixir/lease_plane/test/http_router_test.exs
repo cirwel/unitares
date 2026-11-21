@@ -1837,4 +1837,419 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(resp)["ok"] == true
     end
   end
+
+  describe "persisted lease principals and multi-issuer attestation (#1983)" do
+    setup do
+      {pub_a, priv_a} = :crypto.generate_key(:eddsa, :ed25519)
+      {pub_b, priv_b} = :crypto.generate_key(:eddsa, :ed25519)
+      now = System.system_time(:second)
+
+      previous = %{
+        mode: Application.get_env(:lease_plane, :identity_binding_mode),
+        format: Application.get_env(:lease_plane, :identity_proof_format),
+        verifier: Application.get_env(:lease_plane, :identity_verifier),
+        trusted: Application.get_env(:lease_plane, :trusted_identity_issuers),
+        fetcher: Application.get_env(:lease_plane, :operator_key_fetcher),
+        consumer: Application.get_env(:lease_plane, :identity_nonce_consumer),
+        audience: Application.get_env(:lease_plane, :identity_attestation_audience),
+        clock: Application.get_env(:lease_plane, :identity_clock),
+        kinds: Application.get_env(:lease_plane, :identity_bound_surface_kinds)
+      }
+
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+      Application.put_env(:lease_plane, :identity_proof_format, :hybrid)
+      Application.delete_env(:lease_plane, :identity_verifier)
+      Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+      Application.put_env(:lease_plane, :identity_attestation_audience, "lease-plane-test")
+      Application.put_env(:lease_plane, :identity_clock, fn -> now end)
+      Application.put_env(:lease_plane, :identity_nonce_consumer, fn _, _, _ -> :ok end)
+
+      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+        "operator-a" => "https://operator-a.example/keys",
+        "operator-b" => "https://operator-b.example/keys"
+      })
+
+      Application.put_env(:lease_plane, :operator_key_fetcher, fn
+        "operator-a", "kid-a", _ -> {:ok, pub_a}
+        "operator-b", "kid-b", _ -> {:ok, pub_b}
+        _, _, _ -> {:error, :invalid}
+      end)
+
+      UnitaresLeasePlane.OperatorKeyCache.evict_issuer("operator-a")
+      UnitaresLeasePlane.OperatorKeyCache.evict_issuer("operator-b")
+
+      on_exit(fn ->
+        restore_app_env(:identity_binding_mode, previous.mode)
+        restore_app_env(:identity_proof_format, previous.format)
+        restore_app_env(:identity_verifier, previous.verifier)
+        restore_app_env(:trusted_identity_issuers, previous.trusted)
+        restore_app_env(:operator_key_fetcher, previous.fetcher)
+        restore_app_env(:identity_nonce_consumer, previous.consumer)
+        restore_app_env(:identity_attestation_audience, previous.audience)
+        restore_app_env(:identity_clock, previous.clock)
+        restore_app_env(:identity_bound_surface_kinds, previous.kinds)
+      end)
+
+      {:ok, priv_a: priv_a, priv_b: priv_b, now: now}
+    end
+
+    defp restore_app_env(key, nil), do: Application.delete_env(:lease_plane, key)
+    defp restore_app_env(key, value), do: Application.put_env(:lease_plane, key, value)
+
+    defp post_attested(path, body, issuer, kid, priv_key, subject, now) do
+      raw_body = Jason.encode!(body)
+      body_sha256 = :crypto.hash(:sha256, raw_body) |> Base.encode16(case: :lower)
+
+      claims = %{
+        "v" => 1,
+        "typ" => "lease-attestation",
+        "alg" => "EdDSA",
+        "iss" => issuer,
+        "kid" => kid,
+        "aud" => "lease-plane-test",
+        "sub" => subject,
+        "mth" => "POST",
+        "pth" => path,
+        "bsha" => body_sha256,
+        "iat" => now,
+        "nbf" => now,
+        "exp" => now + 30,
+        "jti" => Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+      }
+
+      payload_b64 = claims |> Jason.encode!() |> Base.url_encode64(padding: false)
+      signing_input = "lat.v1." <> payload_b64
+      sig = :crypto.sign(:eddsa, :none, signing_input, [priv_key, :ed25519])
+      token = signing_input <> "." <> Base.url_encode64(sig, padding: false)
+
+      :post
+      |> conn(path, raw_body)
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-unitares-identity-proof", token)
+      |> authed()
+      |> HTTPRouter.call(@opts)
+    end
+
+    test "persists (holder_issuer, holder_subject) with distinct holder_subject, rejects cross-issuer and legacy mutations, and conflicts on same UUID with different issuer",
+         ctx do
+      attempt_nonce = random_uuid()
+      durable_subject = "sentinel-resident-principal"
+
+      acq_body =
+        acquire_body(ctx.surface, holder_agent_uuid: attempt_nonce)
+        |> Map.put(:holder_subject, durable_subject)
+
+      # Acquire with operator-a attestation bound to durable_subject
+      acq =
+        post_attested(
+          "/v1/lease/acquire",
+          acq_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          durable_subject,
+          ctx.now
+        )
+
+      assert acq.status == 200
+      lease = parsed(acq)["lease"]
+      assert lease["holder_agent_uuid"] == attempt_nonce
+      assert lease["holder_issuer"] == "operator-a"
+      assert lease["holder_subject"] == durable_subject
+      lease_id = lease["lease_id"]
+
+      # Status returns persisted principal
+      status =
+        :get
+        |> conn("/v1/lease/status?surface_id=#{URI.encode_www_form(ctx.surface)}")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert status.status == 200
+      assert parsed(status)["lease"]["holder_issuer"] == "operator-a"
+      assert parsed(status)["lease"]["holder_subject"] == durable_subject
+
+      # Same holder_agent_uuid + same (issuer, subject) -> idempotent
+      idem =
+        post_attested(
+          "/v1/lease/acquire",
+          acq_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          durable_subject,
+          ctx.now
+        )
+
+      assert idem.status == 200
+      assert parsed(idem)["idempotent"] == true
+
+      # Same holder_agent_uuid + same subject from DIFFERENT issuer -> 409 held_by_other
+      conflict =
+        post_attested(
+          "/v1/lease/acquire",
+          acq_body,
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          durable_subject,
+          ctx.now
+        )
+
+      assert conflict.status == 409
+      assert parsed(conflict)["error"] == "held_by_other"
+
+      # Conflict event payload records both requested and held principals
+      %{rows: [[conflict_payload]]} =
+        Postgrex.query!(
+          UnitaresLeasePlane.DB,
+          "SELECT payload FROM lease_plane.lease_plane_events " <>
+            "WHERE surface_id = $1 AND event_type = 'conflict_held_by_other' " <>
+            "ORDER BY ts DESC LIMIT 1",
+          [ctx.surface]
+        )
+
+      assert conflict_payload["requested_holder_issuer"] == "operator-b"
+      assert conflict_payload["requested_holder_subject"] == durable_subject
+      assert conflict_payload["held_by_issuer"] == "operator-a"
+      assert conflict_payload["held_by_subject"] == durable_subject
+
+      # Renew refused for different issuer (operator-b) with same subject
+      cross_issuer_renew =
+        post_attested(
+          "/v1/lease/renew",
+          %{lease_id: lease_id},
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          durable_subject,
+          ctx.now
+        )
+
+      assert cross_issuer_renew.status == 403
+      assert parsed(cross_issuer_renew)["reason"] == "identity_proof_invalid"
+
+      # Renew refused for legacy proof even in :hybrid mode
+      legacy_renew =
+        post_json_with_proof("/v1/lease/renew", %{lease_id: lease_id}, "v1.legacy.token")
+
+      assert legacy_renew.status == 403
+      assert parsed(legacy_renew)["reason"] == "identity_proof_invalid"
+
+      # Renew refused if attested subject is attempt_nonce instead of holder_subject
+      wrong_subject_renew =
+        post_attested(
+          "/v1/lease/renew",
+          %{lease_id: lease_id},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          attempt_nonce,
+          ctx.now
+        )
+
+      assert wrong_subject_renew.status == 403
+
+      # Renew succeeds with matching (operator-a, durable_subject)
+      good_renew =
+        post_attested(
+          "/v1/lease/renew",
+          %{lease_id: lease_id},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          durable_subject,
+          ctx.now
+        )
+
+      assert good_renew.status == 200
+
+      # Release succeeds with matching (operator-a, durable_subject)
+      good_release =
+        post_attested(
+          "/v1/lease/release",
+          %{lease_id: lease_id, release_reason: "normal"},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          durable_subject,
+          ctx.now
+        )
+
+      assert good_release.status == 200
+    end
+
+    test "cross-issuer handoff pins to_holder_issuer and to_holder_subject and persists verified recipient principal",
+         ctx do
+      holder_a = random_uuid()
+      holder_b = random_uuid()
+      subject_a = "principal-a"
+      subject_b = "principal-b"
+
+      acq =
+        post_attested(
+          "/v1/lease/acquire",
+          acquire_body(ctx.surface, holder_agent_uuid: holder_a)
+          |> Map.put(:holder_subject, subject_a),
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          subject_a,
+          ctx.now
+        )
+
+      assert acq.status == 200
+      lease_id = parsed(acq)["lease"]["lease_id"]
+
+      offer_body = %{
+        lease_id: lease_id,
+        to_holder_agent_uuid: holder_b,
+        to_holder_issuer: "operator-b",
+        to_holder_subject: subject_b,
+        ttl_s: 45
+      }
+
+      # Offer requires current holder (operator-a, subject_a)
+      bad_offer =
+        post_attested(
+          "/v1/lease/handoff/offer",
+          offer_body,
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          subject_a,
+          ctx.now
+        )
+
+      assert bad_offer.status == 403
+
+      offer =
+        post_attested(
+          "/v1/lease/handoff/offer",
+          offer_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          subject_a,
+          ctx.now
+        )
+
+      assert offer.status == 200
+      handoff_id = parsed(offer)["handoff_id"]
+
+      # Accept refuses wrong issuer (operator-a) even with subject_b
+      wrong_issuer_accept =
+        post_attested(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          subject_b,
+          ctx.now
+        )
+
+      assert wrong_issuer_accept.status == 403
+
+      # Accept succeeds with recipient's (operator-b, subject_b)
+      accept =
+        post_attested(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          subject_b,
+          ctx.now
+        )
+
+      assert accept.status == 200
+
+      status =
+        :get
+        |> conn("/v1/lease/status?surface_id=#{URI.encode_www_form(ctx.surface)}")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      new_lease = parsed(status)["lease"]
+      assert new_lease["holder_agent_uuid"] == holder_b
+      assert new_lease["holder_issuer"] == "operator-b"
+      assert new_lease["holder_subject"] == subject_b
+
+      # Release of handed-off lease requires (operator-b, subject_b)
+      assert post_attested(
+               "/v1/lease/release",
+               %{lease_id: new_lease["lease_id"], release_reason: "normal"},
+               "operator-b",
+               "kid-b",
+               ctx.priv_b,
+               subject_b,
+               ctx.now
+             ).status == 200
+    end
+
+    test "log mode never persists unverified holder_subject from request body", ctx do
+      Application.put_env(:lease_plane, :identity_binding_mode, :log)
+
+      body =
+        acquire_body(ctx.surface)
+        |> Map.put(:holder_subject, "unverified-claimed-subject")
+
+      resp = post_json_without_proof("/v1/lease/acquire", body)
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      assert lease["holder_issuer"] == nil
+      assert lease["holder_subject"] == nil
+    end
+
+    test "invalid holder_subject and handoff principal fields return 422 schema_invalid", ctx do
+      bad_acquire =
+        post_json_without_proof(
+          "/v1/lease/acquire",
+          acquire_body(ctx.surface) |> Map.put(:holder_subject, "has space")
+        )
+
+      assert bad_acquire.status == 422
+      assert parsed(bad_acquire)["error"] == "schema_invalid"
+
+      bad_offer =
+        post_json_without_proof("/v1/lease/handoff/offer", %{
+          lease_id: random_uuid(),
+          to_holder_agent_uuid: random_uuid(),
+          to_holder_issuer: "bad issuer",
+          ttl_s: 30
+        })
+
+      assert bad_offer.status == 422
+      assert parsed(bad_offer)["error"] == "schema_invalid"
+    end
+
+    test "non-lease /v1/msg/send stays fail-closed when multiple trusted issuers are configured",
+         ctx do
+      sender = random_uuid()
+      recipient = random_uuid()
+
+      msg_body = %{
+        topic: "topic:/multi-issuer-fail-closed-#{System.unique_integer([:positive])}",
+        sender_agent_uuid: sender,
+        recipient_agent_uuid: recipient,
+        envelope: %{"kind" => "ping"},
+        ttl_s: 60
+      }
+
+      resp =
+        post_attested(
+          "/v1/msg/send",
+          msg_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          sender,
+          ctx.now
+        )
+
+      assert resp.status == 503
+      assert parsed(resp)["reason"] == "identity_verification_unavailable"
+    end
+  end
 end

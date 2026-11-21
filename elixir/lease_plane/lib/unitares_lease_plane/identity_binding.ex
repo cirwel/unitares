@@ -21,12 +21,14 @@ defmodule UnitaresLeasePlane.IdentityBinding do
   alias UnitaresLeasePlane.{IdentityMetrics, RawBodyReader}
 
   @proof_header "x-unitares-identity-proof"
+  @max_trusted_issuers 32
 
   @type refusal ::
           :identity_proof_invalid
           | :identity_proof_replayed
           | :identity_verification_unavailable
 
+  @type principal :: %{issuer: String.t(), subject: String.t()}
   @type request_context :: %{method: String.t(), path: String.t(), body_sha256: String.t()}
 
   @spec proof_header() :: String.t()
@@ -102,6 +104,69 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
   def authorize(_expected_holder_uuid, _proof, _surface_kind, _request_context),
     do: {:error, :identity_proof_invalid}
+
+  @doc """
+  Authorize a lease mutation and return the verified `(issuer, subject)`
+  principal when attested via `lat.v1.`, or `nil` for compatibility/legacy
+  paths.
+
+  Multi-issuer verification (`allow_multiple_issuers: true`, up to 32 trusted
+  issuers) is enabled ONLY on this lease-principal path because
+  `lease_plane.surface_leases` persists `(holder_issuer, holder_subject)`.
+  Non-lease callers (`authorize/4`, `authorize_strict/3`) remain fail-closed
+  with more than one trusted issuer.
+
+  When `expected_issuer` is non-nil (an already-attested lease row or a
+  principal-pinned handoff offer), a missing or non-attestation proof is
+  refused even in `:hybrid` mode. Unverified principals are never returned.
+  """
+  @spec authorize_lease_principal(
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          request_context() | nil,
+          keyword()
+        ) :: {:ok, principal() | nil} | {:error, refusal()}
+  def authorize_lease_principal(
+        expected_subject,
+        proof,
+        surface_kind,
+        request_context,
+        opts \\ []
+      )
+
+  def authorize_lease_principal(expected_subject, proof, surface_kind, request_context, opts)
+      when is_binary(expected_subject) and is_list(opts) do
+    case effective_mode(surface_kind) do
+      :off ->
+        {:ok, nil}
+
+      :log ->
+        case verify_lease_principal(expected_subject, proof, request_context, opts) do
+          {:ok, principal} ->
+            {:ok, principal}
+
+          {:error, reason} ->
+            Logger.warning(
+              "lease identity binding would refuse subject=#{short_uuid(expected_subject)} reason=#{reason}"
+            )
+
+            {:ok, nil}
+        end
+
+      :enforce ->
+        verify_lease_principal(expected_subject, proof, request_context, opts)
+    end
+  end
+
+  def authorize_lease_principal(
+        _expected_subject,
+        _proof,
+        _surface_kind,
+        _request_context,
+        _opts
+      ),
+      do: {:error, :identity_proof_invalid}
 
   @doc """
   Verify unconditionally, ignoring `identity_binding_mode` and
@@ -203,10 +268,10 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
   def parse_trusted_issuers(value) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, %{} = issuers} when map_size(issuers) <= 1 ->
+      {:ok, %{} = issuers} when map_size(issuers) <= @max_trusted_issuers ->
         if Enum.all?(issuers, fn {issuer, url} ->
              is_binary(issuer) and byte_size(issuer) in 1..256 and
-               not String.match?(issuer, ~r/\s/) and
+               not String.match?(issuer, ~r/[[:space:]]/u) and
                is_binary(url) and byte_size(url) in 1..2_048 and valid_trusted_url?(url)
            end) do
           issuers
@@ -215,9 +280,13 @@ defmodule UnitaresLeasePlane.IdentityBinding do
                 "UNITARES_LEASE_TRUSTED_ISSUERS must map non-empty issuer strings to JWKS URLs"
         end
 
+      {:ok, %{} = _issuers} ->
+        raise ArgumentError,
+              "UNITARES_LEASE_TRUSTED_ISSUERS supports at most #{@max_trusted_issuers} trusted issuers"
+
       _ ->
         raise ArgumentError,
-              "UNITARES_LEASE_TRUSTED_ISSUERS supports at most one issuer until lease principals persist issuer + subject"
+              "UNITARES_LEASE_TRUSTED_ISSUERS must be a JSON object mapping at most #{@max_trusted_issuers} issuer strings to JWKS URLs"
     end
   end
 
@@ -284,6 +353,174 @@ defmodule UnitaresLeasePlane.IdentityBinding do
   defp effective_mode(surface_kind) do
     if required_for_surface?(surface_kind), do: mode(), else: :off
   end
+
+  defp verify_lease_principal(expected_subject, proof, request_context, opts) do
+    proof_type = proof_type(proof)
+    started = System.monotonic_time(:microsecond)
+
+    result =
+      verify_lease_principal_with_selected_format(
+        expected_subject,
+        proof,
+        request_context,
+        opts
+      )
+
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    case result do
+      {:ok, principal} ->
+        IdentityMetrics.record(proof_type, :verified, elapsed)
+        {:ok, principal}
+
+      {:error, :invalid} ->
+        IdentityMetrics.record(proof_type, :invalid, elapsed)
+        {:error, :identity_proof_invalid}
+
+      {:error, :replayed} ->
+        IdentityMetrics.record(proof_type, :replayed, elapsed)
+        {:error, :identity_proof_replayed}
+
+      {:error, _reason} ->
+        IdentityMetrics.record(proof_type, :unavailable, elapsed)
+        {:error, :identity_verification_unavailable}
+    end
+  end
+
+  defp verify_lease_principal_with_selected_format(
+         _expected_subject,
+         nil,
+         _request_context,
+         _opts
+       ),
+       do: {:error, :invalid}
+
+  defp verify_lease_principal_with_selected_format(
+         expected_subject,
+         proof,
+         request_context,
+         opts
+       ) do
+    case Application.get_env(:lease_plane, :identity_verifier) do
+      nil ->
+        verify_lease_principal_by_format(expected_subject, proof, request_context, opts)
+
+      override ->
+        override
+        |> call_principal_verifier(expected_subject, proof, request_context, opts)
+        |> normalize_principal_result(expected_subject, Keyword.get(opts, :expected_issuer))
+    end
+  end
+
+  defp verify_lease_principal_by_format(expected_subject, proof, request_context, opts) do
+    format = Application.get_env(:lease_plane, :identity_proof_format, :hybrid)
+    attestation? = is_binary(proof) and String.starts_with?(proof, "lat.v1.")
+    expected_issuer = Keyword.get(opts, :expected_issuer)
+
+    cond do
+      not is_nil(expected_issuer) and not is_binary(expected_issuer) ->
+        {:error, :invalid}
+
+      is_binary(expected_issuer) and not attestation? ->
+        {:error, :invalid}
+
+      attestation? and format == :legacy ->
+        {:error, :invalid}
+
+      attestation? and is_map(request_context) ->
+        UnitaresLeasePlane.FederatedIdentityVerifier.verify_principal(
+          expected_subject,
+          proof,
+          request_context,
+          allow_multiple_issuers: true,
+          expected_issuer: expected_issuer
+        )
+
+      attestation? ->
+        {:error, :invalid}
+
+      format == :attestation ->
+        {:error, :invalid}
+
+      true ->
+        case UnitaresLeasePlane.GovernanceIdentityClient.verify(expected_subject, proof) do
+          :ok -> {:ok, nil}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp call_principal_verifier(verifier, expected_subject, proof, request_context, opts) do
+    try do
+      cond do
+        is_function(verifier, 4) ->
+          verifier.(expected_subject, proof, request_context, opts)
+
+        is_function(verifier, 3) ->
+          verifier.(expected_subject, proof, request_context)
+
+        is_function(verifier, 2) ->
+          verifier.(expected_subject, proof)
+
+        function_exported?(verifier, :verify_principal, 4) ->
+          verifier.verify_principal(expected_subject, proof, request_context, opts)
+
+        function_exported?(verifier, :verify, 3) ->
+          verifier.verify(expected_subject, proof, request_context)
+
+        true ->
+          verifier.verify(expected_subject, proof)
+      end
+    rescue
+      _exception -> {:error, :identity_verifier_exception}
+    catch
+      _kind, _reason -> {:error, :identity_verifier_exception}
+    end
+  end
+
+  defp normalize_principal_result(:ok, _expected_subject, nil), do: {:ok, nil}
+
+  defp normalize_principal_result(:ok, _expected_subject, _expected_issuer),
+    do: {:error, :invalid}
+
+  defp normalize_principal_result({:ok, nil}, _expected_subject, nil), do: {:ok, nil}
+
+  defp normalize_principal_result({:ok, nil}, _expected_subject, _expected_issuer),
+    do: {:error, :invalid}
+
+  defp normalize_principal_result(
+         {:ok, %{issuer: issuer, subject: subject}},
+         expected_subject,
+         expected_issuer
+       ) do
+    cond do
+      not valid_principal_component?(issuer) or not valid_principal_component?(subject) ->
+        {:error, :invalid}
+
+      subject != expected_subject ->
+        {:error, :invalid}
+
+      not is_nil(expected_issuer) and
+          (not is_binary(expected_issuer) or issuer != expected_issuer) ->
+        {:error, :invalid}
+
+      true ->
+        {:ok, %{issuer: issuer, subject: subject}}
+    end
+  end
+
+  defp normalize_principal_result({:error, reason}, _expected_subject, _expected_issuer),
+    do: {:error, reason}
+
+  defp normalize_principal_result(_other, _expected_subject, _expected_issuer),
+    do: {:error, :invalid}
+
+  defp valid_principal_component?(value)
+       when is_binary(value) and byte_size(value) in 1..256 do
+    not String.match?(value, ~r/[[:space:]]/u)
+  end
+
+  defp valid_principal_component?(_value), do: false
 
   defp verify(expected_holder_uuid, proof, request_context) do
     proof_type = proof_type(proof)

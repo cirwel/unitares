@@ -569,6 +569,38 @@ def test_lease_record_accepts_earned_status_earned():
     assert record.earned_status == "earned"
 
 
+def test_lease_record_principal_fields_default_none_and_validate_pair():
+    unattested = LeaseRecord.model_validate(_lease_payload())
+    assert unattested.holder_issuer is None
+    assert unattested.holder_subject is None
+
+    payload = _lease_payload()
+    payload["holder_issuer"] = "operator-a"
+    payload["holder_subject"] = "sentinel-principal-1"
+    attested = LeaseRecord.model_validate(payload)
+    assert attested.holder_issuer == "operator-a"
+    assert attested.holder_subject == "sentinel-principal-1"
+
+    half_set = _lease_payload()
+    half_set["holder_issuer"] = "operator-a"
+    try:
+        LeaseRecord.model_validate(half_set)
+    except ValidationError as exc:
+        assert "holder_issuer and holder_subject" in str(exc)
+    else:
+        raise AssertionError("half-set lease principal must fail validation")
+
+    whitespace = _lease_payload()
+    whitespace["holder_issuer"] = "operator a"
+    whitespace["holder_subject"] = "sub-1"
+    try:
+        LeaseRecord.model_validate(whitespace)
+    except ValidationError as exc:
+        assert "without whitespace" in str(exc)
+    else:
+        raise AssertionError("whitespace in holder_issuer must fail validation")
+
+
 def test_handoff_offer_returns_handoff_id_on_ok():
     handoff_id = uuid4()
     seen: dict[str, Any] = {}

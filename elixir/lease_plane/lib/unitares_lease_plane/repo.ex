@@ -28,6 +28,7 @@ defmodule UnitaresLeasePlane.Repo do
   lease_id::text AS lease_id,
   surface_id, surface_kind,
   holder_agent_uuid::text AS holder_agent_uuid,
+  holder_issuer, holder_subject,
   holder_class, holder_kind, holder_pid, heartbeat_required, intent,
   acquired_at, expires_at, last_heartbeat_at, released_at, release_reason,
   audit_session, original_ttl_s, earned_status,
@@ -118,7 +119,11 @@ defmodule UnitaresLeasePlane.Repo do
 
   defp acquire_step(conn, p, %{holder_agent_uuid: held} = existing)
        when is_binary(held) do
-    if held == p.holder_agent_uuid do
+    same_principal? =
+      Map.get(existing, :holder_issuer) == Map.get(p, :holder_issuer) and
+        Map.get(existing, :holder_subject) == Map.get(p, :holder_subject)
+
+    if held == p.holder_agent_uuid and same_principal? do
       # RFC §7.13: idempotent re-acquire from the same holder MUST update
       # substrate_state when caller provided new substrate fields. Without
       # this, SDK-based residents (Vigil/Sentinel/Watcher/Chronicler) using
@@ -191,20 +196,22 @@ defmodule UnitaresLeasePlane.Repo do
 
     insert_lease_sql = """
     INSERT INTO lease_plane.surface_leases
-      (surface_id, holder_agent_uuid, holder_class,
-       holder_kind, holder_pid, heartbeat_required, intent,
+      (surface_id, holder_agent_uuid, holder_issuer, holder_subject,
+       holder_class, holder_kind, holder_pid, heartbeat_required, intent,
        expires_at, original_ttl_s, audit_session, earned_status,
        substrate_state, substrate_state_observed_at)
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7,
-       now() + make_interval(secs => $8), $8, $9, 'provisional',
-       $10::jsonb, $11::timestamptz)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+       now() + make_interval(secs => $10), $10, $11, 'provisional',
+       $12::jsonb, $13::timestamptz)
     RETURNING #{@select_lease_columns}
     """
 
     args = [
       p.surface_id,
       EffectsAndHandoffs.uuid_to_binary(p.holder_agent_uuid),
+      Map.get(p, :holder_issuer),
+      Map.get(p, :holder_subject),
       Map.get(p, :holder_class, "process_instance"),
       p.holder_kind,
       Map.get(p, :holder_pid),
@@ -317,6 +324,8 @@ defmodule UnitaresLeasePlane.Repo do
     %{
       surface_id: existing.surface_id,
       holder_agent_uuid: existing.holder_agent_uuid,
+      holder_issuer: Map.get(existing, :holder_issuer),
+      holder_subject: Map.get(existing, :holder_subject),
       holder_class: existing.holder_class,
       holder_kind: existing.holder_kind,
       holder_pid: existing.holder_pid,
