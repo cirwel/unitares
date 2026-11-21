@@ -248,6 +248,65 @@ class TestPatternTable:
         out = _watcher_summary_from_rows(rows, now=NOW)
         assert [p["pattern"] for p in out["patterns"]] == ["P_HIGH", "P_LOW"]
 
+    def test_propagated_dup_excluded_but_standalone_manual_dup_preserved(self):
+        """Propagated worktree-copy rows carry duplicate_of=<target_fp> and
+        must not inflate pattern or timeline resolution counts. Standalone
+        manual `--dismiss --reason dup` rows have no duplicate_of and stay
+        counted in dismissed, dismiss_ratio, and daily resolution series."""
+        day = NOW.isoformat()
+        rows = [
+            # Primary confirmed + 2 propagated copies
+            _row(pattern="P006", status="confirmed", confirmed_at=day),
+            _row(
+                pattern="P006",
+                status="confirmed",
+                confirmed_at=day,
+                resolution_reason="dup",
+                duplicate_of="aaaa000000000001",
+            ),
+            _row(
+                pattern="P006",
+                status="confirmed",
+                confirmed_at=day,
+                resolution_reason="dup",
+                duplicate_of="aaaa000000000001",
+            ),
+            # Primary fp dismissal + 1 propagated copy
+            _row(
+                pattern="P006",
+                status="dismissed",
+                dismissed_at=day,
+                resolution_reason="fp",
+            ),
+            _row(
+                pattern="P006",
+                status="dismissed",
+                dismissed_at=day,
+                resolution_reason="dup",
+                duplicate_of="bbbb000000000002",
+            ),
+            # Standalone manual --dismiss --reason dup (no duplicate_of)
+            _row(
+                pattern="P006",
+                status="dismissed",
+                dismissed_at=day,
+                resolution_reason="dup",
+            ),
+        ]
+        out = _watcher_summary_from_rows(rows, now=NOW, window_days=3)
+        assert out["total"] == 6
+        assert out["by_status"] == {"confirmed": 3, "dismissed": 3}
+
+        pat = out["patterns"][0]
+        assert pat["confirmed"] == 1
+        assert pat["dismissed"] == 2  # fp + standalone manual dup
+        assert pat["dismissed_fp"] == 1
+        assert pat["dismiss_ratio"] == pytest.approx(2.0 / 3.0)
+
+        by_day = {d["day"]: d for d in out["timeline"]}
+        assert by_day[NOW.date().isoformat()]["confirmed"] == 1
+        assert by_day[NOW.date().isoformat()]["dismissed"] == 2
+
 
 class TestTimeline:
     def test_timeline_spans_full_window_with_zeros(self):
