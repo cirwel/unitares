@@ -150,6 +150,11 @@ def _transport_cache_key(signals) -> Optional[str]:
     return f"sticky:{signals.ip_ua_fingerprint}"
 
 
+def transport_cache_key(signals) -> Optional[str]:
+    """Public accessor computing the sticky transport cache key from signals."""
+    return _transport_cache_key(signals)
+
+
 def update_transport_binding(
     key: str,
     agent_uuid: str,
@@ -256,9 +261,9 @@ _REDIS_RECOVERY_TIMEOUT = 0.5
 async def _lookup_core_agent_row_status(agent_uuid: str, source: str) -> Optional[str]:
     """Best-effort bounded lookup of the persisted lifecycle status."""
     try:
-        from ..identity.handlers import _get_agent_status
+        from ..identity.handlers import get_agent_status
         return await asyncio.wait_for(
-            _get_agent_status(agent_uuid),
+            get_agent_status(agent_uuid),
             timeout=_REDIS_RECOVERY_TIMEOUT,
         )
     except asyncio.TimeoutError:
@@ -477,8 +482,8 @@ async def _maybe_recover_via_x_agent_id(
         )
         return bound_agent_id
     try:
-        from ..identity.handlers import _agent_exists_in_postgres, _cache_session
-        if not await _agent_exists_in_postgres(x_agent_id_header):
+        from ..identity.handlers import agent_exists_in_postgres, cache_session
+        if not await agent_exists_in_postgres(x_agent_id_header):
             return bound_agent_id
         if not _token_proof:
             # UDS peer without a token: only an accepted substrate attestation
@@ -494,8 +499,8 @@ async def _maybe_recover_via_x_agent_id(
                 )
                 return bound_agent_id
         # Substrate-over-HTTP gate — same one PATH 1/2 apply.
-        from ..identity.resolution import _substrate_http_reject
-        if await _substrate_http_reject(
+        from ..identity.resolution import substrate_http_reject
+        if await substrate_http_reject(
             x_agent_id_header, source="path2_75_x_agent_id_recovery"
         ) is not None:
             # Do not log the header-derived UUID (CodeQL: clear-text logging of
@@ -516,7 +521,7 @@ async def _maybe_recover_via_x_agent_id(
         identity_result["persisted"] = True
         identity_result["source"] = "x_agent_id_recovery"
         # Cache this session → UUID binding for future requests
-        await _cache_session(session_key, x_agent_id_header)
+        await cache_session(session_key, x_agent_id_header)
         return x_agent_id_header
     except Exception as e:
         logger.debug(f"[DISPATCH] X-Agent-Id recovery failed: {e}")
@@ -550,10 +555,10 @@ def _anchor_resolved_identity(
         return
     try:
         from ..identity.session import (
-            _extract_base_fingerprint,
+            extract_base_fingerprint,
             set_identity_anchor,
         )
-        base_fp = _extract_base_fingerprint(fingerprint)
+        base_fp = extract_base_fingerprint(fingerprint)
         if not base_fp:
             return
         asyncio.get_running_loop()  # raises RuntimeError if no loop
@@ -777,10 +782,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 hijack attempts surface on the same broadcast channel as
                 handler-path attempts. Source tag distinguishes them."""
                 try:
-                    from ..identity.handlers import _broadcaster
+                    from ..identity.handlers import get_broadcaster
                 except Exception:
                     return
-                b = _broadcaster()
+                b = get_broadcaster()
                 if b is None:
                     return
                 try:

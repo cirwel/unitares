@@ -54,7 +54,12 @@ from typing import Optional
 # Single source for the HMAC secret — the design's "the secret it already
 # holds". Domain separation (the gnt.v1. prefix in the signed bytes) keeps
 # grants and continuity_tokens non-cross-verifiable despite the shared secret.
-from src.mcp_handlers.identity.session import _get_continuity_secret
+from src.mcp_handlers.identity.session import get_continuity_secret
+
+
+def _get_continuity_secret() -> Optional[bytes]:
+    """Module-level hook delegating to session.get_continuity_secret."""
+    return get_continuity_secret()
 
 EFFECT_GRANT_VERSION = "gnt.v1"
 

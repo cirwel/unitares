@@ -182,9 +182,9 @@ async def resolve_dialectic_agent_id(
                 # re-introduce label matching), so it errors — see the follow-up note
                 # in the PR body.
                 if _looks_like_uuid(provided):
-                    from ..identity.handlers import _agent_exists_in_postgres
+                    from ..identity.handlers import agent_exists_in_postgres
 
-                    if await _agent_exists_in_postgres(provided):
+                    if await agent_exists_in_postgres(provided):
                         resolved = provided
 
             if resolved is None:

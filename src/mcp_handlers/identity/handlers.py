@@ -77,6 +77,26 @@ from .persistence import (
 )
 
 
+async def agent_exists_in_postgres(agent_uuid: str) -> bool:
+    """Public check for whether ``agent_uuid`` exists in PostgreSQL."""
+    return await _agent_exists_in_postgres(agent_uuid)
+
+
+async def get_agent_status(agent_uuid: str) -> Optional[str]:
+    """Public lookup for an agent's persisted lifecycle status."""
+    return await _get_agent_status(agent_uuid)
+
+
+async def cache_session(*args, **kwargs) -> None:
+    """Public wrapper caching a session -> agent UUID binding."""
+    return await _cache_session(*args, **kwargs)
+
+
+async def find_agent_by_label(label: str) -> Optional[str]:
+    """Public lookup resolving an agent label to its canonical UUID."""
+    return await _find_agent_by_label(label)
+
+
 def _broadcaster():
     """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``),
     wrapped so the caller never waits on the fan-out (see
@@ -92,6 +112,11 @@ def _broadcaster():
     except Exception:
         return None
     return _ScheduledBroadcaster(_b)
+
+
+def get_broadcaster():
+    """Public lazy accessor for the scheduled process-wide broadcaster."""
+    return _broadcaster()
 
 
 _s1d_false_reached_logged = False
@@ -1782,9 +1807,9 @@ async def _perform_session_bind(
     # 3. Sticky transport
     try:
         from ..context import get_session_signals as _get_signals
-        from ..middleware.identity_step import _transport_cache_key, update_transport_binding
+        from ..middleware.identity_step import transport_cache_key, update_transport_binding
         _signals = _get_signals()
-        _tkey = _transport_cache_key(_signals)
+        _tkey = transport_cache_key(_signals)
         if _tkey:
             # S3: derive original_session_source from the strongest proof
             # signal present on the current request. _transport_cache_key
@@ -2264,6 +2289,11 @@ def _derive_onboard_response_mode(arguments: Dict[str, Any]) -> tuple:
     if response_mode not in {"full", "minimal"}:
         response_mode = "full" if verbose else "minimal"
     return verbose, response_mode
+
+
+def derive_onboard_response_mode(arguments: Dict[str, Any]) -> tuple:
+    """Public accessor resolving (verbose, response_mode) for the onboard envelope."""
+    return _derive_onboard_response_mode(arguments)
 
 
 def _resolve_response_agent_id(agent_uuid: str, agent_id) -> str:

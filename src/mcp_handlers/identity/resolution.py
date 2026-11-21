@@ -516,6 +516,11 @@ def _substrate_check_unavailable(agent_uuid: str, uuid_key: str, source: str) ->
     }
 
 
+async def substrate_http_reject(*args, **kwargs):
+    """Public gate rejecting HTTP resume for substrate-anchored UUIDs."""
+    return await _substrate_http_reject(*args, **kwargs)
+
+
 async def _substrate_http_reject(agent_uuid: str, source: str):
     """S19 extension (#802): a substrate-anchored UUID must not resume over a
     non-UDS (HTTP) transport via ANY session path — not just continuity_token.

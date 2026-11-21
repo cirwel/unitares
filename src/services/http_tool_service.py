@@ -354,10 +354,10 @@ def _strict_identity_refusal_or_none(
     if tool_name != "consult" and all(
         isinstance(view, dict) and view.get("agent_id") for view in views
     ):
-        from src.http_routes.access import _looks_like_uuid
+        from src.http_routes.access import looks_like_uuid
 
         # A name at every depth, so whichever one dispatch acts on carries it.
-        if not any(_looks_like_uuid(view["agent_id"]) for view in views):
+        if not any(looks_like_uuid(view["agent_id"]) for view in views):
             return None
     logger.info(
         "[HTTP] %s unbound under STRICT_IDENTITY_REQUIRED — returning "
