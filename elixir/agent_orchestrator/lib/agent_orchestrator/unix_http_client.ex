@@ -411,7 +411,11 @@ defmodule AgentOrchestrator.UnixHTTPClient do
     else
       case recv_chunk(sock, deadline) do
         {:ok, chunk} ->
-          read_until_eof(sock, buf <> chunk, deadline, max_body_bytes)
+          if byte_size(buf) + byte_size(chunk) > max_body_bytes do
+            {:error, :response_too_large}
+          else
+            read_until_eof(sock, buf <> chunk, deadline, max_body_bytes)
+          end
 
         {:error, :closed} ->
           {:ok, buf}

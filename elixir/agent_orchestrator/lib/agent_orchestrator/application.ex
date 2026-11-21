@@ -176,8 +176,8 @@ defmodule AgentOrchestrator.Application do
     put_env_if_present(:governance_url, ["UNITARES_GOVERNANCE_URL", "GOVERNANCE_URL"])
 
     put_env_if_present(:governance_api_token, [
-      "UNITARES_MCP_BEARER_TOKEN",
-      "UNITARES_HTTP_API_TOKEN"
+      "UNITARES_HTTP_API_TOKEN",
+      "UNITARES_MCP_BEARER_TOKEN"
     ])
 
     put_env_if_present(:lease_identity_proof, [

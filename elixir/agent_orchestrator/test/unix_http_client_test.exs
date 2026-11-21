@@ -241,16 +241,46 @@ defmodule AgentOrchestrator.UnixHTTPClientTest do
     end
 
     test "enforces max_body_bytes cap across Content-Length, chunked, and EOF responses" do
-      path = tmp_socket_path("cap")
+      cl_path = tmp_socket_path("cap_cl")
 
-      start_uds_server(path, fn sock ->
+      start_uds_server(cl_path, fn sock ->
         {_head, _body} = read_raw_http_request(sock)
         payload = String.duplicate("a", 64)
         :ok = :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\n" <> payload)
       end)
 
       assert {:error, :response_too_large} =
-               UnixHTTPClient.post(path, "/v1/lease/acquire", [], "{}", max_body_bytes: 32)
+               UnixHTTPClient.post(cl_path, "/v1/lease/acquire", [], "{}", max_body_bytes: 32)
+
+      chunked_path = tmp_socket_path("cap_chunked")
+
+      start_uds_server(chunked_path, fn sock ->
+        {_head, _body} = read_raw_http_request(sock)
+        part = String.duplicate("b", 20)
+
+        wire =
+          "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" <>
+            "14\r\n" <> part <> "\r\n" <> "14\r\n" <> part <> "\r\n0\r\n\r\n"
+
+        :ok = :gen_tcp.send(sock, wire)
+      end)
+
+      assert {:error, :response_too_large} =
+               UnixHTTPClient.post(chunked_path, "/v1/lease/acquire", [], "{}",
+                 max_body_bytes: 32
+               )
+
+      eof_path = tmp_socket_path("cap_eof")
+
+      start_uds_server(eof_path, fn sock ->
+        {_head, _body} = read_raw_http_request(sock)
+        :ok = :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")
+        :ok = :gen_tcp.send(sock, String.duplicate("c", 20))
+        :ok = :gen_tcp.send(sock, String.duplicate("d", 20))
+      end)
+
+      assert {:error, :response_too_large} =
+               UnixHTTPClient.post(eof_path, "/v1/lease/acquire", [], "{}", max_body_bytes: 32)
     end
 
     test "enforces total timeout deadline on slow peer" do

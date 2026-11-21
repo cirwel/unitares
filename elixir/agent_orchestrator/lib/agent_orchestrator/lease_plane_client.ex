@@ -284,7 +284,12 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   @doc false
   def validate_governance_url(url) when is_binary(url) do
-    trimmed = url |> String.trim() |> String.trim_trailing("/")
+    trimmed =
+      url
+      |> String.trim()
+      |> String.trim_trailing("/")
+      |> strip_mcp_suffix()
+
     uri = URI.parse(trimmed)
     host = if is_binary(uri.host), do: String.downcase(uri.host), else: ""
 
@@ -309,6 +314,29 @@ defmodule AgentOrchestrator.LeasePlaneClient do
   end
 
   def validate_governance_url(_other), do: {:error, :invalid_governance_url}
+
+  defp strip_mcp_suffix(url) do
+    uri = URI.parse(url)
+
+    case uri.path do
+      "/mcp" ->
+        %{uri | path: nil} |> URI.to_string() |> String.trim_trailing("/")
+
+      path when is_binary(path) ->
+        if String.ends_with?(path, "/mcp") do
+          prefix = binary_part(path, 0, byte_size(path) - 4)
+
+          %{uri | path: if(prefix == "", do: nil, else: prefix)}
+          |> URI.to_string()
+          |> String.trim_trailing("/")
+        else
+          url
+        end
+
+      _ ->
+        url
+    end
+  end
 
   defp loopback_host?("localhost"), do: true
 

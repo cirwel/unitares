@@ -370,6 +370,45 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       assert String.starts_with?(rel_lease_req.headers["x-unitares-identity-proof"], "lat.v1.")
     end
 
+    test "normalizes /mcp and /mcp/ suffix on GOVERNANCE_URL before calling /v1/lease-holder/attest" do
+      assert {:ok, "http://127.0.0.1:8767"} =
+               LeasePlaneClient.validate_governance_url("http://127.0.0.1:8767/mcp/")
+
+      assert {:ok, "http://127.0.0.1:8767"} =
+               LeasePlaneClient.validate_governance_url("http://127.0.0.1:8767/mcp")
+
+      assert {:ok, "https://gov.example.test/prefix"} =
+               LeasePlaneClient.validate_governance_url("https://gov.example.test/prefix/mcp/")
+
+      assert {:ok, "http://127.0.0.1:8767/mcp2"} =
+               LeasePlaneClient.validate_governance_url("http://127.0.0.1:8767/mcp2")
+
+      test_pid = self()
+
+      gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:attest_path, req.path})
+          decoded = Jason.decode!(req.raw_body)
+          token = "lat.v1." <> Base.url_encode64(decoded["body_sha256"], padding: false) <> ".sig"
+          {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: token}}
+        end)
+
+      socket_path =
+        start_uds_http_server("mcp_suffix", fn _req ->
+          {200, %{ok: true, lease: %{lease_id: "lease-mcp-norm"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, gov_url <> "/mcp/")
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:ok, "lease-mcp-norm"} =
+               LeasePlaneClient.acquire("agent:/ex-mcp", @holder_uuid, "remote_heartbeat", 60)
+
+      assert_receive {:attest_path, "/v1/lease-holder/attest"}
+    end
+
     test "passes through pre-minted lat.v1 attestation and rejects malformed lat.v1 tokens" do
       test_pid = self()
 
