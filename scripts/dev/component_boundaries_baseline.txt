@@ -6,7 +6,6 @@
 2 B1 agents/dialectic_reviewer/host_backends.py
 1 B1 agents/dialectic_reviewer/host_list.py
 2 B1 agents/dialectic_reviewer/reviewer.py
-1 B1 agents/local_resident/runner.py
 2 B3 src/dialectic_receipt.py
 1 B3 src/effect_grant.py
 1 B3 src/http_routes/access.py
@@ -22,14 +21,7 @@
 1 B3 src/services/http_tool_service.py
 3 B4 elixir/lease_plane/lib/unitares_lease_plane/repo.ex
 1 B4 elixir/sentinel/lib/unitares_sentinel/audit_volume_watch.ex
-1 B4 src/db/mixins/identity.py
-3 B4 src/db/mixins/session.py
 7 B4 src/db/mixins/state.py
-3 B4 src/db/mixins/tool_usage.py
-1 B4 src/db/postgres_backend.py
-3 B4 src/eisv_telemetry_health.py
-1 B4 src/fleet_metrics/catalog.py
-5 B4 src/grounding/class_promotion.py
 2 B4 src/http_routes/effects.py
 1 B4 src/http_routes/findings.py
 2 B4 src/identity/agent_fragmentation.py
