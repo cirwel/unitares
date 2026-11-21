@@ -193,12 +193,12 @@ class IdentityMixin:
         """
         # core.identities is aliased ``i`` so the EXISTS subquery can
         # correlate on i.identity_id without column ambiguity.
-        participated_clause = (
-            " AND EXISTS (SELECT 1 FROM core.agent_state s "
-            "WHERE s.identity_id = i.identity_id AND s.synthetic = false)"
-            if participated_only
-            else ""
-        )
+        if participated_only:
+            from .state import measured_state_exists_sql
+
+            participated_clause = f" AND {measured_state_exists_sql('i')}"
+        else:
+            participated_clause = ""
         async with self.acquire() as conn:
             if status:
                 rows = await conn.fetch(
@@ -1683,3 +1683,158 @@ async def fetch_agent_identities_for_ids(
         """,
         agent_ids,
     )
+
+
+IDENTITY_COUNT_SCALAR_SQL = "(SELECT COUNT(*) FROM core.identities)"
+
+
+def identity_from_sql(alias: str = "i") -> str:
+    """Return a ``FROM core.identities <alias>`` clause owned by the identity component."""
+    return f"FROM core.identities {alias}"
+
+
+def identity_join_on_id_sql(source_alias: str = "s", identity_alias: str = "i") -> str:
+    """Return an INNER JOIN against ``core.identities`` keyed on ``identity_id``."""
+    return (
+        f"JOIN core.identities {identity_alias} "
+        f"ON {identity_alias}.identity_id = {source_alias}.identity_id"
+    )
+
+
+async def fetch_identity_id_by_agent_id(conn, agent_id: str) -> Optional[int]:
+    """Return numeric ``identity_id`` for ``agent_id`` from ``core.identities``."""
+    val = await conn.fetchval(
+        "SELECT identity_id FROM core.identities WHERE agent_id = $1",
+        agent_id,
+    )
+    return int(val) if val is not None else None
+
+
+_PROMOTION_TOTAL_UPDATES_EXPR = (
+    "COALESCE(NULLIF(metadata->>'total_updates', '')::int, 0)"
+)
+
+
+async def fetch_ephemeral_promotion_candidates(
+    conn,
+    *,
+    threshold: int,
+    source_jsonb: str,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+) -> list:
+    """Return candidate ``core.identities`` rows eligible for ephemeral promotion."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    select_sql = f"""
+        SELECT agent_id,
+               metadata->>'label' AS label,
+               {_PROMOTION_TOTAL_UPDATES_EXPR} AS total_updates
+        FROM core.identities
+        WHERE metadata->'tags' @> $2::jsonb
+          AND {_PROMOTION_TOTAL_UPDATES_EXPR} >= $1
+          {status_clause}
+        ORDER BY {_PROMOTION_TOTAL_UPDATES_EXPR} DESC
+        {limit_clause}
+    """
+    return await conn.fetch(select_sql, threshold, source_jsonb)
+
+
+async def sweep_promote_ephemeral_identities(
+    conn,
+    *,
+    threshold: int,
+    source_jsonb: str,
+    source_tag: str,
+    target_jsonb: str,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+):
+    """Atomically promote eligible ``core.identities`` rows via a single CTE."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    sweep_sql = f"""
+        WITH candidates AS (
+            SELECT agent_id,
+                   metadata->>'label' AS label,
+                   {_PROMOTION_TOTAL_UPDATES_EXPR} AS total_updates
+            FROM core.identities
+            WHERE metadata->'tags' @> $2::jsonb
+              AND {_PROMOTION_TOTAL_UPDATES_EXPR} >= $1
+              {status_clause}
+            ORDER BY {_PROMOTION_TOTAL_UPDATES_EXPR} DESC
+            {limit_clause}
+            FOR UPDATE SKIP LOCKED
+        ),
+        promoted AS (
+            UPDATE core.identities i
+            SET metadata = jsonb_set(
+                    i.metadata,
+                    ARRAY['tags'],
+                    COALESCE((i.metadata->'tags') - $3::text, '[]'::jsonb) || $4::jsonb
+                ),
+                updated_at = NOW()
+            FROM candidates c
+            WHERE i.agent_id = c.agent_id
+              AND i.metadata->'tags' @> $2::jsonb
+            RETURNING i.agent_id
+        )
+        SELECT
+            (SELECT COUNT(*) FROM promoted) AS promoted_count,
+            COALESCE((SELECT array_agg(agent_id) FROM promoted), ARRAY[]::text[]) AS promoted_ids,
+            COALESCE((
+                SELECT json_agg(row_to_json(c))
+                FROM (
+                    SELECT agent_id, label, total_updates
+                    FROM candidates
+                    ORDER BY total_updates DESC
+                    LIMIT 10
+                ) c
+            ), '[]'::json) AS sample
+    """
+    return await conn.fetchrow(
+        sweep_sql,
+        threshold,
+        source_jsonb,
+        source_tag,
+        target_jsonb,
+    )
+
+
+async def fetch_untagged_identities(
+    conn,
+    *,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+) -> list:
+    """Return ``core.identities`` rows with missing or empty ``metadata->'tags'``."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    select_sql = f"""
+        SELECT agent_id, metadata->>'label' AS label
+        FROM core.identities
+        WHERE (metadata->'tags' IS NULL
+               OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
+          {status_clause}
+        ORDER BY created_at DESC
+        {limit_clause}
+    """
+    return await conn.fetch(select_sql)
+
+
+async def stamp_untagged_identity_batch(
+    conn,
+    *,
+    agent_ids: List[str],
+    tags_jsonb: str,
+) -> None:
+    """Stamp ``tags_jsonb`` onto still-untagged ``core.identities`` rows for ``agent_ids``."""
+    update_sql = """
+        UPDATE core.identities
+        SET metadata = jsonb_set(metadata, ARRAY['tags'], $2::jsonb),
+            updated_at = NOW()
+        WHERE agent_id = ANY($1::text[])
+          AND (metadata->'tags' IS NULL
+               OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
+    """
+    await conn.execute(update_sql, agent_ids, tags_jsonb)

@@ -631,3 +631,25 @@ async def fetch_pause_divergence_summary(
         days,
     )
     return totals, last_row, weekly
+
+
+def reported_confidence_lateral_subquery_sql(
+    *,
+    agent_param: str = "$1",
+    window_hours_param: str = "$3",
+    ref_ts_expr: str = "ext.ts",
+) -> str:
+    """Return a LATERAL-compatible SELECT for the latest reported confidence claim
+    in ``audit.events`` within ``window_hours_param`` hours at or before ``ref_ts_expr``."""
+    return f"""
+        SELECT e.confidence AS conf
+        FROM audit.events e
+        WHERE e.agent_id = {agent_param}
+          AND e.confidence IS NOT NULL AND e.confidence > 0
+          AND e.event_type = 'auto_attest'
+          AND e.payload->>'confidence_source' = 'reported'
+          AND e.ts <= {ref_ts_expr}
+          AND e.ts > {ref_ts_expr} - ({window_hours_param} * interval '1 hour')
+        ORDER BY e.ts DESC
+        LIMIT 1
+    """
