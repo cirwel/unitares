@@ -56,11 +56,20 @@ def test_manifest_and_scripts_served_to_trusted_caller(ext_dir):
     r = _client(TRUSTED).get("/dashboard/ext/manifest.json")
     assert r.status_code == 200
     assert r.json()["sections"][0]["id"] == "queue"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     js = _client(TRUSTED).get("/dashboard/ext/sections/queue.js")
     assert js.status_code == 200
     assert js.headers["content-type"].startswith("application/javascript")
     assert "Queue" in js.text
     assert js.headers["cache-control"] == "no-store"
+    assert js.headers["x-content-type-options"] == "nosniff"
+    assert js.headers["referrer-policy"] == "no-referrer"
+    assert js.headers["x-frame-options"] == "DENY"
+    assert "object-src 'none'" in js.headers["content-security-policy"]
 
 
 @pytest.mark.parametrize("path", ["manifest.json", "sections/queue.js"])

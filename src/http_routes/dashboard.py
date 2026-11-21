@@ -33,6 +33,29 @@ logger = get_logger(__name__)
 _AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
 _AUTH_HANDLER_PAGES = {"auth/signin.html", "auth/enroll.html", "auth/hub-authorize.html"}
 
+# Baseline browser security headers for all dashboard routes (HTML shells,
+# static assets, and operator extensions). Inline styles/scripts remain allowed
+# because the buildless redesign and extension loader use them, while framing,
+# plugins, base-URI hijacking, and unexpected external origins are blocked.
+_DASHBOARD_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+_DASHBOARD_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": _DASHBOARD_CSP,
+}
+
 
 def _same_file_as_any(target: Path, base: Path, names) -> bool:
     """Whether ``target`` is one of the named files under ``base``, by inode."""
@@ -74,6 +97,7 @@ async def http_phase(request):
             content=html,
             media_type="text/html",
             headers={
+                **_DASHBOARD_SECURITY_HEADERS,
                 "Cache-Control": "no-store",
                 "Vary": "Cookie, Authorization",
             },
@@ -114,7 +138,10 @@ async def http_dashboard_static(request):
         return Response(
             content=static_path.read_text(),
             media_type=content_type,
-            headers={"Cache-Control": "no-cache"},
+            headers={
+                **_DASHBOARD_SECURITY_HEADERS,
+                "Cache-Control": "no-cache",
+            },
         )
     return JSONResponse({
         "error": "File not found",
@@ -217,7 +244,11 @@ async def http_dashboard_redesign(request):
     return Response(
         content=content,
         media_type=media,
-        headers={"Cache-Control": cache, "Vary": "Cookie, Authorization"},
+        headers={
+            **_DASHBOARD_SECURITY_HEADERS,
+            "Cache-Control": cache,
+            "Vary": "Cookie, Authorization",
+        },
     )
 
 
@@ -258,11 +289,15 @@ async def http_dashboard_ext(request):
     return Response(
         content=target.read_text(),
         media_type=_EXT_MEDIA[suffix],
-        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"},
+        headers={
+            **_DASHBOARD_SECURITY_HEADERS,
+            "Cache-Control": "no-store",
+            "Vary": "Cookie, Authorization",
+        },
     )
 
 
 async def http_dashboard_classic_redirect(request):
     """Classic was retired (PR #1012). Old /dashboard/classic links land on the
     live dashboard instead of a confusing 403 from the static allowlist."""
-    return RedirectResponse("/dashboard", status_code=302)
+    return RedirectResponse("/dashboard", status_code=302, headers=dict(_DASHBOARD_SECURITY_HEADERS))
