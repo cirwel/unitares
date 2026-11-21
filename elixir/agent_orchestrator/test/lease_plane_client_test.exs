@@ -727,5 +727,91 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
                  lease: %{required: true}
                })
     end
+
+    test "LeaseGovernance fails closed when require_lease_identity_proof is true and injected client lacks acquire/5 or release/3" do
+      Application.put_env(:agent_orchestrator, :test_pid, self())
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+      on_exit(fn -> Application.delete_env(:agent_orchestrator, :test_pid) end)
+
+      cfg =
+        LeaseGovernance.normalize_lease_cfg(
+          %{required: true, holder_agent_uuid: @holder_uuid, identity_proof: @continuity_token},
+          "ex-stub-req"
+        )
+
+      assert {:error, :lease_denied, :lease_client_missing_identity_proof_support} =
+               LeaseGovernance.maybe_acquire_lease(%{
+                 execution_id: "ex-stub-req",
+                 agent_id: "agent-stub-req",
+                 lease_cfg: cfg,
+                 lease_client: AgentOrchestrator.StubLeaseClient
+               })
+
+      log =
+        capture_log(fn ->
+          assert {:error, :lease_client_missing_identity_proof_support} =
+                   LeaseGovernance.maybe_release_lease(
+                     %{
+                       lease_id: "stub-lease",
+                       lease_cfg: cfg,
+                       lease_client: AgentOrchestrator.StubLeaseClient
+                     },
+                     "normal"
+                   )
+        end)
+
+      assert log =~ "lease_client_missing_identity_proof_support"
+      refute log =~ @continuity_token
+      refute_receive {:lease_event, _}
+    end
+
+    test "LeaseGovernance warns without leaking proof and falls back to acquire/4 and release/2 when optional" do
+      Application.put_env(:agent_orchestrator, :test_pid, self())
+      Application.put_env(:agent_orchestrator, :stub_acquire_result, {:ok, "stub-fallback-lease"})
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
+
+      on_exit(fn ->
+        Application.delete_env(:agent_orchestrator, :test_pid)
+        Application.delete_env(:agent_orchestrator, :stub_acquire_result)
+      end)
+
+      cfg =
+        LeaseGovernance.normalize_lease_cfg(
+          %{required: true, holder_agent_uuid: @holder_uuid, identity_proof: @continuity_token},
+          "ex-stub-warn"
+        )
+
+      acq_log =
+        capture_log(fn ->
+          assert {:ok, "stub-fallback-lease", :registered} =
+                   LeaseGovernance.maybe_acquire_lease(%{
+                     execution_id: "ex-stub-warn",
+                     agent_id: "agent-stub-warn",
+                     lease_cfg: cfg,
+                     lease_client: AgentOrchestrator.StubLeaseClient
+                   })
+        end)
+
+      assert acq_log =~ "does not implement acquire/5"
+      refute acq_log =~ @continuity_token
+      assert_receive {:lease_event, {:acquire, "agent:/ex-stub-warn", @holder_uuid, _, _}}
+
+      rel_log =
+        capture_log(fn ->
+          assert :ok =
+                   LeaseGovernance.maybe_release_lease(
+                     %{
+                       lease_id: "stub-fallback-lease",
+                       lease_cfg: cfg,
+                       lease_client: AgentOrchestrator.StubLeaseClient
+                     },
+                     "normal"
+                   )
+        end)
+
+      assert rel_log =~ "does not implement release/3"
+      refute rel_log =~ @continuity_token
+      assert_receive {:lease_event, {:release, "stub-fallback-lease", "normal"}}
+    end
   end
 end

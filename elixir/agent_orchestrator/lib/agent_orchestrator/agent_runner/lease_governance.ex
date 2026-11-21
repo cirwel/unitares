@@ -86,16 +86,29 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
           client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
 
         opts ->
-          if Code.ensure_loaded?(client) and function_exported?(client, :acquire, 5) do
-            client.acquire(
-              cfg.surface_id,
-              cfg.holder_agent_uuid,
-              "remote_heartbeat",
-              cfg.ttl_s,
-              opts
-            )
-          else
-            client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
+          cond do
+            Code.ensure_loaded?(client) and function_exported?(client, :acquire, 5) ->
+              client.acquire(
+                cfg.surface_id,
+                cfg.holder_agent_uuid,
+                "remote_heartbeat",
+                cfg.ttl_s,
+                opts
+              )
+
+            Keyword.has_key?(opts, :identity_proof) and require_lease_identity_proof?() ->
+              {:error, :lease_client_missing_identity_proof_support}
+
+            Keyword.has_key?(opts, :identity_proof) ->
+              Logger.warning(
+                "lease_client #{inspect(client)} does not implement acquire/5; " <>
+                  "dropping per-lease identity_proof and falling back to acquire/4"
+              )
+
+              client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
+
+            true ->
+              client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
           end
       end
 
@@ -136,10 +149,23 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
           client.release(lease_id, reason)
 
         opts ->
-          if Code.ensure_loaded?(client) and function_exported?(client, :release, 3) do
-            client.release(lease_id, reason, opts)
-          else
-            client.release(lease_id, reason)
+          cond do
+            Code.ensure_loaded?(client) and function_exported?(client, :release, 3) ->
+              client.release(lease_id, reason, opts)
+
+            Keyword.has_key?(opts, :identity_proof) and require_lease_identity_proof?() ->
+              {:error, :lease_client_missing_identity_proof_support}
+
+            Keyword.has_key?(opts, :identity_proof) ->
+              Logger.warning(
+                "lease_client #{inspect(client)} does not implement release/3; " <>
+                  "dropping per-lease identity_proof and falling back to release/2"
+              )
+
+              client.release(lease_id, reason)
+
+            true ->
+              client.release(lease_id, reason)
           end
       end
 
@@ -192,6 +218,10 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   end
 
   defp lease_release_opts(_cfg), do: []
+
+  defp require_lease_identity_proof? do
+    Application.get_env(:agent_orchestrator, :require_lease_identity_proof, false) == true
+  end
 
   @doc false
   def open_port(spec, candidates) do

@@ -42,11 +42,27 @@ defmodule AgentOrchestrator.ApplicationTest do
     end
   end
 
+  @lease_env_keys [
+    :lease_plane_base_url,
+    :lease_plane_unix_socket_path,
+    :lease_plane_bearer_token,
+    :governance_url,
+    :governance_api_token,
+    :governance_api_tokens,
+    :lease_identity_proof,
+    :lease_holder_agent_uuid,
+    :require_lease_identity_proof,
+    :insecure_governance_hosts
+  ]
+
   test "configure_lease_client_from_env records ordered unique governance tokens preferring UNITARES_HTTP_API_TOKEN" do
     saved_http = System.get_env("UNITARES_HTTP_API_TOKEN")
     saved_mcp = System.get_env("UNITARES_MCP_BEARER_TOKEN")
-    saved_app = Elixir.Application.fetch_env(:agent_orchestrator, :governance_api_token)
-    saved_app_list = Elixir.Application.fetch_env(:agent_orchestrator, :governance_api_tokens)
+
+    saved_app_env =
+      Enum.map(@lease_env_keys, fn key ->
+        {key, Elixir.Application.get_env(:agent_orchestrator, key, :__unset__)}
+      end)
 
     on_exit(fn ->
       if saved_http,
@@ -57,21 +73,13 @@ defmodule AgentOrchestrator.ApplicationTest do
         do: System.put_env("UNITARES_MCP_BEARER_TOKEN", saved_mcp),
         else: System.delete_env("UNITARES_MCP_BEARER_TOKEN")
 
-      case saved_app do
-        {:ok, value} ->
-          Elixir.Application.put_env(:agent_orchestrator, :governance_api_token, value)
+      Enum.each(saved_app_env, fn
+        {key, :__unset__} ->
+          Elixir.Application.delete_env(:agent_orchestrator, key)
 
-        :error ->
-          Elixir.Application.delete_env(:agent_orchestrator, :governance_api_token)
-      end
-
-      case saved_app_list do
-        {:ok, value} ->
-          Elixir.Application.put_env(:agent_orchestrator, :governance_api_tokens, value)
-
-        :error ->
-          Elixir.Application.delete_env(:agent_orchestrator, :governance_api_tokens)
-      end
+        {key, value} ->
+          Elixir.Application.put_env(:agent_orchestrator, key, value)
+      end)
     end)
 
     System.put_env("UNITARES_HTTP_API_TOKEN", "http-api-tok")
