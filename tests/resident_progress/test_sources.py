@@ -140,7 +140,10 @@ def test_reference_catalog_keeps_the_five_series_the_verdict_was_built_on(
 
     catalog = restore_progress_catalog
     catalog.progress_series.clear()
-    ref = Path(__file__).resolve().parents[2] / "agents/chronicler/metrics_catalog.json"
+    ref = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/fleet_metrics/reference_extra_catalog.json"
+    )
     catalog.load_extra_catalog(ref)
     assert set(progress_series_names()) == {
         "tokei.unitares.src.code",
@@ -149,27 +152,6 @@ def test_reference_catalog_keeps_the_five_series_the_verdict_was_built_on(
         "kg.entries.count",
         "checkins.7d",
     }
-
-
-def test_progress_series_are_all_backed_by_a_scraper(restore_progress_catalog):
-    """Every counted name must be a key Chronicler actually writes (a SCRAPERS
-    entry). Without this guard a rename on the Chronicler side leaves
-    MetricsSeriesSource querying a series nobody writes, which returns 0
-    forever with no error.
-    """
-    from pathlib import Path
-
-    from agents.chronicler.scrapers import SCRAPERS
-
-    catalog = restore_progress_catalog
-    catalog.progress_series.clear()
-    ref = Path(__file__).resolve().parents[2] / "agents/chronicler/metrics_catalog.json"
-    catalog.load_extra_catalog(ref)
-    orphans = sorted(n for n in progress_series_names() if n not in SCRAPERS)
-    assert not orphans, (
-        f"progress series with no backing scraper: {orphans}. A counted name "
-        "must match a key in agents/chronicler/scrapers.py SCRAPERS."
-    )
 
 
 @pytest.mark.asyncio

@@ -174,7 +174,6 @@ additions merge cleanly. -->
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
-| `UNITARES_METRICS_URL` | varies: `DEFAULT_URL` (agents/chronicler/agent.py); `''` (agents/chronicler/scrapers.py) | read by main() | agents/chronicler/agent.py, agents/chronicler/scrapers.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
 | `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
@@ -211,7 +210,6 @@ additions merge cleanly. -->
 | `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_resident_monitors.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_READ_ONLY_TOKENS` | `''` | Read the read-only key digests | src/http_routes/access.py |
-| `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
 | `UNITARES_RESIDENTS` | `None (no reader fallback)` | Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |

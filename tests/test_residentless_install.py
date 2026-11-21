@@ -336,7 +336,7 @@ def test_default_install_mounts_no_resident_routes(residentless, monkeypatch):
 # --- metrics catalog (2026-09-27) ---------------------------------------------
 # GET /v1/metrics/catalog serves the catalog to every install. The metrics the
 # reference scraper resident records about this operator's own repo, GitHub org
-# and residents live in agents/chronicler/metrics_catalog.json and are
+# and residents live in that deployment's own extra catalog and are
 # registered only when UNITARES_METRICS_CATALOG_EXTRA names that file. The
 # catalog is built at import, so the default install is checked in a fresh
 # interpreter with the variable unset rather than by patching a module global.
@@ -360,7 +360,9 @@ def test_default_install_catalog_is_product_only(tmp_path):
     declared = {
         m["name"]
         for m in json.loads(
-            (repo / "agents" / "chronicler" / "metrics_catalog.json").read_text()
+            (
+                repo / "tests" / "fixtures" / "fleet_metrics" / "reference_extra_catalog.json"
+            ).read_text()
         )["metrics"]
     }
     assert declared, "the reference extra catalog must declare its metrics"

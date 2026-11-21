@@ -283,8 +283,8 @@ when the governance server's `UNITARES_METRICS_CATALOG_EXTRA` names that file:
 UNITARES_METRICS_CATALOG_EXTRA=/etc/unitares/metrics-catalog.json
 ```
 
-Copy or extend the reference Chronicler's `agents/chronicler/metrics_catalog.json`
-into your deployment configuration. It declares repository-size, test-count,
+Keep your Chronicler's metric catalog in your deployment configuration
+(`tests/fixtures/fleet_metrics/reference_extra_catalog.json` shows the format). It declares repository-size, test-count,
 Sentinel-findings and GitHub-traffic series. Unset (the default) registers
 nothing, so an install that runs no such scraper neither lists those names nor
 accepts writes to them. Each entry is `{"name", "description", "unit"}` under a

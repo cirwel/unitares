@@ -1,5 +1,5 @@
-"""Tests for agents/vigil_hygiene/cherry.py."""
-from agents.vigil_hygiene.cherry import CherryVerdict, parse_cherry
+"""Tests for scripts/dev/branch_hygiene/cherry.py."""
+from scripts.dev.branch_hygiene.cherry import CherryVerdict, parse_cherry
 
 
 class TestParseCherry:

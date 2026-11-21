@@ -688,7 +688,7 @@ def run_branch_hygiene(root: Path, *, dry_run: bool) -> BranchHygieneSummary:
     if str(source_root) not in sys.path:
         sys.path.insert(0, str(source_root))
 
-    from agents.vigil_hygiene.agent import sweep
+    from scripts.dev.branch_hygiene.agent import sweep
 
     log_buffer = io.StringIO()
     with contextlib.redirect_stdout(log_buffer):

@@ -1,6 +1,6 @@
 # agents/
 
-Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, and `chronicler/` as examples of how to build a resident agent, not as load-bearing governance internals.
+Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/` and `sentinel/` as examples of how to build a resident agent, not as load-bearing governance internals.
 
 These implementations are optional. Installing the server does not select a
 resident fleet or enable a scheduler. Configure names, capabilities, endpoints,
@@ -21,17 +21,22 @@ governance database directly, or receive a privileged measurement path.
 | `common/`   | Shared helpers used by the residents in this tree (findings, config, log). |
 | `vigil/`    | Reference **janitorial** resident — runs on a schedule, posts health findings. |
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
-| `chronicler/` | Reference **archive** resident — daily external-source capture.            |
 | `github_observer/` | Optional **observer**, not a resident: reads CI results, review records and state changes on agent-signed pull requests from GitHub. Dry run only until its write route lands (`docs/proposals/active/github-outcome-observer-v0.md`). |
 | `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin (`scripts/dev/sync-plugin-agents.sh`); see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
 
 ## Residents that have moved out
 
 A deployment's residents belong in its deployment repository, built on the
-public SDK. The code-watcher resident (Watcher) that used to live here at
-`agents/watcher/` moved out on that basis; the residents still in this tree are
-slated to follow. Core keeps only the reader side of Watcher's state-location
-contract (`src/watcher_state_reader.py`) for a deployment-owned route pack.
+public SDK. Two that used to live here moved out on that basis: the
+code-watcher resident (Watcher, `agents/watcher/`) and the daily metrics
+scraper (Chronicler, `agents/chronicler/`). The residents still in this tree
+are slated to follow. Core keeps only what a deployment-owned resident reads
+through: the Watcher state-location contract (`src/watcher_state_reader.py`)
+and the extra-metrics-catalog mechanism (`UNITARES_METRICS_CATALOG_EXTRA`).
+
+The branch-hygiene sweep that sat beside them (`agents/vigil_hygiene/`) is not
+a resident: it is a git tool the workspace closeout script uses, and now lives
+at `scripts/dev/branch_hygiene/`.
 
 ## Running your own
 

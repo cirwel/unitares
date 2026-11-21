@@ -1,7 +1,7 @@
-"""Tests for agents/vigil_hygiene/clean_check.py."""
+"""Tests for scripts/dev/branch_hygiene/clean_check.py."""
 from pathlib import Path
 
-from agents.vigil_hygiene.clean_check import check_worktree_clean
+from scripts.dev.branch_hygiene.clean_check import check_worktree_clean
 
 
 class TestCheckWorktreeClean:

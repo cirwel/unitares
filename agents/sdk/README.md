@@ -165,8 +165,7 @@ Do **not** override `_ensure_identity`, `_handle_cycle_result`, or
   forever with heartbeats when idle. Reference:
   `agents/sentinel/agent.py`.
 - **Scheduled:** `asyncio.run(agent.run_once())` under launchd /
-  systemd cron. References: `agents/chronicler/agent.py`,
-  `agents/vigil/agent.py`.
+  systemd cron. Reference: `agents/vigil/agent.py`.
 
 Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
 

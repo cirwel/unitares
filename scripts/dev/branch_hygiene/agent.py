@@ -8,7 +8,7 @@ squash-merged. Reports HOLD branches with unique commits for human salvage
 review.
 
 Usage:
-    python3 agents/vigil_hygiene/agent.py [--repo PATH] [--live]
+    python3 scripts/dev/branch_hygiene/agent.py [--repo PATH] [--live]
 
 Defaults to dry-run. --live enables actual deletions.
 See docs/operations/branch-hygiene-runbook.md for the salvage contract.
@@ -30,12 +30,12 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 # Ensure repo root on sys.path when run directly
-project_root = Path(__file__).resolve().parent.parent.parent
+project_root = Path(__file__).resolve().parents[3]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from agents.vigil_hygiene.cherry import CherryResult, CherryVerdict, parse_cherry
-from agents.vigil_hygiene.clean_check import check_worktree_clean
+from scripts.dev.branch_hygiene.cherry import CherryResult, CherryVerdict, parse_cherry
+from scripts.dev.branch_hygiene.clean_check import check_worktree_clean
 
 KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main"})
 NEWER_THAN_SECONDS = 24 * 60 * 60
@@ -435,7 +435,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="vigil-hygiene weekly branch sweep")
     parser.add_argument(
         "--repo",
-        default=os.environ.get("UNITARES_REPO", str(Path(__file__).resolve().parents[2])),
+        default=os.environ.get("UNITARES_REPO", str(Path(__file__).resolve().parents[3])),
         help="path to git repo",
     )
     parser.add_argument("--live", action="store_true", help="actually delete (default: dry-run)")
