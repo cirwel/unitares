@@ -50,9 +50,11 @@ _FINGERPRINT_MAX_CHARS = 256
 _FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
 # Server-owned provenance keys: always stripped from incoming JSON and stamped
 # solely from the authenticated request credential.
+PROVENANCE_SOURCE_FINDINGS_TOKEN = "server_findings_token"
 _SERVER_OWNED_PROVENANCE_FIELDS = (
     "provenance_verified",
     "verified_actor_agent_uuid",
+    "provenance_source",
 )
 
 
@@ -200,8 +202,13 @@ async def http_record_finding(request):
         # verified_actor_agent_uuid=None.
         for key in _SERVER_OWNED_PROVENANCE_FIELDS:
             payload.pop(key, None)
-        payload["provenance_verified"] = bool(provenance_verified)
-        payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
+        if provenance_verified and isinstance(verified_actor_agent_uuid, str):
+            payload["provenance_verified"] = True
+            payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
+            payload["provenance_source"] = PROVENANCE_SOURCE_FINDINGS_TOKEN
+        else:
+            payload["provenance_verified"] = False
+            payload["verified_actor_agent_uuid"] = None
 
         # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
         # release sentinel findings get their event check attached BEFORE

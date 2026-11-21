@@ -317,12 +317,14 @@ def test_strips_caller_forged_provenance_on_trusted_network(client):
         agent_name="Vigil",
         provenance_verified=True,
         verified_actor_agent_uuid=VIGIL_UUID,
+        provenance_source="server_findings_token",
     )
     r = client.post("/api/findings", json=spoofed)
     assert r.status_code == 200
     ev = r.json()["event"]
     assert ev["provenance_verified"] is False
     assert ev["verified_actor_agent_uuid"] is None
+    assert "provenance_source" not in ev
 
 
 def test_shared_static_tokens_record_unverified_provenance(monkeypatch):
@@ -678,10 +680,41 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert events[0]["verified_actor_agent_uuid"] == VIGIL_UUID
 
     # 3. REST /api/events (audit-DB backfill after restart) preserves top-level
-    #    provenance keys from the persisted row and coerces non-bool values fail-closed.
+    #    provenance keys ONLY for server-stamped rows with a valid canonical UUID,
+    #    and fails closed on pre-deploy legacy / malformed / mismatched rows.
     assert len(persisted_rows) == 1
+    assert persisted_rows[0]["details"]["provenance_source"] == "server_findings_token"
     db_rows = [
         persisted_rows[0],
+        {
+            "event_id": "db-legacy-pre-pr",
+            "event_type": "vigil_finding",
+            "agent_id": "vigil",
+            "timestamp": "2026-11-21T01:59:30+00:00",
+            "details": {
+                "type": "vigil_finding",
+                "severity": "warning",
+                "message": "pre-PR forged row lacking provenance_source",
+                "agent_name": "Vigil",
+                "provenance_verified": True,
+                "verified_actor_agent_uuid": VIGIL_UUID,
+            },
+        },
+        {
+            "event_id": "db-missing-actor",
+            "event_type": "vigil_finding",
+            "agent_id": "vigil",
+            "timestamp": "2026-11-21T01:59:15+00:00",
+            "details": {
+                "type": "vigil_finding",
+                "severity": "warning",
+                "message": "mismatched row with None actor",
+                "agent_name": "Vigil",
+                "provenance_source": "server_findings_token",
+                "provenance_verified": True,
+                "verified_actor_agent_uuid": None,
+            },
+        },
         {
             "event_id": "db-spoofed-nonbool",
             "event_type": "vigil_finding",
@@ -692,6 +725,7 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
                 "severity": "warning",
                 "message": "spoofed",
                 "agent_name": "Vigil",
+                "provenance_source": "server_findings_token",
                 "provenance_verified": "true",
                 "verified_actor_agent_uuid": 12345,
             },
@@ -705,5 +739,6 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert type(by_id["db-1"]["provenance_verified"]) is bool
     assert by_id["db-1"]["provenance_verified"] is True
     assert by_id["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
-    assert by_id["db-spoofed-nonbool"]["provenance_verified"] is False
-    assert by_id["db-spoofed-nonbool"]["verified_actor_agent_uuid"] is None
+    for bad_id in ("db-legacy-pre-pr", "db-missing-actor", "db-spoofed-nonbool"):
+        assert by_id[bad_id]["provenance_verified"] is False
+        assert by_id[bad_id]["verified_actor_agent_uuid"] is None

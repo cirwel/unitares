@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-21T09:28:27Z",
+  "verified_at": "2026-11-21T09:44:10Z",
   "verified_date": "2026-11-21",
-  "verifier": "gemini: re-checked skills/unitares-dashboard/SKILL.md against src/http_routes/telemetry.py audit-DB backfill provenance pass-through (dashboard endpoints/views unchanged)",
+  "verifier": "gemini: re-checked skills/unitares-dashboard/SKILL.md against src/http_routes/telemetry.py audit-DB backfill provenance_source fail-closed check (dashboard endpoints/views unchanged)",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "6ec22f988af49425",
@@ -29,7 +29,7 @@
     "unitares/src/http_routes/connectors.py": "4397034d3c844dc7",
     "unitares/src/http_routes/dashboard.py": "0c00830ee2f2a569",
     "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
-    "unitares/src/http_routes/telemetry.py": "b96cc7b8c446fc62",
+    "unitares/src/http_routes/telemetry.py": "b6c2cf5835238995",
     "unitares/src/oauth_connectors.py": "370658a9f3414d3b"
   },
   "skill_digest": "ed8c417af389aaf4",

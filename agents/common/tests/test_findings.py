@@ -506,17 +506,23 @@ def test_post_finding_falls_back_to_http_api_token_when_findings_token_unset(
     assert sent_headers[0].get("Authorization") == "Bearer fallback-http-tok"
 
 
-def test_post_finding_does_not_downgrade_when_findings_agent_token_rejected(monkeypatch):
-    """If UNITARES_FINDINGS_AGENT_TOKEN is configured and rejected, fail visibly instead of silently downgrading."""
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_post_finding_does_not_downgrade_when_findings_agent_token_rejected(
+    monkeypatch, status_code
+):
+    """If UNITARES_FINDINGS_AGENT_TOKEN is configured and rejected (401 or 403), fail visibly without retrying shared tokens."""
     from agents.common.findings import FAILED, post_finding_result
+    from agents.common.http_client import clear_bearer_preference_cache
 
+    clear_bearer_preference_cache()
     monkeypatch.setenv("UNITARES_FINDINGS_AGENT_TOKEN", "revoked-findings-tok")
     monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "shared-http-tok")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "shared-mcp-tok")
     sent_headers: list[dict] = []
 
     def fake_post(url, json, headers, timeout):  # noqa: A002
         sent_headers.append(dict(headers))
-        return _resp(403, {"success": False, "error": "AgentTokenScope"})
+        return _resp(status_code, {"success": False, "error": "rejected"})
 
     monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
     outcome = post_finding_result(
@@ -525,9 +531,10 @@ def test_post_finding_does_not_downgrade_when_findings_agent_token_rejected(monk
         message="revoked",
         agent_id="vigil",
         agent_name="Vigil",
-        fingerprint="fp-revoked",
+        fingerprint=f"fp-revoked-{status_code}",
     )
     assert outcome == FAILED
     assert [h.get("Authorization") for h in sent_headers] == [
         "Bearer revoked-findings-tok"
     ]
+    clear_bearer_preference_cache()

@@ -7,6 +7,7 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 
@@ -17,8 +18,13 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.http_routes.findings import PROVENANCE_SOURCE_FINDINGS_TOKEN
 
 logger = get_logger(__name__)
+
+_PROVENANCE_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
@@ -358,15 +364,32 @@ async def http_events(request):
                         "timestamp": de.get("timestamp"),
                         "event_id": de_id,
                     }
-                    if "provenance_verified" in payload:
-                        row["provenance_verified"] = (
-                            payload["provenance_verified"] is True
+                    if any(
+                        k in payload
+                        for k in (
+                            "provenance_verified",
+                            "verified_actor_agent_uuid",
+                            "provenance_source",
                         )
-                    if "verified_actor_agent_uuid" in payload:
-                        raw_actor = payload["verified_actor_agent_uuid"]
-                        row["verified_actor_agent_uuid"] = (
-                            raw_actor if isinstance(raw_actor, str) else None
+                    ):
+                        raw_actor = payload.get("verified_actor_agent_uuid")
+                        normalized_actor = (
+                            raw_actor.lower()
+                            if isinstance(raw_actor, str)
+                            and _PROVENANCE_UUID_RE.fullmatch(raw_actor.lower())
+                            else None
                         )
+                        if (
+                            payload.get("provenance_source")
+                            == PROVENANCE_SOURCE_FINDINGS_TOKEN
+                            and payload.get("provenance_verified") is True
+                            and normalized_actor is not None
+                        ):
+                            row["provenance_verified"] = True
+                            row["verified_actor_agent_uuid"] = normalized_actor
+                        else:
+                            row["provenance_verified"] = False
+                            row["verified_actor_agent_uuid"] = None
                     events.append(row)
                 events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
                 events = events[:limit]
