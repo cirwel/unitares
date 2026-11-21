@@ -1,0 +1,1 @@
+- Interface contract 2.4.2: Imported-memory close-contest ranking_multiplier relaxes from 0.55 to 0.85 while channel_message stays 0.55.

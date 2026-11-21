@@ -308,7 +308,7 @@ def _error_reason(exc: urllib.error.HTTPError) -> str | None:
     try:
         raw_body = exc.read(4096)
         data = json.loads(raw_body.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
+    except (OSError, http.client.HTTPException, UnicodeDecodeError, ValueError):
         return None
     err = data.get("error") if isinstance(data, dict) else None
     return err if isinstance(err, str) else None
@@ -359,7 +359,10 @@ class UnitaresEventWriter:
             if exc.code in (400, 413):
                 return "rejected"
             if exc.code == 422:
-                if _error_reason(exc) == "observed_at in the future":
+                reason = _error_reason(exc)
+                if reason is None:
+                    return "failed"
+                if reason == "observed_at in the future":
                     return "future_timestamp"
                 return "rejected"
             if exc.code == 403:

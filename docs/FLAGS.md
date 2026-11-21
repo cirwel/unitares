@@ -41,6 +41,7 @@ additions merge cleanly. -->
 | `UNITARES_ACTOR_WORK_TOOL_STATS` | `'1'` | Return True when behavioral tool stats read clean actor DB work tools | src/behavioral_sensor.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
+| `UNITARES_ALLOW_NO_CONTINUITY_SECRET` | `None (no reader fallback)` | Whether the operator chose to run without a continuity key | src/continuity_secret.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |

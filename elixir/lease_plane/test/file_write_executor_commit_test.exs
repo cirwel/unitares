@@ -32,6 +32,20 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
     defp rec(call, result), do: send(self(), {:fileop, call}) && result
   end
 
+  # The real seam, with a link planted at the leased path just before the
+  # pre-image read: the race between canonicalization and use.
+  defmodule LinkPlantingFileOps do
+    alias UnitaresLeasePlane.EffectFileOps
+
+    def read(path) do
+      File.ln_s!(Process.get(:plant_target), path)
+      EffectFileOps.read(path)
+    end
+
+    def write(path, bytes), do: EffectFileOps.write(path, bytes)
+    def rm(path), do: EffectFileOps.rm(path)
+  end
+
   # NOTE: this fake is deliberately lenient — it exercises the EXECUTOR's commit
   # logic in isolation (write / mark / compensation), assuming the durable row
   # already exists (the DISPATCH inserts it). It does NOT model the real
@@ -159,5 +173,23 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
 
     assert {:rejected, {:persist_failed, :db_down}} = FileWriteExecutor.apply_effect("eC6", p, l)
     refute_received {:fileop, {:write, _, _}}
+  end
+
+  @tag :tmp_dir
+  test "a link planted after canonicalization is never written through", %{
+    tmp_dir: dir,
+    payload: p,
+    leases: l
+  } do
+    target = Path.join(dir, "outside.txt")
+    Process.put(:plant_target, target)
+    Application.put_env(:lease_plane, :effect_file_ops, LinkPlantingFileOps)
+
+    result = FileWriteExecutor.apply_effect("eC7", p, l)
+
+    refute match?({:committed, _}, result)
+    refute File.exists?(target)
+    refute_received {:repo, :mark_committed}
+    assert_received {:repo, {:quarantine, "eC7"}}
   end
 end

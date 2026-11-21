@@ -19,7 +19,7 @@ from tests.helpers import parse_result, successful_dialectic_message_append
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
 _DIALECTIC_SUBMODULES = {
-    "mcp_server": ("phase_submission", "resolution_helpers", "llm_assisted", "handlers"),
+    "mcp_server": ("phase_submission", "resolution_helpers", "llm_assisted", "actionability", "handlers"),
     "load_session": ("phase_submission", "resolution_helpers", "llm_assisted"),
     "load_session_as_dict": ("phase_submission", "llm_assisted"),
     "save_session": ("phase_submission", "resolution_helpers"),
