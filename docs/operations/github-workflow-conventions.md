@@ -50,29 +50,30 @@ veto by removing the label.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - Before readiness, the owner classifies the PR body as `fix` or `capability`.
-  A capability that adds a tool, action, instrument or model channel is
-  reserved to the operator and stays a draft until the operator rules; fixes,
-  friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
-  freeze was lifted by the operator on 2026-10-15 (KG decision
-  `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
-  than holding a fix. Scientific and governance-sensitive gates are unchanged.
-  An auth or identity-enforcement diff is no longer held as a draft for the
-  operator (operator ruling, 2026-11-20): its gate is two reviewer families
-  outside the authors, and its owner marks it ready and labels it once both
-  have passed. On a `second_family_paths` file the `review` check enforces
-  that. `review_policy.json` deliberately leaves some files with an access
-  decision off that list (its `_boundary` note names them, for example
-  `src/mcp_handlers/decorators.py`), and a change there passes `review` on one
-  family. For an auth or identity-enforcement change in such a file the owner
-  gets the second family's review before marking ready and names both families
-  in the PR body; nothing enforces this, so the body is the record. The same
-  holds for `ready-when-validated`: do not apply it to such a PR until both
-  families have passed, because the queue promotes a declared draft as soon as
-  `review` succeeds, and here `review` succeeds on one family. With no
-  second family available, the PR waits for one or for the operator's word, as
-  it would on a listed path. The operator reviews, merges and authors no PR, so a rule
-  that parks a PR for the operator to read parks it for good; #3222 stayed a
-  draft for 13 days while each reviewer repeated that it was reserved.
+  Fixes, friction reduction, tooling, tests and docs proceed after validation.
+  The 2026-10-09 feature freeze was lifted by the operator on 2026-10-15 (KG
+  decision `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments
+  rather than holding a fix. Scientific and governance-sensitive gates are
+  unchanged. Neither an auth or identity-enforcement diff (operator ruling,
+  2026-11-20) nor a `capability` PR (including one that adds a tool, alias,
+  action, instrument or model channel against `docs/integration/INTENT_MAP.md`;
+  operator ruling, 2026-11-21) is held as a draft for the operator: its gate is
+  two reviewer families outside the authors, and its owner marks it ready and
+  labels it once both have passed. On a `second_family_paths` file the `review`
+  check enforces that. `review_policy.json` deliberately leaves some files with
+  an access decision or capability surface off that list (its `_boundary` note
+  names them, for example `src/mcp_handlers/decorators.py`), and a change there
+  passes `review` on one family. For a `capability` or an auth or
+  identity-enforcement change in such a file the owner gets the second family's
+  review before marking ready and names both families in the PR body; nothing
+  enforces this, so the body is the record. The same holds for
+  `ready-when-validated`: do not apply it to such a PR until both families have
+  passed, because the queue promotes a declared draft as soon as `review`
+  succeeds, and here `review` succeeds on one family. With no second family
+  available, the PR waits for one or for the operator's word, as it would on a
+  listed path. The operator reviews, merges and authors no PR, so a rule that
+  parks a PR for the operator to read parks it for good; #3222 stayed a draft
+  for 13 days while each reviewer repeated that it was reserved.
 - A PR that records an operator decision also carries it to the open issues it
   touches. Before readiness, the owner lists in the PR body each open issue the
   decision parks, supersedes or unblocks, and posts a short note on each one
@@ -237,9 +238,11 @@ veto by removing the label.
   once this content validates." The queue carries it out (section 4) and
   infers nothing. It applies under the same authority as `approved-to-merge`:
   the opening owner, a completed adopter, or a named successor holding both
-  readiness and queue-entry authority. It is for a PR whose body says
-  `Classification: fix`; a capability still waits for the operator's ruling.
-  Removing the label withdraws the declaration.
+  readiness and queue-entry authority. It requires the PR body to state
+  `Classification: fix` or `Classification: capability` (with no conflicting
+  classification); for a `capability` or an unlisted auth change, apply it only
+  once both reviewer families have passed. Removing the label withdraws the
+  declaration.
 
   If the owner cannot return, the operator may override readiness or assign a
   named successor by UNITARES agent UUID. A direct readiness override must be
@@ -1152,10 +1155,10 @@ else, the script looks at every PR against `master` that carries
   tick.
 - It never promotes a fork, a PR labelled `governance-sensitive`,
   `operator-armed`, `automerge-hold` or `no-auto-merge`, a diff on a
-  governance-sensitive surface, a stacked PR, or a PR whose body does not say
-  `Classification: fix`. The veto-window route for a governance-sensitive PR
-  starts from a PR its owner marked ready and labelled, never from a
-  declaration.
+  governance-sensitive surface, a stacked PR, or a PR whose body does not state
+  a single classification (`Classification: fix` or `Classification: capability`).
+  The veto-window route for a governance-sensitive PR starts from a PR its owner
+  marked ready and labelled, never from a declaration.
 
 Lasting refusals post one notice on the PR; waiting on CI or review posts
 nothing. Findings still need their author: the route removes the wait for a
@@ -1291,7 +1294,7 @@ this entirely).
 | One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
-| Your session will end before CI and review finish, and the PR is a `fix` you own | `gh pr edit <n> --add-label ready-when-validated` on the draft; the queue marks it ready and queues it once that content validates (section 4) |
+| Your session will end before CI and review finish, and the PR is a non-sensitive `fix` or `capability` you own (with both families passed if `capability` or unlisted auth) | `gh pr edit <n> --add-label ready-when-validated` on the draft; the queue marks it ready and queues it once that content validates (section 4) |
 | Your PR is READY and you hold queue-entry authority (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | Your READY, labelled PR is governance-sensitive | Put `Expected effect: <effect on pause and verdict rates>` in the body and get `review` passing with two model families; the queue arms it 24 hours after the label went on (section 4). A diff touching the sensitivity manifest, its checker or its workflow waits for the operator's hand merge |
 | You have readiness-only authority | Mark an unlabeled draft ready, leave it unlabeled, and wait for a separate verified queue-entry grant before revalidation and labeling |

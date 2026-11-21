@@ -1839,18 +1839,29 @@ def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "body",
     [
-        "",
+        "Classification: fix",
         "Classification: capability",
         "class: `capability`",
-        # A fix mentioned in passing does not outvote the PR's own classification.
+    ],
+)
+def test_a_pr_with_a_single_classification_is_promoted(tmp_path: Path, body: str) -> None:
+    calls, _ = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
+    assert calls == PROMOTE
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        # Conflicting classifications in the same body are refused.
         "Classification: capability\n\nThe earlier proposal used Classification: fix.",
         "Classification: fix\n\nClassification: capability",
     ],
 )
-def test_only_a_pr_classified_as_a_fix_is_promoted(tmp_path: Path, body: str) -> None:
+def test_an_unclassified_or_conflicting_pr_is_not_promoted(tmp_path: Path, body: str) -> None:
     calls, out = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
     assert calls == []
-    assert "without Classification: fix" in out
+    assert "without a single Classification: fix or capability" in out
 
 
 @pytest.mark.parametrize(

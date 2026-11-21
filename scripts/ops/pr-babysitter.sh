@@ -719,16 +719,14 @@ while read -r pr; do
     log "#$n declared ready but labelled $hold; skipped"
     continue
   fi
-  # Readiness of a capability is the operator's ruling, so the route takes
-  # only a PR whose body classifies it as a fix, as `ship.sh --resume` does.
-  # Unattended, an unstated classification is not assumed to be a fix, and
-  # every classification the body states must agree: a capability PR that
-  # also quotes "Classification: fix" somewhere is still a capability.
+  # Every declared draft must state a single classification (`fix` or
+  # `capability`, operator ruling 2026-11-21); an unclassified body or one
+  # stating both is skipped.
   if ! jq -e '[(.body // "") | match("\\b(?:classification|class)\\s*:\\s*[*` ]*(fix|capability)\\b"; "gi")
                | .captures[0].string | ascii_downcase]
-              | length > 0 and all(. == "fix")' <<<"$pr" >/dev/null; then
-    log "#$n declared ready without Classification: fix in its body; skipped"
-    notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` takes only a PR whose body says \`Classification: fix\`. A capability stays a draft until the operator rules on it."
+              | length > 0 and (unique | length == 1)' <<<"$pr" >/dev/null; then
+    log "#$n declared ready without a single Classification: fix or capability in its body; skipped"
+    notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` requires the PR body to state \`Classification: fix\` or \`Classification: capability\` (with no conflicting classification)."
     continue
   fi
   times=$(LABEL="$READY_LABEL" approval_times "$n") || { log "#$n timeline unreadable; declaration skipped"; continue; }
