@@ -52,6 +52,8 @@ defmodule AgentOrchestrator.Application do
       Application.put_env(:agent_orchestrator, :bearer_token, token)
     end
 
+    configure_lease_client_from_env()
+
     children =
       [
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
@@ -159,5 +161,90 @@ defmodule AgentOrchestrator.Application do
     else
       []
     end
+  end
+
+  @doc false
+  def configure_lease_client_from_env do
+    put_env_if_present(:lease_plane_base_url, ["LEASE_PLANE_BASE_URL"])
+
+    put_env_if_present(:lease_plane_unix_socket_path, [
+      "UNITARES_LEASE_PLANE_UNIX_SOCKET",
+      "LEASE_PLANE_UNIX_SOCKET"
+    ])
+
+    put_env_if_present(:lease_plane_bearer_token, ["LEASE_PLANE_BEARER_TOKEN"])
+    put_env_if_present(:governance_url, ["UNITARES_GOVERNANCE_URL", "GOVERNANCE_URL"])
+
+    put_env_if_present(:governance_api_token, ["UNITARES_HTTP_API_TOKEN"])
+    put_env_if_present(:governance_mcp_token, ["UNITARES_MCP_BEARER_TOKEN"])
+
+    if raw = System.get_env("UNITARES_REST_STRICT") do
+      trimmed = String.trim(raw)
+
+      if trimmed != "" do
+        Application.put_env(
+          :agent_orchestrator,
+          :governance_rest_strict,
+          parse_bool_env(trimmed)
+        )
+      end
+    end
+
+    put_env_if_present(:lease_identity_proof, [
+      "AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF",
+      "UNITARES_LEASE_IDENTITY_PROOF"
+    ])
+
+    put_env_if_present(:lease_holder_agent_uuid, ["AGENT_ORCHESTRATOR_LEASE_HOLDER_AGENT_UUID"])
+
+    if raw = System.get_env("AGENT_ORCHESTRATOR_REQUIRE_LEASE_IDENTITY_PROOF") do
+      Application.put_env(
+        :agent_orchestrator,
+        :require_lease_identity_proof,
+        parse_bool_env(raw)
+      )
+    end
+
+    if raw = System.get_env("UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS") do
+      hosts =
+        raw
+        |> String.split(",", trim: true)
+        |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+        |> Enum.reject(&(&1 == ""))
+        |> MapSet.new()
+
+      Application.put_env(:agent_orchestrator, :insecure_governance_hosts, hosts)
+    end
+
+    :ok
+  end
+
+  @doc false
+  def parse_bool_env(nil), do: false
+
+  def parse_bool_env(value) when is_binary(value) do
+    String.downcase(String.trim(value)) in ["1", "true", "yes", "on"]
+  end
+
+  defp put_env_if_present(app_key, env_names) do
+    case collect_nonempty_env(env_names) do
+      [first | _rest] -> Application.put_env(:agent_orchestrator, app_key, first)
+      [] -> :ok
+    end
+  end
+
+  defp collect_nonempty_env(env_names) do
+    env_names
+    |> Enum.flat_map(fn name ->
+      case System.get_env(name) do
+        value when is_binary(value) ->
+          trimmed = String.trim(value)
+          if trimmed != "", do: [trimmed], else: []
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.uniq()
   end
 end
