@@ -234,7 +234,11 @@ def _stalled_pr_author(entry: Dict[str, Any]) -> str:
     return f"agent {uuid} ({model})" if model else f"agent {uuid}"
 
 
-def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
+def emit_stalled_pr_findings(
+    health_state: Dict[str, Any],
+    *,
+    findings_token: Optional[str] = None,
+) -> Dict[str, int]:
     """Post one finding per stalled draft PR opened or closed this cycle.
 
     Reads the edges the stalled-draft-PR check left in ``health_state`` and
@@ -274,6 +278,8 @@ def emit_stalled_pr_findings(health_state: Dict[str, Any]) -> Dict[str, int]:
             stop["now"] = True
             counts["deferred"] += 1
             return None
+        if findings_token is not None:
+            kwargs["token"] = findings_token
         outcome = post_finding_result(**kwargs)
         if outcome not in REACHED_GOVERNANCE:
             stop["now"] = True
@@ -713,7 +719,12 @@ def archive_digest_due(prev_state: Dict[str, Any], now: datetime) -> bool:
 
 
 def post_archive_digest(
-    candidates: int, eligible: int, threshold_days: int, now: datetime,
+    candidates: int,
+    eligible: int,
+    threshold_days: int,
+    now: datetime,
+    *,
+    findings_token: Optional[str] = None,
 ) -> str:
     """Tell the operator the candidate queue exists and how to clear it.
 
@@ -727,21 +738,24 @@ def post_archive_digest(
         f"({eligible} past the {threshold_days}d auto-archive threshold). "
         f"Review: {ARCHIVE_REVIEW_COMMAND} · approve the listed set: add --apply"
     )
-    return post_finding_result(
-        event_type="vigil_finding",
-        severity="low",
-        message=message,
-        agent_id="vigil",
-        agent_name="Vigil",
-        fingerprint=compute_fingerprint(
+    post_kwargs: Dict[str, Any] = {
+        "event_type": "vigil_finding",
+        "severity": "low",
+        "message": message,
+        "agent_id": "vigil",
+        "agent_name": "Vigil",
+        "fingerprint": compute_fingerprint(
             ["vigil", "kg_archive_candidates", f"{year}-W{week:02d}"]
         ),
-        extra={
+        "extra": {
             "finding_type": "kg_archive_candidates",
             "candidates": candidates,
             "eligible": eligible,
         },
-    )
+    }
+    if findings_token is not None:
+        post_kwargs["token"] = findings_token
+    return post_finding_result(**post_kwargs)
 
 
 def _is_high_sev_permission_denial(error_code: Optional[str], message: str) -> bool:
@@ -834,6 +848,7 @@ class VigilAgent(GovernanceAgent):
         with_hygiene: bool = False,
         with_eval: bool = False,
         force_new: bool = False,
+        findings_token: Optional[str] = None,
     ):
         super().__init__(
             name=label,
@@ -855,6 +870,7 @@ class VigilAgent(GovernanceAgent):
         self.with_hygiene = with_hygiene
         self.with_eval = with_eval
         self.force_new = force_new
+        self.findings_token = findings_token
         # Vigil-specific cycle data (populated during run_cycle, used in post-checkin)
         self._cycle_state: Dict[str, Any] = {}
         self._cycle_prev_state: Dict[str, Any] = {}
@@ -1333,18 +1349,24 @@ class VigilAgent(GovernanceAgent):
                 continue
             if not result.ok and was_healthy and result.fingerprint_key:
                 notify("Vigil", result.summary)
-                post_finding(
-                    event_type="vigil_finding",
-                    severity=result.severity,
-                    message=result.summary,
-                    agent_id="vigil",
-                    agent_name="Vigil",
-                    fingerprint=compute_fingerprint(["vigil", result.fingerprint_key]),
-                    extra={"finding_type": result.fingerprint_key},
-                )
+                transition_kwargs: Dict[str, Any] = {
+                    "event_type": "vigil_finding",
+                    "severity": result.severity,
+                    "message": result.summary,
+                    "agent_id": "vigil",
+                    "agent_name": "Vigil",
+                    "fingerprint": compute_fingerprint(["vigil", result.fingerprint_key]),
+                    "extra": {"finding_type": result.fingerprint_key},
+                }
+                if self.findings_token is not None:
+                    transition_kwargs["token"] = self.findings_token
+                post_finding(**transition_kwargs)
 
         # --- Stalled draft PRs: one finding per PR, opened and closed ---
-        emit_stalled_pr_findings(health_state)
+        if self.findings_token is not None:
+            emit_stalled_pr_findings(health_state, findings_token=self.findings_token)
+        else:
+            emit_stalled_pr_findings(health_state)
 
         # --- 2.5. Read Sentinel findings since last cycle, route to action ---
         # First actual coordination arc: Sentinel observes fleet-level anomalies
@@ -1445,11 +1467,15 @@ class VigilAgent(GovernanceAgent):
             and candidates > 0
             and archive_digest_due(prev_state, cycle_now)
         ):
+            digest_kwargs: Dict[str, Any] = {}
+            if self.findings_token is not None:
+                digest_kwargs["findings_token"] = self.findings_token
             outcome = post_archive_digest(
                 candidates,
                 groundskeeper_summary.get("archive_eligible", 0),
                 int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90")),
                 cycle_now,
+                **digest_kwargs,
             )
             if outcome in REACHED_GOVERNANCE:
                 archive_digest_sent_at = cycle_now.isoformat()

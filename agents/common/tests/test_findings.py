@@ -409,3 +409,125 @@ def test_post_finding_503_sleep_is_capped(monkeypatch):
     )
     # Hot-path cap: never parks an agent cycle longer than 5s.
     assert sleeps == [5.0]
+
+
+# --- UNITARES_FINDINGS_AGENT_TOKEN selection & fallback ----------------------
+
+
+def test_post_finding_prefers_findings_agent_token_over_shared_tokens(monkeypatch):
+    from agents.common.http_client import clear_bearer_preference_cache
+
+    clear_bearer_preference_cache()
+    monkeypatch.setenv("UNITARES_FINDINGS_AGENT_TOKEN", "scoped-findings-tok")
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "local-http-tok")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "remote-mcp-tok")
+
+    sent_headers: list[dict] = []
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        sent_headers.append(dict(headers))
+        return _resp(200, {"success": True, "deduped": False})
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    assert post_finding(
+        event_type="vigil_finding",
+        severity="warning",
+        message="loopback",
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint="fp-scoped-local",
+        url="http://localhost:8767/api/findings",
+    ) is True
+    assert post_finding(
+        event_type="vigil_finding",
+        severity="warning",
+        message="remote",
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint="fp-scoped-remote",
+        url="https://gov.example.test/api/findings",
+    ) is True
+    assert [h.get("Authorization") for h in sent_headers] == [
+        "Bearer scoped-findings-tok",
+        "Bearer scoped-findings-tok",
+    ]
+
+
+def test_post_finding_explicit_token_overrides_env_findings_token(monkeypatch):
+    monkeypatch.setenv("UNITARES_FINDINGS_AGENT_TOKEN", "env-findings-tok")
+    sent_headers: list[dict] = []
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        sent_headers.append(dict(headers))
+        return _resp(200, {"success": True, "deduped": False})
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    assert post_finding(
+        event_type="vigil_finding",
+        severity="low",
+        message="explicit",
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint="fp-explicit",
+        token="explicit-override-tok",
+    ) is True
+    assert sent_headers[0].get("Authorization") == "Bearer explicit-override-tok"
+
+
+@pytest.mark.parametrize("findings_env", [None, "", "   "])
+def test_post_finding_falls_back_to_http_api_token_when_findings_token_unset(
+    monkeypatch, findings_env
+):
+    from agents.common.http_client import clear_bearer_preference_cache
+
+    clear_bearer_preference_cache()
+    if findings_env is None:
+        monkeypatch.delenv("UNITARES_FINDINGS_AGENT_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("UNITARES_FINDINGS_AGENT_TOKEN", findings_env)
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "fallback-http-tok")
+
+    sent_headers: list[dict] = []
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        sent_headers.append(dict(headers))
+        return _resp(200, {"success": True, "deduped": False})
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    assert post_finding(
+        event_type="vigil_finding",
+        severity="warning",
+        message="fallback",
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint="fp-fallback",
+    ) is True
+    assert sent_headers[0].get("Authorization") == "Bearer fallback-http-tok"
+
+
+def test_post_finding_does_not_downgrade_when_findings_agent_token_rejected(monkeypatch):
+    """If UNITARES_FINDINGS_AGENT_TOKEN is configured and rejected, fail visibly instead of silently downgrading."""
+    from agents.common.findings import FAILED, post_finding_result
+
+    monkeypatch.setenv("UNITARES_FINDINGS_AGENT_TOKEN", "revoked-findings-tok")
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "shared-http-tok")
+    sent_headers: list[dict] = []
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        sent_headers.append(dict(headers))
+        return _resp(403, {"success": False, "error": "AgentTokenScope"})
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    outcome = post_finding_result(
+        event_type="vigil_finding",
+        severity="warning",
+        message="revoked",
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint="fp-revoked",
+    )
+    assert outcome == FAILED
+    assert [h.get("Authorization") for h in sent_headers] == [
+        "Bearer revoked-findings-tok"
+    ]
