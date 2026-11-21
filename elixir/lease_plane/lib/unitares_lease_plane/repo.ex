@@ -28,6 +28,7 @@ defmodule UnitaresLeasePlane.Repo do
   lease_id::text AS lease_id,
   surface_id, surface_kind,
   holder_agent_uuid::text AS holder_agent_uuid,
+  holder_issuer, holder_subject,
   holder_class, holder_kind, holder_pid, heartbeat_required, intent,
   acquired_at, expires_at, last_heartbeat_at, released_at, release_reason,
   audit_session, original_ttl_s, earned_status,
@@ -118,7 +119,27 @@ defmodule UnitaresLeasePlane.Repo do
 
   defp acquire_step(conn, p, %{holder_agent_uuid: held} = existing)
        when is_binary(held) do
-    if held == p.holder_agent_uuid do
+    p_issuer = Map.get(p, :holder_issuer)
+    p_subject = Map.get(p, :holder_subject)
+    existing_issuer = Map.get(existing, :holder_issuer)
+    existing_subject = Map.get(existing, :holder_subject)
+
+    unverified_fallback? =
+      is_nil(p_issuer) and is_nil(p_subject) and
+        Map.get(p, :allow_unverified_principal_fallback, false) == true
+
+    legacy_row_attested_reacquire? =
+      is_nil(existing_issuer) and is_nil(existing_subject) and
+        is_binary(p_issuer) and is_binary(p_subject) and
+        p_subject == held and
+        Map.get(p, :allow_legacy_row_attested_reacquire, false) == true
+
+    same_principal? =
+      (existing_issuer == p_issuer and existing_subject == p_subject) or
+        unverified_fallback? or
+        legacy_row_attested_reacquire?
+
+    if held == p.holder_agent_uuid and same_principal? do
       # RFC §7.13: idempotent re-acquire from the same holder MUST update
       # substrate_state when caller provided new substrate fields. Without
       # this, SDK-based residents (Vigil/Sentinel/Watcher/Chronicler) using
@@ -137,6 +158,7 @@ defmodule UnitaresLeasePlane.Repo do
       if not is_nil(substrate_state) or not is_nil(substrate_observed_at) do
         update_substrate_on_idempotent(
           conn,
+          p,
           existing,
           substrate_state,
           substrate_observed_at
@@ -191,20 +213,22 @@ defmodule UnitaresLeasePlane.Repo do
 
     insert_lease_sql = """
     INSERT INTO lease_plane.surface_leases
-      (surface_id, holder_agent_uuid, holder_class,
-       holder_kind, holder_pid, heartbeat_required, intent,
+      (surface_id, holder_agent_uuid, holder_issuer, holder_subject,
+       holder_class, holder_kind, holder_pid, heartbeat_required, intent,
        expires_at, original_ttl_s, audit_session, earned_status,
        substrate_state, substrate_state_observed_at)
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7,
-       now() + make_interval(secs => $8), $8, $9, 'provisional',
-       $10::jsonb, $11::timestamptz)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+       now() + make_interval(secs => $10), $10, $11, 'provisional',
+       $12::jsonb, $13::timestamptz)
     RETURNING #{@select_lease_columns}
     """
 
     args = [
       p.surface_id,
       EffectsAndHandoffs.uuid_to_binary(p.holder_agent_uuid),
+      Map.get(p, :holder_issuer),
+      Map.get(p, :holder_subject),
       Map.get(p, :holder_class, "process_instance"),
       p.holder_kind,
       Map.get(p, :holder_pid),
@@ -272,7 +296,14 @@ defmodule UnitaresLeasePlane.Repo do
   # COALESCE pattern in renew/3 — caller-omitted fields preserve existing
   # values; caller-provided fields overwrite. Returns the refreshed lease
   # with `:idempotent` so the caller-side response shape stays the same.
-  defp update_substrate_on_idempotent(conn, existing, substrate_state, substrate_observed_at) do
+  @doc false
+  def update_substrate_on_idempotent(
+        conn,
+        p,
+        existing,
+        substrate_state,
+        substrate_observed_at
+      ) do
     sql = """
     UPDATE lease_plane.surface_leases
     SET substrate_state =
@@ -295,37 +326,17 @@ defmodule UnitaresLeasePlane.Repo do
         {:ok, {:ok, refreshed, :idempotent}}
 
       # Lease was released between the maybe_existing_active read and our UPDATE
-      # (race against the reaper). Fall through to acquire_step_nil so the
-      # caller still gets a fresh acquire instead of a confusing :not_found.
+      # (race against the reaper). Fall through to acquire_step_nil using the
+      # current acquire params `p` so any verified `(holder_issuer, holder_subject)`
+      # is preserved on the replacement row (never overwritten with a stale
+      # pre-084 `nil` principal from `existing`, and never copying an old
+      # lease's principal onto an unauthenticated acquire).
       {:ok, %{rows: []}} ->
-        acquire_step_nil(
-          conn,
-          p_from_existing(existing, substrate_state, substrate_observed_at),
-          0
-        )
+        acquire_step_nil(conn, p, 0)
 
       {:error, e} ->
         {:error, e}
     end
-  end
-
-  # Reconstruct the acquire params map from an existing-lease snapshot when
-  # the idempotent UPDATE races against a release. The original acquire `p`
-  # isn't in scope here, so synthesize from the existing row + caller fields.
-  # Only used in the rare race-recovery path above.
-  defp p_from_existing(existing, substrate_state, substrate_observed_at) do
-    %{
-      surface_id: existing.surface_id,
-      holder_agent_uuid: existing.holder_agent_uuid,
-      holder_class: existing.holder_class,
-      holder_kind: existing.holder_kind,
-      holder_pid: existing.holder_pid,
-      ttl_s: existing.original_ttl_s,
-      intent: existing.intent,
-      audit_session: existing.audit_session,
-      substrate_state: substrate_state,
-      substrate_state_observed_at: substrate_observed_at
-    }
   end
 
   # ---------- status ----------

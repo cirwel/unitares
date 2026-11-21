@@ -180,7 +180,11 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
       handoff_id: handoff.handoff_id,
       from_lease_id: lease.lease_id,
       from_holder_agent_uuid: lease.holder_agent_uuid,
+      from_holder_issuer: Map.get(lease, :holder_issuer),
+      from_holder_subject: Map.get(lease, :holder_subject),
       to_holder_agent_uuid: handoff.to_holder_agent_uuid,
+      to_holder_issuer: Map.get(handoff, :to_holder_issuer),
+      to_holder_subject: Map.get(handoff, :to_holder_subject),
       new_ttl_s: handoff.ttl_s,
       offer_expires_at: iso(handoff.expires_at),
       audit_session: lease.audit_session
@@ -230,12 +234,12 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
 
     insert_sql = """
     INSERT INTO lease_plane.surface_leases
-      (surface_id, holder_agent_uuid, holder_class,
-       holder_kind, holder_pid, heartbeat_required, intent,
+      (surface_id, holder_agent_uuid, holder_issuer, holder_subject,
+       holder_class, holder_kind, holder_pid, heartbeat_required, intent,
        expires_at, original_ttl_s, audit_session, earned_status)
     VALUES
-      ($1, $2, $3, 'remote_heartbeat', NULL, true, $4,
-       now() + make_interval(secs => $5), $5, $6, 'provisional')
+      ($1, $2, $3, $4, $5, 'remote_heartbeat', NULL, true, $6,
+       now() + make_interval(secs => $7), $7, $8, 'provisional')
     RETURNING #{Repo.select_lease_columns()}
     """
 
@@ -245,6 +249,8 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
     args = [
       old_lease.surface_id,
       uuid_to_binary(handoff.to_holder_agent_uuid),
+      Map.get(handoff, :holder_issuer),
+      Map.get(handoff, :holder_subject),
       old_lease.holder_class,
       intent,
       handoff.ttl_s,
@@ -258,7 +264,11 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
            handoff_id: handoff.handoff_id,
            from_lease_id: old_lease.lease_id,
            from_holder_agent_uuid: old_lease.holder_agent_uuid,
+           from_holder_issuer: Map.get(old_lease, :holder_issuer),
+           from_holder_subject: Map.get(old_lease, :holder_subject),
            to_holder_agent_uuid: handoff.to_holder_agent_uuid,
+           to_holder_issuer: Map.get(new_lease, :holder_issuer),
+           to_holder_subject: Map.get(new_lease, :holder_subject),
            audit_session: audit_session
          },
          :ok <- log_event(conn, "handoff_accept", new_lease, payload) do
@@ -347,7 +357,11 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
 
     payload = %{
       requested_holder_agent_uuid: p.holder_agent_uuid,
+      requested_holder_issuer: Map.get(p, :holder_issuer),
+      requested_holder_subject: Map.get(p, :holder_subject),
       held_by_uuid: existing.holder_agent_uuid,
+      held_by_issuer: Map.get(existing, :holder_issuer),
+      held_by_subject: Map.get(existing, :holder_subject),
       expires_at: iso(existing.expires_at),
       audit_session: Map.get(p, :audit_session)
     }
@@ -375,6 +389,8 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
       "surface_id" => lease.surface_id,
       "surface_kind" => lease.surface_kind,
       "holder_agent_uuid" => lease.holder_agent_uuid,
+      "holder_issuer" => Map.get(lease, :holder_issuer),
+      "holder_subject" => Map.get(lease, :holder_subject),
       "holder_class" => lease.holder_class,
       "holder_kind" => lease.holder_kind,
       "holder_pid" => lease.holder_pid,
