@@ -158,6 +158,7 @@ defmodule UnitaresLeasePlane.Repo do
       if not is_nil(substrate_state) or not is_nil(substrate_observed_at) do
         update_substrate_on_idempotent(
           conn,
+          p,
           existing,
           substrate_state,
           substrate_observed_at
@@ -295,7 +296,14 @@ defmodule UnitaresLeasePlane.Repo do
   # COALESCE pattern in renew/3 — caller-omitted fields preserve existing
   # values; caller-provided fields overwrite. Returns the refreshed lease
   # with `:idempotent` so the caller-side response shape stays the same.
-  defp update_substrate_on_idempotent(conn, existing, substrate_state, substrate_observed_at) do
+  @doc false
+  def update_substrate_on_idempotent(
+        conn,
+        p,
+        existing,
+        substrate_state,
+        substrate_observed_at
+      ) do
     sql = """
     UPDATE lease_plane.surface_leases
     SET substrate_state =
@@ -318,39 +326,17 @@ defmodule UnitaresLeasePlane.Repo do
         {:ok, {:ok, refreshed, :idempotent}}
 
       # Lease was released between the maybe_existing_active read and our UPDATE
-      # (race against the reaper). Fall through to acquire_step_nil so the
-      # caller still gets a fresh acquire instead of a confusing :not_found.
+      # (race against the reaper). Fall through to acquire_step_nil using the
+      # current acquire params `p` so any verified `(holder_issuer, holder_subject)`
+      # is preserved on the replacement row (never overwritten with a stale
+      # pre-084 `nil` principal from `existing`, and never copying an old
+      # lease's principal onto an unauthenticated acquire).
       {:ok, %{rows: []}} ->
-        acquire_step_nil(
-          conn,
-          p_from_existing(existing, substrate_state, substrate_observed_at),
-          0
-        )
+        acquire_step_nil(conn, p, 0)
 
       {:error, e} ->
         {:error, e}
     end
-  end
-
-  # Reconstruct the acquire params map from an existing-lease snapshot when
-  # the idempotent UPDATE races against a release. The original acquire `p`
-  # isn't in scope here, so synthesize from the existing row + caller fields.
-  # Only used in the rare race-recovery path above.
-  defp p_from_existing(existing, substrate_state, substrate_observed_at) do
-    %{
-      surface_id: existing.surface_id,
-      holder_agent_uuid: existing.holder_agent_uuid,
-      holder_issuer: Map.get(existing, :holder_issuer),
-      holder_subject: Map.get(existing, :holder_subject),
-      holder_class: existing.holder_class,
-      holder_kind: existing.holder_kind,
-      holder_pid: existing.holder_pid,
-      ttl_s: existing.original_ttl_s,
-      intent: existing.intent,
-      audit_session: existing.audit_session,
-      substrate_state: substrate_state,
-      substrate_state_observed_at: substrate_observed_at
-    }
   end
 
   # ---------- status ----------
