@@ -109,7 +109,6 @@ def test_raw_mcp_transport_callers_attach_shared_bearer_headers(path):
         "scripts/ops/com.unitares.governance-mcp.plist",
         "scripts/ops/com.unitares.gateway-mcp.plist.template",
         "scripts/ops/com.unitares.vigil.plist.template",
-        "scripts/ops/com.unitares.chronicler.plist.template",
         "scripts/ops/com.unitares.dialectic-canary.plist.template",
     ],
 )

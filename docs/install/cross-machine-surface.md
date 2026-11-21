@@ -56,12 +56,11 @@ Option 2 is cleanest for cross-machine portability. Not applied in this PR becau
 
 ## TEMPLATE GAP (gitignored plists with no in-repo template)
 
-`.gitignore` excludes `scripts/ops/*.plist` because installed copies contain secrets. Only three templates are tracked: `governance-mcp.plist` (sanitized), `chronicler.plist.template`, `ipv6-loopback-proxy.plist.template`. The four below exist on the operator's disk but **a stranger has nothing to copy from**.
+`.gitignore` excludes `scripts/ops/*.plist` because installed copies contain secrets. Tracked templates include `governance-mcp.plist` (sanitized) and `ipv6-loopback-proxy.plist.template`. (The Chronicler template named in the original audit left with that resident.) The four below exist on the operator's disk but **a stranger has nothing to copy from**.
 
 | LaunchAgent | Status | Notes |
 |------------|--------|-------|
 | `com.unitares.governance-mcp.plist` | Tracked, sanitized with `/PATH/TO/UNITARES`, `GENERATE_YOUR_OWN_TOKEN` | Rename to `.template` for naming consistency (low priority) |
-| `com.unitares.chronicler.plist.template` | Tracked template using `__UNITARES_ROOT__`, `__HOME__` | OK — reference pattern |
 | `com.unitares.ipv6-loopback-proxy.plist.template` | ✅ Resolved in this PR | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders applied |
 | `com.unitares.sentinel.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.sentinel-beam.plist.template` | ✅ Added in Wave 1 cutover PR | Sanitized BEAM Sentinel cutover target |
@@ -102,7 +101,6 @@ These appear in the audit but need no change. Listed so future audits don't re-f
 | LAN / private network ranges `192.168.0.0/16`, `10.0.0.0/8` | `src/http_api.py:148-149` | RFC 1918 ranges, machine-independent |
 | `~/Library/LaunchAgents` install path | All plist install instructions | Standard macOS path, identical across machines |
 | `~/.unitares/anchors`, `~/backups/governance` | `scripts/ops/rotate-secrets.sh`, `backup_governance.sh` | Use `${HOME}` correctly |
-| `$HOME` substitution in chronicler template | `scripts/ops/com.unitares.chronicler.plist.template` | Pattern to follow for the other plist templates |
 
 ---
 
