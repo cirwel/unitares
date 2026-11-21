@@ -322,7 +322,7 @@ def test_compute_fingerprint_format_is_locked():
     """Lock the pipe-joined SHA-256 16-hex-prefix format against silent refactor.
 
     This exists because Watcher already stores fingerprints in this format on
-    disk (agents/watcher/findings.jsonl); any change to the format would
+    disk (a Watcher resident's findings.jsonl); any change to the format would
     break cross-agent dedup against Watcher's existing findings.
     """
     import hashlib

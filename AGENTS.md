@@ -41,17 +41,21 @@ The governance plugin can surface Watcher findings when its explicit Watcher
 opt-in is configured. SessionStart is read-only; UserPromptSubmit records a
 stable host+worktree delivery receipt so one federated client cannot consume
 another client's notification. Without that plugin wiring, visibility remains
-manual. To see and close findings directly:
+manual.
+
+This repository ships no Watcher. A deployment that runs one keeps it in its
+own deployment repository and names its agent script in
+`UNITARES_WATCHER_AGENT`. To see and close findings directly on such a host:
 
 ```bash
-python3 agents/watcher/agent.py --list-findings --only-open   # list open/surfaced findings
-python3 agents/watcher/agent.py --print-unresolved            # print unresolved block without mutating
-python3 agents/watcher/agent.py --surface-pending             # print + transition open→surfaced
-python3 agents/watcher/agent.py --resolve <fingerprint> --agent-id <your-uuid>
-python3 agents/watcher/agent.py --dismiss <fingerprint> --agent-id <your-uuid>
+python3 "$UNITARES_WATCHER_AGENT" --list-findings --only-open   # list open/surfaced findings
+python3 "$UNITARES_WATCHER_AGENT" --print-unresolved            # print unresolved block without mutating
+python3 "$UNITARES_WATCHER_AGENT" --surface-pending             # print + transition open→surfaced
+python3 "$UNITARES_WATCHER_AGENT" --resolve <fingerprint> --agent-id <your-uuid>
+python3 "$UNITARES_WATCHER_AGENT" --dismiss <fingerprint> --agent-id <your-uuid>
 ```
 
-Use `--agent-id` when resolving or dismissing so the audit trail stays attributed. `data/watcher/` is gitignored, so commit messages are still useful context when you close a finding.
+Use `--agent-id` when resolving or dismissing so the audit trail stays attributed. Watcher state lives outside any checkout (`~/.unitares/watcher/`), so commit messages are still useful context when you close a finding.
 
 ### What Codex should NOT reference
 

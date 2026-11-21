@@ -116,7 +116,7 @@ additions merge cleanly. -->
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_EXTERNAL_TRUSTED_GITHUB_APPS` | `''` | Comma-separated APP_ID:BOT_ACTOR_ID or BOT_ACTOR_ID allowlist for external PR authors. | src/http_routes/external_events.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
-| `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
+| `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_APPLY` | `''` | Whether a baselined absolute-floor breach forces at least "caution" (UNITARES_FLOOR_BREACH_CAUTION_APPLY) | src/behavioral_assessment.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_SHADOW` | `''` | Whether to record what the baselined floor-breach verdict floor would do (UNITARES_FLOOR_BREACH_CAUTION_SHADOW) | src/behavioral_assessment.py |
 | `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:128); `[] (via split_csv_env)` (src/mcp_listen_config.py:129) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
@@ -124,7 +124,6 @@ additions merge cleanly. -->
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the gateway surface | src/mcp_listen_config.py |
 | `UNITARES_GITHUB_OBSERVER_STATE` | `None (no reader fallback)` | read by default_state_path() | agents/github_observer/observer.py |
-| `UNITARES_GOVERNANCE_HTTP` | `'http://localhost:8767'` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `None (no reader fallback)` | The governance MCP URL the reviewer connects to | src/dialectic_reviewer_config.py, agents/dialectic_reviewer/reviewer.py (+2 more) |
 | `UNITARES_GOVERNED_EFFECT_BINDING` | `None (no reader fallback)` | Return whether effect binding is enabled for this type; unset is off | src/http_routes/effects.py |
 | `UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN` | `None (no reader fallback)` | Default-off per-effect binding gate for agent_spawn | src/http_routes/effects.py |
@@ -136,7 +135,7 @@ additions merge cleanly. -->
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
-| `UNITARES_HTTP_API_TOKEN` | varies: `None (no reader fallback)` (src/http_routes/audit_volume.py, src/http_routes/dashboard.py, src/http_routes/effects.py, src/http_routes/findings.py, src/http_routes/health.py, src/http_routes/lease_identity.py, src/http_routes/lease_plane_telemetry.py, src/http_routes/metrics_api.py, src/http_routes/overview.py, src/http_routes/packs.py, src/http_routes/residents.py, src/http_routes/substrate.py, src/http_routes/telemetry.py, src/http_routes/timeline.py, src/http_routes/tools.py, agents/sdk/src/unitares_sdk/lease_plane/client.py, agents/sentinel/routes.py, agents/vigil/routes.py, agents/watcher/routes.py, scripts/ops/automation_census_route.py); `''` (agents/common/http_client.py) | GET /v1/audit/volume-summary?floor=300  | src/http_routes/audit_volume.py, src/http_routes/dashboard.py (+19 more) |
+| `UNITARES_HTTP_API_TOKEN` | varies: `None (no reader fallback)` (src/http_routes/audit_volume.py, src/http_routes/dashboard.py, src/http_routes/effects.py, src/http_routes/findings.py, src/http_routes/health.py, src/http_routes/lease_identity.py, src/http_routes/lease_plane_telemetry.py, src/http_routes/metrics_api.py, src/http_routes/overview.py, src/http_routes/packs.py, src/http_routes/residents.py, src/http_routes/substrate.py, src/http_routes/telemetry.py, src/http_routes/timeline.py, src/http_routes/tools.py, agents/sdk/src/unitares_sdk/lease_plane/client.py, agents/sentinel/routes.py, agents/vigil/routes.py, scripts/ops/automation_census_route.py); `''` (agents/common/http_client.py) | GET /v1/audit/volume-summary?floor=300  | src/http_routes/audit_volume.py, src/http_routes/dashboard.py (+18 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_HUB_CALLBACK_URL` | `''` | Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404 | src/dashboard_auth.py |
@@ -193,7 +192,7 @@ additions merge cleanly. -->
 | `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
-| `UNITARES_OPERATOR_TOKEN` | varies: `None (no reader fallback)` (agents/github_observer/observer.py); `''` (agents/watcher/agent.py) | read by main() | agents/github_observer/observer.py, agents/watcher/agent.py |
+| `UNITARES_OPERATOR_TOKEN` | `None (no reader fallback)` | read by main() | agents/github_observer/observer.py |
 | `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
 | `UNITARES_ORCHESTRATOR_PROFILES` | `''` | Whether spawns go out as the orchestrator's launch profiles | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |
@@ -251,7 +250,6 @@ additions merge cleanly. -->
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
 | `UNITARES_TRUSTED_NETWORKS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/trusted_networks.py) | Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS) | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/trusted_networks.py |
 | `UNITARES_TRUSTED_SUBSTRATE_MARKERS` | `''` | Substrate markers the operator adds to the built-in set (UNITARES_TRUSTED_SUBSTRATE_MARKERS) | src/outcome_corroboration.py |
-| `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
+| `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py, agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_URL` | `None (no reader fallback)` | read by main() | agents/github_observer/observer.py |
-| `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
-| `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |
+| `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py |

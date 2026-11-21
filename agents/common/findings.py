@@ -87,7 +87,7 @@ MAX_503_RETRY_SLEEP_SECONDS = 5.0
 def compute_fingerprint(parts: Iterable[Any]) -> str:
     """16-hex-char SHA-256 prefix of a pipe-joined identity string.
 
-    Matches the format used by Watcher (agents/watcher/agent.py:Finding.compute_fingerprint).
+    Matches the format a Watcher resident uses (``Finding.compute_fingerprint``).
     Callers pass the identity parts they want hashed, e.g.:
         compute_fingerprint(["sentinel", finding_type, violation_class, agent_id])
     """
