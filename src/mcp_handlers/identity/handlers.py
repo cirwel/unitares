@@ -2599,6 +2599,17 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         resume=resume,
     )
 
+    # A harness asking for an identity is subject to the operator's policy
+    # (src.identity.harness_onboarding). Under agent_only nothing is created
+    # for it. Here: the call asks outright for a new identity. The other place
+    # is the resolve miss below, where a resume finds nothing to resume.
+    # Resuming an existing identity creates nothing and is not declined.
+    harness_request = coerce_bool(arguments.get("harness_request"), default=False)
+    if harness_request and (force_new or not resume):
+        _declined = _harness_onboarding_refusal()
+        if _declined is not None:
+            return _declined
+
     # Extract agent UUID from continuity token for direct lookup fallback (PATH 2.8).
     # Token is a cryptographic proof of identity — stronger than name claim.
     _token_agent_uuid = None
@@ -2663,6 +2674,10 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 # on the H4/lineage-decl gap, 2026-04-27 post-deploy
                 # canary refuted by 0 dispatch_auto_mint rows in
                 # core.agents). Caller-provided values are preserved.
+                if harness_request:
+                    _declined = _harness_onboarding_refusal()
+                    if _declined is not None:
+                        return _declined
                 if not _spawn_reason:
                     _spawn_reason = (
                         "orchestrated_thread_anchor"
@@ -3004,6 +3019,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # whatever its mint recorded), and never allowed to fail the onboard.
     if is_new and arguments.get("host_session") is not None:
         await _record_host_session(agent_uuid, arguments.get("host_session"))
+    if is_new and arguments.get("spawned_under") is not None:
+        await _record_spawned_under(agent_uuid, arguments.get("spawned_under"))
 
     # CONCURRENT IDENTITY BINDING (#123): if the client declared a process
     # fingerprint, record the binding and run audit-only collision detection.
@@ -3508,6 +3525,49 @@ async def _create_spawned_edge_bg(
         logger.info(f"[SPAWNED] Created edge {parent_id[:8]}... -> {child_id[:8]}...")
     except Exception as e:
         logger.warning(f"SPAWNED edge creation failed (non-fatal): {e}")
+
+
+def _harness_onboarding_refusal():
+    """The decline for a harness call under ``agent_only``, or None to proceed."""
+    from src.identity.harness_onboarding import (
+        harness_onboarding_declined_payload,
+        harness_onboarding_policy,
+    )
+
+    policy, basis = harness_onboarding_policy()
+    if policy != "agent_only":
+        return None
+    logger.info(
+        "[ONBOARD] harness request declined: this server accepts agent-claimed "
+        "identities only (policy basis=%s)",
+        basis,
+    )
+    return success_response(harness_onboarding_declined_payload("onboard"))
+
+
+async def _record_spawned_under(agent_uuid: str, declared: Any) -> bool:
+    """Store a declared ``spawned_under`` on a freshly minted identity.
+
+    See ``src.identity.harness_onboarding``: descriptive context only, never
+    lineage. A malformed declaration or a failed write is logged and dropped;
+    it never fails the onboard.
+    """
+    from src.identity.harness_onboarding import normalize_spawned_under
+
+    try:
+        record = normalize_spawned_under(declared)
+    except ValueError as exc:
+        logger.warning(f"[ONBOARD] spawned_under ignored for {agent_uuid[:8]}...: {exc}")
+        return False
+    if record is None:
+        return False
+    try:
+        return await get_db().update_identity_metadata(
+            agent_uuid, {"spawned_under": record}, merge=True
+        )
+    except Exception as exc:
+        logger.warning(f"[ONBOARD] spawned_under not recorded for {agent_uuid[:8]}...: {exc}")
+        return False
 
 
 async def _record_host_session(agent_uuid: str, declared: Any) -> bool:

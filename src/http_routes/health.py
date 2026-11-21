@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse, Response
 from prometheus_client import REGISTRY, generate_latest, CONTENT_TYPE_LATEST
 
 from src.logging_utils import get_logger
+from src.identity.harness_onboarding import harness_onboarding_summary
 from src.metrics_registry import (
     AGENTS_TOTAL,
     DIALECTIC_SESSIONS_ACTIVE,
@@ -112,6 +113,9 @@ async def http_health(request):
         "session": {
             "header": "X-Session-ID (recommended for stable identity binding)"
         },
+        # Whether a harness may ask this server for an identity. A description
+        # for adapters and their agents; the onboard handler enforces it.
+        "onboarding": harness_onboarding_summary(),
         "identity": {
             "header": "X-Agent-Id",
             "description": (
