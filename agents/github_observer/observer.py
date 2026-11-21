@@ -8,7 +8,9 @@ write would store, and a one-line summary on stderr. It writes nothing: not to
 UNITARES, and not to the fingerprint store. Without ``--dry-run``, it posts
 new events to ``POST /v1/external/events`` (authenticated with
 ``UNITARES_OPERATOR_TOKEN``) and records persisted fingerprints in the durable
-SQLite store.
+SQLite store. With ``--record-outcomes`` (off by default) it also posts a
+``task_completed`` outcome for each merge it stores, to
+``POST /v1/harness/outcome`` (``outcomes.py``).
 
 GitHub is read with GET requests only, using ``GITHUB_TOKEN`` (or
 ``GH_TOKEN``). The token needs to read the repository and nothing else.
@@ -41,6 +43,12 @@ from agents.github_observer.events import (
     review_events,
     run_belongs_to_pr,
     trusted_pr_author,
+)
+from agents.github_observer.outcomes import (
+    DryRunOutcomeWriter,
+    MemoryPendingStore,
+    OutcomeQueue,
+    UnitaresOutcomeWriter,
 )
 from agents.github_observer.store import FingerprintStore, read_only_fingerprints
 
@@ -388,6 +396,9 @@ COUNTS = (
     "events_rejected",
     "markers_untrusted",
     "writes_failed",
+    "outcomes_written",
+    "outcomes_rejected",
+    "outcomes_failed",
 )
 # What one unreadable or malformed pull request can raise. It is counted and
 # the poll goes on; MalformedPullRequest is a ValueError.
@@ -404,8 +415,16 @@ def run_cycle(
     since: datetime,
     trusted_apps: Mapping[int, int],
     skipped_checks: Iterable[str] = DEFAULT_SKIPPED_CHECKS,
+    outcomes: OutcomeQueue | None = None,
 ) -> dict[str, int]:
     """One poll. Returns counts.
+
+    With ``outcomes`` (opt-in, ``--record-outcomes``), an event that grades
+    as an outcome queues it before the event is posted, the event route's
+    answer releases or drops it, and every released outcome, this poll's
+    and any an earlier poll could not deliver, is sent as the poll ends
+    (``outcomes.py``). Event marking is the
+    same with or without it.
 
     A repository or pull request that cannot be read is counted, never guessed
     at, and does not stop the others. A pull request with no footer, or whose
@@ -414,65 +433,74 @@ def run_cycle(
     """
     counts = dict.fromkeys(COUNTS, 0)
     this_cycle: set[str] = set()
-    for repo in repos:
-        try:
-            pulls = reader.pulls(repo, since)
-        except GitHubError:
-            counts["repos_failed"] += 1
-            continue
-        for pr in pulls:
+    try:
+        for repo in repos:
             try:
-                # A missing ``body_html`` (the media type was not honoured) is
-                # a failed read, not an unsigned pull request.
-                agent_uuid = agent_uuid_from_body_html(pr["body_html"])
-                if agent_uuid is None:
-                    counts["prs_unsigned"] += 1
-                    continue
-                if not trusted_pr_author(pr, trusted_apps):
-                    counts["prs_untrusted_author"] += 1
-                    continue
-                events, untrusted = collect_pr_events(
-                    reader,
-                    repo,
-                    pr,
-                    agent_uuid,
-                    trusted_apps=trusted_apps,
-                    skipped_checks=skipped_checks,
-                    seen=seen,
-                )
-            except _PR_ERRORS:
-                counts["prs_failed"] += 1
+                pulls = reader.pulls(repo, since)
+            except GitHubError:
+                counts["repos_failed"] += 1
                 continue
-            counts["prs_read"] += 1
-            counts["markers_untrusted"] += untrusted
-            for event in events:
-                if event["type"] not in EVENT_TYPES:
-                    raise AssertionError(f"unexpected event type {event['type']!r}")
-                fingerprint = event["fingerprint"]
-                if fingerprint in this_cycle or seen(fingerprint):
-                    counts["events_known"] += 1
+            for pr in pulls:
+                try:
+                    # A missing ``body_html`` (the media type was not honoured) is
+                    # a failed read, not an unsigned pull request.
+                    agent_uuid = agent_uuid_from_body_html(pr["body_html"])
+                    if agent_uuid is None:
+                        counts["prs_unsigned"] += 1
+                        continue
+                    if not trusted_pr_author(pr, trusted_apps):
+                        counts["prs_untrusted_author"] += 1
+                        continue
+                    events, untrusted = collect_pr_events(
+                        reader,
+                        repo,
+                        pr,
+                        agent_uuid,
+                        trusted_apps=trusted_apps,
+                        skipped_checks=skipped_checks,
+                        seen=seen,
+                    )
+                except _PR_ERRORS:
+                    counts["prs_failed"] += 1
                     continue
-                this_cycle.add(fingerprint)
-                outcome = writer.write(event)
-                if outcome is True or outcome == "written":
-                    mark(fingerprint, event["type"])
-                    counts["events_new"] += 1
-                elif outcome == "duplicate":
-                    mark(fingerprint, event["type"])
-                    counts["events_known"] += 1
-                elif outcome == "unknown_agent":
-                    counts["events_unknown_agent"] += 1
-                elif outcome == "untrusted_author":
-                    # Server/observer allowlist mismatch may be fixed in config; do not mark locally.
-                    counts["events_untrusted_author"] += 1
-                elif outcome == "future_timestamp":
-                    # Clock skew relative to GitHub may resolve on a later poll; do not mark locally.
-                    counts["events_future"] += 1
-                elif outcome == "rejected":
-                    mark(fingerprint, event["type"])
-                    counts["events_rejected"] += 1
-                else:
-                    counts["writes_failed"] += 1
+                counts["prs_read"] += 1
+                counts["markers_untrusted"] += untrusted
+                for event in events:
+                    if event["type"] not in EVENT_TYPES:
+                        raise AssertionError(f"unexpected event type {event['type']!r}")
+                    fingerprint = event["fingerprint"]
+                    if fingerprint in this_cycle or seen(fingerprint):
+                        counts["events_known"] += 1
+                        continue
+                    this_cycle.add(fingerprint)
+                    ticket = outcomes.before_event(event) if outcomes is not None else None
+                    outcome = writer.write(event)
+                    if outcomes is not None:
+                        outcomes.after_event(ticket, outcome)
+                    if outcome is True or outcome == "written":
+                        mark(fingerprint, event["type"])
+                        counts["events_new"] += 1
+                    elif outcome == "duplicate":
+                        mark(fingerprint, event["type"])
+                        counts["events_known"] += 1
+                    elif outcome == "unknown_agent":
+                        counts["events_unknown_agent"] += 1
+                    elif outcome == "untrusted_author":
+                        # Server/observer allowlist mismatch may be fixed in config; do not mark locally.
+                        counts["events_untrusted_author"] += 1
+                    elif outcome == "future_timestamp":
+                        # Clock skew relative to GitHub may resolve on a later poll; do not mark locally.
+                        counts["events_future"] += 1
+                    elif outcome == "rejected":
+                        mark(fingerprint, event["type"])
+                        counts["events_rejected"] += 1
+                    else:
+                        counts["writes_failed"] += 1
+    finally:
+        # Also after a read error ends the poll early: released outcomes do
+        # not wait on GitHub.
+        if outcomes is not None:
+            outcomes.flush(counts)
     return counts
 
 
@@ -512,6 +540,13 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="APP_ID:BOT_ACTOR_ID of an App whose review records are admitted; repeatable. "
         "Also read from GITHUB_OBSERVER_TRUSTED_APPS (comma-separated)",
+    )
+    parser.add_argument(
+        "--record-outcomes",
+        action="store_true",
+        help="also post a graded outcome (merge -> task_completed) to /v1/harness/outcome "
+        "for each merge event this observer stores; off by default "
+        "(docs/proposals/active/github-outcome-observer-v0.md section 6b)",
     )
     parser.add_argument(
         "--skip-check",
@@ -560,11 +595,24 @@ def main(argv: list[str] | None = None) -> int:
             seen_fn = known.__contains__
             mark_fn = lambda fingerprint, event_type: None
             writer: Writer = DryRunWriter(sys.stdout)
+            outcomes: OutcomeQueue | None = (
+                OutcomeQueue(MemoryPendingStore(known), DryRunOutcomeWriter(sys.stdout))
+                if args.record_outcomes
+                else None
+            )
         else:
             store = FingerprintStore(state_path)
             seen_fn = store.has
             mark_fn = store.add
             writer = UnitaresEventWriter(unitares_url, operator_token or "")
+            outcomes = (
+                OutcomeQueue(
+                    store,
+                    UnitaresOutcomeWriter(unitares_url, operator_token or "", opener=_DEFAULT_OPENER),
+                )
+                if args.record_outcomes
+                else None
+            )
     except (sqlite3.Error, OSError):
         if store is not None:
             store.close()
@@ -583,6 +631,7 @@ def main(argv: list[str] | None = None) -> int:
             since=datetime.now(timezone.utc) - timedelta(days=args.since_days),
             trusted_apps=trusted_apps,
             skipped_checks=DEFAULT_SKIPPED_CHECKS | set(args.skip_check),
+            outcomes=outcomes,
         )
     except GitHubError as exc:
         print(f"github_observer: {exc}", file=sys.stderr)
@@ -596,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
         counts["repos_failed"]
         or counts["prs_failed"]
         or counts["writes_failed"]
+        or counts["outcomes_failed"]
+        or counts["outcomes_rejected"]
         or counts["events_unknown_agent"]
         or counts["events_untrusted_author"]
         or counts["events_future"]
