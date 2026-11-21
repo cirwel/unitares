@@ -64,8 +64,11 @@ def _listen_host() -> str:
 def harness_onboarding_policy(
     listen_host: Optional[str] = None,
 ) -> tuple[HarnessOnboardingPolicy, str]:
-    """The policy in force and why: ``explicit``, ``default_loopback`` or
-    ``default_exposed``. An unrecognised setting is ignored, never guessed at."""
+    """Whether a harness may ask this server for an identity: ``welcome`` or ``agent_only``; unset, ``welcome`` on loopback and ``agent_only`` beyond it.
+
+    Returns the policy and why it holds: ``explicit``, ``default_loopback`` or
+    ``default_exposed``. An unrecognised setting is ignored, never guessed at.
+    """
     declared = os.environ.get(HARNESS_ONBOARDING_ENV, "").strip().lower()
     if declared in HARNESS_ONBOARDING_POLICIES:
         return cast(HarnessOnboardingPolicy, declared), "explicit"
