@@ -7,6 +7,7 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 
@@ -17,8 +18,17 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.http_routes.findings import (
+    PROVENANCE_SOURCE_FINDINGS_TOKEN,
+    strip_internal_provenance_fields,
+    verify_finding_provenance_mac,
+)
 
 logger = get_logger(__name__)
+
+_PROVENANCE_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
@@ -347,7 +357,9 @@ async def http_events(request):
                             continue
                     # Reshape audit row → dashboard event shape
                     payload = de.get("details", {})
-                    events.append({
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    row = {
                         "type": payload.get("type", de.get("event_type", "")),
                         "severity": payload.get("severity", "info"),
                         "message": payload.get("message", de.get("event_type", "")),
@@ -355,7 +367,47 @@ async def http_events(request):
                         "agent_name": payload.get("agent_name", ""),
                         "timestamp": de.get("timestamp"),
                         "event_id": de_id,
-                    })
+                    }
+                    if any(
+                        k in payload
+                        for k in (
+                            "provenance_verified",
+                            "verified_actor_agent_uuid",
+                            "provenance_source",
+                            "provenance_mac",
+                        )
+                    ):
+                        raw_actor = payload.get("verified_actor_agent_uuid")
+                        normalized_actor = (
+                            raw_actor.lower()
+                            if isinstance(raw_actor, str)
+                            and _PROVENANCE_UUID_RE.fullmatch(raw_actor.lower())
+                            else None
+                        )
+                        if (
+                            payload.get("provenance_source")
+                            == PROVENANCE_SOURCE_FINDINGS_TOKEN
+                            and payload.get("provenance_verified") is True
+                            and normalized_actor is not None
+                            and verify_finding_provenance_mac(
+                                mac=payload.get("provenance_mac"),
+                                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                                verified_actor_agent_uuid=normalized_actor,
+                                agent_id=str(row["agent_id"] or ""),
+                                event_type=str(row["type"] or ""),
+                                severity=str(row["severity"] or ""),
+                                agent_name=str(row["agent_name"] or ""),
+                                message=str(row["message"] or ""),
+                                fingerprint=str(payload.get("fingerprint") or ""),
+                                timestamp=de.get("timestamp"),
+                            )
+                        ):
+                            row["provenance_verified"] = True
+                            row["verified_actor_agent_uuid"] = normalized_actor
+                        else:
+                            row["provenance_verified"] = False
+                            row["verified_actor_agent_uuid"] = None
+                    events.append(row)
                 events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
                 events = events[:limit]
             except Exception as db_err:
@@ -503,13 +555,14 @@ async def http_lifecycle_recent(request):
 
         events = []
         for r in rows:
-            details = r.get("details") or {}
+            raw_details = r.get("details") or {}
+            details = strip_internal_provenance_fields(raw_details)
             events.append({
                 "timestamp": r.get("timestamp"),
                 "event_type": r.get("event_type"),
                 "agent_id": r.get("agent_id"),
                 "agent_label": uuid_to_label.get(r.get("agent_id"), ""),
-                "reason": details.get("reason"),
+                "reason": details.get("reason") if isinstance(details, dict) else None,
                 "details": details,
                 "event_id": r.get("event_id"),
             })

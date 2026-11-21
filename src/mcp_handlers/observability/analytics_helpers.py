@@ -888,6 +888,17 @@ async def _handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextConten
         "include_test_fixtures": include_test_fixtures,
     }
     if include_events:
-        payload["events"] = visible_events
+        from src.http_routes.findings import strip_internal_provenance_fields
+
+        payload["events"] = [
+            (
+                {**e, "details": strip_internal_provenance_fields(e["details"])}
+                if isinstance(e, dict)
+                and isinstance(e.get("details"), dict)
+                and "provenance_mac" in e["details"]
+                else e
+            )
+            for e in visible_events
+        ]
 
     return success_response(payload)

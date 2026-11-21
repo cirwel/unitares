@@ -45,6 +45,7 @@ additions merge cleanly. -->
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
+| `UNITARES_AUDIT_PROVENANCE_SECRET` | `''` | Optional HMAC secret persisting server-verified finding provenance across restarts; unset fails closed after restart. | src/http_routes/findings.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
 | `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
 | `UNITARES_AUTOMATION_STATE_DIR` | `None (no reader fallback)` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
@@ -115,6 +116,7 @@ additions merge cleanly. -->
 | `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_EXTERNAL_TRUSTED_GITHUB_APPS` | `''` | Comma-separated APP_ID:BOT_ACTOR_ID or BOT_ACTOR_ID allowlist for external PR authors. | src/http_routes/external_events.py |
+| `UNITARES_FINDINGS_AGENT_TOKEN` | `''` | Optional per-agent findings-scoped bearer for POST /api/findings; falls back to HTTP/MCP env tokens when unset. | agents/common/findings.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_APPLY` | `''` | Whether a baselined absolute-floor breach forces at least "caution" (UNITARES_FLOOR_BREACH_CAUTION_APPLY) | src/behavioral_assessment.py |
