@@ -8,7 +8,7 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v4.0.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
+| UNITARES server | `v4.0.1` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.6.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 40412142192](https://github.com/cirwel/unitares/actions/runs/40412142192). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.6.0). |
 | `unitares-governance` plugin | `v0.4.24` | Carries the skills bundle for server `v3.6.0`, whose changelog entry names it as the bundle carrier (`plugin-bundle-recut: v0.4.24`). The plugin's [release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.24) record the mirrored commit and the file-by-file comparison. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
 | `unitares-sdk` | `0.6.1` | Published Python client for resident and custom integrations. `sdk-v0.6.1` is the newest SDK tag in server `v3.6.0`, and PyPI serves it. Install it with `pip install unitares-sdk==0.6.1`; use a server Git tag only when deliberately testing an unreleased SDK build. What changed: [changelog](CHANGELOG.md). |
@@ -34,6 +34,22 @@ installs and automation for little immediate user value. New public prose should
 lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
+
+- v4.0.1 moves the negotiated interface contract from 2.4.1 to 2.4.2 and adds
+  two additive startup migrations: `082_oauth_connectors.sql` (dynamic OAuth
+  connector registry) and `083_external_event_fingerprints.sql` (durable
+  external outcome event deduplication). Existing registered tool names and
+  argument shapes remain compatible. Behavioral EISV signal-hygiene eras `HU1`,
+  `SD1`, and `SH1` now default to enabled (`0` restores legacy axis fills,
+  shared drift terms, or blends), `trajectory_risk_adjustment` becomes advisory
+  only rather than rewriting `metrics.risk_score`, per-agent REST credentials
+  accept explicit `:scope` suffixes (defaulting to `checkin`), and the server
+  refuses to start without a continuity-token secret unless
+  `UNITARES_ALLOW_NO_CONTINUITY_SECRET=1` is set. Lease-plane identity binding
+  defaults to `log` and both the lease plane and `unitares-sdk` `0.6.3` add
+  opt-in owner-only Unix domain socket transport while keeping loopback TCP
+  enabled by default; published install pins stay on `v3.6.0` / `0.6.1` until
+  release promotion verifies the published artifacts.
 
 - v4.0.0 makes inferred policy actuation opt-in: set
   `UNITARES_POLICY_ACTUATION=enforce` before upgrading if the deployment relies
