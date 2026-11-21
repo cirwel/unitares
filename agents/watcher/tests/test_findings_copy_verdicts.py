@@ -739,6 +739,52 @@ class TestPersistFindingsFpCarryOver:
             wt_finding.fingerprint,
         ]
 
+    @pytest.mark.parametrize(
+        ("corrected_status", "corrected_reason"),
+        [
+            ("confirmed", "actually a real bug"),
+            ("dismissed", "stale"),
+        ],
+    )
+    def test_reclassifying_original_fp_unsuppresses_dup_copy_after_dedup_expiry(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        corrected_status: str,
+        corrected_reason: str,
+    ):
+        """If an operator first dismisses a finding as fp (propagating a dup
+        copy with duplicate_of_reason=='fp') and later reclassifies the
+        original (--resolve or --dismiss --reason stale), the original's live
+        verdict takes precedence over the stale snapshot on the copy."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert len(persist_findings([main_finding, wt_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="fp")
+            == 0
+        )
+        # Operator corrects the original verdict
+        assert (
+            update_finding_status(
+                main_finding.fingerprint,
+                corrected_status,
+                reason=corrected_reason,
+            )
+            == 0
+        )
+
+        # After dedup TTL expiry, the copy resurfaces just like its target
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        resurfaced = persist_findings([wt_finding])
+        assert [f.fingerprint for f in resurfaced] == [wt_finding.fingerprint]
+
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
         isolated_findings_state: Path,

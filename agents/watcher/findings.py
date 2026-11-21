@@ -312,6 +312,11 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             dedup[f.fingerprint] = now
             brand_new.append(f)
 
+        present_fingerprints = {
+            fp
+            for row in existing_rows
+            if isinstance((fp := row.get("fingerprint")), str) and fp
+        }
         fp_row_fingerprints = {
             fp
             for row in existing_rows
@@ -321,9 +326,11 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             and fp
         }
         # Existing dismissed+fp fingerprints and propagated copies of fp
-        # dismissals (for expired-dedup self-match guard). Copies of non-fp
-        # dismissals (stale, wont_fix, unclear, out_of_scope, None) stay
-        # unsuppressed after dedup expiry, matching their target's behavior.
+        # dismissals (for expired-dedup self-match guard). When the original
+        # row is still present, its current verdict is authoritative (so a
+        # later --resolve or --dismiss --reason stale un-suppresses the copy
+        # too); fall back to duplicate_of_reason=="fp" only when the original
+        # has been compacted away.
         existing_suppressed_fingerprints = fp_row_fingerprints | {
             fp
             for row in existing_rows
@@ -332,8 +339,9 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             and isinstance((dup_of := row.get("duplicate_of")), str)
             and bool(dup_of)
             and (
-                row.get("duplicate_of_reason") == "fp"
-                or dup_of in fp_row_fingerprints
+                dup_of in fp_row_fingerprints
+                if dup_of in present_fingerprints
+                else row.get("duplicate_of_reason") == "fp"
             )
             and isinstance((fp := row.get("fingerprint")), str)
             and fp
