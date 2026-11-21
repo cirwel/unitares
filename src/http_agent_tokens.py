@@ -23,8 +23,13 @@ append-only knowledge writes):
 - Accepted only by ``POST /v1/tools/call`` (for ``checkin``, ``outcome``, and
   ``knowledge_store``) and ``POST /api/findings`` (for ``findings``), in both
   REST postures. A ``findings``-only token cannot call any tool on
-  ``POST /v1/tools/call``, and tokens lacking ``findings`` are refused on
-  ``POST /api/findings``. No other REST route, WebSocket, or ``/mcp`` reads it.
+  ``POST /v1/tools/call``. On ``POST /api/findings``, per-agent tokens lacking
+  ``findings`` (or combined with ``X-Unitares-Operator`` / ``X-Agent-Id``) are
+  refused with 403 ``AgentTokenScope`` on untrusted networks or under
+  ``UNITARES_REST_STRICT=1``, while trusted-network callers without a valid
+  ``findings`` grant fall back to standard ``_check_http_auth`` with
+  ``provenance_verified=False`` and ``verified_actor_agent_uuid=None``. No
+  other REST route, WebSocket, or ``/mcp`` reads agent tokens.
 - On ``POST /v1/tools/call``, the token is authorization, not identity: the
   call still resolves its caller through the normal REST path using the body's
   explicit ``client_session_id``, and the token only admits a call that resolves
