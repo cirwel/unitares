@@ -662,9 +662,9 @@ job is set, which is the order the per-family peer table gave. Results:
 - `family` (compact and full) names the served host's model family, and the
   audit record's route carries it.
 - `skipped` lists the hosts passed over before the one that served, in order,
-  each with a closed reason code (`disabled`, `unconfigured`, `cooldown`,
-  `excluded_family`) and a sentence. It appears only when a host was skipped,
-  and never on `privacy="local"`, which contacts no thorough host.
+  each with a reason code and a sentence. See [Thorough consultation failover](#thorough-consultation-failover)
+  for the current closed set of reason codes. `skipped` appears only when a host
+  was skipped and is omitted for `privacy="local"`.
 - New refusals: `INFERENCE_CONFIG_INVALID` (the hosts file does not load; the
   standard lane is unaffected), `CONSULT_NO_ELIGIBLE_HOST` (every host in the
   job was skipped; with `allow_degraded=true` the call answers locally
