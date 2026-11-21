@@ -42,7 +42,8 @@ HARNESS_ONBOARDING_ENV = "UNITARES_HARNESS_ONBOARDING"
 HARNESS_ONBOARDING_DECLINED = "harness_onboarding_declined"
 SPAWNED_UNDER_SCHEMA = "unitares.spawned_under.v1"
 
-_ANCHOR_RE = re.compile(r"^agent:[/_]thread-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Used with fullmatch: `$` alone also matches before a final newline.
+_ANCHOR_RE = re.compile(r"agent:[/_]thread-[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def is_loopback_host(host: object) -> bool:
@@ -142,7 +143,7 @@ def normalize_spawned_under(
     if unknown:
         raise ValueError(f"spawned_under has unknown fields: {', '.join(sorted(unknown))}")
     anchor = value.get("anchor")
-    if not isinstance(anchor, str) or not _ANCHOR_RE.match(anchor):
+    if not isinstance(anchor, str) or not _ANCHOR_RE.fullmatch(anchor):
         raise ValueError("spawned_under.anchor must be a thread anchor")
     return {
         "schema": SPAWNED_UNDER_SCHEMA,
