@@ -7,7 +7,7 @@ fingerprinted findings feed. A companion GitHub Actions step
 a deduped GitHub issue.
 
 This is the CI-side counterpart to the in-editor / in-server surfacing agents
-(``agents/watcher``, ``agents/vigil``). Those run against a live governance
+(a deployment's Watcher, ``agents/vigil``). Those run against a live governance
 server and an LLM detector, neither of which exists on a stock GitHub runner.
 The collectors here are stdlib/CLI-only so they run on a vanilla
 ``ubuntu-latest`` with no Postgres, no Ollama, and no secrets beyond the
@@ -17,8 +17,9 @@ Collectors (select with ``--collectors``):
 
     ruff     ``ruff check ... --output-format=json`` lint diagnostics.
     doctor   ``scripts/dev/unitares_doctor.py --json`` (surfaces fail/warn checks).
-    watcher  OPTIONAL LLM scan. Skipped unless ``--enable-watcher`` is passed
-             AND a ``WATCHER_OLLAMA_URL`` endpoint answers. Off by default so
+    watcher  OPTIONAL LLM scan by a deployment's own Watcher. Skipped unless
+             ``--enable-watcher`` is passed, ``UNITARES_WATCHER_AGENT`` names
+             its agent script, AND a ``WATCHER_OLLAMA_URL`` endpoint answers. Off by default so
              CI output stays deterministic.
 
 Fingerprints reuse ``agents.common.findings.compute_fingerprint`` so a finding
@@ -242,6 +243,11 @@ def collect_watcher(paths: Sequence[str]) -> tuple[list[Finding], str]:
     exist on a stock GitHub runner, so this collector probes the endpoint first
     and skips cleanly when it is absent — the common CI case.
     """
+    # Core ships no Watcher. A deployment that runs one names its agent script.
+    agent_path = os.environ.get("UNITARES_WATCHER_AGENT", "").strip()
+    if not agent_path or not Path(agent_path).expanduser().is_file():
+        return [], "no Watcher agent configured (UNITARES_WATCHER_AGENT) — skipped"
+
     url = os.environ.get("WATCHER_OLLAMA_URL", "http://localhost:11434")
     probe = url.rstrip("/").rsplit("/v1", 1)[0] + "/api/tags"
     try:
@@ -254,7 +260,16 @@ def collect_watcher(paths: Sequence[str]) -> tuple[list[Finding], str]:
     findings: list[Finding] = []
     notes: list[str] = []
     try:
-        from agents.watcher.agent import scan_file  # type: ignore
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_external_watcher_agent", Path(agent_path).expanduser()
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {agent_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        scan_file = module.scan_file
     except Exception as e:  # pragma: no cover - import guarded for CI
         return [], f"watcher agent import failed: {e}"
 

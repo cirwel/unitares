@@ -91,7 +91,7 @@ GOOD_OUTCOME_TYPES = {"test_passed", "drawing_completed", "task_completed", "wat
 # Recording it closes the dialectic→outcome_events tracking gap so downstream
 # back-tests can correlate resumption with subsequent agent state.
 # watcher_finding_dismissed is neutral: only a 'fp' dismissal is bad, so the
-# caller (agents/watcher/agent.py) passes is_bad explicitly rather than inferring
+# caller (a deployment's Watcher) passes is_bad explicitly rather than inferring
 # it from the type.
 NEUTRAL_OUTCOME_TYPES = {"trajectory_validated", "dialectic_resolved", "watcher_finding_dismissed"}  # is_bad determined by score/explicit
 VALID_OUTCOME_TYPES = BAD_OUTCOME_TYPES | GOOD_OUTCOME_TYPES | NEUTRAL_OUTCOME_TYPES

@@ -14,14 +14,14 @@ Three layers fire on Claude lifecycle events, and it matters which one produced 
 - **User-level hooks** under `~/.claude/hooks/`, wired in `~/.claude/settings.json`. They are machine-local and differ per operator. On a host that wires a Watcher hook, Watcher findings at session start or in a chime block come from this chain, not from the plugin's `post-edit`.
 - **A file on disk under `hooks/` is not evidence that it runs.** Retired hooks stay on disk; check `settings.json` before assuming a user-level hook is live.
 
-To close a Watcher finding (the agent itself lives in this repo):
+This repository ships no Watcher. A deployment that runs one keeps it in its own deployment repository and names its agent script in `UNITARES_WATCHER_AGENT`. To close a finding on such a host:
 
 ```bash
-python3 agents/watcher/agent.py --resolve <fingerprint>   # confirmed bug, fixed
-python3 agents/watcher/agent.py --dismiss <fingerprint>   # false positive
+python3 "$UNITARES_WATCHER_AGENT" --resolve <fingerprint> --agent-id <your-uuid>   # confirmed bug, fixed
+python3 "$UNITARES_WATCHER_AGENT" --dismiss <fingerprint> --agent-id <your-uuid>   # false positive
 ```
 
-Reference fingerprints in the commit message — Watcher's audit trail lives in commits, not in tracked files (`data/watcher/` is gitignored).
+Reference fingerprints in the commit message — Watcher's audit trail lives in commits, not in tracked files (its state is under `~/.unitares/watcher/`).
 
 ### Session-end auto-stash
 

@@ -1,5 +1,5 @@
 """Tests for _sentinel_summary_from_events — the pure aggregator behind
-/v1/sentinel/summary. Mirrors the test pattern in test_http_api_watcher_summary:
+/v1/sentinel/summary. Follows the pattern for resident summary routes:
 feed dict rows, assert on the shape returned, no HTTP/DB plumbing.
 
 Sentinel findings are transient fleet-state signals (a coordinated_degradation

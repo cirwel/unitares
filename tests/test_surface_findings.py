@@ -115,6 +115,15 @@ def test_watcher_disabled_by_default(mod):
     assert "disabled" in report.collectors["watcher"]
 
 
+def test_watcher_collector_skips_without_a_configured_agent(mod, monkeypatch):
+    """Core ships no Watcher: with no agent named, the collector must skip
+    before it probes any endpoint."""
+    monkeypatch.delenv("UNITARES_WATCHER_AGENT", raising=False)
+    findings, note = mod.collect_watcher(["src/x.py"])
+    assert findings == []
+    assert "UNITARES_WATCHER_AGENT" in note
+
+
 def test_unknown_collector_noted_not_crashed(mod):
     report = mod.run(["nope"], paths=[], enable_watcher=False)
     assert "unknown collector" in report.collectors["nope"]

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -173,9 +174,18 @@ def run_watcher(root: Path, mode: str) -> CommandProbe:
     if mode == "skip":
         return skipped_probe("watcher", "disabled by --watcher-mode skip")
 
-    script = root / "agents" / "watcher" / "agent.py"
+    # Core ships no Watcher. A deployment that runs one names its agent script
+    # in UNITARES_WATCHER_AGENT; an in-repo copy is still honoured if present.
+    configured = os.environ.get("UNITARES_WATCHER_AGENT", "").strip()
+    script = (
+        Path(configured).expanduser()
+        if configured
+        else root / "agents" / "watcher" / "agent.py"
+    )
     if not script.exists():
-        return skipped_probe("watcher", "agents/watcher/agent.py not present")
+        return skipped_probe(
+            "watcher", "no Watcher agent (set UNITARES_WATCHER_AGENT to its agent.py)"
+        )
 
     flag = "--surface-pending" if mode == "surface" else "--print-unresolved"
     probe = run_cmd([sys.executable, str(script), flag], root, timeout=60)
