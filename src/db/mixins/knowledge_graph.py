@@ -722,3 +722,24 @@ async def fetch_symptom_discoveries_for_sessions(
         session_ids,
         symptom_regex,
     )
+
+
+async def has_open_discovery_with_tag(
+    conn,
+    *,
+    agent_id: str,
+    tag: str,
+) -> bool:
+    """Return True if `agent_id` has an open discovery carrying `tag`."""
+    existing = await conn.fetchval(
+        """
+        SELECT 1 FROM knowledge.discoveries
+        WHERE agent_id = $1
+          AND tags @> ARRAY[$2::text]
+          AND status = 'open'
+        LIMIT 1
+        """,
+        agent_id,
+        tag,
+    )
+    return bool(existing)

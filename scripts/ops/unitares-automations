@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import glob as glob_module
+import hashlib
 import json
 import os
 import plistlib
@@ -342,7 +343,10 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
             continue
 
         label = str(plist.get("Label") or path.stem)
+        program = plist.get("Program")
         args = [str(v) for v in plist.get("ProgramArguments") or []]
+        if not program and not args and loaded is not None and label not in loaded:
+            continue
         workdir = plist.get("WorkingDirectory")
         text = " ".join([label, command_text(args), str(workdir or "")])
         cadence = calendar_interval_to_text(plist.get("StartCalendarInterval"))
@@ -397,7 +401,7 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
                     notes.append("attention:launchd_last_exit_nonzero")
         else:
             notes.append("attention:launchd_state_unknown")
-        missing_command = missing_launchd_command(plist.get("Program"), args)
+        missing_command = missing_launchd_command(program, args)
         if missing_command is not None:
             status = "missing"
             notes.append(f"attention:command_missing:{short_path(missing_command)}")
@@ -865,15 +869,27 @@ def collect_github_actions(projects_root: Path, warnings: list[str]) -> list[Aut
     results: list[Automation] = []
     if not projects_root.exists():
         return results
-    excluded_parts = {"node_modules", ".venv", "venv", "_archive", ".trash"}
+    excluded_parts = {
+        "node_modules", ".venv", "venv", "_archive", ".trash",
+        "_build", "deps", "target", "dist", "build", "__pycache__",
+        ".tox", ".mypy_cache", ".pytest_cache", "cache", ".cache",
+        "wt", "_security", "_drafts", ".ref",
+    }
     workflow_files: list[Path] = []
-    for path in projects_root.rglob(".github/workflows/*"):
-        if not path.is_file() or path.suffix not in {".yml", ".yaml"}:
+    for dirpath, dirnames, _filenames in os.walk(projects_root, topdown=True):
+        current = Path(dirpath)
+        if (current / ".git").exists():
+            wf_dir = current / ".github" / "workflows"
+            if wf_dir.is_dir():
+                for path in sorted(wf_dir.iterdir()):
+                    if path.is_file() and path.suffix in {".yml", ".yaml"}:
+                        workflow_files.append(path)
+            dirnames[:] = []
             continue
-        lowered = {p.lower() for p in path.parts}
-        if lowered & excluded_parts:
-            continue
-        workflow_files.append(path)
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not d.startswith(".") and d.lower() not in excluded_parts
+        )
 
     by_workflow: dict[tuple[str, str], tuple[int, Path, Path]] = {}
     for path in workflow_files:
@@ -1051,17 +1067,17 @@ def collect_external(warnings: list[str]) -> list[Automation]:
     return results
 
 
-def _installed_plugin_roots() -> list[Path]:
-    """Return runtime plugin roots, never historical cache siblings.
+def _installed_plugin_roots() -> list[tuple[Path, str]]:
+    """Return runtime ``(plugin_root, host)`` pairs, never historical cache siblings.
 
     Claude records each installed version's exact ``installPath``. Codex's
     personal plugins are the direct entries under ``~/.codex/plugins`` (often
-    symlinks to live source checkouts). A cache walk cannot distinguish either
-    of those from old versions left behind after an update, and a marketplace
-    source path says where a plugin is developed, not whether that checkout is
-    the runtime installation.
+    symlinks to live source checkouts). Tagging each root with its host lets
+    ``_plugin_hook_declarations`` avoid emitting cross-host hook sets twice
+    while still indexing sibling declarations so cross-host scripts are not
+    misreported as orphaned.
     """
-    roots: list[Path] = []
+    candidates: list[tuple[Path, str]] = []
     installed = HOME / ".claude/plugins/installed_plugins.json"
     if installed.exists():
         try:
@@ -1076,7 +1092,7 @@ def _installed_plugin_roots() -> list[Path]:
                     for entry in entries:
                         path = entry.get("installPath") if isinstance(entry, dict) else None
                         if path:
-                            roots.append(Path(path).expanduser())
+                            candidates.append((Path(path).expanduser(), "claude"))
         except Exception:  # noqa: BLE001 - best-effort inventory
             pass
 
@@ -1086,67 +1102,103 @@ def _installed_plugin_roots() -> list[Path]:
             if entry.name == "cache" or entry.name.startswith("."):
                 continue
             if entry.is_dir():
-                roots.append(entry)
+                candidates.append((entry, "codex"))
 
-    deduped: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
+    deduped: list[tuple[Path, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for root, host in candidates:
         if not root.is_dir():
             continue
-        key = str(root.resolve())
+        key = (str(root.resolve()), host)
         if key in seen:
             continue
         seen.add(key)
-        deduped.append(root)
+        deduped.append((root, host))
     return deduped
 
 
-def _plugin_hook_declarations(root: Path) -> list[Path]:
-    """Resolve host hook manifests declared by a runtime plugin root."""
-    candidates: list[Path] = []
-    for manifest_rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
-        manifest = root / manifest_rel
-        if not manifest.exists():
-            continue
-        try:
-            data = json.loads(manifest.read_text())
-        except Exception:  # noqa: BLE001 - conventional paths still apply
-            continue
-        declared = data.get("hooks") if isinstance(data, dict) else None
-        if isinstance(declared, str):
-            candidates.append(root / declared)
-        elif isinstance(declared, list):
-            candidates.extend(root / item for item in declared if isinstance(item, str))
+def _manifest_declared_hooks(root: Path, manifest_rel: str) -> list[Path]:
+    manifest = root / manifest_rel
+    if not manifest.is_file():
+        return []
+    try:
+        data = json.loads(manifest.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    declared = data.get("hooks") if isinstance(data, dict) else None
+    if isinstance(declared, str):
+        return [root / declared]
+    if isinstance(declared, list):
+        return [root / item for item in declared if isinstance(item, str)]
+    return []
 
-    # Older Claude plugins use hooks/hooks.json without a manifest pointer;
-    # host-specific bundles may also keep Claude and Codex declarations apart.
-    candidates.extend(
-        root / rel
-        for rel in ("hooks/hooks.json", "hooks/claude-hooks.json", "hooks/codex-hooks.json")
-    )
 
-    declarations: list[Path] = []
+def _existing_unique_paths(candidates: list[Path], exclude: set[str] | None = None) -> list[Path]:
+    excluded = set(exclude or ())
+    out: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
         if not candidate.is_file():
             continue
         key = str(candidate.resolve())
-        if key in seen:
+        if key in excluded or key in seen:
             continue
         seen.add(key)
-        declarations.append(candidate)
-    return declarations
+        out.append(candidate)
+    return out
 
 
-def _settings_hook_sources() -> list[tuple[Path, str | None]]:
-    """(settings-or-hooks-json, plugin_root) pairs that can declare hooks."""
-    sources: list[tuple[Path, str | None]] = [
-        (HOME / ".claude/settings.json", None),
-        (HOME / ".claude/settings.local.json", None),
+def _plugin_hook_declarations(root: Path, host: str) -> tuple[list[Path], list[Path]]:
+    """Return ``(active_declarations, sibling_declarations)`` for a plugin root."""
+    if host == "codex":
+        declared = _manifest_declared_hooks(root, ".codex-plugin/plugin.json")
+        if not declared:
+            declared = [root / "hooks/codex-hooks.json"]
+            if not declared[0].is_file():
+                declared = [root / "hooks/hooks.json"]
+        active = _existing_unique_paths(declared)
+        active_keys = {str(p.resolve()) for p in active}
+        sibling_candidates = (
+            _manifest_declared_hooks(root, ".claude-plugin/plugin.json")
+            + [root / "hooks/claude-hooks.json", root / "hooks/hooks.json"]
+        )
+        sibling = _existing_unique_paths(sibling_candidates, exclude=active_keys)
+        return active, sibling
+
+    claude_declared = _manifest_declared_hooks(root, ".claude-plugin/plugin.json")
+    if claude_declared:
+        active = _existing_unique_paths([root / "hooks/hooks.json", *claude_declared])
+        active_keys = {str(p.resolve()) for p in active}
+        sibling_candidates = (
+            _manifest_declared_hooks(root, ".codex-plugin/plugin.json")
+            + [root / "hooks/codex-hooks.json"]
+        )
+        sibling = _existing_unique_paths(sibling_candidates, exclude=active_keys)
+        return active, sibling
+
+    # Legacy manifest-less plugin layout (or manifest without a `hooks` key).
+    legacy = _existing_unique_paths([
+        root / rel
+        for rel in ("hooks/hooks.json", "hooks/claude-hooks.json", "hooks/codex-hooks.json")
+    ])
+    return legacy, []
+
+
+def _settings_hook_sources() -> list[tuple[Path, str | None, str, bool]]:
+    """``(settings_or_hooks_json, plugin_root, scheduler, emit)`` sources."""
+    sources: list[tuple[Path, str | None, str, bool]] = [
+        (HOME / ".claude/settings.json", None, "claude-settings", True),
+        (HOME / ".claude/settings.local.json", None, "claude-settings", True),
+        (HOME / ".codex/hooks.json", None, "codex-settings", True),
+        (HOME / ".gemini/config/hooks.json", None, "antigravity-settings", True),
     ]
-    for root in _installed_plugin_roots():
-        for declaration in _plugin_hook_declarations(root):
-            sources.append((declaration, str(root)))
+    for root, host in _installed_plugin_roots():
+        scheduler = "codex-plugin" if host == "codex" else "claude-plugin"
+        active, sibling = _plugin_hook_declarations(root, host)
+        for declaration in active:
+            sources.append((declaration, str(root), scheduler, True))
+        for declaration in sibling:
+            sources.append((declaration, str(root), scheduler, False))
     return sources
 
 
@@ -1154,6 +1206,7 @@ DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 # Editor/tooling debris that lives beside real hooks but is not a hook.
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
 NON_HOOK_FILENAMES = {"__init__.py"}
+SYSTEM_BIN_DIRS = {"/bin", "/usr/bin", "/sbin", "/usr/sbin"}
 
 
 _SHELL_KEYWORDS = {
@@ -1212,11 +1265,13 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     # character, so dropping them all is safe.
     text = text.replace('"', "").replace("'", "")
     tokens = [t.strip(";,") for t in text.split()]
-    found: list[str] = []
+    found: list[tuple[bool, str]] = []
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
         if "/" not in tok:
+            continue
+        if tok.startswith("-") or "://" in tok or any(ch in tok for ch in "<>"):
             continue
         expanded = os.path.expanduser(tok)
         if any(ch in expanded for ch in "*?["):
@@ -1233,16 +1288,25 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             matches = sorted(glob_module.glob(expanded))
             if not matches:
                 continue
-            resolved = Path(matches[0]).resolve()
+            raw_path = Path(matches[0])
+            resolved = raw_path.resolve()
         else:
-            if not Path(expanded).exists():
+            raw_path = Path(expanded)
+            if not raw_path.exists():
                 continue
-            resolved = Path(expanded).resolve()
-        found.append(str(resolved))
-        if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
+            resolved = raw_path.resolve()
+        is_sys = (
+            str(raw_path.parent) in SYSTEM_BIN_DIRS
+            or str(resolved.parent) in SYSTEM_BIN_DIRS
+        )
+        found.append((is_sys, str(resolved)))
+        if not is_sys and resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
             dispatcher_idx = idx
             dispatcher_path = resolved
     if dispatcher_idx is not None and dispatcher_path is not None:
+        # System helper binaries in a dispatcher wrapper (e.g. /usr/bin/grep in #122)
+        # are not hooks, while standalone system-command hooks are kept intact.
+        paths = [path for is_sys, path in found if not is_sys]
         # Keep scanning candidates until one actually exists, rather than
         # stopping at the first syntactically-plausible word. A wrapper
         # that names a non-hook bare word before the real hook name (a
@@ -1254,17 +1318,73 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
                 continue
             target = dispatcher_path.parent / bare
             if target.exists():
-                found.append(str(target.resolve()))
+                paths.append(str(target.resolve()))
                 break
-    return found
+        return paths
+    return [path for _, path in found]
 
 
 def _dispatched_label(scripts: list[str], command: str) -> str:
     """Prefer the dispatched hook name over the dispatcher's own filename."""
+    dispatchers = [Path(p) for p in scripts if Path(p).name in DISPATCHER_NAMES]
+    if dispatchers:
+        dispatcher_dirs = {d.parent for d in dispatchers}
+        for path in scripts:
+            p = Path(path)
+            if p.name not in DISPATCHER_NAMES and p.parent in dispatcher_dirs:
+                return p.name
+    for path in scripts:
+        p = Path(path)
+        if p.name not in DISPATCHER_NAMES and str(p.parent) not in SYSTEM_BIN_DIRS:
+            return p.name
     for path in scripts:
         if Path(path).name not in DISPATCHER_NAMES:
             return Path(path).name
     return Path(scripts[0]).name if scripts else command.split()[0]
+
+
+def _iter_declared_hooks(
+    data: Any, scheduler: str,
+) -> list[tuple[str | None, str, str | None, dict[str, Any]]]:
+    """Yield ``(namespace, event, matcher, hook_dict)`` across Claude/Codex and Antigravity hook files."""
+    if not isinstance(data, dict):
+        return []
+    out: list[tuple[str | None, str, str | None, dict[str, Any]]] = []
+    if scheduler == "antigravity-settings":
+        # ~/.gemini/config/hooks.json maps plugin_name -> {event -> [hook_or_group]}.
+        for plugin_name, plugin_hooks in data.items():
+            if not isinstance(plugin_hooks, dict):
+                continue
+            namespace = str(plugin_name)
+            for event, entries in plugin_hooks.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if isinstance(entry.get("hooks"), list):
+                        matcher = entry.get("matcher")
+                        for hook in entry["hooks"]:
+                            if isinstance(hook, dict):
+                                out.append((namespace, str(event), matcher, hook))
+                    else:
+                        out.append((namespace, str(event), entry.get("matcher"), entry))
+        return out
+
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            matcher = group.get("matcher")
+            for hook in group.get("hooks") or []:
+                if isinstance(hook, dict):
+                    out.append((None, str(event), matcher, hook))
+    return out
 
 
 def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
@@ -1279,57 +1399,59 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
     results: list[Automation] = []
     referenced: set[str] = set()
 
-    for settings_path, plugin_root in _settings_hook_sources():
+    for settings_path, plugin_root, scheduler, emit in _settings_hook_sources():
         if not settings_path.exists():
             continue
         try:
             data = json.loads(settings_path.read_text())
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"claude-hooks: failed to parse {short_path(settings_path)}: {exc}")
+            if emit:
+                warnings.append(f"claude-hooks: failed to parse {short_path(settings_path)}: {exc}")
             continue
-        hooks = (data or {}).get("hooks") if isinstance(data, dict) else None
-        if not isinstance(hooks, dict):
-            continue
-        for event, groups in hooks.items():
-            if not isinstance(groups, list):
+        for namespace, event, matcher, hook in _iter_declared_hooks(data, scheduler):
+            command = str(hook.get("command") or "")
+            if hook.get("type") != "command" or not command:
                 continue
-            for group in groups:
-                if not isinstance(group, dict):
-                    continue
-                matcher = group.get("matcher")
-                for hook in group.get("hooks") or []:
-                    if not isinstance(hook, dict):
-                        continue
-                    command = str(hook.get("command") or "")
-                    if hook.get("type") != "command" or not command:
-                        continue
-                    scripts = _hook_script_paths(command, plugin_root)
-                    referenced.update(scripts)
-                    label = _dispatched_label(scripts, command)
-                    notes = [f"event={event}"]
-                    if matcher:
-                        notes.append(f"matcher={matcher}")
-                    if not scripts:
-                        notes.append("attention:script_not_found_on_disk")
-                        warnings.append(
-                            f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
-                        )
-                    results.append(
-                        Automation(
-                            id=stable_id("claude-hook", f"{settings_path}:{event}:{matcher}:{command}"),
-                            name=f"{event}: {label}",
-                            source="claude-hooks",
-                            kind="hook",
-                            scheduler="claude-settings" if plugin_root is None else "claude-plugin",
-                            runner=infer_runner(command, default="shell"),
-                            status="wired" if scripts else "missing",
-                            cadence=f"on:{event}",
-                            command=[command],
-                            config_path=str(settings_path),
-                            workdir=plugin_root,
-                            notes=notes,
-                        )
-                    )
+            scripts = _hook_script_paths(command, plugin_root)
+            referenced.update(scripts)
+            if not emit:
+                continue
+            label = _dispatched_label(scripts, command)
+            notes = [f"event={event}"]
+            if namespace is not None:
+                notes.append(f"plugin={namespace}")
+            if matcher:
+                notes.append(f"matcher={matcher}")
+            if not scripts:
+                notes.append("attention:script_not_found_on_disk")
+                warnings.append(
+                    f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
+                )
+            id_key = json.dumps(
+                [scheduler, str(settings_path), namespace, event, matcher, command],
+                separators=(",", ":"),
+            )
+            id_hash = hashlib.sha256(id_key.encode("utf-8")).hexdigest()[:12]
+            id_parts = [scheduler]
+            if namespace:
+                id_parts.append(namespace)
+            id_parts.extend([event, id_hash])
+            results.append(
+                Automation(
+                    id=stable_id("claude-hook", ":".join(id_parts)),
+                    name=f"{event}: {label}",
+                    source="claude-hooks",
+                    kind="hook",
+                    scheduler=scheduler,
+                    runner=infer_runner(command, default="shell"),
+                    status="wired" if scripts else "missing",
+                    cadence=f"on:{event}",
+                    command=[command],
+                    config_path=str(settings_path),
+                    workdir=plugin_root,
+                    notes=notes,
+                )
+            )
 
     # Orphan sweep: scripts on disk wired to nothing. Skip anything a launchd
     # plist invokes -- collect_launchd already owns those, and counting them
@@ -1345,7 +1467,7 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
     launchd_blob = "\n".join(launchd_refs)
 
     hook_dirs = [HOME / ".claude/hooks"]
-    hook_dirs.extend(root / "hooks" for root in _installed_plugin_roots())
+    hook_dirs.extend(root / "hooks" for root, _host in _installed_plugin_roots())
     seen_dirs: set[str] = set()
     for hook_dir in hook_dirs:
         key = str(hook_dir)
@@ -1516,7 +1638,6 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
     items: list[Automation] = []
     check_own_install_health(warnings)
     collectors = [
-        collect_launchd,
         collect_crontab,
         collect_systemd,
         collect_remote_host,
@@ -1529,6 +1650,9 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
     for collector in collectors:
         items.extend(collector(warnings))
     items.extend(collect_github_actions(projects_root, warnings))
+    # Snapshot launchd right before reading wrapper receipts so slow/remote
+    # collectors cannot open a window where a starting job looks stale.
+    items.extend(collect_launchd(warnings))
 
     latest_runs = load_latest_runs()
     items.extend(orphaned_stale_receipts(items, latest_runs))
