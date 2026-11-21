@@ -300,7 +300,7 @@ def _error_reason(exc: urllib.error.HTTPError) -> str | None:
     try:
         raw_body = exc.read(4096)
         data = json.loads(raw_body.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
+    except (OSError, http.client.HTTPException, UnicodeDecodeError, ValueError):
         return None
     err = data.get("error") if isinstance(data, dict) else None
     return err if isinstance(err, str) else None

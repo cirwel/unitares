@@ -1565,3 +1565,20 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
     assert summary["writes_failed"] == 0
     assert len(read_only_fingerprints(state)) == 12
 
+
+def test_writer_handles_incomplete_read_in_http_error_body():
+    import urllib.error
+
+    class CutOffBody:
+        def read(self, _amt=None):
+            raise http.client.IncompleteRead(b'{"error":')
+
+        def close(self):
+            pass
+
+    event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
+    for code, expected in ((422, "rejected"), (403, "failed")):
+        def opener(request, timeout=None, _code=code):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, CutOffBody())
+
+        assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener).write(event) == expected
