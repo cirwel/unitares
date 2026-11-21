@@ -421,3 +421,334 @@ def test_true_cache_rollover_glob_fallback_resolves(census_mod, tmp_path):
     assert "run-hook.cmd" in resolved_names
     assert "post-checkin" in resolved_names
     assert all(str(current_root.resolve()) in p for p in scripts), scripts
+
+
+def test_cache_rollover_wrapper_ignores_usr_bin_grep_and_labels_hook(
+    census_mod, tmp_path, monkeypatch,
+):
+    """A real #122 wrapper invokes `/usr/bin/grep -q`; label must be post-activity, not grep."""
+    home = tmp_path / "home"
+    plugin = home / "plugins/gov"
+    _exe(plugin / "hooks/run-hook.cmd")
+    _exe(plugin / "hooks/post-activity")
+    _exe(plugin / "hooks/post-edit")
+    (plugin / ".codex-plugin").mkdir(parents=True)
+    (plugin / ".codex-plugin/plugin.json").write_text(json.dumps({
+        "name": "gov",
+        "hooks": "./hooks/codex-hooks.json",
+    }))
+    (plugin / "hooks/codex-hooks.json").write_text(json.dumps({
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{
+                    "type": "command",
+                    "command": (
+                        '_unitares_runner="${PLUGIN_ROOT}/hooks/run-hook.cmd"; '
+                        'if [ ! -f "$_unitares_runner" ]; then '
+                        'for _unitares_candidate in "${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd; do '
+                        '[ -f "$_unitares_candidate" ] && /usr/bin/grep -q UNITARES_ORCHESTRATED_OWNER_PID "$_unitares_candidate" && _unitares_runner="$_unitares_candidate"; '
+                        'done; fi; exec "$_unitares_runner" post-activity --host codex'
+                    ),
+                }],
+            }]
+        }
+    }))
+    link = home / ".codex/plugins/gov"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(plugin, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    wired = [i for i in items if i.status == "wired"]
+    assert len(wired) == 1
+    assert wired[0].name == "PostToolUse: post-activity"
+    assert wired[0].scheduler == "codex-plugin"
+
+
+def test_dual_host_plugin_does_not_duplicate_or_orphan_cross_host_hooks(
+    census_mod, tmp_path, monkeypatch,
+):
+    """Claude + Codex manifests on the same plugin emit each host once with zero false orphans."""
+    home = tmp_path / "home"
+    claude_root = home / ".claude/plugins/cache/mkt/gov/1.0.0"
+    codex_root = home / "src/gov"
+    for root in (claude_root, codex_root):
+        _exe(root / "hooks/run-hook.cmd")
+        _exe(root / "hooks/post-edit")
+        _exe(root / "hooks/post-activity")
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({
+            "name": "gov",
+            "hooks": "./hooks/claude-hooks.json",
+        }))
+        (root / ".codex-plugin").mkdir(parents=True)
+        (root / ".codex-plugin/plugin.json").write_text(json.dumps({
+            "name": "gov",
+            "hooks": "./hooks/codex-hooks.json",
+        }))
+        (root / "hooks/claude-hooks.json").write_text(json.dumps({
+            "hooks": {"PostToolUse": [{"hooks": [{
+                "type": "command",
+                "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" post-edit --host claude',
+            }]}]}
+        }))
+        (root / "hooks/codex-hooks.json").write_text(json.dumps({
+            "hooks": {"PostToolUse": [{"hooks": [{
+                "type": "command",
+                "command": '"${PLUGIN_ROOT}/hooks/run-hook.cmd" post-activity --host codex',
+            }]}]}
+        }))
+
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"gov@mkt": [{"installPath": str(claude_root)}]},
+    }))
+    codex_link = home / ".codex/plugins/gov"
+    codex_link.parent.mkdir(parents=True, exist_ok=True)
+    codex_link.symlink_to(codex_root, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    orphans = [i for i in items if i.status == "orphaned"]
+    assert orphans == [], orphans
+    wired = [(i.scheduler, i.name) for i in items if i.status == "wired"]
+    assert sorted(wired) == [
+        ("claude-plugin", "PostToolUse: post-edit"),
+        ("codex-plugin", "PostToolUse: post-activity"),
+    ]
+
+
+def test_codex_and_antigravity_user_hooks_are_discovered(
+    census_mod, tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    presence = _exe(home / "bin/agent-presence")
+    plugin_hooks = home / "gov/hooks"
+    _exe(plugin_hooks / "run-hook.cmd")
+    _exe(plugin_hooks / "post-stop")
+
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex/hooks.json").write_text(json.dumps({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "startup",
+                "hooks": [{"type": "command", "command": f"{presence} hook --harness codex"}],
+            }]
+        }
+    }))
+
+    (home / ".gemini/config").mkdir(parents=True)
+    (home / ".gemini/config/hooks.json").write_text(json.dumps({
+        "agent-presence": {
+            "SessionStart": [{"type": "command", "command": f"{presence} hook --harness agy"}],
+            "PostToolUse": [{
+                "matcher": "",
+                "hooks": [{"type": "command", "command": f"{presence} hook --harness agy"}],
+            }],
+        },
+        "unitares-governance": {
+            "Stop": [{
+                "type": "command",
+                "command": f"UNITARES_AUTO_ONBOARD=on {plugin_hooks / 'run-hook.cmd'} post-stop --host agy",
+            }],
+        },
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    by_sched = sorted((i.scheduler, i.name) for i in items)
+    assert by_sched == [
+        ("antigravity-settings", "PostToolUse: agent-presence"),
+        ("antigravity-settings", "SessionStart: agent-presence"),
+        ("antigravity-settings", "Stop: post-stop"),
+        ("codex-settings", "SessionStart: agent-presence"),
+    ]
+
+
+@pytest.mark.parametrize("command_template,expected_label", [
+    ("{sysbin}/true", "Stop: true"),
+    ("{sysbin}/osascript -e 'beep'", "Stop: osascript"),
+    ("{sysbin}/bash -ec 'exit 0'", "Stop: bash"),
+    ("{sysbin}/bash -eo pipefail -c 'exit 0'", "Stop: bash"),
+    ("{sysbin}/bash -c 'echo /does/not/exist'", "Stop: bash"),
+])
+def test_standalone_system_command_hook_is_wired(
+    census_mod, tmp_path, monkeypatch, command_template, expected_label,
+):
+    """Valid standalone/inline system-command hooks stay wired across platforms."""
+    home = tmp_path / "home"
+    sysbin = tmp_path / "sysbin"
+    for name in ("true", "osascript", "bash"):
+        _exe(sysbin / name)
+    command = command_template.format(sysbin=sysbin)
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": command}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    monkeypatch.setattr(census_mod, "SYSTEM_BIN_DIRS", {str(sysbin), str(sysbin.resolve())})
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    assert items[0].name == expected_label
+
+
+def test_interpreter_wrapped_hook_prefers_script_label(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    sysbin = tmp_path / "sysbin"
+    bash = _exe(sysbin / "bash")
+    hook = _exe(home / ".claude/hooks/custom-stop.sh")
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": f"{bash} {hook}"}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    monkeypatch.setattr(census_mod, "SYSTEM_BIN_DIRS", {str(sysbin), str(sysbin.resolve())})
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    assert items[0].name == "Stop: custom-stop.sh"
+
+
+def test_antigravity_hooks_preserve_plugin_namespace_in_id(census_mod, tmp_path, monkeypatch):
+    """Identical hooks registered under distinct Antigravity plugins must have distinct IDs."""
+    home = tmp_path / "home"
+    presence = _exe(home / "bin/agent-presence")
+    command = f"{presence} hook --harness agy"
+    (home / ".gemini/config").mkdir(parents=True)
+    (home / ".gemini/config/hooks.json").write_text(json.dumps({
+        "plugin-alpha": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{"type": "command", "command": command}],
+            }],
+        },
+        "plugin-beta": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{"type": "command", "command": command}],
+            }],
+        },
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 2
+    assert len({item.id for item in items}) == 2
+    assert {
+        note for item in items for note in item.notes if note.startswith("plugin=")
+    } == {"plugin=plugin-alpha", "plugin=plugin-beta"}
+
+
+def test_manifest_declared_claude_hooks_also_loads_conventional_hooks_json(
+    census_mod, tmp_path, monkeypatch,
+):
+    """Manifest-declared hooks in Claude plugins supplement, not replace, hooks/hooks.json."""
+    home = tmp_path / "home"
+    plugin = home / "plugins/manifest-plus-conv"
+    _exe(plugin / "hooks/conv-hook")
+    _exe(plugin / "hooks/extra-hook")
+    (plugin / "hooks/hooks.json").write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/conv-hook"),
+        }]}]},
+    }))
+    (plugin / "hooks/extra-hooks.json").write_text(json.dumps({
+        "hooks": {"UserPromptSubmit": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/extra-hook"),
+        }]}]},
+    }))
+    manifest = plugin / ".claude-plugin/plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "name": "manifest-plus-conv",
+        "hooks": ["./hooks/extra-hooks.json", "./hooks/hooks.json"],
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "plugins": {"manifest-plus-conv@local": [{"installPath": str(plugin)}]},
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert [i for i in items if i.status == "orphaned"] == []
+    wired = [i for i in items if i.status == "wired" and i.scheduler == "claude-plugin"]
+    assert sorted(i.name for i in wired) == ["Stop: conv-hook", "UserPromptSubmit: extra-hook"]
+
+
+def test_shared_plugin_root_across_claude_and_codex_gets_distinct_ids(
+    census_mod, tmp_path, monkeypatch,
+):
+    """When Claude and Codex load the exact same plugin root and hooks/hooks.json, IDs stay distinct."""
+    home = tmp_path / "home"
+    plugin = home / "plugins/shared-plugin"
+    _exe(plugin / "hooks/shared-hook")
+    (plugin / "hooks/hooks.json").write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{
+            "type": "command", "command": str(plugin / "hooks/shared-hook"),
+        }]}]},
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"shared-plugin@local": [{"installPath": str(plugin)}]},
+    }))
+    codex_link = home / ".codex/plugins/shared-plugin"
+    codex_link.parent.mkdir(parents=True, exist_ok=True)
+    codex_link.symlink_to(plugin, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    wired = [i for i in items if i.status == "wired"]
+    assert {i.scheduler for i in wired} == {"claude-plugin", "codex-plugin"}
+    assert len(wired) == 2
+    assert len({i.id for i in wired}) == 2
+
+
+def test_hook_id_stays_stable_when_script_becomes_missing(census_mod, tmp_path, monkeypatch):
+    """Hook automation ID must depend on configuration alone, never script presence on disk."""
+    home = tmp_path / "home"
+    hook = _exe(home / ".claude/hooks/custom-stop.sh")
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude/settings.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "command", "command": str(hook)}],
+            }]
+        }
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, warnings = _collect(census_mod)
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].status == "wired"
+    wired_id = items[0].id
+
+    hook.unlink()
+    items_after, _ = _collect(census_mod)
+    assert len(items_after) == 1
+    assert items_after[0].status == "missing"
+    assert items_after[0].id == wired_id
