@@ -749,26 +749,26 @@ def update_finding_status(
                             if wt_non_aged_counts[sib_wt] == 1 and len(indices) == 1:
                                 sibling_indices_to_close.add(indices[0])
 
+    was_propagated_dup = bool(str(target_row.get("duplicate_of") or "").strip())
+    updated_target: dict[str, Any] = {**target_row, "status": new_status}
+    if timestamp_field:
+        updated_target[timestamp_field] = now_iso
+    if resolver_agent_id:
+        updated_target["resolved_by"] = resolver_agent_id
+    if reason:
+        updated_target["resolution_reason"] = reason
+    elif was_propagated_dup and updated_target.get("resolution_reason") == "dup":
+        updated_target.pop("resolution_reason", None)
+    if was_propagated_dup and reason != "dup":
+        updated_target.pop("duplicate_of", None)
+        updated_target.pop("duplicate_of_reason", None)
+    effective_reason = updated_target.get("resolution_reason")
+
     updated: list[dict[str, Any]] = []
-    updated_target: dict[str, Any] | None = None
     closed_copies = 0
     for idx, f in enumerate(findings):
         if idx == target_index:
-            was_propagated_dup = bool(str(f.get("duplicate_of") or "").strip())
-            merged = {**f, "status": new_status}
-            if timestamp_field:
-                merged[timestamp_field] = now_iso
-            if resolver_agent_id:
-                merged["resolved_by"] = resolver_agent_id
-            if reason:
-                merged["resolution_reason"] = reason
-            elif was_propagated_dup and merged.get("resolution_reason") == "dup":
-                merged.pop("resolution_reason", None)
-            if was_propagated_dup and reason != "dup":
-                merged.pop("duplicate_of", None)
-                merged.pop("duplicate_of_reason", None)
-            f = merged
-            updated_target = merged
+            f = updated_target
         elif idx in sibling_indices_to_close:
             sibling_merged = {
                 **f,
@@ -776,8 +776,8 @@ def update_finding_status(
                 "resolution_reason": "dup",
                 "duplicate_of": target_fp,
             }
-            if new_status == "dismissed" and reason:
-                sibling_merged["duplicate_of_reason"] = reason
+            if new_status == "dismissed" and effective_reason:
+                sibling_merged["duplicate_of_reason"] = effective_reason
             if timestamp_field:
                 sibling_merged[timestamp_field] = now_iso
             if resolver_agent_id:
@@ -785,12 +785,13 @@ def update_finding_status(
             f = sibling_merged
             closed_copies += 1
         elif f.get("duplicate_of") == target_fp:
-            # Keep duplicate_of_reason synchronized when an operator
-            # reclassifies the original finding so compacting the original
-            # never leaves a stale "fp" snapshot on existing copies.
+            # Keep duplicate_of_reason synchronized with the target's effective
+            # stored resolution_reason (not just the optional reason arg) so
+            # re-dismissing without --reason preserves "fp" while reclassifying
+            # clears or updates it before compaction.
             synced = dict(f)
-            if new_status == "dismissed" and reason:
-                synced["duplicate_of_reason"] = reason
+            if new_status == "dismissed" and effective_reason:
+                synced["duplicate_of_reason"] = effective_reason
             else:
                 synced.pop("duplicate_of_reason", None)
             f = synced

@@ -790,7 +790,6 @@ class TestPersistFindingsFpCarryOver:
         [
             ("confirmed", "fixed", None),
             ("dismissed", "stale", "stale"),
-            ("dismissed", None, None),
         ],
     )
     def test_reclassifying_original_syncs_duplicate_of_reason_before_compaction(
@@ -835,6 +834,44 @@ class TestPersistFindingsFpCarryOver:
         (isolated_findings_state / "dedup.json").write_text("{}")
         resurfaced = persist_findings([wt_finding])
         assert [f.fingerprint for f in resurfaced] == [wt_finding.fingerprint]
+
+    def test_redismissing_fp_without_reason_preserves_duplicate_of_reason_on_copies(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Re-dismissing an existing fp original with reason=None preserves
+        resolution_reason='fp' on the target and must preserve
+        duplicate_of_reason='fp' on its sibling copies (regardless of row order)."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        # Put sibling copy BEFORE target in findings.jsonl to verify order independence
+        assert len(persist_findings([wt_finding, main_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="fp")
+            == 0
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason=None)
+            == 0
+        )
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[main_finding.fingerprint]["resolution_reason"] == "fp"
+        wt_row = by_fp[wt_finding.fingerprint]
+        assert wt_row["duplicate_of"] == main_finding.fingerprint
+        assert wt_row["duplicate_of_reason"] == "fp"
+
+        # Compact original away and expire dedup -> copy stays suppressed as fp
+        _write_rows(isolated_findings_state, [wt_row])
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        assert persist_findings([wt_finding]) == []
 
     def test_resurfaced_copy_can_be_resolved_without_ambiguity(
         self,
