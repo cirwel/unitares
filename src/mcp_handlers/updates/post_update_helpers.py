@@ -420,6 +420,9 @@ def _rewrap_behavioral_verdict(result: dict, decision: dict) -> None:
         logger.debug(f"Behavioral verdict re-wrap skipped: {e}")
 
 
+rewrap_behavioral_verdict = _rewrap_behavioral_verdict
+
+
 async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
     mcp_server = ctx.mcp_server
     agent_id = ctx.agent_id

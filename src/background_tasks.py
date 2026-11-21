@@ -18,7 +18,6 @@ from src.background_maintenance_tasks import (  # noqa: F401
     _lineage_eval_sweep_once,
     _session_cleanup_pass,
     class_promotion_sweeper_task,
-    identity_cache_warmup,
     lineage_eval_sweeper_task,
     perf_monitor_persist_task,
     principal_rollup_sweeper_task,
@@ -848,6 +847,5 @@ def start_all_background_tasks(set_ready):
     _supervised_create_task(check_agent_silence(), name="silence_detection")
     logger.info("[SILENCE] Started agent silence detection (every 10m)")
 
-    _supervised_create_task(identity_cache_warmup(), name="identity_cache_warmup")
     _supervised_create_task(substrate_claims_refresh(), name="substrate_claims_refresh")
     _supervised_create_task(transport_binding_cache_warmup(), name="transport_binding_cache_warmup")

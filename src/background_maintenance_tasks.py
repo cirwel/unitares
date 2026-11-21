@@ -425,10 +425,10 @@ async def perf_monitor_persist_task(interval_minutes: float = 5.0):
 async def transport_binding_cache_warmup():
     """Pre-populate the sticky transport-binding cache from Redis at startup.
 
-    Mirrors identity_cache_warmup but reads the transport_binding:* keys that
-    identity_step.py writes. Running this at boot means the dispatch-path
-    Redis read (guarded by wait_for) rarely has to fire, which keeps the
-    anyio-asyncio deadlock off the critical path.
+    Waits 2 seconds for Redis to be ready, scans up to 500 ``transport_binding:*``
+    entries written by ``identity_step.py``, and pre-populates warmed entries in
+    memory. This reduces (rather than eliminates) Redis reads (guarded by
+    ``wait_for``) on cold dispatch paths.
     """
     await asyncio.sleep(2)  # Wait for DB and Redis to be ready
     try:
@@ -518,67 +518,6 @@ async def substrate_claims_refresh(interval_s: float = 60.0):
         else:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
-
-
-async def identity_cache_warmup():
-    """Pre-populate sticky transport identity cache from recent session bindings.
-
-    Prevents first-request timeouts after server restart by warming the
-    in-memory cache from Redis/PostgreSQL before any client connects.
-    """
-    await asyncio.sleep(2)  # Wait for DB and Redis to be ready
-    try:
-        from src.cache import is_redis_available
-
-        if not is_redis_available():
-            logger.info("[WARMUP] Redis unavailable, skipping identity cache warmup")
-            return
-
-        from src.cache.redis_client import get_redis
-
-        redis = await get_redis()
-        if not redis:
-            logger.info("[WARMUP] Redis client not ready, skipping identity cache warmup")
-            return
-
-        import json
-        from src.mcp_handlers.middleware.identity_step import update_transport_binding
-
-        warmed = 0
-        max_scan = 500
-        scanned = 0
-        async for key in redis.scan_iter(match="session:*", count=50):
-            scanned += 1
-            if scanned > max_scan:
-                logger.debug(f"[WARMUP] Scan cap reached ({max_scan} keys)")
-                break
-            try:
-                data = await redis.get(key)
-                if not data:
-                    continue
-                binding = json.loads(data)
-                agent_uuid = binding.get("agent_uuid") or binding.get("agent_id")
-                session_key = binding.get("session_key") or (key.decode() if isinstance(key, bytes) else str(key))
-                ip_ua_fp = binding.get("ip_ua_fingerprint")
-                if agent_uuid and ip_ua_fp:
-                    cache_key = f"sticky:{ip_ua_fp}"
-                    update_transport_binding(
-                        cache_key,
-                        agent_uuid,
-                        session_key,
-                        source="warmup",
-                        original_session_source="unknown",
-                    )
-                    warmed += 1
-            except Exception:
-                continue  # Skip malformed entries
-
-        if warmed > 0:
-            logger.info(f"[WARMUP] Pre-populated identity cache with {warmed} binding(s)")
-        else:
-            logger.info("[WARMUP] No recent session bindings found to warm")
-    except Exception as e:
-        logger.warning(f"[WARMUP] Identity cache warmup failed (non-fatal): {e}")
 
 
 async def restore_host_cooldowns():
