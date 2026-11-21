@@ -1055,6 +1055,7 @@ def apply_overrides(items: list[Automation], warnings: list[str]) -> None:
         for legacy_id in _legacy_hook_ids(item):
             legacy_by_id.setdefault(legacy_id, []).append(item)
 
+    legacy_applied: dict[str, str] = {}
     for automation_id, override in sorted(overrides.items()):
         item = by_id.get(automation_id)
         if item is None:
@@ -1067,6 +1068,15 @@ def apply_overrides(items: list[Automation], warnings: list[str]) -> None:
                         f"canonical id {candidate.id} is also configured"
                     )
                     continue
+                prior_legacy = legacy_applied.get(candidate.id)
+                if prior_legacy is not None:
+                    warnings.append(
+                        f"overrides: legacy hook id {automation_id} ignored because "
+                        f"legacy id {prior_legacy} already matched {candidate.id}; "
+                        f"update {short_path(OVERRIDES_JSON)}"
+                    )
+                    continue
+                legacy_applied[candidate.id] = automation_id
                 warnings.append(
                     f"overrides: legacy hook id {automation_id} matched {candidate.id}; "
                     f"update {short_path(OVERRIDES_JSON)}"

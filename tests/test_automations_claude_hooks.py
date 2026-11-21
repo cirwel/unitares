@@ -856,13 +856,14 @@ def test_apply_overrides_legacy_hook_id_migrates_with_warning(
     census_mod, tmp_path, monkeypatch, legacy_matcher,
 ):
     home = tmp_path / "home"
-    hook = _exe(home / ".claude/hooks/stop.sh")
-    command = str(hook)
+    _exe(home / ".claude/hooks/stop.sh")
+    command = "~/.claude/hooks/stop.sh"
     settings_path = home / ".claude/settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps({
         "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
     }))
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(census_mod, "HOME", home)
     items, collect_warnings = _collect(census_mod)
     assert collect_warnings == []
@@ -870,6 +871,10 @@ def test_apply_overrides_legacy_hook_id_migrates_with_warning(
     canonical_id = items[0].id
     legacy_id = census_mod.stable_id(
         "claude-hook", f"{settings_path}:Stop:{legacy_matcher}:{command}",
+    )
+    other_matcher = "" if legacy_matcher == "None" else "None"
+    assert legacy_id != census_mod.stable_id(
+        "claude-hook", f"{settings_path}:Stop:{other_matcher}:{command}",
     )
     assert legacy_id != canonical_id
 
@@ -1020,3 +1025,55 @@ def test_apply_overrides_ambiguous_legacy_hook_id_does_not_misapply(
     assert "ambiguous" in warnings[0]
     assert wired[0].id in warnings[0]
     assert wired[1].id in warnings[0]
+
+
+def test_apply_overrides_duplicate_legacy_ids_for_same_hook_warn_and_skip_second(
+    census_mod, tmp_path, monkeypatch,
+):
+    """If both :None: and :: legacy IDs target the same hook without a canonical override, first wins and second warns."""
+    home = tmp_path / "home"
+    _exe(home / ".claude/hooks/stop.sh")
+    command = "~/.claude/hooks/stop.sh"
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
+    }))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, collect_warnings = _collect(census_mod)
+    assert collect_warnings == []
+    assert len(items) == 1
+    canonical_id = items[0].id
+
+    legacy_none = census_mod.stable_id("claude-hook", f"{settings_path}:Stop:None:{command}")
+    legacy_empty = census_mod.stable_id("claude-hook", f"{settings_path}:Stop::{command}")
+    assert legacy_none != legacy_empty
+    first_id, second_id = sorted([legacy_none, legacy_empty])
+
+    overrides_path = tmp_path / "automation-overrides.json"
+    overrides_path.write_text(json.dumps({
+        "automations": {
+            first_id: {
+                "owner": "first-owner",
+                "notes": ["gate:machine"],
+            },
+            second_id: {
+                "owner": "second-owner",
+                "notes": ["gate:ungated"],
+            },
+        }
+    }))
+    monkeypatch.setattr(census_mod, "OVERRIDES_JSON", overrides_path)
+
+    warnings: list[str] = []
+    census_mod.apply_overrides(items, warnings)
+    assert items[0].owner == "first-owner"
+    assert "gate:machine" in items[0].notes
+    assert "gate:ungated" not in items[0].notes
+    assert len(warnings) == 2
+    assert f"legacy hook id {first_id} matched {canonical_id}" in warnings[0]
+    assert (
+        f"legacy hook id {second_id} ignored because legacy id {first_id} already matched {canonical_id}"
+        in warnings[1]
+    )

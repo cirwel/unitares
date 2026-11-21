@@ -56,6 +56,10 @@ accepted by `apply_overrides` as migration aliases:
   `automation-overrides.json`.
 - **Both canonical and legacy IDs configured** — the canonical override wins and
   the legacy key is ignored with a warning.
+- **Multiple legacy IDs for the same hook** (for example, both `...:None:...`
+  and `...::...` for a hook with no matcher) — the first in sorted key order
+  applies with a migration warning, and subsequent legacy keys targeting the
+  same canonical ID are ignored with a conflict warning.
 - **Ambiguous legacy ID** (for example, the same plugin hook file loaded by both
   Claude and Codex) — the override is not applied, and a warning lists the
   candidate canonical IDs for disambiguation.
