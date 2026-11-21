@@ -408,7 +408,11 @@ defmodule UnitaresLeasePlane.IdentityBinding do
       override ->
         override
         |> call_principal_verifier(expected_subject, proof, request_context, opts)
-        |> normalize_principal_result(expected_subject, Keyword.get(opts, :expected_issuer))
+        |> normalize_principal_result(
+          expected_subject,
+          Keyword.get(opts, :expected_issuer),
+          Keyword.get(opts, :require_attestation, false) == true
+        )
     end
   end
 
@@ -416,12 +420,13 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     format = Application.get_env(:lease_plane, :identity_proof_format, :hybrid)
     attestation? = is_binary(proof) and String.starts_with?(proof, "lat.v1.")
     expected_issuer = Keyword.get(opts, :expected_issuer)
+    require_attestation? = Keyword.get(opts, :require_attestation, false) == true
 
     cond do
       not is_nil(expected_issuer) and not is_binary(expected_issuer) ->
         {:error, :invalid}
 
-      is_binary(expected_issuer) and not attestation? ->
+      (is_binary(expected_issuer) or require_attestation?) and not attestation? ->
         {:error, :invalid}
 
       attestation? and format == :legacy ->
@@ -478,20 +483,26 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
-  defp normalize_principal_result(:ok, _expected_subject, nil), do: {:ok, nil}
+  defp normalize_principal_result(:ok, _expected_subject, nil, false), do: {:ok, nil}
 
-  defp normalize_principal_result(:ok, _expected_subject, _expected_issuer),
+  defp normalize_principal_result(:ok, _expected_subject, _expected_issuer, _require_attestation),
     do: {:error, :invalid}
 
-  defp normalize_principal_result({:ok, nil}, _expected_subject, nil), do: {:ok, nil}
+  defp normalize_principal_result({:ok, nil}, _expected_subject, nil, false), do: {:ok, nil}
 
-  defp normalize_principal_result({:ok, nil}, _expected_subject, _expected_issuer),
-    do: {:error, :invalid}
+  defp normalize_principal_result(
+         {:ok, nil},
+         _expected_subject,
+         _expected_issuer,
+         _require_attestation
+       ),
+       do: {:error, :invalid}
 
   defp normalize_principal_result(
          {:ok, %{issuer: issuer, subject: subject}},
          expected_subject,
-         expected_issuer
+         expected_issuer,
+         _require_attestation
        ) do
     cond do
       not valid_principal_component?(issuer) or not valid_principal_component?(subject) ->
@@ -509,11 +520,21 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
-  defp normalize_principal_result({:error, reason}, _expected_subject, _expected_issuer),
-    do: {:error, reason}
+  defp normalize_principal_result(
+         {:error, reason},
+         _expected_subject,
+         _expected_issuer,
+         _require_attestation
+       ),
+       do: {:error, reason}
 
-  defp normalize_principal_result(_other, _expected_subject, _expected_issuer),
-    do: {:error, :invalid}
+  defp normalize_principal_result(
+         _other,
+         _expected_subject,
+         _expected_issuer,
+         _require_attestation
+       ),
+       do: {:error, :invalid}
 
   defp valid_principal_component?(value)
        when is_binary(value) and byte_size(value) in 1..256 do

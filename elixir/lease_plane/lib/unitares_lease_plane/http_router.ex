@@ -77,16 +77,31 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/acquire" do
     case extract_acquire_params(conn.body_params) do
       {:ok, params} ->
-        expected_subject = Map.get(params, :requested_holder_subject) || params.holder_agent_uuid
+        requested_subject = Map.get(params, :requested_holder_subject)
+
+        distinct_subject? =
+          is_binary(requested_subject) and requested_subject != params.holder_agent_uuid
+
+        expected_subject = requested_subject || params.holder_agent_uuid
+        kind = surface_kind(params.surface_id)
 
         case IdentityBinding.authorize_lease_principal(
                expected_subject,
                IdentityBinding.proof_from_conn(conn),
-               surface_kind(params.surface_id),
-               IdentityBinding.request_context(conn)
+               kind,
+               IdentityBinding.request_context(conn),
+               require_attestation: distinct_subject?
              ) do
+          {:ok, nil} when distinct_subject? ->
+            identity_refusal(conn, :identity_proof_invalid)
+
           {:ok, principal} ->
-            acquire_authorized(conn, attach_verified_principal(params, principal))
+            acquire_params =
+              params
+              |> attach_verified_principal(principal)
+              |> maybe_allow_unverified_principal_fallback(kind)
+
+            acquire_authorized(conn, acquire_params)
 
           {:error, reason} ->
             identity_refusal(conn, reason)
@@ -1098,6 +1113,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
          }} ->
           case Repo.active_lease(lease_id) do
             {:ok, lease} ->
+              distinct_subject? =
+                is_binary(recipient_subject) and recipient_subject != recipient_uuid
+
               expected_subject = recipient_subject || recipient_uuid
 
               IdentityBinding.authorize_lease_principal(
@@ -1105,7 +1123,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                 IdentityBinding.proof_from_conn(conn),
                 lease.surface_kind,
                 IdentityBinding.request_context(conn),
-                expected_issuer: recipient_issuer
+                expected_issuer: recipient_issuer,
+                require_attestation: distinct_subject?
               )
 
             {:error, :not_found} ->
@@ -1133,6 +1152,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp attach_verified_principal(params, nil) do
     Map.delete(params, :requested_holder_subject)
+  end
+
+  defp maybe_allow_unverified_principal_fallback(params, surface_kind) do
+    if IdentityBinding.enforced_for_surface?(surface_kind) do
+      params
+    else
+      Map.put(params, :allow_unverified_principal_fallback, true)
+    end
   end
 
   defp authorize_dialectic_participant(conn, session_id, actor_agent_id, roles) do

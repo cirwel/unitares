@@ -2188,18 +2188,139 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
              ).status == 200
     end
 
-    test "log mode never persists unverified holder_subject from request body", ctx do
+    test "distinct holder_subject is refused when no attested principal is verified (hybrid legacy, log, off)",
+         ctx do
+      holder_a = random_uuid()
+      holder_b = random_uuid()
+
+      distinct_body =
+        acquire_body(ctx.surface, holder_agent_uuid: holder_b)
+        |> Map.put(:holder_subject, holder_a)
+
+      # :enforce + :hybrid with a legacy proof -> 403 identity_proof_invalid
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+      Application.put_env(:lease_plane, :identity_proof_format, :hybrid)
+
+      legacy_resp =
+        post_json_with_proof("/v1/lease/acquire", distinct_body, "v1.legacy-for-a.sig")
+
+      assert legacy_resp.status == 403
+      assert parsed(legacy_resp)["reason"] == "identity_proof_invalid"
+
+      # :enforce + mock verifier returning :ok (no issuer/subject) for holder_a -> 403
+      Application.put_env(:lease_plane, :identity_verifier, fn
+        ^holder_a, "proof:" <> ^holder_a -> :ok
+        _, _ -> {:error, :invalid}
+      end)
+
+      mock_legacy_resp =
+        post_json_with_proof("/v1/lease/acquire", distinct_body, "proof:" <> holder_a)
+
+      assert mock_legacy_resp.status == 403
+      assert parsed(mock_legacy_resp)["reason"] == "identity_proof_invalid"
+      Application.delete_env(:lease_plane, :identity_verifier)
+
+      # :log with missing proof + distinct holder_subject -> 403 (never stores holder_agent_uuid=B with subject=nil)
+      Application.put_env(:lease_plane, :identity_binding_mode, :log)
+      log_distinct = post_json_without_proof("/v1/lease/acquire", distinct_body)
+      assert log_distinct.status == 403
+      assert parsed(log_distinct)["reason"] == "identity_proof_invalid"
+
+      # :off with distinct holder_subject -> 403
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+      off_distinct = post_json_without_proof("/v1/lease/acquire", distinct_body)
+      assert off_distinct.status == 403
+      assert parsed(off_distinct)["reason"] == "identity_proof_invalid"
+
+      # :log with matching holder_subject == holder_agent_uuid and missing proof -> 200, unverified principal NOT persisted
       Application.put_env(:lease_plane, :identity_binding_mode, :log)
 
-      body =
-        acquire_body(ctx.surface)
-        |> Map.put(:holder_subject, "unverified-claimed-subject")
+      same_body =
+        acquire_body(ctx.surface, holder_agent_uuid: holder_a)
+        |> Map.put(:holder_subject, holder_a)
 
-      resp = post_json_without_proof("/v1/lease/acquire", body)
-      assert resp.status == 200
-      lease = parsed(resp)["lease"]
+      same_resp = post_json_without_proof("/v1/lease/acquire", same_body)
+      assert same_resp.status == 200
+      lease = parsed(same_resp)["lease"]
       assert lease["holder_issuer"] == nil
       assert lease["holder_subject"] == nil
+    end
+
+    test "compatibility-mode (:log and :off) idempotent reacquire preserves recorded principal while wrong issuer still conflicts",
+         ctx do
+      rand = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+      resident_surface = "resident:/test_elixir_compat_#{rand}"
+      on_exit(fn -> cleanup_surface(resident_surface) end)
+
+      holder = random_uuid()
+      base_body = acquire_body(resident_surface, holder_agent_uuid: holder)
+
+      # Initial attested acquire in :log mode records ("operator-a", holder)
+      Application.put_env(:lease_plane, :identity_binding_mode, :log)
+
+      acq =
+        post_attested(
+          "/v1/lease/acquire",
+          base_body,
+          "operator-a",
+          "kid-a",
+          ctx.priv_a,
+          holder,
+          ctx.now
+        )
+
+      assert acq.status == 200
+      assert parsed(acq)["lease"]["holder_issuer"] == "operator-a"
+      assert parsed(acq)["lease"]["holder_subject"] == holder
+
+      # Unauthenticated idempotent retry in :log mode with substrate_state update succeeds and preserves principal
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+      retry_body =
+        base_body
+        |> Map.put(:substrate_state, %{"sensor" => %{"status" => "healthy"}})
+        |> Map.put(:substrate_state_observed_at, observed_at)
+
+      log_retry = post_json_without_proof("/v1/lease/acquire", retry_body)
+      assert log_retry.status == 200
+      log_retry_body = parsed(log_retry)
+      assert log_retry_body["idempotent"] == true
+      assert log_retry_body["lease"]["holder_issuer"] == "operator-a"
+      assert log_retry_body["lease"]["holder_subject"] == holder
+      assert log_retry_body["lease"]["substrate_state"] == %{"sensor" => %{"status" => "healthy"}}
+
+      # Wrong-issuer attestation in :log mode STILL conflicts (409 held_by_other)
+      wrong_issuer_retry =
+        post_attested(
+          "/v1/lease/acquire",
+          base_body,
+          "operator-b",
+          "kid-b",
+          ctx.priv_b,
+          holder,
+          ctx.now
+        )
+
+      assert wrong_issuer_retry.status == 409
+      assert parsed(wrong_issuer_retry)["error"] == "held_by_other"
+
+      # :off mode idempotent retry on attested lease succeeds and preserves principal
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+      off_retry = post_json_without_proof("/v1/lease/acquire", base_body)
+      assert off_retry.status == 200
+      assert parsed(off_retry)["idempotent"] == true
+      assert parsed(off_retry)["lease"]["holder_issuer"] == "operator-a"
+      assert parsed(off_retry)["lease"]["holder_subject"] == holder
+
+      # Direct Repo.acquire/1 without allow_unverified_principal_fallback remains fail-closed
+      assert {:error, :held_by_other, _info} =
+               UnitaresLeasePlane.Repo.acquire(%{
+                 surface_id: resident_surface,
+                 holder_agent_uuid: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "local_beam",
+                 ttl_s: 30
+               })
     end
 
     test "invalid holder_subject and handoff principal fields return 422 schema_invalid", ctx do

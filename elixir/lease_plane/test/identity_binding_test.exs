@@ -307,6 +307,35 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
              )
   end
 
+  test "require_attestation refuses legacy proofs in hybrid mode and :ok verifier overrides" do
+    subject = "11111111-1111-4111-8111-111111111111"
+    ctx = %{method: "POST", path: "/v1/lease/acquire", body_sha256: String.duplicate("d", 64)}
+
+    Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+    Application.put_env(:lease_plane, :identity_proof_format, :hybrid)
+    Application.delete_env(:lease_plane, :identity_verifier)
+
+    assert {:error, :identity_proof_invalid} =
+             IdentityBinding.authorize_lease_principal(
+               subject,
+               "v1.legacy.signature",
+               "agent",
+               ctx,
+               require_attestation: true
+             )
+
+    Application.put_env(:lease_plane, :identity_verifier, fn ^subject, "legacy-for-a" -> :ok end)
+
+    assert {:error, :identity_proof_invalid} =
+             IdentityBinding.authorize_lease_principal(
+               subject,
+               "legacy-for-a",
+               "agent",
+               ctx,
+               require_attestation: true
+             )
+  end
+
   test "multi-issuer config succeeds on authorize_lease_principal while authorize/4 and authorize_strict/3 stay fail-closed" do
     {pub_a, priv_a} = :crypto.generate_key(:eddsa, :ed25519)
     {pub_b, _priv_b} = :crypto.generate_key(:eddsa, :ed25519)

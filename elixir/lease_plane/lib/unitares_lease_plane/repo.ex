@@ -119,9 +119,18 @@ defmodule UnitaresLeasePlane.Repo do
 
   defp acquire_step(conn, p, %{holder_agent_uuid: held} = existing)
        when is_binary(held) do
+    p_issuer = Map.get(p, :holder_issuer)
+    p_subject = Map.get(p, :holder_subject)
+    existing_issuer = Map.get(existing, :holder_issuer)
+    existing_subject = Map.get(existing, :holder_subject)
+
+    unverified_fallback? =
+      is_nil(p_issuer) and is_nil(p_subject) and
+        Map.get(p, :allow_unverified_principal_fallback, false) == true
+
     same_principal? =
-      Map.get(existing, :holder_issuer) == Map.get(p, :holder_issuer) and
-        Map.get(existing, :holder_subject) == Map.get(p, :holder_subject)
+      (existing_issuer == p_issuer and existing_subject == p_subject) or
+        unverified_fallback?
 
     if held == p.holder_agent_uuid and same_principal? do
       # RFC §7.13: idempotent re-acquire from the same holder MUST update

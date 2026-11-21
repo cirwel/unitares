@@ -56,6 +56,30 @@ def _validate_substrate_pair(
         )
 
 
+def _validate_principal_component(
+    value: str | None,
+    *,
+    field_name: str,
+    where: str,
+) -> str | None:
+    """Validate an attested principal component (issuer or subject).
+
+    Matches both the migration-084 CHECK constraint (non-empty, <=256 chars,
+    no whitespace) and the Elixir router/verifier byte-length check (1..256 bytes).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{where}: {field_name} must be a string")
+    if not (1 <= len(value.encode("utf-8")) <= 256) or any(
+        ch.isspace() for ch in value
+    ):
+        raise ValueError(
+            f"{where}: {field_name} must be 1..256 bytes without whitespace"
+        )
+    return value
+
+
 class LeaseRecord(BaseModel):
     """Active or historical lease row as returned by the lease plane."""
 
@@ -107,15 +131,12 @@ class LeaseRecord(BaseModel):
             raise ValueError(
                 "LeaseRecord: holder_issuer and holder_subject must be both set or both unset"
             )
-        if self.holder_issuer is not None and self.holder_subject is not None:
-            for field_name, value in (
-                ("holder_issuer", self.holder_issuer),
-                ("holder_subject", self.holder_subject),
-            ):
-                if not (1 <= len(value) <= 256) or any(ch.isspace() for ch in value):
-                    raise ValueError(
-                        f"LeaseRecord: {field_name} must be 1..256 chars without whitespace"
-                    )
+        _validate_principal_component(
+            self.holder_issuer, field_name="holder_issuer", where="LeaseRecord"
+        )
+        _validate_principal_component(
+            self.holder_subject, field_name="holder_subject", where="LeaseRecord"
+        )
         return self
 
 
@@ -134,6 +155,7 @@ class AcquireRequest(LeasePlaneModel):
 
     surface_id: str = Field(min_length=1)
     holder_agent_uuid: UUID
+    holder_subject: str | None = None
     holder_class: HolderClass
     holder_kind: HolderKind
     ttl_s: int = Field(gt=0, le=3600)
@@ -168,6 +190,13 @@ class AcquireRequest(LeasePlaneModel):
                 f"(RFC §7.2.1)"
             )
         return canonicalize(v)
+
+    @field_validator("holder_subject")
+    @classmethod
+    def _validate_holder_subject(cls, v: str | None) -> str | None:
+        return _validate_principal_component(
+            v, field_name="holder_subject", where="AcquireRequest"
+        )
 
     @model_validator(mode="after")
     def _substrate_pair_coherent(self) -> "AcquireRequest":
@@ -243,7 +272,23 @@ class HandoffOfferRequest(LeasePlaneModel):
 
     lease_id: UUID
     to_holder_agent_uuid: UUID
+    to_holder_issuer: str | None = None
+    to_holder_subject: str | None = None
     ttl_s: int = Field(gt=0, le=3600)
+
+    @field_validator("to_holder_issuer")
+    @classmethod
+    def _validate_to_holder_issuer(cls, v: str | None) -> str | None:
+        return _validate_principal_component(
+            v, field_name="to_holder_issuer", where="HandoffOfferRequest"
+        )
+
+    @field_validator("to_holder_subject")
+    @classmethod
+    def _validate_to_holder_subject(cls, v: str | None) -> str | None:
+        return _validate_principal_component(
+            v, field_name="to_holder_subject", where="HandoffOfferRequest"
+        )
 
 
 class HandoffAcceptRequest(LeasePlaneModel):
