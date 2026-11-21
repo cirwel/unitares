@@ -3577,6 +3577,7 @@ async def _forget_unpersisted_identity(agent_uuid: Any, session_key: str) -> Non
     if not isinstance(agent_uuid, str) or not agent_uuid:
         return
     try:
+        from .persistence import _REDIS_WRITE_TIMEOUT
         from .shared import make_client_session_id, _session_identities
         from src.cache import get_session_cache
 
@@ -3589,10 +3590,12 @@ async def _forget_unpersisted_identity(agent_uuid: Any, session_key: str) -> Non
                 held.get("bound_agent_id") or held.get("agent_uuid")
             ) == agent_uuid:
                 _session_identities.pop(key, None)
-            cached = await cache.get(key)
+            # Bounded like every Redis await on this path: a stalled cache
+            # must not turn the decline into a timeout of the whole onboard.
+            cached = await asyncio.wait_for(cache.get(key), timeout=_REDIS_WRITE_TIMEOUT)
             if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
-                await cache.unbind(key)
-    except Exception as exc:
+                await asyncio.wait_for(cache.unbind(key), timeout=_REDIS_WRITE_TIMEOUT)
+    except (Exception, asyncio.TimeoutError) as exc:
         logger.warning(
             f"[ONBOARD] could not drop the cached session for declined identity "
             f"{agent_uuid[:8]}...: {exc}"

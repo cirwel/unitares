@@ -2328,6 +2328,27 @@ class TestHandleOnboardV2:
                 _session_identities.pop(stale, None)
 
     @pytest.mark.asyncio
+    async def test_a_stalled_cache_does_not_cost_the_decline(self, monkeypatch):
+        """Dropping the cached session is best effort. A cache that never
+        answers is given up on, and the caller still gets its decline."""
+        import asyncio as _asyncio
+        from src.mcp_handlers.identity import handlers as identity_handlers
+
+        class _Stalled:
+            async def get(self, key):
+                await _asyncio.sleep(30)
+
+            async def unbind(self, key):
+                await _asyncio.sleep(30)
+
+        monkeypatch.setattr("src.mcp_handlers.identity.persistence._REDIS_WRITE_TIMEOUT", 0.05)
+        monkeypatch.setattr("src.cache.get_session_cache", lambda: _Stalled())
+        await _asyncio.wait_for(
+            identity_handlers._forget_unpersisted_identity(str(uuid.uuid4()), "agent:/thread-stalled"),
+            timeout=2,
+        )
+
+    @pytest.mark.asyncio
     async def test_agent_only_server_still_resumes_an_identity_for_a_harness(
         self, patch_onboard_deps, mock_db, mock_redis, mock_raw_redis, monkeypatch
     ):
