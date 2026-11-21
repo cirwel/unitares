@@ -683,6 +683,7 @@ class TestPersistFindingsFpCarryOver:
         assert rows[1]["status"] == "dismissed"
         assert rows[1]["resolution_reason"] == "dup"
         assert rows[1]["duplicate_of"] == prior_fp
+        assert rows[1]["duplicate_of_reason"] == "fp"
         dedup_after = json.loads((isolated_findings_state / "dedup.json").read_text())
         assert wt_copy.fingerprint in dedup_after
 
@@ -694,6 +695,49 @@ class TestPersistFindingsFpCarryOver:
         rows_after_compact = _read_rows(isolated_findings_state)
         assert len(rows_after_compact) == 1
         assert rows_after_compact[0]["status"] == "dismissed"
+
+    @pytest.mark.parametrize("reason", ["stale", "unclear", "wont_fix", None])
+    def test_expired_dedup_on_non_fp_propagated_copy_resurfaces_like_target(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        reason: str | None,
+    ):
+        """Copies propagated from non-fp dismissals (stale/unclear/wont_fix/None)
+        must NOT stay suppressed after dedup TTL expiry — they resurface on
+        rescan consistently with their target."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert len(persist_findings([main_finding, wt_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(
+                main_finding.fingerprint, "dismissed", reason=reason
+            )
+            == 0
+        )
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[wt_finding.fingerprint]["status"] == "dismissed"
+        assert by_fp[wt_finding.fingerprint]["resolution_reason"] == "dup"
+        assert by_fp[wt_finding.fingerprint]["duplicate_of"] == main_finding.fingerprint
+        if reason is not None:
+            assert by_fp[wt_finding.fingerprint]["duplicate_of_reason"] == reason
+        else:
+            assert "duplicate_of_reason" not in by_fp[wt_finding.fingerprint]
+
+        # Simulate dedup TTL expiry: both target and its non-fp dup copy resurface
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        resurfaced = persist_findings([main_finding, wt_finding])
+        assert [f.fingerprint for f in resurfaced] == [
+            main_finding.fingerprint,
+            wt_finding.fingerprint,
+        ]
 
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,

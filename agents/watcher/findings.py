@@ -312,22 +312,28 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             dedup[f.fingerprint] = now
             brand_new.append(f)
 
-        # Existing dismissed+fp fingerprints and propagated dismissed+dup
-        # copies (for expired-dedup self-match guard). Without including
-        # propagated dup copies here, rescanning a sibling worktree after
-        # FINDINGS_TTL_DAYS drops its dedup entry would append a second open
-        # row with the same fingerprint.
-        existing_suppressed_fingerprints = {
+        fp_row_fingerprints = {
             fp
             for row in existing_rows
             if row.get("status") == "dismissed"
+            and row.get("resolution_reason") == "fp"
+            and isinstance((fp := row.get("fingerprint")), str)
+            and fp
+        }
+        # Existing dismissed+fp fingerprints and propagated copies of fp
+        # dismissals (for expired-dedup self-match guard). Copies of non-fp
+        # dismissals (stale, wont_fix, unclear, out_of_scope, None) stay
+        # unsuppressed after dedup expiry, matching their target's behavior.
+        existing_suppressed_fingerprints = fp_row_fingerprints | {
+            fp
+            for row in existing_rows
+            if row.get("status") == "dismissed"
+            and row.get("resolution_reason") == "dup"
+            and isinstance((dup_of := row.get("duplicate_of")), str)
+            and bool(dup_of)
             and (
-                row.get("resolution_reason") == "fp"
-                or (
-                    row.get("resolution_reason") == "dup"
-                    and isinstance(row.get("duplicate_of"), str)
-                    and bool(row.get("duplicate_of"))
-                )
+                row.get("duplicate_of_reason") == "fp"
+                or dup_of in fp_row_fingerprints
             )
             and isinstance((fp := row.get("fingerprint")), str)
             and fp
@@ -422,6 +428,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                         "dismissed_at": now_iso,
                         "resolution_reason": "dup",
                         "duplicate_of": prior_fp,
+                        "duplicate_of_reason": "fp",
                     }
                 )
                 continue
@@ -741,6 +748,8 @@ def update_finding_status(
                 "resolution_reason": "dup",
                 "duplicate_of": target_fp,
             }
+            if reason:
+                sibling_merged["duplicate_of_reason"] = reason
             if timestamp_field:
                 sibling_merged[timestamp_field] = now_iso
             if resolver_agent_id:
