@@ -1,0 +1,596 @@
+defmodule AgentOrchestrator.LeasePlaneClientTest do
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias AgentOrchestrator.AgentRunner.LeaseGovernance
+  alias AgentOrchestrator.LeasePlaneClient
+
+  @bearer "test-lease-bearer-token"
+  @gov_token "test-gov-api-token"
+  @holder_uuid "11111111-1111-4111-8111-111111111111"
+  @continuity_token "ct.v1.secret-continuity-token-must-never-leak"
+
+  @env_keys [
+    :lease_plane_base_url,
+    :lease_plane_unix_socket_path,
+    :lease_plane_bearer_token,
+    :governance_url,
+    :governance_api_token,
+    :lease_identity_proof,
+    :lease_holder_agent_uuid,
+    :require_lease_identity_proof,
+    :insecure_governance_hosts
+  ]
+
+  setup do
+    saved =
+      Enum.map(@env_keys, fn key ->
+        {key, Application.fetch_env(:agent_orchestrator, key)}
+      end)
+
+    Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, @bearer)
+    Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, nil)
+    Application.put_env(:agent_orchestrator, :lease_plane_base_url, "http://127.0.0.1:8788")
+    Application.put_env(:agent_orchestrator, :governance_url, "http://127.0.0.1:8767")
+    Application.put_env(:agent_orchestrator, :governance_api_token, nil)
+    Application.put_env(:agent_orchestrator, :lease_identity_proof, nil)
+    Application.put_env(:agent_orchestrator, :lease_holder_agent_uuid, nil)
+    Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
+    Application.put_env(:agent_orchestrator, :insecure_governance_hosts, MapSet.new())
+
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {key, {:ok, val}} -> Application.put_env(:agent_orchestrator, key, val)
+        {key, :error} -> Application.delete_env(:agent_orchestrator, key)
+      end)
+
+      Enum.each(AgentOrchestrator.list(), &AgentOrchestrator.stop(&1, :test_cleanup))
+    end)
+
+    :ok
+  end
+
+  defp start_tcp_http_server(handler) do
+    {:ok, lsock} =
+      :gen_tcp.listen(0, [
+        :binary,
+        {:ip, {127, 0, 0, 1}},
+        {:active, false},
+        {:reuseaddr, true}
+      ])
+
+    {:ok, port} = :inet.port(lsock)
+    pid = spawn_http_loop(lsock, handler)
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: Process.exit(pid, :normal)
+      :gen_tcp.close(lsock)
+    end)
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp start_uds_http_server(tag, handler) do
+    path = "/tmp/ao_lpc_#{tag}_#{System.unique_integer([:positive])}.sock"
+    File.rm(path)
+    {:ok, lsock} = :gen_tcp.listen(0, [:binary, {:ifaddr, {:local, path}}, {:active, false}])
+    :ok = File.chmod(path, 0o600)
+    pid = spawn_http_loop(lsock, handler)
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: Process.exit(pid, :normal)
+      :gen_tcp.close(lsock)
+      File.rm(path)
+    end)
+
+    path
+  end
+
+  defp spawn_http_loop(lsock, handler) do
+    parent = self()
+
+    pid =
+      spawn_link(fn ->
+        send(parent, {:server_ready, self()})
+        http_accept_loop(lsock, handler)
+      end)
+
+    receive do
+      {:server_ready, ^pid} -> pid
+    after
+      1_000 -> flunk("test HTTP server failed to start")
+    end
+  end
+
+  defp http_accept_loop(lsock, handler) do
+    case :gen_tcp.accept(lsock) do
+      {:ok, sock} ->
+        try do
+          req = read_http_request(sock)
+          {status, resp_body} = handler.(req)
+          body_bin = if is_binary(resp_body), do: resp_body, else: Jason.encode!(resp_body)
+
+          wire =
+            "HTTP/1.1 #{status} OK\r\n" <>
+              "Content-Type: application/json\r\n" <>
+              "Content-Length: #{byte_size(body_bin)}\r\n" <>
+              "Connection: close\r\n\r\n" <>
+              body_bin
+
+          :ok = :gen_tcp.send(sock, wire)
+        after
+          :gen_tcp.close(sock)
+        end
+
+        http_accept_loop(lsock, handler)
+
+      {:error, _closed} ->
+        :ok
+    end
+  end
+
+  defp read_http_request(sock, acc \\ <<>>) do
+    case :binary.match(acc, "\r\n\r\n") do
+      {pos, 4} ->
+        head = binary_part(acc, 0, pos)
+        rest = binary_part(acc, pos + 4, byte_size(acc) - pos - 4)
+        [request_line | header_lines] = String.split(head, "\r\n")
+        [method, path, _version] = String.split(request_line, " ", parts: 3)
+
+        headers =
+          Map.new(header_lines, fn line ->
+            [k, v] = String.split(line, ":", parts: 2)
+            {String.downcase(String.trim(k)), String.trim(v)}
+          end)
+
+        len =
+          case Map.get(headers, "content-length") do
+            nil -> 0
+            s -> String.to_integer(s)
+          end
+
+        raw_body = read_exact(sock, rest, len)
+        %{method: method, path: path, headers: headers, raw_body: raw_body}
+
+      :nomatch ->
+        {:ok, chunk} = :gen_tcp.recv(sock, 0, 2_000)
+        read_http_request(sock, acc <> chunk)
+    end
+  end
+
+  defp read_exact(_sock, buf, len) when byte_size(buf) >= len, do: binary_part(buf, 0, len)
+
+  defp read_exact(sock, buf, len) do
+    {:ok, chunk} = :gen_tcp.recv(sock, 0, 2_000)
+    read_exact(sock, buf <> chunk, len)
+  end
+
+  defp sha256_hex(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+  describe "UDS and TCP transport" do
+    test "acquire and release round-trip over configured Unix domain socket" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("roundtrip", fn req ->
+          send(test_pid, {:lease_req, req})
+
+          case req.path do
+            "/v1/lease/acquire" ->
+              {200, %{ok: true, lease: %{lease_id: "lease-uds-1"}}}
+
+            "/v1/lease/release" ->
+              {200, %{ok: true}}
+          end
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+
+      assert {:ok, "lease-uds-1"} =
+               LeasePlaneClient.acquire("agent:/ex-1", @holder_uuid, "remote_heartbeat", 300)
+
+      assert_receive {:lease_req, acq_req}
+      assert acq_req.method == "POST"
+      assert acq_req.path == "/v1/lease/acquire"
+      assert acq_req.headers["authorization"] == "Bearer #{@bearer}"
+      assert acq_req.headers["content-type"] == "application/json"
+      refute Map.has_key?(acq_req.headers, "x-unitares-identity-proof")
+
+      assert Jason.decode!(acq_req.raw_body) == %{
+               "surface_id" => "agent:/ex-1",
+               "holder_agent_uuid" => @holder_uuid,
+               "holder_kind" => "remote_heartbeat",
+               "ttl_s" => 300
+             }
+
+      assert :ok = LeasePlaneClient.release("lease-uds-1", "normal")
+
+      assert_receive {:lease_req, rel_req}
+      assert rel_req.path == "/v1/lease/release"
+
+      assert Jason.decode!(rel_req.raw_body) == %{
+               "lease_id" => "lease-uds-1",
+               "release_reason" => "normal"
+             }
+    end
+
+    test "supports unix:/// base URL and rejects malformed unix:// URLs" do
+      socket_path =
+        start_uds_http_server("unix_url", fn _req ->
+          {200, %{ok: true, lease: %{lease_id: "lease-unix-url"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_base_url, "unix://" <> socket_path)
+
+      assert {:ok, "lease-unix-url"} =
+               LeasePlaneClient.acquire("agent:/ex-url", @holder_uuid, "remote_heartbeat", 60)
+
+      Application.put_env(
+        :agent_orchestrator,
+        :lease_plane_base_url,
+        "unix://host/not-local.sock"
+      )
+
+      assert {:error, {:unix_socket, :invalid_url}} =
+               LeasePlaneClient.acquire("agent:/ex-bad", @holder_uuid, "remote_heartbeat", 60)
+    end
+
+    test "does not fall back to TCP when configured Unix socket is missing or unsafe" do
+      test_pid = self()
+
+      tcp_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:unexpected_tcp_req, req})
+          {200, %{ok: true, lease_id: "should-not-hit-tcp"}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_base_url, tcp_url)
+
+      Application.put_env(
+        :agent_orchestrator,
+        :lease_plane_unix_socket_path,
+        "/tmp/ao_missing_#{System.unique_integer([:positive])}.sock"
+      )
+
+      assert {:error, {:unix_socket, {:socket_stat_failed, :enoent}}} =
+               LeasePlaneClient.acquire("agent:/ex-2", @holder_uuid, "remote_heartbeat", 60)
+
+      refute_receive {:unexpected_tcp_req, _}
+    end
+
+    test "falls back cleanly to TCP when no Unix socket is configured" do
+      tcp_url =
+        start_tcp_http_server(fn _req ->
+          {200, %{ok: true, lease: %{lease_id: "lease-tcp-1"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_base_url, tcp_url)
+
+      assert {:ok, "lease-tcp-1"} =
+               LeasePlaneClient.acquire("agent:/ex-tcp", @holder_uuid, "remote_heartbeat", 120)
+    end
+
+    test "preserves SDK held_by_other error classification over UDS" do
+      other_uuid = "22222222-2222-4222-8222-222222222222"
+
+      socket_path =
+        start_uds_http_server("held", fn _req ->
+          {409,
+           %{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: other_uuid,
+             blocking_lease_id: "lease-other-1",
+             retry_after_hint_ms: 250
+           }}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+
+      assert {:error, {:held_by_other, ^other_uuid, %{"blocking_lease_id" => "lease-other-1"}}} =
+               LeasePlaneClient.acquire("agent:/ex-held", @holder_uuid, "remote_heartbeat", 60)
+    end
+  end
+
+  describe "request-bound lat.v1 attestation and raw-body binding" do
+    test "mints exact raw-body-bound lat.v1 attestations for acquire and release over UDS" do
+      test_pid = self()
+
+      gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:attest_req, req})
+          decoded = Jason.decode!(req.raw_body)
+          bsha = decoded["body_sha256"]
+          path = decoded["path"]
+
+          token = "lat.v1." <> Base.url_encode64("#{path}:#{bsha}", padding: false) <> ".sig"
+
+          {200,
+           %{
+             ok: true,
+             holder_agent_uuid: @holder_uuid,
+             attestation: token,
+             proof_type: "lease-attestation.v1"
+           }}
+        end)
+
+      socket_path =
+        start_uds_http_server("attest", fn req ->
+          send(test_pid, {:lease_req, req})
+
+          case req.path do
+            "/v1/lease/acquire" -> {200, %{ok: true, lease: %{lease_id: "lease-attested-1"}}}
+            "/v1/lease/release" -> {200, %{ok: true}}
+          end
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, gov_url)
+      Application.put_env(:agent_orchestrator, :governance_api_token, @gov_token)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:ok, "lease-attested-1"} =
+               LeasePlaneClient.acquire("agent:/ex-att", @holder_uuid, "remote_heartbeat", 300)
+
+      assert_receive {:attest_req, acq_att_req}
+      assert acq_att_req.method == "POST"
+      assert acq_att_req.path == "/v1/lease-holder/attest"
+      assert acq_att_req.headers["authorization"] == "Bearer #{@gov_token}"
+      acq_att_body = Jason.decode!(acq_att_req.raw_body)
+      assert acq_att_body["identity_proof"] == @continuity_token
+      assert acq_att_body["holder_agent_uuid"] == @holder_uuid
+      assert acq_att_body["method"] == "POST"
+      assert acq_att_body["path"] == "/v1/lease/acquire"
+
+      assert_receive {:lease_req, acq_lease_req}
+      # Raw wire bytes received by the lease plane MUST match the attested SHA-256 bit-for-bit.
+      assert sha256_hex(acq_lease_req.raw_body) == acq_att_body["body_sha256"]
+
+      expected_acq_token =
+        "lat.v1." <>
+          Base.url_encode64("/v1/lease/acquire:#{acq_att_body["body_sha256"]}", padding: false) <>
+          ".sig"
+
+      assert acq_lease_req.headers["x-unitares-identity-proof"] == expected_acq_token
+      refute acq_lease_req.headers["x-unitares-identity-proof"] =~ @continuity_token
+
+      assert :ok = LeasePlaneClient.release("lease-attested-1", "normal")
+
+      assert_receive {:attest_req, rel_att_req}
+      rel_att_body = Jason.decode!(rel_att_req.raw_body)
+      assert rel_att_body["identity_proof"] == @continuity_token
+      assert rel_att_body["method"] == "POST"
+      assert rel_att_body["path"] == "/v1/lease/release"
+      refute Map.has_key?(rel_att_body, "holder_agent_uuid")
+
+      assert_receive {:lease_req, rel_lease_req}
+      assert sha256_hex(rel_lease_req.raw_body) == rel_att_body["body_sha256"]
+      assert String.starts_with?(rel_lease_req.headers["x-unitares-identity-proof"], "lat.v1.")
+    end
+
+    test "passes through pre-minted lat.v1 attestation and rejects malformed lat.v1 tokens" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("preminted", fn req ->
+          send(test_pid, {:lease_req, req})
+          {200, %{ok: true, lease: %{lease_id: "lease-pre"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+
+      assert {:ok, "lease-pre"} =
+               LeasePlaneClient.acquire(
+                 "agent:/ex-pre",
+                 @holder_uuid,
+                 "remote_heartbeat",
+                 60,
+                 identity_proof: "lat.v1.payload.sig"
+               )
+
+      assert_receive {:lease_req, req}
+      assert req.headers["x-unitares-identity-proof"] == "lat.v1.payload.sig"
+
+      assert {:error, {:identity_attestation_failed, :malformed_attestation}} =
+               LeasePlaneClient.acquire(
+                 "agent:/ex-pre",
+                 @holder_uuid,
+                 "remote_heartbeat",
+                 60,
+                 identity_proof: "lat.v1.bad\r\nheader"
+               )
+    end
+  end
+
+  describe "AGENT_ORCHESTRATOR_REQUIRE_LEASE_IDENTITY_PROOF fail-closed enforcement" do
+    test "refuses before touching lease plane when proof is missing" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("req_missing", fn req ->
+          send(test_pid, {:unexpected_lease_req, req})
+          {200, %{ok: true, lease_id: "nope"}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:error, {:identity_attestation_required, :missing_proof}} =
+               LeasePlaneClient.acquire("agent:/ex-req", @holder_uuid, "remote_heartbeat", 60)
+
+      assert {:error, {:identity_attestation_required, :missing_proof}} =
+               LeasePlaneClient.release("lease-1", "normal")
+
+      refute_receive {:unexpected_lease_req, _}
+    end
+
+    test "refuses before touching lease plane when governance returns non-200, malformed JSON, non-lat.v1, or holder mismatch" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("req_bad_gov", fn req ->
+          send(test_pid, {:unexpected_lease_req, req})
+          {200, %{ok: true, lease_id: "nope"}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      cases = [
+        {{403, %{ok: false, error: "identity_proof_invalid"}}, {:attestation_http_status, 403}},
+        {{503, %{ok: false, error: "attestation_unavailable"}}, {:attestation_http_status, 503}},
+        {{200, "not-json"}, :malformed_attestation_response},
+        {{200, %{ok: true, attestation: "not-lat-v1"}}, :malformed_attestation_response},
+        {{200, %{ok: false, attestation: "lat.v1.a.b"}}, :malformed_attestation_response},
+        {{200,
+          %{
+            ok: true,
+            holder_agent_uuid: "22222222-2222-4222-8222-222222222222",
+            attestation: "lat.v1.a.b"
+          }}, :malformed_attestation_response}
+      ]
+
+      for {gov_reply, expected_reason} <- cases do
+        gov_url = start_tcp_http_server(fn _req -> gov_reply end)
+        Application.put_env(:agent_orchestrator, :governance_url, gov_url)
+
+        assert {:error, {:identity_attestation_failed, ^expected_reason}} =
+                 LeasePlaneClient.acquire("agent:/ex-fail", @holder_uuid, "remote_heartbeat", 60)
+      end
+
+      refute_receive {:unexpected_lease_req, _}
+    end
+
+    test "refuses plain HTTP non-loopback governance URL without leaking credential" do
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+      Application.put_env(:agent_orchestrator, :governance_url, "http://gov.example.test:8767")
+
+      assert {:error, {:identity_attestation_failed, :insecure_governance_url}} =
+               LeasePlaneClient.acquire("agent:/ex-http", @holder_uuid, "remote_heartbeat", 60)
+    end
+
+    test "refuses before touching lease plane when governance endpoint is unreachable" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("req_unreach", fn req ->
+          send(test_pid, {:unexpected_lease_req, req})
+          {200, %{ok: true, lease: %{lease_id: "nope"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+      Application.put_env(:agent_orchestrator, :governance_url, "http://127.0.0.1:1")
+
+      assert {:error, {:identity_attestation_failed, {:attestation_unreachable, _reason}}} =
+               LeasePlaneClient.acquire("agent:/ex-unreach", @holder_uuid, "remote_heartbeat", 60)
+
+      refute_receive {:unexpected_lease_req, _}
+    end
+
+    test "when optional, failed attestation never forwards raw continuity token and never logs it" do
+      test_pid = self()
+
+      gov_url = start_tcp_http_server(fn _req -> {503, %{ok: false}} end)
+
+      socket_path =
+        start_uds_http_server("opt_fallback", fn req ->
+          send(test_pid, {:lease_req, req})
+          {200, %{ok: true, lease: %{lease_id: "lease-opt"}}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, gov_url)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, "lease-opt"} =
+                   LeasePlaneClient.acquire("agent:/ex-opt", @holder_uuid, "remote_heartbeat", 60)
+        end)
+
+      assert log =~ "lease identity attestation unavailable"
+      refute log =~ @continuity_token
+
+      assert_receive {:lease_req, req}
+      refute Map.has_key?(req.headers, "x-unitares-identity-proof")
+    end
+  end
+
+  describe "AgentRunner integration with real LeasePlaneClient" do
+    test "acquires and releases with distinct request-bound attestations and hides per-lease secret behind closure" do
+      test_pid = self()
+
+      cfg =
+        LeaseGovernance.normalize_lease_cfg(
+          %{holder_agent_uuid: @holder_uuid, identity_proof: @continuity_token, required: true},
+          "ex-secret"
+        )
+
+      refute inspect(cfg) =~ @continuity_token
+
+      gov_url =
+        start_tcp_http_server(fn req ->
+          decoded = Jason.decode!(req.raw_body)
+          send(test_pid, {:gov_attest, decoded["path"], decoded["holder_agent_uuid"]})
+
+          token =
+            "lat.v1." <>
+              Base.url_encode64(decoded["path"] <> ":" <> decoded["body_sha256"], padding: false) <>
+              ".sig"
+
+          {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: token}}
+        end)
+
+      socket_path =
+        start_uds_http_server("runner_e2e", fn req ->
+          send(test_pid, {:plane_req, req.path, req.headers["x-unitares-identity-proof"]})
+
+          case req.path do
+            "/v1/lease/acquire" -> {200, %{ok: true, lease: %{lease_id: "lease-runner-1"}}}
+            "/v1/lease/release" -> {200, %{ok: true}}
+          end
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, gov_url)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      {:ok, id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "echo",
+          args: ["attested-ok"],
+          lease: %{
+            required: true,
+            holder_agent_uuid: @holder_uuid,
+            identity_proof: @continuity_token
+          }
+        })
+
+      assert {:ok, %{exit_status: 0, output: ["attested-ok"], lease_id: "lease-runner-1"}} =
+               AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:gov_attest, "/v1/lease/acquire", @holder_uuid}
+      assert_receive {:plane_req, "/v1/lease/acquire", "lat.v1." <> _}
+      assert_receive {:gov_attest, "/v1/lease/release", @holder_uuid}
+      assert_receive {:plane_req, "/v1/lease/release", "lat.v1." <> _}
+    end
+
+    test "required lease spawn fails closed when require_lease_identity_proof is true and proof is absent" do
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+
+      assert {:error, {:lease_denied, {:identity_attestation_required, :missing_proof}}} =
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["never-runs"],
+                 lease: %{required: true}
+               })
+    end
+  end
+end

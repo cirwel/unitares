@@ -31,4 +31,14 @@ defmodule AgentOrchestrator.ApplicationTest do
       Application.parse_database_url("postgresql://postgres@localhost/")
     end
   end
+
+  test "parses boolean env flags case-insensitively" do
+    for truthy <- ["1", "true", "TRUE", " yes ", "On"] do
+      assert Application.parse_bool_env(truthy)
+    end
+
+    for falsy <- [nil, "", "0", "false", "no", "off", "maybe"] do
+      refute Application.parse_bool_env(falsy)
+    end
+  end
 end
