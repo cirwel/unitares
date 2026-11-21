@@ -922,3 +922,72 @@ async def test_audit_events_query_strips_provenance_mac():
     assert "provenance_mac" not in returned_details
     # Source row must not be mutated in place
     assert row["details"]["provenance_mac"] == "a" * 64
+
+
+def test_backfill_non_ascii_provenance_mac_fails_closed_without_aborting_batch(monkeypatch):
+    """A legacy/malformed row with non-ASCII provenance_mac must fail closed and not abort backfill."""
+    from src.broadcaster import broadcaster_instance
+
+    monkeypatch.setenv(
+        "UNITARES_HTTP_AGENT_TOKENS",
+        _agent_token_entry(VIGIL_UUID, VIGIL_FINDINGS_TOKEN, "findings"),
+    )
+    persisted_rows: list[dict] = []
+
+    async def _capture_persist(audit_event: dict):
+        persisted_rows.append(
+            {
+                "event_id": "db-valid-following",
+                "event_type": audit_event["event_type"],
+                "agent_id": audit_event["agent_id"],
+                "timestamp": audit_event["timestamp"],
+                "details": audit_event["details"],
+            }
+        )
+
+    monkeypatch.setattr(broadcaster_instance, "_send_to_clients", AsyncMock())
+    c = _client_for_ip("127.0.0.1")
+    with patch("src.audit_db.append_audit_event_async", new=_capture_persist):
+        r_post = c.post(
+            "/api/findings",
+            json=_finding(
+                "prov-non-ascii-batch",
+                type="vigil_finding",
+                agent_id="vigil",
+                agent_name="Vigil",
+            ),
+            headers={"Authorization": f"Bearer {VIGIL_FINDINGS_TOKEN}"},
+        )
+    assert r_post.status_code == 200
+    assert len(persisted_rows) == 1
+
+    non_ascii_row = {
+        "event_id": "db-non-ascii-mac",
+        "event_type": "vigil_finding",
+        "agent_id": "vigil",
+        "timestamp": persisted_rows[0]["timestamp"],
+        "details": {
+            "type": "vigil_finding",
+            "severity": "warning",
+            "message": "malformed non-ASCII mac",
+            "agent_name": "Vigil",
+            "fingerprint": "fp-non-ascii",
+            "provenance_source": "server_findings_token",
+            "provenance_verified": True,
+            "verified_actor_agent_uuid": VIGIL_UUID,
+            "provenance_mac": "é",
+        },
+    }
+    event_detector.clear_events()
+    with patch(
+        "src.audit_db.query_audit_events_async",
+        new=AsyncMock(return_value=[non_ascii_row, persisted_rows[0]]),
+    ):
+        r_db = c.get("/api/events?limit=10")
+    assert r_db.status_code == 200
+    by_id = {e["event_id"]: e for e in r_db.json()["events"]}
+    assert set(by_id) == {"db-non-ascii-mac", "db-valid-following"}
+    assert by_id["db-non-ascii-mac"]["provenance_verified"] is False
+    assert by_id["db-non-ascii-mac"]["verified_actor_agent_uuid"] is None
+    assert by_id["db-valid-following"]["provenance_verified"] is True
+    assert by_id["db-valid-following"]["verified_actor_agent_uuid"] == VIGIL_UUID

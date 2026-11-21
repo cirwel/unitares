@@ -61,6 +61,7 @@ _SERVER_OWNED_PROVENANCE_FIELDS = (
     "provenance_mac",
 )
 _EPHEMERAL_PROVENANCE_KEY = secrets.token_bytes(32)
+_PROVENANCE_MAC_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _provenance_hmac_key() -> bytes:
@@ -90,13 +91,16 @@ def normalize_provenance_timestamp(value: object) -> Optional[str]:
             return None
         try:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
+        except (ValueError, TypeError):
             return None
     else:
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError, TypeError):
+        return None
 
 
 def _canonical_provenance_payload(
@@ -172,7 +176,7 @@ def verify_finding_provenance_mac(
     timestamp: object,
 ) -> bool:
     """Verify a persisted audit-DB provenance MAC in constant time."""
-    if not isinstance(mac, str) or not mac:
+    if not isinstance(mac, str) or not _PROVENANCE_MAC_RE.fullmatch(mac):
         return False
     normalized_ts = normalize_provenance_timestamp(timestamp)
     if normalized_ts is None:
@@ -188,7 +192,7 @@ def verify_finding_provenance_mac(
         fingerprint=fingerprint,
         timestamp=normalized_ts,
     )
-    return hmac.compare_digest(mac, expected)
+    return hmac.compare_digest(mac.encode("ascii"), expected.encode("ascii"))
 
 
 def _is_shared_static_bearer(
