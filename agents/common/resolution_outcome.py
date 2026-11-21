@@ -14,7 +14,7 @@ comparable. The ``outcome_event`` handler auto-snapshots EISV by ``agent_id``, s
 callers attribute the outcome to the **resident's own UUID** (not an operator's).
 
 This generalizes the Watcher-local ``build_resolution_outcome_args`` in
-``agents/watcher/agent.py``; Watcher can migrate onto this in a later DRY pass.
+a Watcher resident's own copy; such a resident can migrate onto this in a later DRY pass.
 """
 from __future__ import annotations
 

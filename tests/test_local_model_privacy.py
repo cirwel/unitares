@@ -333,12 +333,14 @@ async def test_orchestrated_reviewer_local_backend_abstains(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_local_resident_runner_refuses(monkeypatch):
+    from agents.common import local_inference_env as client_env
     from agents.local_resident import runner
 
     monkeypatch.setattr(runner, "OLLAMA_BASE_URL", EXTERNAL_BASE)
     with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
-        with pytest.raises(env.EndpointNotLocalError):
+        with pytest.raises(client_env.EndpointNotLocalError) as raised:
             await runner.call_local_model("prompt")
+    assert raised.value.code == env.ENDPOINT_NOT_LOCAL
 
 
 @pytest.mark.asyncio
@@ -361,13 +363,15 @@ async def test_orchestrated_reviewer_abstains_without_a_named_model(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_local_resident_runner_refuses_without_a_named_model(monkeypatch):
+    from agents.common import local_inference_env as client_env
     from agents.local_resident import runner
 
     monkeypatch.setattr(runner, "DEFAULT_MODEL", "")
     monkeypatch.delenv(env.MODEL_ENV, raising=False)
     with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
-        with pytest.raises(env.ModelNotConfiguredError):
+        with pytest.raises(client_env.ModelNotConfiguredError) as raised:
             await runner.call_local_model("prompt")
+    assert raised.value.code == env.MODEL_NOT_CONFIGURED
 
 
 # --- Ollama detection gates the native /api/chat route ---------------------------

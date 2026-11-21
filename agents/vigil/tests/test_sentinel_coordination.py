@@ -204,7 +204,6 @@ def _patch_health_checks(monkeypatch):
     # floor, or proposes it to the lease plane under this test's MagicMock
     # identity. Stub it, as test_hygiene_repeat_and_digest does. Sandboxing
     # the floor dir instead would make the recompute fire on every run.
-    monkeypatch.setattr(_hb_module, "maybe_recompute_watcher_floor", lambda **_: False)
 
 
 class TestSentinelTriggerNamesMatchEmittedTypes:

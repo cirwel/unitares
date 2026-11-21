@@ -1,6 +1,6 @@
 # agents/
 
-Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, `chronicler/`, and `watcher/` as examples of how to build a resident agent, not as load-bearing governance internals.
+Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, and `chronicler/` as examples of how to build a resident agent, not as load-bearing governance internals.
 
 These implementations are optional. Installing the server does not select a
 resident fleet or enable a scheduler. Configure names, capabilities, endpoints,
@@ -23,8 +23,15 @@ governance database directly, or receive a privileged measurement path.
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
 | `chronicler/` | Reference **archive** resident — daily external-source capture.            |
 | `github_observer/` | Optional **observer**, not a resident: reads CI results, review records and state changes on agent-signed pull requests from GitHub. Dry run only until its write route lands (`docs/proposals/active/github-outcome-observer-v0.md`). |
-| `watcher/`  | Reference **code-watcher** resident — wired into Claude Code's PostToolUse hook. |
 | `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin (`scripts/dev/sync-plugin-agents.sh`); see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
+
+## Residents that have moved out
+
+A deployment's residents belong in its deployment repository, built on the
+public SDK. The code-watcher resident (Watcher) that used to live here at
+`agents/watcher/` moved out on that basis; the residents still in this tree are
+slated to follow. Core keeps only the reader side of Watcher's state-location
+contract (`src/watcher_state_reader.py`) for a deployment-owned route pack.
 
 ## Running your own
 

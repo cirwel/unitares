@@ -1,4 +1,4 @@
-"""Regression tests for two defects Watcher flagged and review confirmed.
+"""Regression tests for two server defects (found by a code scanner, confirmed in review).
 
 - compare_agents similarity divided by the signed group mean, so a negative
   mean (V is signed) reported a similarity above 1 or divided by zero.

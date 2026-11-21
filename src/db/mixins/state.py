@@ -1327,3 +1327,53 @@ async def fetch_runtime_reflection_summary_by_identity(
         """,
         identity_ids,
     )
+
+
+def measured_state_exists_sql(identity_alias: str = "i") -> str:
+    """Return an EXISTS predicate matching identities with at least one measured
+    (``synthetic = false``) row in ``core.agent_state``."""
+    return (
+        f"EXISTS (SELECT 1 FROM core.agent_state s "
+        f"WHERE s.identity_id = {identity_alias}.identity_id AND s.synthetic = false)"
+    )
+
+
+def latest_measured_eisv_by_agent_sql(
+    *,
+    identity_join_sql: str,
+    identity_alias: str = "i",
+    agent_param: str = "$1",
+    epoch_param: str = "$2",
+) -> str:
+    """Return a query selecting the latest non-synthetic ``core.agent_state`` EISV row
+    for an agent joined via ``identity_join_sql``."""
+    return f"""
+        SELECT s.state_json, s.entropy, s.integrity, s.volatility,
+               s.coherence, s.regime
+        FROM core.agent_state s
+        {identity_join_sql}
+        WHERE {identity_alias}.agent_id = {agent_param} AND s.epoch = {epoch_param}
+          AND s.synthetic = false
+        ORDER BY s.recorded_at DESC
+        LIMIT 1
+    """
+
+
+def prior_measured_state_lateral_sql(
+    *,
+    identity_from_sql_fragment: str,
+    agent_id_expr: str = "o.agent_id",
+    outcome_ts_expr: str = "o.ts",
+    lead_minutes_param: str = "$2",
+) -> str:
+    """Return a LATERAL subquery selecting the latest non-synthetic
+    ``core.agent_state`` row for ``agent_id_expr`` at least
+    ``lead_minutes_param`` minutes before ``outcome_ts_expr``."""
+    return f"""    SELECT s.recorded_at, s.risk_score, s.state_json
+    {identity_from_sql_fragment}
+    JOIN core.agent_state s ON s.identity_id = i.identity_id
+    WHERE i.agent_id = {agent_id_expr}
+      AND s.synthetic IS NOT TRUE
+      AND s.recorded_at <= {outcome_ts_expr} - ({lead_minutes_param}::double precision * INTERVAL '1 minute')
+    ORDER BY s.recorded_at DESC
+    LIMIT 1"""
