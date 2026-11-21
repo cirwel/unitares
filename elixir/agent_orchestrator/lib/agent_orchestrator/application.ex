@@ -175,15 +175,19 @@ defmodule AgentOrchestrator.Application do
     put_env_if_present(:lease_plane_bearer_token, ["LEASE_PLANE_BEARER_TOKEN"])
     put_env_if_present(:governance_url, ["UNITARES_GOVERNANCE_URL", "GOVERNANCE_URL"])
 
-    gov_tokens =
-      collect_nonempty_env([
-        "UNITARES_HTTP_API_TOKEN",
-        "UNITARES_MCP_BEARER_TOKEN"
-      ])
+    put_env_if_present(:governance_api_token, ["UNITARES_HTTP_API_TOKEN"])
+    put_env_if_present(:governance_mcp_token, ["UNITARES_MCP_BEARER_TOKEN"])
 
-    if gov_tokens != [] do
-      Application.put_env(:agent_orchestrator, :governance_api_tokens, gov_tokens)
-      Application.put_env(:agent_orchestrator, :governance_api_token, hd(gov_tokens))
+    if raw = System.get_env("UNITARES_REST_STRICT") do
+      trimmed = String.trim(raw)
+
+      if trimmed != "" do
+        Application.put_env(
+          :agent_orchestrator,
+          :governance_rest_strict,
+          parse_bool_env(trimmed)
+        )
+      end
     end
 
     put_env_if_present(:lease_identity_proof, [

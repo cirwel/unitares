@@ -221,7 +221,7 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   defp mint_attestation(source_proof, method, path, raw_body, holder_agent_uuid, opts) do
     with {:ok, gov_base} <- validate_governance_url(governance_url(opts)),
-         {:ok, header_candidates} <- governance_header_candidates(opts) do
+         {:ok, header_candidates} <- governance_header_candidates(gov_base, opts) do
       url = gov_base <> "/v1/lease-holder/attest"
       body_sha256 = :crypto.hash(:sha256, raw_body) |> Base.encode16(case: :lower)
 
@@ -388,30 +388,107 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       Application.get_env(:agent_orchestrator, :governance_url, @default_governance_url)
   end
 
-  defp governance_header_candidates(opts) do
-    raw_tokens =
-      case Keyword.fetch(opts, :governance_api_token) do
-        {:ok, token} ->
-          [token]
+  defp loopback_url?(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{host: host} when is_binary(host) and host != "" ->
+        host
+        |> String.trim()
+        |> String.trim_leading("[")
+        |> String.trim_trailing("]")
+        |> String.downcase()
+        |> loopback_host?()
 
-        :error ->
-          primary = Application.get_env(:agent_orchestrator, :governance_api_token)
-          configured = Application.get_env(:agent_orchestrator, :governance_api_tokens, [])
-          [primary | List.wrap(configured)]
+      _ ->
+        false
+    end
+  end
+
+  defp secure_or_loopback_url?(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme, host: host}
+      when is_binary(scheme) and is_binary(host) and host != "" ->
+        case String.downcase(scheme) do
+          "https" -> true
+          "http" -> loopback_url?(url)
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  def governance_header_candidates(gov_base, opts \\ []) when is_binary(gov_base) do
+    if not secure_or_loopback_url?(gov_base) do
+      {:ok, [[]]}
+    else
+      raw_tokens = resolve_governance_tokens(gov_base, opts)
+
+      case normalize_governance_tokens(raw_tokens) do
+        {:ok, []} ->
+          {:ok, [[]]}
+
+        {:ok, tokens} ->
+          {:ok,
+           Enum.map(tokens, fn token ->
+             [{~c"authorization", String.to_charlist("Bearer " <> token)}]
+           end)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp resolve_governance_tokens(gov_base, opts) do
+    cond do
+      Keyword.has_key?(opts, :governance_api_tokens) ->
+        List.wrap(Keyword.get(opts, :governance_api_tokens))
+
+      Keyword.has_key?(opts, :governance_api_token) ->
+        [Keyword.get(opts, :governance_api_token)]
+
+      true ->
+        case Application.get_env(:agent_orchestrator, :governance_api_tokens) do
+          tokens when is_list(tokens) and tokens != [] ->
+            tokens
+
+          _ ->
+            mcp_token = Application.get_env(:agent_orchestrator, :governance_mcp_token)
+            api_token = Application.get_env(:agent_orchestrator, :governance_api_token)
+
+            if governance_rest_strict?(gov_base, opts) do
+              [mcp_token, api_token]
+            else
+              [api_token, mcp_token]
+            end
+        end
+    end
+  end
+
+  defp governance_rest_strict?(gov_base, opts) do
+    configured =
+      case Keyword.fetch(opts, :governance_rest_strict) do
+        {:ok, value} -> value
+        :error -> Application.get_env(:agent_orchestrator, :governance_rest_strict)
       end
 
-    case normalize_governance_tokens(raw_tokens) do
-      {:ok, []} ->
-        {:ok, [[]]}
+    case configured do
+      bool when is_boolean(bool) ->
+        bool
 
-      {:ok, tokens} ->
-        {:ok,
-         Enum.map(tokens, fn token ->
-           [{~c"authorization", String.to_charlist("Bearer " <> token)}]
-         end)}
+      raw when is_binary(raw) ->
+        trimmed = String.trim(raw)
 
-      {:error, reason} ->
-        {:error, reason}
+        if trimmed == "" do
+          not loopback_url?(gov_base)
+        else
+          String.downcase(trimmed) in ["1", "true", "yes", "on"]
+        end
+
+      _ ->
+        not loopback_url?(gov_base)
     end
   end
 

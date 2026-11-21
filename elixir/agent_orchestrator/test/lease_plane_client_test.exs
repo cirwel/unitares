@@ -17,7 +17,9 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
     :lease_plane_bearer_token,
     :governance_url,
     :governance_api_token,
+    :governance_mcp_token,
     :governance_api_tokens,
+    :governance_rest_strict,
     :lease_identity_proof,
     :lease_holder_agent_uuid,
     :require_lease_identity_proof,
@@ -35,7 +37,9 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
     Application.put_env(:agent_orchestrator, :lease_plane_base_url, "http://127.0.0.1:8788")
     Application.put_env(:agent_orchestrator, :governance_url, "http://127.0.0.1:8767")
     Application.put_env(:agent_orchestrator, :governance_api_token, nil)
+    Application.put_env(:agent_orchestrator, :governance_mcp_token, nil)
     Application.put_env(:agent_orchestrator, :governance_api_tokens, [])
+    Application.put_env(:agent_orchestrator, :governance_rest_strict, nil)
     Application.put_env(:agent_orchestrator, :lease_identity_proof, nil)
     Application.put_env(:agent_orchestrator, :lease_holder_agent_uuid, nil)
     Application.put_env(:agent_orchestrator, :require_lease_identity_proof, false)
@@ -421,7 +425,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       assert_receive {:attest_path, "/v1/lease-holder/attest"}
     end
 
-    test "falls back to second governance bearer token on 401 (strict mode) but not on 200 or 403" do
+    test "on loopback with strict unset, tries API token first and falls back to MCP bearer on 401 (never on 200 or 403)" do
       test_pid = self()
 
       socket_path =
@@ -433,13 +437,10 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
       Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
       Application.put_env(:agent_orchestrator, :governance_api_token, "local-http-tok")
+      Application.put_env(:agent_orchestrator, :governance_mcp_token, "strict-mcp-tok")
+      Application.put_env(:agent_orchestrator, :governance_rest_strict, nil)
 
-      Application.put_env(:agent_orchestrator, :governance_api_tokens, [
-        "local-http-tok",
-        "strict-mcp-tok"
-      ])
-
-      # Case 1: local mode accepts first token -> single request, no fallback
+      # Case 1: loopback non-strict server accepts HTTP API token -> single request, no fallback
       local_gov_url =
         start_tcp_http_server(fn req ->
           send(test_pid, {:local_auth, req.headers["authorization"]})
@@ -456,7 +457,7 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       assert_receive {:local_auth, "Bearer local-http-tok"}
       refute_receive {:local_auth, _}
 
-      # Case 2: UNITARES_REST_STRICT=1 rejects HTTP API token with 401 and accepts MCP bearer token
+      # Case 2: unexpectedly strict loopback server rejects HTTP API token with 401 -> retries MCP bearer
       strict_gov_url =
         start_tcp_http_server(fn req ->
           auth = req.headers["authorization"]
@@ -513,6 +514,109 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       assert_receive {:all_401_auth, "Bearer local-http-tok"}
       assert_receive {:all_401_auth, "Bearer strict-mcp-tok"}
       refute_receive {:all_401_auth, _}
+    end
+
+    test "with governance_rest_strict enabled, sends MCP bearer token FIRST without leaking HTTP API token" do
+      test_pid = self()
+
+      socket_path =
+        start_uds_http_server("gov_strict_first", fn _req ->
+          {200, %{ok: true, lease: %{lease_id: "lease-mcp-first"}}}
+        end)
+
+      strict_gov_url =
+        start_tcp_http_server(fn req ->
+          send(test_pid, {:strict_first_auth, req.headers["authorization"]})
+          decoded = Jason.decode!(req.raw_body)
+          token = "lat.v1." <> Base.url_encode64(decoded["body_sha256"], padding: false) <> ".sig"
+          {200, %{ok: true, holder_agent_uuid: @holder_uuid, attestation: token}}
+        end)
+
+      Application.put_env(:agent_orchestrator, :lease_plane_unix_socket_path, socket_path)
+      Application.put_env(:agent_orchestrator, :governance_url, strict_gov_url)
+      Application.put_env(:agent_orchestrator, :lease_identity_proof, @continuity_token)
+      Application.put_env(:agent_orchestrator, :require_lease_identity_proof, true)
+      Application.put_env(:agent_orchestrator, :governance_api_token, "local-http-tok")
+      Application.put_env(:agent_orchestrator, :governance_mcp_token, "strict-mcp-tok")
+      Application.put_env(:agent_orchestrator, :governance_rest_strict, true)
+
+      assert {:ok, "lease-mcp-first"} =
+               LeasePlaneClient.acquire(
+                 "agent:/ex-strict-1st",
+                 @holder_uuid,
+                 "remote_heartbeat",
+                 60
+               )
+
+      assert_receive {:strict_first_auth, "Bearer strict-mcp-tok"}
+      refute_receive {:strict_first_auth, _}
+    end
+
+    test "orders MCP bearer first for remote https:// targets and strips Bearer headers on cleartext non-loopback http://" do
+      Application.put_env(:agent_orchestrator, :governance_api_token, "local-http-tok")
+      Application.put_env(:agent_orchestrator, :governance_mcp_token, "remote-mcp-tok")
+      Application.put_env(:agent_orchestrator, :governance_rest_strict, nil)
+
+      Application.put_env(
+        :agent_orchestrator,
+        :insecure_governance_hosts,
+        MapSet.new(["gov.internal"])
+      )
+
+      # Remote HTTPS defaults to strict ordering: [mcp_token, api_token]
+      assert {:ok,
+              [
+                [{~c"authorization", ~c"Bearer remote-mcp-tok"}],
+                [{~c"authorization", ~c"Bearer local-http-tok"}]
+              ]} = LeasePlaneClient.governance_header_candidates("https://gov.example.test")
+
+      # Explicit strict=false overrides remote default
+      assert {:ok,
+              [
+                [{~c"authorization", ~c"Bearer local-http-tok"}],
+                [{~c"authorization", ~c"Bearer remote-mcp-tok"}]
+              ]} =
+               LeasePlaneClient.governance_header_candidates(
+                 "https://gov.example.test",
+                 governance_rest_strict: false
+               )
+
+      # Loopback (127.0.0.1, ::1, localhost) defaults to [api_token, mcp_token]
+      for loopback <- [
+            "http://127.0.0.1:8767",
+            "http://[::1]:8767",
+            "http://localhost:8767"
+          ] do
+        assert {:ok,
+                [
+                  [{~c"authorization", ~c"Bearer local-http-tok"}],
+                  [{~c"authorization", ~c"Bearer remote-mcp-tok"}]
+                ]} = LeasePlaneClient.governance_header_candidates(loopback)
+      end
+
+      # Cleartext non-loopback HTTP NEVER carries Bearer credentials even if allowlisted or passed explicitly
+      assert {:ok, "http://gov.internal:8767"} =
+               LeasePlaneClient.validate_governance_url("http://gov.internal:8767")
+
+      assert {:ok, [[]]} =
+               LeasePlaneClient.governance_header_candidates("http://gov.internal:8767")
+
+      assert {:ok, [[]]} =
+               LeasePlaneClient.governance_header_candidates(
+                 "http://gov.internal:8767",
+                 governance_api_token: "explicit-should-not-traverse-cleartext"
+               )
+
+      # Explicit :governance_api_tokens override remains supported on secure/loopback URLs
+      assert {:ok,
+              [
+                [{~c"authorization", ~c"Bearer override-1"}],
+                [{~c"authorization", ~c"Bearer override-2"}]
+              ]} =
+               LeasePlaneClient.governance_header_candidates(
+                 "http://127.0.0.1:8767",
+                 governance_api_tokens: ["override-1", "override-2"]
+               )
     end
 
     test "refuses pre-supplied lat.v1 token when required and drops it with sanitized warning when optional" do

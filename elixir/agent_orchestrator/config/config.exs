@@ -18,19 +18,15 @@ first_nonempty_env = fn names ->
   end)
 end
 
-nonempty_unique_env = fn names ->
-  names
-  |> Enum.flat_map(fn name ->
-    case System.get_env(name) do
-      value when is_binary(value) ->
-        trimmed = String.trim(value)
-        if trimmed != "", do: [trimmed], else: []
+optional_bool_env = fn name ->
+  case System.get_env(name) do
+    value when is_binary(value) ->
+      trimmed = String.trim(value)
+      if trimmed == "", do: nil, else: String.downcase(trimmed) in ["1", "true", "yes", "on"]
 
-      _ ->
-        []
-    end
-  end)
-  |> Enum.uniq()
+    _ ->
+      nil
+  end
 end
 
 config :agent_orchestrator,
@@ -46,10 +42,9 @@ config :agent_orchestrator,
   governance_url:
     first_nonempty_env.(["UNITARES_GOVERNANCE_URL", "GOVERNANCE_URL"]) ||
       "http://127.0.0.1:8767",
-  governance_api_token:
-    first_nonempty_env.(["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]),
-  governance_api_tokens:
-    nonempty_unique_env.(["UNITARES_HTTP_API_TOKEN", "UNITARES_MCP_BEARER_TOKEN"]),
+  governance_api_token: first_nonempty_env.(["UNITARES_HTTP_API_TOKEN"]),
+  governance_mcp_token: first_nonempty_env.(["UNITARES_MCP_BEARER_TOKEN"]),
+  governance_rest_strict: optional_bool_env.("UNITARES_REST_STRICT"),
   # Optional standing identity proof (continuity token) exchanged per lease
   # mutation for a short-lived request-bound `lat.v1` attestation, plus optional
   # matching default holder UUID for presence leases.

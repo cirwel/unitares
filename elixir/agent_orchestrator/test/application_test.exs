@@ -48,16 +48,19 @@ defmodule AgentOrchestrator.ApplicationTest do
     :lease_plane_bearer_token,
     :governance_url,
     :governance_api_token,
+    :governance_mcp_token,
     :governance_api_tokens,
+    :governance_rest_strict,
     :lease_identity_proof,
     :lease_holder_agent_uuid,
     :require_lease_identity_proof,
     :insecure_governance_hosts
   ]
 
-  test "configure_lease_client_from_env records ordered unique governance tokens preferring UNITARES_HTTP_API_TOKEN" do
+  test "configure_lease_client_from_env stores governance API/MCP tokens and strict flag separately" do
     saved_http = System.get_env("UNITARES_HTTP_API_TOKEN")
     saved_mcp = System.get_env("UNITARES_MCP_BEARER_TOKEN")
+    saved_strict = System.get_env("UNITARES_REST_STRICT")
 
     saved_app_env =
       Enum.map(@lease_env_keys, fn key ->
@@ -65,13 +68,13 @@ defmodule AgentOrchestrator.ApplicationTest do
       end)
 
     on_exit(fn ->
-      if saved_http,
-        do: System.put_env("UNITARES_HTTP_API_TOKEN", saved_http),
-        else: System.delete_env("UNITARES_HTTP_API_TOKEN")
-
-      if saved_mcp,
-        do: System.put_env("UNITARES_MCP_BEARER_TOKEN", saved_mcp),
-        else: System.delete_env("UNITARES_MCP_BEARER_TOKEN")
+      for {name, saved} <- [
+            {"UNITARES_HTTP_API_TOKEN", saved_http},
+            {"UNITARES_MCP_BEARER_TOKEN", saved_mcp},
+            {"UNITARES_REST_STRICT", saved_strict}
+          ] do
+        if saved, do: System.put_env(name, saved), else: System.delete_env(name)
+      end
 
       Enum.each(saved_app_env, fn
         {key, :__unset__} ->
@@ -82,33 +85,47 @@ defmodule AgentOrchestrator.ApplicationTest do
       end)
     end)
 
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_api_token)
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_mcp_token)
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_api_tokens)
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_rest_strict)
+
     System.put_env("UNITARES_HTTP_API_TOKEN", "http-api-tok")
     System.put_env("UNITARES_MCP_BEARER_TOKEN", "mcp-bearer-tok")
+    System.delete_env("UNITARES_REST_STRICT")
 
     assert :ok = Application.configure_lease_client_from_env()
 
     assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_token) ==
              "http-api-tok"
 
-    assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_tokens) == [
-             "http-api-tok",
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_mcp_token) ==
              "mcp-bearer-tok"
-           ]
 
-    System.put_env("UNITARES_HTTP_API_TOKEN", "same-tok")
-    System.put_env("UNITARES_MCP_BEARER_TOKEN", "same-tok")
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_rest_strict) == nil
+
+    System.put_env("UNITARES_REST_STRICT", "1")
     assert :ok = Application.configure_lease_client_from_env()
-    assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_tokens) == ["same-tok"]
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_rest_strict) == true
+
+    System.put_env("UNITARES_REST_STRICT", "0")
+    assert :ok = Application.configure_lease_client_from_env()
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_rest_strict) == false
+
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_api_token)
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_mcp_token)
+    Elixir.Application.delete_env(:agent_orchestrator, :governance_rest_strict)
 
     System.put_env("UNITARES_HTTP_API_TOKEN", "   ")
     System.put_env("UNITARES_MCP_BEARER_TOKEN", "mcp-bearer-tok")
+    System.put_env("UNITARES_REST_STRICT", "   ")
     assert :ok = Application.configure_lease_client_from_env()
 
-    assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_token) ==
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_token) == nil
+
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_mcp_token) ==
              "mcp-bearer-tok"
 
-    assert Elixir.Application.get_env(:agent_orchestrator, :governance_api_tokens) == [
-             "mcp-bearer-tok"
-           ]
+    assert Elixir.Application.get_env(:agent_orchestrator, :governance_rest_strict) == nil
   end
 end
