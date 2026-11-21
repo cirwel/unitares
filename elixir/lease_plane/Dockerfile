@@ -1,7 +1,7 @@
 # Pinned to the multi-arch index digest (not one platform's manifest, which
 # would break the linux/arm64 release build), so a moved tag cannot change what
 # a release builds on. Dependabot's docker ecosystem proposes digest bumps.
-FROM elixir:1.19-slim@sha256:b0082436839969c6eac09ee99515980322d8ecadd302ff7b9fd6547aa24cddf9
+FROM elixir:1.20-slim@sha256:610dfb3dd85f9e23af58b431f4907ebce66ae59fca9b462eed2e02d9f0baef89
 
 # The image carries no .git, so the runtime `git rev-parse` in
 # UnitaresLeasePlane.BuildInfo cannot resolve anything and /health would publish
