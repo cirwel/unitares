@@ -444,8 +444,10 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 prior_suppressed_ctx = str(
                     latest_row_by_fp[f.fingerprint].get("context_hash") or ""
                 )
-                if not prior_suppressed_ctx or (
-                    live_ctx is not None and live_ctx == prior_suppressed_ctx
+                if (
+                    prior_suppressed_ctx
+                    and live_ctx is not None
+                    and live_ctx == prior_suppressed_ctx
                 ):
                     continue
             row_dict = asdict(f)

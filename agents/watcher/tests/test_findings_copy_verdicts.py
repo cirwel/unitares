@@ -725,22 +725,26 @@ class TestPersistFindingsFpCarryOver:
         assert by_fp[other_repo_copy.fingerprint]["status"] == "open"
         assert by_fp[r000_finding.fingerprint]["status"] == "open"
 
-    def test_expired_dedup_for_same_fp_row_does_not_create_self_duplicate(
+    def test_expired_dedup_for_same_fp_row_with_matching_context_does_not_duplicate(
         self,
         isolated_findings_state: Path,
         tmp_path: Path,
     ):
         trees = _repo_with_worktrees(tmp_path)
-        same_finding = _make_finding(trees["main"] / "pkg/mod.py", line=10)
+        mod_path = trees["main"] / "pkg/mod.py"
+        same_finding = _make_finding(mod_path, line=10)
+        ctx = _extract_unique_context_hash(str(mod_path), 10, _DEFAULT_LINE_HASH, {})
+        assert ctx is not None
         _write_rows(
             isolated_findings_state,
             [
                 _make_row(
                     same_finding.fingerprint,
-                    trees["main"] / "pkg/mod.py",
+                    mod_path,
                     line=10,
                     status="dismissed",
                     resolution_reason="fp",
+                    context_hash=ctx,
                 )
             ],
         )
@@ -751,6 +755,63 @@ class TestPersistFindingsFpCarryOver:
         assert len(rows) == 1
         assert rows[0]["resolution_reason"] == "fp"
         assert "duplicate_of" not in rows[0]
+
+    def test_expired_dedup_without_context_hash_or_with_changed_context_is_not_suppressed(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+    ):
+        """After dedup expires, a dismissed/fp row lacking context_hash (legacy
+        row) OR whose surrounding ±5-line context changed on disk (same line +
+        line number) must NOT be silently suppressed."""
+        trees = _repo_with_worktrees(tmp_path)
+        mod_path = trees["main"] / "pkg/mod.py"
+        same_finding = _make_finding(mod_path, line=10)
+
+        # (a) Legacy current-revision dismissed/fp row without context_hash
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    same_finding.fingerprint,
+                    mod_path,
+                    line=10,
+                    status="dismissed",
+                    resolution_reason="fp",
+                )
+            ],
+        )
+        fresh_legacy = persist_findings([same_finding])
+        assert [f.fingerprint for f in fresh_legacy] == [same_finding.fingerprint]
+        rows_after_legacy = _read_rows(isolated_findings_state)
+        assert len(rows_after_legacy) == 2
+        assert rows_after_legacy[1]["status"] == "open"
+        assert rows_after_legacy[1]["context_hash"]
+
+        # (b) Row WITH context_hash, then surrounding ±5-line context changes on disk
+        old_ctx = rows_after_legacy[1]["context_hash"]
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    same_finding.fingerprint,
+                    mod_path,
+                    line=10,
+                    status="dismissed",
+                    resolution_reason="fp",
+                    context_hash=old_ctx,
+                )
+            ],
+        )
+        _write_source_blocks(mod_path, [(10, "rewritten_context")])
+        (isolated_findings_state / "dedup.json").write_text("{}")
+
+        fresh_changed = persist_findings([same_finding])
+        assert [f.fingerprint for f in fresh_changed] == [same_finding.fingerprint]
+        rows_after_change = _read_rows(isolated_findings_state)
+        assert len(rows_after_change) == 2
+        assert rows_after_change[1]["status"] == "open"
+        assert rows_after_change[1]["context_hash"] != old_ctx
 
     def test_expired_dedup_on_propagated_dup_copy_does_not_resurface_or_duplicate(
         self,
