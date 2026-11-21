@@ -1600,3 +1600,86 @@ async def fetch_identity_tier_counts(conn) -> list:
         GROUP BY 1
         """
     )
+
+
+async def fetch_succession_ancestors(
+    conn,
+    child_ids: List[str],
+    non_succession_reasons: List[str],
+    depth: int,
+) -> set[str]:
+    """Recursive CTE over `core.identities` for succession-filtered transitive ancestors."""
+    sql = """
+        WITH RECURSIVE ancestors(agent_id, depth) AS (
+            SELECT i.parent_agent_id, 1
+            FROM core.identities i
+            WHERE i.agent_id = ANY($1::text[])
+              AND i.parent_agent_id IS NOT NULL
+              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
+            UNION ALL
+            SELECT i.parent_agent_id, a.depth + 1
+            FROM core.identities i
+            JOIN ancestors a ON i.agent_id = a.agent_id
+            WHERE i.parent_agent_id IS NOT NULL
+              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
+              AND a.depth < $3
+        )
+        SELECT DISTINCT agent_id FROM ancestors WHERE agent_id IS NOT NULL
+    """
+    rows = await conn.fetch(sql, child_ids, non_succession_reasons, depth)
+    return {r["agent_id"] for r in rows if r["agent_id"]}
+
+
+async def fetch_scope_total_updates(
+    conn,
+    scope_clause: str,
+    scope_args: tuple,
+) -> int:
+    """Return total_updates across the selected agent scope from `core.identities`."""
+    updates_sql = f"""
+        SELECT COALESCE(
+            SUM(COALESCE((i.metadata->>'total_updates')::int, 0)), 0
+        )::bigint AS total_updates
+        FROM core.agents a
+        JOIN core.identities i ON i.agent_id = a.id
+        {scope_clause}
+    """
+    return await conn.fetchval(updates_sql, *scope_args)
+
+
+async def fetch_agent_ids_by_identity_ids(
+    conn,
+    identity_ids: List[int],
+) -> Dict[int, str]:
+    """Map numeric `identity_id` values to `agent_id` strings from `core.identities`."""
+    if not identity_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT identity_id, agent_id
+        FROM core.identities
+        WHERE identity_id = ANY($1::bigint[])
+        """,
+        identity_ids,
+    )
+    return {int(r["identity_id"]): str(r["agent_id"]) for r in rows if r["agent_id"]}
+
+
+async def fetch_agent_identities_for_ids(
+    conn,
+    agent_ids: List[str],
+) -> list:
+    """Return `(agent_id, label, identity_id)` rows for `agent_ids` via LEFT JOIN."""
+    if not agent_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT a.id AS agent_id,
+               a.label,
+               i.identity_id
+        FROM core.agents a
+        LEFT JOIN core.identities i ON i.agent_id = a.id
+        WHERE a.id = ANY($1::text[])
+        """,
+        agent_ids,
+    )

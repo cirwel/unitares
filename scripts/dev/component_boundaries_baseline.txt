@@ -7,14 +7,11 @@
 1 B1 agents/dialectic_reviewer/host_list.py
 2 B1 agents/dialectic_reviewer/reviewer.py
 1 B1 agents/local_resident/runner.py
-1 B1p agents/sentinel/routes.py
-1 B3 agents/sentinel/routes.py
 2 B3 src/dialectic_receipt.py
 1 B3 src/effect_grant.py
 1 B3 src/http_routes/access.py
 1 B3 src/identity/trajectory_continuity.py
 3 B3 src/mcp_handlers/admin/handlers.py
-1 B3 src/mcp_handlers/core.py
 1 B3 src/mcp_handlers/dialectic/auth.py
 1 B3 src/mcp_handlers/identity/handlers.py
 1 B3 src/mcp_handlers/knowledge/handlers.py
@@ -35,8 +32,6 @@
 5 B4 src/grounding/class_promotion.py
 2 B4 src/http_routes/effects.py
 1 B4 src/http_routes/findings.py
-3 B4 src/http_routes/overview.py
-3 B4 src/http_routes/telemetry.py
 2 B4 src/identity/agent_fragmentation.py
 1 B4 src/identity/model_risk_cohort.py
 1 B4 src/identity/provenance_index_readiness.py
@@ -45,8 +40,4 @@
 2 B4 src/identity/s22_h5_comparison.py
 1 B4 src/mcp_handlers/identity/agent_presence_lease.py
 1 B4 src/mcp_handlers/identity/process_binding.py
-2 B4 src/mcp_handlers/lifecycle/lineage_reachability.py
 1 B4 src/mcp_handlers/lifecycle/query.py
-3 B4 src/mcp_handlers/lifecycle/stuck.py
-1 B4 src/mcp_handlers/observability/handlers.py
-2 B4 src/runtime_observations.py

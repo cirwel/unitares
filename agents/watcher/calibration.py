@@ -395,6 +395,11 @@ def precision_by_pattern_and_class(
             reason = row.get("resolution_reason")
             if not isinstance(reason, str) or reason not in tn_reasons:
                 continue
+        elif row.get("resolution_reason") == "dup" or row.get("duplicate_of"):
+            # Worktree-copy propagations carry resolution_reason="dup" and
+            # duplicate_of=<target_fp>. Exclude them from confirmed counts so
+            # resolving one finding across worktrees counts once, not N times.
+            continue
 
         if pattern in versions and row.get("rule_version") != versions[pattern]:
             continue

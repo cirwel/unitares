@@ -1839,18 +1839,45 @@ def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "body",
     [
-        "",
         "Classification: capability",
         "class: `capability`",
-        # A fix mentioned in passing does not outvote the PR's own classification.
+    ],
+)
+def test_a_capability_draft_on_a_two_family_path_is_promoted(tmp_path: Path, body: str) -> None:
+    _review_policy(tmp_path, "f")
+    calls, _ = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
+    assert calls == PROMOTE
+
+
+def test_a_capability_draft_outside_two_family_paths_or_waived_is_not_promoted(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "outside two-family review paths" in out
+
+    _review_policy(tmp_path, "f")
+    _review_title(
+        tmp_path,
+        "second family waived by the operator (2 changed line(s) on f; have: openai): tiny",
+        sha="sha1",
+    )
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "passed on an operator waiver" in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        # Conflicting classifications in the same body are refused.
         "Classification: capability\n\nThe earlier proposal used Classification: fix.",
         "Classification: fix\n\nClassification: capability",
     ],
 )
-def test_only_a_pr_classified_as_a_fix_is_promoted(tmp_path: Path, body: str) -> None:
+def test_an_unclassified_or_conflicting_pr_is_not_promoted(tmp_path: Path, body: str) -> None:
     calls, out = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
     assert calls == []
-    assert "without Classification: fix" in out
+    assert "without a single Classification: fix or capability" in out
 
 
 @pytest.mark.parametrize(
