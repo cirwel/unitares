@@ -318,6 +318,7 @@ def test_strips_caller_forged_provenance_on_trusted_network(client):
         provenance_verified=True,
         verified_actor_agent_uuid=VIGIL_UUID,
         provenance_source="server_findings_token",
+        provenance_mac="0" * 64,
     )
     r = client.post("/api/findings", json=spoofed)
     assert r.status_code == 200
@@ -325,6 +326,7 @@ def test_strips_caller_forged_provenance_on_trusted_network(client):
     assert ev["provenance_verified"] is False
     assert ev["verified_actor_agent_uuid"] is None
     assert "provenance_source" not in ev
+    assert "provenance_mac" not in ev
 
 
 def test_shared_static_tokens_record_unverified_provenance(monkeypatch):
@@ -663,13 +665,17 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
         )
     assert r.status_code == 200
 
-    # 1. WebSocket payload preserves top-level provenance keys
+    # 1. POST response and WebSocket payload preserve top-level provenance keys
+    #    and never leak the internal audit-DB provenance_mac.
+    assert "provenance_mac" not in r.json()["event"]
     assert len(ws_sent) == 1
     assert type(ws_sent[0]["provenance_verified"]) is bool
     assert ws_sent[0]["provenance_verified"] is True
     assert ws_sent[0]["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert "provenance_mac" not in ws_sent[0]
 
     # 2. REST /api/events (in-memory ring) preserves top-level provenance keys
+    #    without exposing provenance_mac.
     with patch("src.audit_db.query_audit_events_async", new=AsyncMock(return_value=[])):
         r_events = c.get("/api/events?since=0&limit=10")
     assert r_events.status_code == 200
@@ -678,28 +684,58 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert type(events[0]["provenance_verified"]) is bool
     assert events[0]["provenance_verified"] is True
     assert events[0]["verified_actor_agent_uuid"] == VIGIL_UUID
+    assert "provenance_mac" not in events[0]
 
-    # 3. REST /api/events (audit-DB backfill after restart) preserves top-level
-    #    provenance keys ONLY for server-stamped rows with a valid canonical UUID,
-    #    and fails closed on pre-deploy legacy / malformed / mismatched rows.
+    # 3. REST /api/events (audit-DB backfill after restart) trusts provenance ONLY
+    #    when provenance_source, provenance_verified=True, canonical UUID, and
+    #    HMAC provenance_mac all verify, and never exposes provenance_mac in JSON.
     assert len(persisted_rows) == 1
     assert persisted_rows[0]["details"]["provenance_source"] == "server_findings_token"
+    assert isinstance(persisted_rows[0]["details"].get("provenance_mac"), str)
+    assert len(persisted_rows[0]["details"]["provenance_mac"]) == 64
+
+    tampered_row = {
+        **persisted_rows[0],
+        "event_id": "db-tampered-message",
+        "details": {
+            **persisted_rows[0]["details"],
+            "message": "tampered after signing",
+        },
+    }
     db_rows = [
         persisted_rows[0],
         {
-            "event_id": "db-legacy-pre-pr",
+            "event_id": "db-forged-no-mac",
+            "event_type": "vigil_finding",
+            "agent_id": "vigil",
+            "timestamp": "2026-11-21T01:59:45+00:00",
+            "details": {
+                "type": "vigil_finding",
+                "severity": "warning",
+                "message": "pre-deploy forged row with all 3 public strings but no MAC",
+                "agent_name": "Vigil",
+                "provenance_source": "server_findings_token",
+                "provenance_verified": True,
+                "verified_actor_agent_uuid": VIGIL_UUID,
+            },
+        },
+        {
+            "event_id": "db-forged-bad-mac",
             "event_type": "vigil_finding",
             "agent_id": "vigil",
             "timestamp": "2026-11-21T01:59:30+00:00",
             "details": {
                 "type": "vigil_finding",
                 "severity": "warning",
-                "message": "pre-PR forged row lacking provenance_source",
+                "message": "forged row with wrong MAC",
                 "agent_name": "Vigil",
+                "provenance_source": "server_findings_token",
                 "provenance_verified": True,
                 "verified_actor_agent_uuid": VIGIL_UUID,
+                "provenance_mac": "0" * 64,
             },
         },
+        tampered_row,
         {
             "event_id": "db-missing-actor",
             "event_type": "vigil_finding",
@@ -713,6 +749,7 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
                 "provenance_source": "server_findings_token",
                 "provenance_verified": True,
                 "verified_actor_agent_uuid": None,
+                "provenance_mac": persisted_rows[0]["details"]["provenance_mac"],
             },
         },
         {
@@ -728,6 +765,7 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
                 "provenance_source": "server_findings_token",
                 "provenance_verified": "true",
                 "verified_actor_agent_uuid": 12345,
+                "provenance_mac": persisted_rows[0]["details"]["provenance_mac"],
             },
         },
     ]
@@ -739,6 +777,14 @@ def test_provenance_preserved_top_level_in_rest_events_and_ws_broadcast(monkeypa
     assert type(by_id["db-1"]["provenance_verified"]) is bool
     assert by_id["db-1"]["provenance_verified"] is True
     assert by_id["db-1"]["verified_actor_agent_uuid"] == VIGIL_UUID
-    for bad_id in ("db-legacy-pre-pr", "db-missing-actor", "db-spoofed-nonbool"):
+    assert "provenance_mac" not in by_id["db-1"]
+    for bad_id in (
+        "db-forged-no-mac",
+        "db-forged-bad-mac",
+        "db-tampered-message",
+        "db-missing-actor",
+        "db-spoofed-nonbool",
+    ):
         assert by_id[bad_id]["provenance_verified"] is False
         assert by_id[bad_id]["verified_actor_agent_uuid"] is None
+        assert "provenance_mac" not in by_id[bad_id]

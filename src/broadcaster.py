@@ -139,6 +139,7 @@ class EISVBroadcaster:
         payload: Optional[Dict[str, Any]] = None,
         *,
         persist: bool = True,
+        persist_details: Optional[Dict[str, Any]] = None,
     ):
         """Broadcast a typed governance event.
 
@@ -164,22 +165,34 @@ class EISVBroadcaster:
         # Fire-and-forget persist to audit.events so dashboard survives restarts
         try:
             from src.background_tasks import create_tracked_task
-            create_tracked_task(self._persist_event(event), name="persist_event")
+            create_tracked_task(
+                self._persist_event(event, extra_details=persist_details),
+                name="persist_event",
+            )
         except RuntimeError:
             pass  # No event loop (tests, CLI)
 
     @staticmethod
-    async def _persist_event(event: dict):
+    async def _persist_event(
+        event: dict,
+        *,
+        extra_details: Optional[Dict[str, Any]] = None,
+    ):
         """Write a governance event to audit.events (best-effort)."""
         try:
             from src.audit_db import append_audit_event_async
+            details = {
+                k: v for k, v in event.items()
+                if k not in ("timestamp", "agent_id")
+            }
+            if extra_details:
+                details.update(extra_details)
             await append_audit_event_async({
                 "timestamp": event.get("timestamp"),
                 "agent_id": event.get("agent_id"),
                 "event_type": event.get("type", "governance_event"),
                 "confidence": 1.0,
-                "details": {k: v for k, v in event.items()
-                            if k not in ("timestamp", "agent_id")},
+                "details": details,
             })
         except Exception as e:
             logger.debug(f"Governance event persist failed (non-fatal): {e}")

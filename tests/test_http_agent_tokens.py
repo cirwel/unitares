@@ -534,12 +534,28 @@ def test_default_omitted_scope_does_not_include_findings():
 def test_findings_token_is_not_accepted_by_generic_http_auth(monkeypatch):
     from src.http_routes.access import _check_http_auth
 
+    shared_http_token = "real-shared-http-api-token"
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", shared_http_token)
     monkeypatch.setenv(
         http_agent_tokens.AGENT_TOKENS_ENV,
         _entry(AGENT, TOKEN, "findings"),
     )
-    request = _plain_request(auth=f"Bearer {TOKEN}")
-    assert _check_http_auth(request, http_api_token=None) is False
+    # Control: generic _check_http_auth accepts the configured HTTP API token from an untrusted IP.
+    assert (
+        _check_http_auth(
+            _plain_request(auth=f"Bearer {shared_http_token}"),
+            http_api_token=shared_http_token,
+        )
+        is True
+    )
+    # Findings-scoped agent token is still rejected by generic _check_http_auth.
+    assert (
+        _check_http_auth(
+            _plain_request(auth=f"Bearer {TOKEN}"),
+            http_api_token=shared_http_token,
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,10 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
-from src.http_routes.findings import PROVENANCE_SOURCE_FINDINGS_TOKEN
+from src.http_routes.findings import (
+    PROVENANCE_SOURCE_FINDINGS_TOKEN,
+    verify_finding_provenance_mac,
+)
 
 logger = get_logger(__name__)
 
@@ -370,6 +373,7 @@ async def http_events(request):
                             "provenance_verified",
                             "verified_actor_agent_uuid",
                             "provenance_source",
+                            "provenance_mac",
                         )
                     ):
                         raw_actor = payload.get("verified_actor_agent_uuid")
@@ -384,6 +388,14 @@ async def http_events(request):
                             == PROVENANCE_SOURCE_FINDINGS_TOKEN
                             and payload.get("provenance_verified") is True
                             and normalized_actor is not None
+                            and verify_finding_provenance_mac(
+                                mac=payload.get("provenance_mac"),
+                                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                                verified_actor_agent_uuid=normalized_actor,
+                                agent_id=str(row["agent_id"] or ""),
+                                event_type=str(row["type"] or ""),
+                                message=str(row["message"] or ""),
+                            )
                         ):
                             row["provenance_verified"] = True
                             row["verified_actor_agent_uuid"] = normalized_actor
