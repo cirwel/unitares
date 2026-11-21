@@ -78,6 +78,14 @@ def _rows():
              "event_type": "lineage_declared",
              "payload": {"parent_id": PARENT, "successor_class": "ephemeral"}},
         ],
+        "github.ci_result": [
+            {"ts": NOW - timedelta(minutes=12), "event_id": "e4", "agent_id": PARENT,
+             "event_type": "github.ci_result",
+             "payload": {"fingerprint": "100#42:ci:700:1", "repo": "example/repo", "pr": 42,
+                         "source": "actions", "workflow": "CI", "run_id": 700, "attempt": 1,
+                         "conclusion": "failure", "failed_jobs": ["smoke"],
+                         "producer": "github_observer", "head_sha": "abc1234"}},
+        ],
         "dialectic": [
             {"session_id": "s-1", "paused_agent_id": PARENT, "reviewer_agent_id": None,
              "status": "resolved", "phase": "resolved", "session_type": "review",
@@ -254,7 +262,7 @@ class TestResponseShape:
         assert stamps == sorted(stamps)
         assert body["counts"] == {
             "checkin": 2, "outcome": 1, "lifecycle": 1,
-            "knowledge": 1, "lineage": 1, "dialectic": 1,
+            "knowledge": 1, "lineage": 1, "dialectic": 1, "external": 1,
         }
         by_kind = {}
         for e in body["events"]:
@@ -286,6 +294,15 @@ class TestResponseShape:
 
         (dialectic,) = by_kind["dialectic"]
         assert dialectic["end"] is not None
+
+        (external,) = by_kind["external"]
+        assert external["event_type"] == "github.ci_result"
+        assert external["fingerprint"] == "100#42:ci:700:1"
+        assert external["repo"] == "example/repo"
+        assert external["pr"] == 42
+        assert external["workflow"] == "CI"
+        assert external["conclusion"] == "failure"
+        assert external["failed_jobs"] == ["smoke"]
 
     def test_agents_lookup_covers_every_named_agent(self, client):
         body = _get(client).json()
@@ -400,7 +417,9 @@ VALUES (now() - interval '40 minutes', '{PARENT}', '{PARENT}', 'lifecycle_paused
        (now() - interval '15 minutes', '{PARENT}', '{PARENT}', 'auto_attest',
         '{{"decision": "proceed"}}'::jsonb, 'tl-4'),
        (now() - interval '8 minutes', '{CHILD}', '{CHILD}', 'lifecycle_archived',
-        '{{"reason": "subagent returned", "parent_id": "{PARENT}"}}'::jsonb, 'tl-5');
+        '{{"reason": "subagent returned", "parent_id": "{PARENT}"}}'::jsonb, 'tl-5'),
+       (now() - interval '7 minutes', '{PARENT}', NULL, 'github.pr_opened',
+        '{{"fingerprint": "100#9:opened", "repo": "example/repo", "pr": 9, "producer": "github_observer"}}'::jsonb, 'tl-6');
 
 INSERT INTO core.dialectic_sessions
     (session_id, paused_agent_id, reviewer_agent_id, status, phase, created_at, updated_at)
@@ -430,7 +449,7 @@ async def test_sql_against_live_db(live_postgres_backend, monkeypatch):
     body = json.loads(response.body)
     assert body["counts"] == {
         "checkin": 2, "outcome": 1, "lifecycle": 2,
-        "knowledge": 1, "lineage": 1, "dialectic": 1,
+        "knowledge": 1, "lineage": 1, "dialectic": 1, "external": 1,
     }
     events = body["events"]
     assert [e["ts"] for e in events] == sorted(e["ts"] for e in events)
