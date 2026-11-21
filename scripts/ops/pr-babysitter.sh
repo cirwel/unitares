@@ -652,6 +652,29 @@ latest_label_time() {
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
 
+# <head-sha> -> why this head's `review` does not show two model families;
+# fails when it does, or when there is no `review` check yet (the required
+# checks report that). The review gate turns `review` green on ONE family when
+# an operator waiver covers the second, and says so in the check's title
+# ("second family waived by the operator", review_gate.py apply_waiver). The
+# ruling asks for two families, and a waiver of the second review is not a
+# waiver of that, so a waived head is a hand merge. Unreadable: the same.
+review_waived() {
+  local runs title
+  runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
+    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
+    || { echo "its review check could not be read"; return 0; }
+  # The run that decides, chosen as `rollup` chooses it: skipped runs (a
+  # workflow that also fires on `labeled` adds one) never count, and the
+  # newest of the rest by start time wins. One still running has no verdict
+  # to read; the required checks report it as pending.
+  title=$(jq -r '[.check_runs[] | select(.name == "review" and (.conclusion // "") != "skipped")]
+                 | sort_by([(.started_at // .completed_at // ""), (.completed_at // "")]) | last
+                 | if . == null or (.status // "completed") != "completed" then "" else (.output.title // "") end' <<<"$runs")
+  grep -qi 'waived' <<<"$title" && { echo "its review passed on an operator waiver, not on two model families"; return 0; }
+  return 1
+}
+
 load_manifest  # once per tick, in this shell (sensitive_verdict runs in subshells)
 load_review_policy  # likewise for auth_path
 
@@ -719,17 +742,25 @@ while read -r pr; do
     log "#$n declared ready but labelled $hold; skipped"
     continue
   fi
-  # Readiness of a capability is the operator's ruling, so the route takes
-  # only a PR whose body classifies it as a fix, as `ship.sh --resume` does.
-  # Unattended, an unstated classification is not assumed to be a fix, and
-  # every classification the body states must agree: a capability PR that
-  # also quotes "Classification: fix" somewhere is still a capability.
-  if ! jq -e '[(.body // "") | match("\\b(?:classification|class)\\s*:\\s*[*` ]*(fix|capability)\\b"; "gi")
-               | .captures[0].string | ascii_downcase]
-              | length > 0 and all(. == "fix")' <<<"$pr" >/dev/null; then
-    log "#$n declared ready without Classification: fix in its body; skipped"
-    notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` takes only a PR whose body says \`Classification: fix\`. A capability stays a draft until the operator rules on it."
+  # Every declared draft must state a single classification (`fix` or
+  # `capability`, operator ruling 2026-11-21); an unclassified body or one
+  # stating both is skipped. A `capability` PR requires two reviewer families
+  # outside the authors, which `review` only enforces on `second_family_paths`
+  # (without a waiver), so an unlisted capability diff is not auto-promoted.
+  declared_class=$(jq -r '[(.body // "") | match("\\b(?:classification|class)\\s*:\\s*[*` ]*(fix|capability)\\b"; "gi")
+                           | .captures[0].string | ascii_downcase]
+                          | unique | if length == 1 then .[0] else "" end' <<<"$pr")
+  if [ -z "$declared_class" ]; then
+    log "#$n declared ready without a single Classification: fix or capability in its body; skipped"
+    notify "$n" declared-unclassified "$head" "not promoted: \`$READY_LABEL\` requires the PR body to state \`Classification: fix\` or \`Classification: capability\` (with no conflicting classification)."
     continue
+  fi
+  if [ "$declared_class" = "capability" ]; then
+    if [ "$auth_state" != "ok" ] || ! auth_path "$head" >/dev/null; then
+      log "#$n declared ready as Classification: capability outside two-family review paths; skipped"
+      notify "$n" declared-capability-unlisted "$head" "not promoted: \`$READY_LABEL\` promotes a \`Classification: capability\` draft only when its diff touches a \`scripts/dev/review_policy.json\` \`second_family_paths\` file (so the \`review\` check enforces two model families). On unlisted paths, get two reviewer families first, record both in the PR body, and mark ready with \`$LABEL\` directly."
+      continue
+    fi
   fi
   times=$(LABEL="$READY_LABEL" approval_times "$n") || { log "#$n timeline unreadable; declaration skipped"; continue; }
   declared_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
@@ -813,6 +844,11 @@ while read -r pr; do
             || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
         fi ;;
     esac
+    continue
+  fi
+  if [ "$declared_class" = "capability" ] && waived=$(review_waived "$head"); then
+    log "#$n declared ready as Classification: capability, but $waived; skipped"
+    notify "$n" declared-capability-waived "$head" "not promoted: this \`Classification: capability\` draft requires two reviewing model families, and $waived."
     continue
   fi
 
@@ -923,29 +959,6 @@ armed_by_script() {  # <pr> <enabledAt>
   [ -f "$ARMS_FILE" ] && [ -n "$2" ] || return 1
   at=$(awk -v n="$1" '$1 == n { t = $2 } END { if (t) print t }' "$ARMS_FILE") && [ -n "$at" ] || return 1
   jq -en --arg a "$at" --arg b "$2" '(($a | fromdateiso8601) - ($b | fromdateiso8601)) | (if . < 0 then -. else . end) <= 120' >/dev/null
-}
-
-# <head-sha> -> why this head's `review` does not show two model families;
-# fails when it does, or when there is no `review` check yet (the required
-# checks report that). The review gate turns `review` green on ONE family when
-# an operator waiver covers the second, and says so in the check's title
-# ("second family waived by the operator", review_gate.py apply_waiver). The
-# ruling asks for two families, and a waiver of the second review is not a
-# waiver of that, so a waived head is a hand merge. Unreadable: the same.
-review_waived() {
-  local runs title
-  runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
-    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
-    || { echo "its review check could not be read"; return 0; }
-  # The run that decides, chosen as `rollup` chooses it: skipped runs (a
-  # workflow that also fires on `labeled` adds one) never count, and the
-  # newest of the rest by start time wins. One still running has no verdict
-  # to read; the required checks report it as pending.
-  title=$(jq -r '[.check_runs[] | select(.name == "review" and (.conclusion // "") != "skipped")]
-                 | sort_by([(.started_at // .completed_at // ""), (.completed_at // "")]) | last
-                 | if . == null or (.status // "completed") != "completed" then "" else (.output.title // "") end' <<<"$runs")
-  grep -qi 'waived' <<<"$title" && { echo "its review passed on an operator waiver, not on two model families"; return 0; }
-  return 1
 }
 
 # <pr> <pr-json> <verdict> -> why an armed sensitive PR must be disarmed; fails
