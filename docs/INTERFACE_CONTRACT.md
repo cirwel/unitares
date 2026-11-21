@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.4.2`
+**Current contract:** `unitares.interface-contract.v1`, version `2.5.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1373,3 +1373,14 @@ Imported-memory close-contest `ranking_multiplier` relaxes from `0.55` to `0.85`
 - **Compatibility:** no tool, action, parameter name, type, default, or requiredness changes. Clients inspecting `authority.ranking_multiplier` or pinning exact close-contest ordering for `imported_context` rows see `0.85` in place of `0.55`.
 - **Schema digests:** none move (`surface_sha256` and all per-tool `input_schema_sha256` values are unchanged); only `version` advances from `2.4.1` to `2.4.2`.
 - **Client action:** none required unless a client asserts the literal `0.55` multiplier on `imported_context` rows.
+
+## 2.5.0 (2026-11-21)
+
+A server's operator decides whether a harness may ask it for an identity, and `onboard` records which conversation a nested process ran under.
+
+- **New inputs:** `onboard` and `start_session` accept two optional adapter-only parameters. `harness_request` (boolean) says a harness, not the agent, is asking for this identity. `spawned_under` (`{anchor}`, a thread anchor of the form `agent:/thread-<id>`) is stored once on a freshly created identity as `metadata.spawned_under`. It is caller-declared context: it is not lineage, is never promoted to `parent_agent_id`, and a malformed value is ignored without failing the call.
+- **New policy:** `UNITARES_HARNESS_ONBOARDING` is `welcome` or `agent_only`. Unset, a server listening on loopback is `welcome` and one listening beyond loopback is `agent_only`. Under `agent_only`, a call with `harness_request=true` that would create an identity creates nothing and returns a success-shaped refusal: `{refused: true, status: "harness_onboarding_declined", policy: "agent_only", hint}` with no `uuid`. A call that resumes an existing identity is unaffected, and so is every call without `harness_request`.
+- **New output:** `GET /health` reports `onboarding: {harness, basis}`, where `basis` is `explicit`, `default_loopback` or `default_exposed`. It describes the policy; the onboard handler enforces it.
+- **Compatibility:** nothing changes for a caller that does not send `harness_request`. `onboard_origin` remains descriptive and is not consulted by the policy. The policy holds an adapter that asks to be held; it is not a boundary against a caller that omits the flag. A server older than 2.5.0 ignores both parameters.
+- **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `onboard` and `start_session` move. No other tool's digest moves.
+- **Client action:** none for agents. An adapter that binds identities on a session's behalf should send `harness_request=true` and treat `harness_onboarding_declined` as "leave this session unbound", not as a failure to retry.

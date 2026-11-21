@@ -72,6 +72,31 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "ok"
 
+    @pytest.mark.parametrize("env,expected", [
+        ({}, {"harness": "welcome", "basis": "default_loopback"}),
+        ({"UNITARES_BIND_ALL_INTERFACES": "1"}, {"harness": "agent_only", "basis": "default_exposed"}),
+        ({"UNITARES_HARNESS_ONBOARDING": "agent_only"}, {"harness": "agent_only", "basis": "explicit"}),
+        ({"UNITARES_HARNESS_ONBOARDING": "welcome", "UNITARES_BIND_ALL_INTERFACES": "1"},
+         {"harness": "welcome", "basis": "explicit"}),
+    ])
+    @pytest.mark.asyncio
+    async def test_health_reports_the_harness_onboarding_policy(self, monkeypatch, env, expected):
+        for name in ("UNITARES_HARNESS_ONBOARDING", "UNITARES_MCP_HOST", "UNITARES_BIND_ALL_INTERFACES"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        request = MagicMock()
+        request.state._http_api_server_ready_fn = lambda: True
+        request.state._http_api_server_start_time = time.time()
+        request.state._http_api_server_version = "test"
+        request.state._http_api_server_build_sha = "test-sha"
+        request.state._http_api_has_streamable_http = True
+
+        no_pool = type("NoPool", (), {"_pool": None})()
+        with patch("src.db.get_db", return_value=no_pool):
+            response = await http_health(request)
+        assert json.loads(response.body)["onboarding"] == expected
+
     @pytest.mark.asyncio
     async def test_health_reports_strict_bearer_posture(self, monkeypatch):
         monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-secret")

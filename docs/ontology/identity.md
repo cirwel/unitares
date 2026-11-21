@@ -90,6 +90,30 @@ orchestrated identity spans many headless processes. Readers choose among
 bindings by time and never treat the two ids as equivalent. Roster reads serve
 `{harness, session_id, resumable}` and leave the workspace path in the record.
 
+### A harness asks; the operator decides
+
+An adapter that creates an identity for a session that did not onboard itself
+marks the call `harness_request=true`. The server's operator sets whether such
+requests are accepted (`UNITARES_HARNESS_ONBOARDING`: `welcome`, or
+`agent_only`). Under `agent_only` the server creates nothing for a harness
+request and answers `harness_onboarding_declined`; an agent's own
+`start_session` is unaffected, and so is a call that resumes an identity that
+already exists. The flag is the adapter asking to be held to the policy.
+`onboard_origin` is not consulted and stays descriptive. A caller that omits
+the flag is treated as an agent, so the policy governs adapters that ask and
+is not a boundary against one that does not.
+
+### Spawned-under is where a process ran, not who its parent is
+
+A process started inside an orchestrated conversation inherits that
+conversation's thread anchor and is refused it. Its adapter may declare the
+anchor at onboard as `spawned_under: {anchor}`. On a freshly minted identity
+the server stores it once as `metadata.spawned_under`, with
+`is_lineage: false`. It lets a reader group helper identities by the
+conversation they ran under. It is an adapter's observation of an inherited
+variable: it never becomes `parent_agent_id`, resolves nothing, and grants
+nothing. Lineage is still only what a process declares in its own call.
+
 `metadata.source` remains a separate persistence-timing diagnostic:
 `identity_v2` means the normal resolver wrote the row immediately, while
 `lazy_creation` means a later write persisted an already-live identity on
