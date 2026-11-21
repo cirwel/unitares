@@ -39,6 +39,19 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
 
+  # Standing orchestrator credentials that may sit in the daemon's OS env.
+  # Never leak them into spawned child processes by inheritance; only an
+  # explicit `spec.env` or profile `secret_env` binding may supply one.
+  @orchestrator_credential_vars [
+    "AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF",
+    "UNITARES_LEASE_IDENTITY_PROOF",
+    "LEASE_PLANE_BEARER_TOKEN",
+    "UNITARES_LEASE_PLANE_BEARER_TOKEN",
+    "UNITARES_HTTP_API_TOKEN",
+    "UNITARES_MCP_BEARER_TOKEN",
+    "AGENT_ORCHESTRATOR_BEARER_TOKEN"
+  ]
+
   # Shape check only (8-4-4-4-12 hex) — ancestry truth is the server's call.
   @uuid_re ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
@@ -236,8 +249,9 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         # nullable config) must not crash the merge below — that exception
         # escapes open_port's rescue and orphans the just-acquired lease.
         env = Map.get(spec, :env, []) || []
+        explicit_env = env ++ OutputBuffer.secret_env(spec)
 
-        child_vars = child_env(env ++ OutputBuffer.secret_env(spec), candidates)
+        child_vars = child_env(explicit_env, candidates)
 
         declared_anchor? =
           Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end) or
@@ -267,6 +281,19 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
                   {@orchestrated_var, false},
                   {@owner_pid_var, false}
                 ]
+
+        # Standing orchestrator credentials stay in the daemon's OS env for
+        # lease/governance calls. Scrub them from inherited Port env unless
+        # explicitly granted via `spec.env` or profile `secret_env`.
+        explicit_keys =
+          for {key, value} <- explicit_env, is_binary(value), into: MapSet.new(), do: key
+
+        scrub_vars =
+          Enum.reject(@orchestrator_credential_vars, &MapSet.member?(explicit_keys, &1))
+
+        child_vars =
+          Enum.reject(child_vars, fn {key, _} -> key in scrub_vars end) ++
+            Enum.map(scrub_vars, fn key -> {key, false} end)
 
         {exec, exec_args} =
           wire_stdin(

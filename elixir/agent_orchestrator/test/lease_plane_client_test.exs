@@ -813,5 +813,66 @@ defmodule AgentOrchestrator.LeasePlaneClientTest do
       refute rel_log =~ @continuity_token
       assert_receive {:lease_event, {:release, "stub-fallback-lease", "normal"}}
     end
+
+    test "open_port strips inherited standing orchestrator credentials from raw spawns while allowing explicit spec.env" do
+      cred_vars = [
+        {"AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF", "standing-proof-1"},
+        {"UNITARES_LEASE_IDENTITY_PROOF", "standing-proof-2"},
+        {"LEASE_PLANE_BEARER_TOKEN", "standing-lease-bearer"},
+        {"UNITARES_LEASE_PLANE_BEARER_TOKEN", "standing-unitares-lease-bearer"},
+        {"UNITARES_HTTP_API_TOKEN", "standing-http-api-tok"},
+        {"UNITARES_MCP_BEARER_TOKEN", "standing-mcp-bearer-tok"},
+        {"AGENT_ORCHESTRATOR_BEARER_TOKEN", "standing-orch-bearer-tok"}
+      ]
+
+      saved =
+        Enum.map(cred_vars, fn {k, _v} -> {k, System.get_env(k)} end)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {k, nil} -> System.delete_env(k)
+          {k, v} -> System.put_env(k, v)
+        end)
+      end)
+
+      Enum.each(cred_vars, fn {k, v} -> System.put_env(k, v) end)
+
+      {:ok, raw_id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "env",
+          args: [],
+          lease: false
+        })
+
+      assert {:ok, %{exit_status: 0, output: raw_lines}} =
+               AgentOrchestrator.await(raw_id, 5_000)
+
+      raw_env_output = Enum.join(raw_lines, "\n")
+
+      for {k, v} <- cred_vars do
+        refute raw_env_output =~ "#{k}="
+        refute raw_env_output =~ v
+      end
+
+      {:ok, explicit_id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "env",
+          args: [],
+          lease: false,
+          env: [{"UNITARES_MCP_BEARER_TOKEN", "explicit-child-mcp-tok"}]
+        })
+
+      assert {:ok, %{exit_status: 0, output: explicit_lines}} =
+               AgentOrchestrator.await(explicit_id, 5_000)
+
+      explicit_env_output = Enum.join(explicit_lines, "\n")
+      assert explicit_env_output =~ "UNITARES_MCP_BEARER_TOKEN=explicit-child-mcp-tok"
+      refute explicit_env_output =~ "standing-mcp-bearer-tok"
+      refute explicit_env_output =~ "AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF="
+      refute explicit_env_output =~ "UNITARES_LEASE_IDENTITY_PROOF="
+      refute explicit_env_output =~ "UNITARES_HTTP_API_TOKEN="
+      refute explicit_env_output =~ "LEASE_PLANE_BEARER_TOKEN="
+      refute explicit_env_output =~ "UNITARES_LEASE_PLANE_BEARER_TOKEN="
+    end
   end
 end
