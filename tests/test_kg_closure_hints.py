@@ -39,7 +39,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers as kg_handlers
+from src.mcp_handlers.knowledge import handlers as kg_handlers, validation_helpers
 from src.mcp_handlers.knowledge.handlers import (
     CLOSURE_CLASSES,
     _build_discovery_updates,
@@ -255,7 +255,7 @@ async def test_resolution_notes_is_stored_by_every_update_path():
 
 def test_note_names_the_classes_as_prose_not_a_list_value():
     for persisted in (False, True):
-        with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", persisted):
+        with patch.object(validation_helpers, "CLOSURE_CLASS_PERSISTED", persisted):
             note = _note()
         assert "closure_class=[" not in note
         assert "[" not in note, note
@@ -264,7 +264,7 @@ def test_note_names_the_classes_as_prose_not_a_list_value():
 
 
 def test_fallback_note_names_each_class_evidence_the_validator_demands():
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
+    with patch.object(validation_helpers, "CLOSURE_CLASS_PERSISTED", False):
         note = _note()
     for closure_class, keys in _derived_evidence_requirements().items():
         if not keys:
@@ -274,7 +274,7 @@ def test_fallback_note_names_each_class_evidence_the_validator_demands():
 
 def test_fallback_note_is_honest_that_the_class_is_not_stored():
     """If storage stops writing the class, the note must stop recommending it."""
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
+    with patch.object(validation_helpers, "CLOSURE_CLASS_PERSISTED", False):
         note = _note()
     assert "resolution_notes, which is stored" in note
     assert "closure_class='...'" not in note
@@ -381,7 +381,7 @@ def test_resolution_notes_calls_the_notes_name_work_as_written(note):
 
 
 def _fallback_note(discovery_id: str, status: str) -> str:
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
+    with patch.object(validation_helpers, "CLOSURE_CLASS_PERSISTED", False):
         return _note(discovery_id, status)
 
 
