@@ -345,28 +345,32 @@ async def http_call_tool(request):
     try:
         # A per-agent token is the fallback when no other credential admits
         # the request (src/http_agent_tokens.py). It admits only its agent's
-        # check-ins, checked below and again once the caller is resolved.
+        # granted scopes, checked below and again once the caller is resolved.
+        agent_grant = None
         agent_scope = None
         if not access._check_http_auth(
             request,
             http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN"),
         ):
-            agent_scope = http_agent_tokens.agent_for_bearer(
+            agent_grant = http_agent_tokens.grant_for_bearer(
                 access._bearer_from_header(request.headers.get("authorization"))
             )
-            if agent_scope is None:
+            if agent_grant is None:
                 return access._http_unauthorized()
+            agent_scope = agent_grant.agent_uuid
 
         body = await read_bounded_json_body(request)
         parsed = parse_http_tool_request(
             body,
             mcp_server_name=request.state._http_api_mcp_server_name,
         )
-        if agent_scope is not None:
+        if agent_grant is not None:
             refusal = http_agent_tokens.call_refusal(
                 parsed.tool_name,
                 parsed.arguments,
                 operator_header=request.headers.get("x-unitares-operator"),
+                agent_id_header=request.headers.get("x-agent-id"),
+                scopes=agent_grant.scopes,
             )
             if refusal:
                 return JSONResponse(
@@ -377,6 +381,13 @@ async def http_call_tool(request):
                     },
                     status_code=403,
                 )
+            logger.info(
+                "[HTTP] agent-token tool=%s agent=%s token=%s scopes=%s",
+                parsed.tool_name,
+                agent_grant.agent_uuid[:8],
+                agent_grant.digest_prefix,
+                "+".join(sorted(agent_grant.scopes)),
+            )
         # Before client enrichment, session injection and prebind read the
         # arguments: only dispatch middleware may write these keys.
         remove_reserved_dispatch_keys(parsed.arguments)

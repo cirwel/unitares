@@ -157,6 +157,9 @@ from src.http_routes.substrate import (
     _HARNESS_OUTCOME_VERIFICATION_SOURCES,
     http_harness_outcome,
 )
+from src.http_routes.external_events import (
+    http_record_external_event,
+)
 from src.http_routes.residents import (
     _DEFAULT_RESIDENT_SILENCE_SECONDS,
     _resolve_resident_labels,
@@ -197,6 +200,7 @@ def register_http_routes(
     mount_route_packs: bool = True,
     oauth_provider=None,
     oauth_settings=None,
+    oauth_setup_failed: bool = False,
 ):
     """
     Register all HTTP REST endpoints on the given Starlette ``app``.
@@ -236,6 +240,7 @@ def register_http_routes(
                 state["oauth_provider"] = oauth_provider
                 state["oauth_issuer"] = getattr(oauth_settings, "issuer_url", "")
                 state["oauth_resource"] = getattr(oauth_settings, "resource_server_url", "")
+                state["oauth_setup_failed"] = bool(oauth_setup_failed)
             await self.app(scope, receive, send)
 
     app.add_middleware(_ConnectorContextMiddleware)
@@ -354,6 +359,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/runtime/activity", http_runtime_activity, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/harness/outcome", http_harness_outcome, methods=["POST"]))
+    app.routes.append(Route("/v1/external/events", http_record_external_event, methods=["POST"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers
+from src.mcp_handlers.knowledge import handlers, search_helpers
 from src.mcp_handlers.knowledge.handlers import (
     _SearchParameterError,
     _parse_knowledge_search_request,
@@ -113,11 +113,11 @@ class TestWeighting:
 
     @pytest.mark.asyncio
     async def test_authority_still_applies_on_top(self):
-        # Recency alone: fresh imported 0.70 * ~0.98 = 0.68 beats a 20-day-old
-        # native 0.77 * 0.63 = 0.49. With authority on top the imported row's
-        # 0.55 multiplier (0.37) hands the contest back to the native row.
+        # Recency alone: fresh imported 0.70 * ~0.98 = 0.68 beats a 10-day-old
+        # native 0.77 * ~0.79 = 0.61. With authority on top the imported row's
+        # 0.85 multiplier (~0.58) hands the contest back to the native row.
         fresh_imported = _node("fresh-imported", age=timedelta(days=1), tags=["source-any-harness-memory"])
-        native = _node("native", age=timedelta(days=20))
+        native = _node("native", age=timedelta(days=10))
         scored = [(fresh_imported, 0.70), (native, 0.77)]
         raw = await _run(
             {"query": "x", "limit": 2, "recency_half_life_days": 30, "authority_mode": "all"},
@@ -152,7 +152,7 @@ async def test_response_echoes_the_half_life():
     )
     state = handlers._KnowledgeSearchState(request=request, graph=graph)
     with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+         patch.object(search_helpers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
         response = await handlers._execute_knowledge_search(state)
     assert response["recency_half_life_days"] == 30.0
     assert handlers._lean_search_payload(response)["recency_half_life_days"] == 30.0

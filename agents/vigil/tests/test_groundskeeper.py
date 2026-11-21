@@ -436,6 +436,121 @@ class TestRunAgedCandidateArchive:
         assert client.call_tool.call_args_list[1].args[1]["status"] == "closed"
 
     @pytest.mark.asyncio
+    async def test_high_sev_falls_back_when_call_tool_raises_refusal(self):
+        """Real GovernanceClient.call_tool raises GovernanceToolRefused on
+        {"success": False}; archive_kg_entry must catch it and retry closed."""
+        from unitares_sdk.client import GovernanceClient
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        # Verify SDK preserves error_code + raw on refusal
+        with pytest.raises(GovernanceToolRefused) as exc_info:
+            GovernanceClient._raise_for_tool_failure(
+                "knowledge",
+                {
+                    "success": False,
+                    "error": "Permission denied: Cannot set status 'archived' on high-severity discovery 'hi-sev'.",
+                    "error_code": "PERMISSION_DENIED",
+                },
+            )
+        assert exc_info.value.error_code == "PERMISSION_DENIED"
+
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "hi-sev", "bucket": "candidate_for_archive", "last_activity_days": 120, "activity_score": 0},
+        ]))
+        client.call_tool = AsyncMock(side_effect=[
+            exc_info.value,
+            {"success": True},
+        ])
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["archived"] == 1
+        assert result["errors"] == []
+        assert client.call_tool.call_count == 2
+        second = client.call_tool.call_args_list[1].args[1]
+        assert second["status"] == "closed"
+        assert second["closure_class"] == "obsolete"
+
+    @pytest.mark.asyncio
+    async def test_auth_required_refusal_does_not_retry_close(self):
+        """AUTH_REQUIRED is an unbound-caller failure, not a non-owner high-sev refusal."""
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "hi-sev", "bucket": "candidate_for_archive", "last_activity_days": 120, "activity_score": 0},
+        ]))
+        client.call_tool = AsyncMock(side_effect=GovernanceToolRefused(
+            "Tool knowledge failed: Authentication required for updating high-severity discoveries.",
+            error_code="AUTH_REQUIRED",
+        ))
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["archived"] == 0
+        assert client.call_tool.call_count == 1
+        assert len(result["errors"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_passed_audit_result_avoids_redundant_audit_call(self):
+        """Passing a pre-fetched audit_result avoids issuing 3 identical audits per cycle."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        shared = _audit_with_top_stale([
+            {"id": "aged-1", "bucket": "candidate_for_archive", "last_activity_days": 120, "activity_score": 0},
+        ])
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(side_effect=AssertionError("should reuse shared audit"))
+        client.call_tool = AsyncMock(return_value={"success": True})
+
+        stale = await agent._run_stale_opens_sweep(client, audit_result=shared)
+        assert len(stale) == 1
+        res = await agent._run_aged_candidate_archive(client, audit_result=shared)
+        assert res["archived"] == 1
+        client.audit_knowledge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_shared_audit_sentinel_prevents_redundant_retries(self):
+        """A failed shared audit sentinel stops both hygiene steps from retrying."""
+        from types import SimpleNamespace
+
+        agent = _make_agent()
+        agent.with_hygiene = True
+        failed_shared = SimpleNamespace(success=False, error="audit_timeout")
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(side_effect=AssertionError("should not retry audit"))
+
+        stale = await agent._run_stale_opens_sweep(client, audit_result=failed_shared)
+        assert stale == []
+        res = await agent._run_aged_candidate_archive(client, audit_result=failed_shared)
+        assert res["archived"] == 0
+        assert "audit_timeout" in res["errors"]
+        client.audit_knowledge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_archive_kg_entry_uses_caller_resolution_notes(self):
+        """Operator review closures carry operator attribution, not auto-sweep text."""
+        from agents.vigil.agent import archive_kg_entry
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        client = AsyncMock()
+        client.call_tool = AsyncMock(side_effect=[
+            GovernanceToolRefused("Tool knowledge failed: Cannot set status 'archived' on high-severity"),
+            {"success": True},
+        ])
+        ok, err = await archive_kg_entry(
+            client,
+            "hi-sev-op",
+            resolution_notes="Closed via Vigil operator review --apply (high-severity non-owner fallback).",
+        )
+        assert ok is True
+        assert err == ""
+        second = client.call_tool.call_args_list[1].args[1]
+        assert "operator review --apply" in second["resolution_notes"]
+        assert "aged-candidate sweep" not in second["resolution_notes"]
+
+    @pytest.mark.asyncio
     async def test_non_dict_response_does_not_crash(self):
         """Server returning non-dict (None, primitive) is reported, not raised."""
         agent = _make_agent()

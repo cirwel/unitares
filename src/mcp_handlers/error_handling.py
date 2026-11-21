@@ -68,6 +68,10 @@ def _sanitize_error_message(message: str) -> str:
     if not isinstance(message, str):
         return str(message)
 
+    # Drop the userinfo of any scheme://user:pass@host URL: a configured
+    # endpoint can carry credentials, and provider errors quote it.
+    message = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]+@', r'\1', message)
+
     # Remove full file paths (but keep filename for context)
     message = re.sub(r'/[^\s]+/([^/\s]+\.py)', r'\1', message)
 

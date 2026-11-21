@@ -120,10 +120,16 @@ compared with full-text search alone:
      credential is required whenever an operator mints another one-time
      enrollment code, and when external outcome producers post in.
    - `UNITARES_HTTP_AGENT_TOKENS` — optional comma-separated
-     `<agent_uuid>:sha256:<64 hex>` digests (passed through by
-     `docker-compose.cloud.yml`) so remote embodied or resident agents can call
-     `process_agent_update` on `POST /v1/tools/call` without holding a fleet-wide
-     bearer (`src/http_agent_tokens.py`).
+     `<agent_uuid>:sha256:<64 hex>[:<scope1+scope2>]` digests (passed through
+     by `docker-compose.cloud.yml`) so remote embodied or resident agents can
+     call granted scopes on `POST /v1/tools/call` without holding a fleet-wide
+     bearer (`src/http_agent_tokens.py`). Omitted scopes default to `checkin`
+     (`process_agent_update`); optional scopes add `outcome` (`outcome_event`)
+     and `knowledge_store` (append-only non-permanent single
+     `knowledge(action='store')` with low/medium severity), with strict
+     argument allowlists on `outcome` and `knowledge_store`. Calls must pass
+     flat top-level arguments with explicit body `client_session_id` (wrapper
+     keys, `X-Agent-Id`, and `X-Session-ID`-only calls are refused).
    - `UNITARES_OAUTH_ISSUER_URL` / `UNITARES_OAUTH_PUBLIC_PORT` / `UNITARES_OAUTH_REQUIRED` —
      optional OAuth 2.1 configuration for hosted connectors such as Claude.ai and
      ChatGPT (`docker-compose.cloud.yml`). Keep `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false`
@@ -134,7 +140,7 @@ compared with full-text search alone:
      Strict REST ignores `UNITARES_HTTP_API_TOKEN`, even on loopback;
      non-browser telemetry and REST clients must send a member of
      `UNITARES_MCP_BEARER_TOKENS` (or a scoped `UNITARES_HTTP_AGENT_TOKENS`
-     credential for check-ins).
+     credential within its granted scopes).
 4. Start the stack and wait for health checks (`docker compose up -d --wait`, or
    add `--build` when using `docker-compose.full.yml` or a source branch; add
    `--profile cloudflare` when running the bundled `cloudflared` container). Do

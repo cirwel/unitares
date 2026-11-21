@@ -97,11 +97,12 @@ def graph_expansion_enabled() -> bool:
 def rrf_fuse(
     ranked_lists: Sequence[Sequence[str]],
     k: int = 60,
+    weights: Optional[Sequence[float]] = None,
 ) -> List[Tuple[str, float]]:
     """Reciprocal Rank Fusion.
 
     For each ranked list and each (doc_id, rank_index) within it, accumulate
-    `1 / (k + rank_index + 1)` into that doc_id's score. Missing lists count
+    `weight / (k + rank_index + 1)` into that doc_id's score. Missing lists count
     as zero. Final output is sorted by score descending.
 
     Args:
@@ -109,6 +110,8 @@ def rrf_fuse(
                       position in each list contributes more.
         k: RRF constant. 60 is the standard default from Cormack et al. 2009;
            it's the boring-correct value and barely needs tuning.
+        weights: optional per-list weights (default 1.0 for every list). Must
+                 match ``len(ranked_lists)`` when provided.
 
     Returns:
         [(doc_id, rrf_score)] sorted by score desc.
@@ -126,10 +129,15 @@ def rrf_fuse(
         made exactly this substitution and rendered a flat miss indistinguishable
         from a hit.
     """
+    if weights is not None and len(weights) != len(ranked_lists):
+        raise ValueError(
+            f"weights length ({len(weights)}) must match ranked_lists length ({len(ranked_lists)})"
+        )
+    list_weights = list(weights) if weights is not None else [1.0] * len(ranked_lists)
     scores: Dict[str, float] = {}
-    for ranked in ranked_lists:
+    for ranked, weight in zip(ranked_lists, list_weights):
         for idx, doc_id in enumerate(ranked):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + idx + 1)
+            scores[doc_id] = scores.get(doc_id, 0.0) + float(weight) / (k + idx + 1)
     items = list(scores.items())
     items.sort(key=lambda kv: kv[1], reverse=True)
     return items

@@ -34,8 +34,9 @@ search setting in the running service is changed.
   differences. Compare the models alone and with fixed RRF (k=60, pool=50).
   Preserve the frozen PostgreSQL tsvectors; compare lexical AND with fallback
   to OR, unconditional OR, hybrid AND and hybrid OR. The hybrid AND path does
-  not automatically use OR when lexical matching is empty, matching that
-  mechanism in the serving handler. Include a fixed 0.3-floor diagnostic,
+  not automatically use OR when lexical matching is empty (holding the frozen
+  pilot arm fixed; the serving handler later added a damped 0.5-weight OR
+  fallback when AND is empty). Include a fixed 0.3-floor diagnostic,
   explicitly **not** a calibrated threshold transferable between models.
 - These are isolated first-stage comparisons: no AGE connectivity, temporal or
   status score multipliers, authority reranking, graph expansion, cross-encoder

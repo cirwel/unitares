@@ -119,6 +119,7 @@ from .validation_helpers import (
     _split_note_text,  # noqa: F401
     _infer_note_severity,  # noqa: F401
     _supersede_notes_block_details,  # noqa: F401
+    _utc_now_iso,  # noqa: F401
 )
 from .search_helpers import (
     _LEAN_DISCOVERY_FIELDS,  # noqa: F401
@@ -160,6 +161,7 @@ from .search_helpers import (
     SUPERSESSION_LOOKUP_RESERVE_S,  # noqa: F401
     _archived_cold_widening,  # noqa: F401
     _bounded_supersession_lookup,  # noqa: F401
+    _annotate_supersession,
     _apply_archived_cold_tier,
     _candidate_matches_semantic_fallback,  # noqa: F401
     _exclude_search_labels,
@@ -215,11 +217,9 @@ def _knowledge_read_response_mode(handler):
 
 
 from .mutation_helpers import (
-    _utc_now_iso,  # noqa: F401
     _new_discovery_id,  # noqa: F401
     _broadcast_knowledge_write,  # noqa: F401
     _resolve_reader_agent_id,
-    _annotate_supersession,
     _record_supersession_edge,  # noqa: F401
     _build_s7_provenance_chain_with_fallback,  # noqa: F401
     _check_display_name_required,  # noqa: F401
@@ -742,11 +742,47 @@ async def _retrieve_hybrid_candidates(
     else:
         semantic_results = list(semantic_raw)
     fts_results = list(fts_raw)
+    fts_weight = 1.0
+    if (
+        not fts_results
+        and request.operator_forced is None
+        and fts_operator == "AND"
+        and request.query_term_count > 1
+    ):
+        if request.query_term_count <= 24:
+            or_results = list(
+                await state.graph.full_text_search(
+                    str(request.query_text),
+                    limit=fetch_limit,
+                    operator="OR",
+                    **tag_kwargs,
+                    **_window_kwargs(request),
+                )
+            )
+            if or_results:
+                fts_results = or_results
+                state.fts_operator_used = "OR"
+                state.fts_fallback_used = True
+                # Dampen broad OR fallback relative to exact AND so common-token
+                # lexical matches boost genuine overlaps without overwhelming
+                # strong semantic hits (benchmarked on labels.json: preserves
+                # MRR 0.803 vs 0.773 unweighted while eliminating false
+                # low_confidence flags on multi-term queries).
+                fts_weight = 0.5
+        else:
+            state.fts_fallback_skipped_reason = (
+                f"automatic OR fallback skipped for {request.query_term_count}-term "
+                "query (limit 24); pass operator='OR' to request broad recall"
+            )
 
     semantic_ids = [document.id for document, _ in semantic_results]
     fts_ids = [document.id for document in fts_results]
     state.fts_anchor_ids = set(fts_ids)
-    fused = rrf_fuse([semantic_ids, fts_ids], k=60)
+    fused = (
+        rrf_fuse([semantic_ids, fts_ids], k=60, weights=[1.0, fts_weight])
+        if fts_weight != 1.0
+        else rrf_fuse([semantic_ids, fts_ids], k=60)
+    )
     pool = {document.id: document for document, _ in semantic_results}
     for document in fts_results:
         pool.setdefault(document.id, document)
@@ -893,7 +929,11 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _apply_semantic_fts_fallback(state)
     if state.fallback_used:
         state.results = _rank_search_documents(state, state.results)[: state.request.limit]
-    await _apply_archived_cold_tier(state, first_pass_s=time.perf_counter() - started_at)
+    await _apply_archived_cold_tier(
+        state,
+        first_pass_s=time.perf_counter() - started_at,
+        run_pass=_run_archived_cold_pass,
+    )
     record_ms(
         f"knowledge.search.{state.search_mode}",
         (time.perf_counter() - started_at) * 1000.0,
@@ -1289,16 +1329,22 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
             # the record this route returns, as on the unpaginated branch.
             if discovery.closure_class is not None and discovery.closure_evidence is not None:
                 summary_view["closure_evidence"] = discovery.closure_evidence
+            pagination: Dict[str, Any] = {
+                "offset": offset,
+                "length": len(details_slice),
+                "total_length": total_length,
+                "has_more": has_more,
+                "next_offset": offset + length if has_more else None,
+            }
+            if has_more:
+                pagination["hint"] = (
+                    f"Pass offset={offset + length} to continue, or increase "
+                    f"length (e.g. length={min(total_length, 16000)}) to read more in one call."
+                )
             response = {
                 "discovery": summary_view,
                 "details": details_slice,
-                "pagination": {
-                    "offset": offset,
-                    "length": len(details_slice),
-                    "total_length": total_length,
-                    "has_more": has_more,
-                    "next_offset": offset + length if has_more else None
-                },
+                "pagination": pagination,
                 "message": f"Details for discovery '{discovery_id}' (showing {offset}-{offset + len(details_slice)} of {total_length} chars)"
             }
         else:

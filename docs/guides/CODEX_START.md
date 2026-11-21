@@ -63,7 +63,7 @@ source of truth. Do not treat every edit or tool call as a governance event.
 The machine-facing rules, Watcher commands, surface-claim procedure, tests, and
 delivery checks live in [`AGENTS.md`](../../AGENTS.md). Repository delivery uses a
 draft PR, then the merge queue once the owning agent labels it
-`approved-to-merge` (a `governance-sensitive` PR still waits for the operator);
+`approved-to-merge` (a `governance-sensitive` PR first waits out a 24-hour veto window);
 the full contract is
 [`docs/operations/github-workflow-conventions.md`](../operations/github-workflow-conventions.md).
 

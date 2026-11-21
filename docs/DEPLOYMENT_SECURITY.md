@@ -89,7 +89,13 @@ important boundary until that value is replaced.
 
 When `UNITARES_CONTINUITY_TOKEN_SECRET` is unset, the governance server creates
 and persists its own continuity signing secret in the governance-data volume.
-The retired Compose default is ignored rather than reused.
+The retired Compose default is ignored rather than reused. The server refuses
+to start when it has no usable secret (the file cannot be created, or is not a
+private regular file owned by the server's user), and a running server keeps
+the key it started with even if the file later changes; restart to rotate.
+`UNITARES_ALLOW_NO_CONTINUITY_SECRET=1` runs without one, which turns off
+continuity tokens and effect grants and issues session ids derivable from
+agent UUIDs.
 
 The base stack still publishes two development credentials in source:
 `LEASE_PLANE_BEARER_TOKEN` and

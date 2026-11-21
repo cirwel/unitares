@@ -19,6 +19,17 @@ class GovernanceToolRefused(GovernanceConnectionError):
     from a transport failure: re-sending a refused call gets the same refusal.
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        raw: dict | None = None,
+    ):
+        self.error_code = error_code
+        self.raw = raw
+        super().__init__(message)
+
 
 class GovernanceTimeoutError(GovernanceError):
     """MCP call exceeded timeout (likely anyio deadlock)."""
