@@ -14,23 +14,11 @@ from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
 from src.db import get_db
+from src.db.mixins.knowledge_graph import S7_COUNTS_SQL
 
 
 DEFAULT_MIN_JSONB_ROWS = 1000
 DEFAULT_MIN_JSONB_QUERY_COUNT = 25
-
-S7_COUNTS_SQL = """
-SELECT
-    COUNT(*)::BIGINT AS total_discoveries,
-    COUNT(*) FILTER (WHERE provenance_chain IS NOT NULL)::BIGINT
-        AS provenance_chain_rows,
-    COUNT(*) FILTER (
-        WHERE provenance_chain @> '[{"schema":"s7.lineage_link.v1"}]'::jsonb
-    )::BIGINT AS s7_lineage_link_rows,
-    COUNT(*) FILTER (WHERE provenance ? 's22_context')::BIGINT
-        AS s22_context_rows
-FROM knowledge.discoveries
-"""
 
 DISCOVERY_INDEXES_SQL = """
 SELECT indexname, indexdef

@@ -743,3 +743,85 @@ async def has_open_discovery_with_tag(
         tag,
     )
     return bool(existing)
+
+
+S7_COUNTS_SQL = """
+SELECT
+    COUNT(*)::BIGINT AS total_discoveries,
+    COUNT(*) FILTER (WHERE provenance_chain IS NOT NULL)::BIGINT
+        AS provenance_chain_rows,
+    COUNT(*) FILTER (
+        WHERE provenance_chain @> '[{"schema":"s7.lineage_link.v1"}]'::jsonb
+    )::BIGINT AS s7_lineage_link_rows,
+    COUNT(*) FILTER (WHERE provenance ? 's22_context')::BIGINT
+        AS s22_context_rows
+FROM knowledge.discoveries
+"""
+
+
+KG_S22_SQL = """
+SELECT
+    d.id::TEXT AS entry_id,
+    'knowledge_discovery' AS source,
+    d.agent_id AS agent_id,
+    d.created_at AS recorded_at,
+    d.provenance->'s22_context' AS s22_context,
+    jsonb_build_object(
+        'summary', d.summary,
+        'type', d.type,
+        'status', d.status,
+        'tags', d.tags,
+        'response_to_id', d.response_to_id,
+        'response_type', d.response_type
+    ) AS state_json
+FROM knowledge.discoveries d
+WHERE d.provenance ? 's22_context'
+  AND (
+    $2::TEXT IS NULL
+    OR COALESCE(
+        d.provenance#>>'{s22_context,comparison_key}',
+        d.provenance#>>'{s22_context,task_label}',
+        d.provenance#>>'{s22_context,task}'
+    ) = $2
+  )
+ORDER BY d.created_at DESC
+LIMIT $1
+"""
+
+
+def stale_public_r1_scores_count_sql() -> str:
+    """Count open public R1 score discoveries older than ``$1`` days."""
+    return """
+        SELECT COUNT(*)
+        FROM knowledge.discoveries
+        WHERE type = 'trajectory_continuity_score'
+          AND status = 'open'
+          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
+    """
+
+
+def stale_public_r1_scores_select_sql(*, limit: Optional[int]) -> str:
+    """Select a bounded preview of open public R1 score discoveries older than ``$1`` days."""
+    return f"""
+        SELECT id, agent_id, created_at, updated_at, status
+        FROM knowledge.discoveries
+        WHERE type = 'trajectory_continuity_score'
+          AND status = 'open'
+          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
+        ORDER BY COALESCE(updated_at, created_at)
+        LIMIT {int(limit) if limit is not None else 20}
+    """
+
+
+def stale_public_r1_scores_ids_sql(*, limit: Optional[int]) -> str:
+    """Enumerate stale public R1 score rows for archival (unbounded unless ``limit`` is set)."""
+    limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
+    return f"""
+        SELECT id, agent_id, created_at, updated_at, status
+        FROM knowledge.discoveries
+        WHERE type = 'trajectory_continuity_score'
+          AND status = 'open'
+          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
+        ORDER BY COALESCE(updated_at, created_at)
+        {limit_sql}
+    """

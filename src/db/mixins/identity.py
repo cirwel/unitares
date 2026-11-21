@@ -1838,3 +1838,24 @@ async def stamp_untagged_identity_batch(
                OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
     """
     await conn.execute(update_sql, agent_ids, tags_jsonb)
+
+
+async def fetch_identity_effect_veto_state(conn, agent_id: str):
+    """Fetch identity status and latest measured governance verdict/action/risk
+    for ``agent_id`` (``POST /v1/effect-veto``)."""
+    from .state_queries import latest_measured_state_verdict_lateral_sql
+
+    latest_state_sql = latest_measured_state_verdict_lateral_sql("i")
+    return await conn.fetchrow(
+        f"""
+                SELECT i.status                       AS identity_status,
+                       (s.recorded_at IS NOT NULL)    AS state_present,
+                       s.state_json->>'verdict'       AS verdict,
+                       s.state_json->>'action'        AS action,
+                       s.risk_score                   AS risk_score
+                FROM core.identities i
+                LEFT JOIN LATERAL ({latest_state_sql}) s ON true
+                WHERE i.agent_id = $1
+                """,
+        agent_id,
+    )

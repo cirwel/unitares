@@ -394,27 +394,11 @@ async def http_effect_veto(request):
 
     try:
         from src.db import get_db
+        from src.db.mixins.identity import fetch_identity_effect_veto_state
+
         db = get_db()
         async with db.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT i.status                       AS identity_status,
-                       (s.recorded_at IS NOT NULL)    AS state_present,
-                       s.state_json->>'verdict'       AS verdict,
-                       s.state_json->>'action'        AS action,
-                       s.risk_score                   AS risk_score
-                FROM core.identities i
-                LEFT JOIN LATERAL (
-                    SELECT state_json, risk_score, recorded_at
-                    FROM core.agent_state
-                    WHERE identity_id = i.identity_id AND synthetic = false
-                    ORDER BY recorded_at DESC
-                    LIMIT 1
-                ) s ON true
-                WHERE i.agent_id = $1
-                """,
-                proposer,
-            )
+            row = await fetch_identity_effect_veto_state(conn, proposer)
     except Exception as e:  # noqa: BLE001 — governance read failed; let caller fail closed
         logger.warning("effect-veto governance read failed for %s: %s", proposer, e)
         return JSONResponse(

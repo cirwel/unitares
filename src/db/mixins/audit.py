@@ -653,3 +653,17 @@ def reported_confidence_lateral_subquery_sql(
         ORDER BY e.ts DESC
         LIMIT 1
     """
+
+
+R2_PHASE1_AUDIT_TELEMETRY_SQL = """
+SELECT
+    event_type,
+    COUNT(*)::BIGINT AS event_count,
+    MIN(ts) AS first_seen_at,
+    MAX(ts) AS last_seen_at
+FROM audit.events
+WHERE ts >= $1
+  AND event_type = ANY($2::TEXT[])
+GROUP BY event_type
+ORDER BY event_type
+"""

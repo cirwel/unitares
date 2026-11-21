@@ -353,3 +353,41 @@ class TestClientLocalInferenceEnvParity:
         assert client_env.no_redirect_http_client().follow_redirects is False
         assert client_env.no_redirect_http_client(asynchronous=False).follow_redirects is False
         assert client_env.no_redirect_http_client(local=False).follow_redirects is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://127.1:11434/v1",
+            "http://0.0.0.0:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://[::]:11434/v1",
+            "http://192.168.1.5:11434/v1",
+            "http://203.0.113.10:11434/v1",
+            "not-a-url",
+        ],
+    )
+    def test_endpoint_reaches_local_address_matches_server(self, url, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        for var in ("UNITARES_MODEL_LOCAL_HOSTS", "UNITARES_TRUSTED_NETWORKS"):
+            monkeypatch.delenv(var, raising=False)
+        assert client_env.endpoint_reaches_local_address(url) == server_env.endpoint_reaches_local_address(url)
+
+    @pytest.mark.parametrize(
+        ("url_a", "url_b"),
+        [
+            ("http://127.0.0.1:11434/v1", "http://127.1:11434/v1"),
+            ("http://127.0.0.1:11434/v1", "http://127.0.0.1:8000/v1"),
+            ("https://api.example.com/v1", "https://api.example.com:443/v1"),
+            ("http://203.0.113.10:8000/v1", "http://203.0.113.11:8000/v1"),
+            ("not-a-url", "http://127.0.0.1:11434/v1"),
+        ],
+    )
+    def test_same_endpoint_matches_server(self, url_a, url_b):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        assert client_env.same_endpoint(url_a, url_b) == server_env.same_endpoint(url_a, url_b)

@@ -419,20 +419,11 @@ async def has_live_agent_lease(agent_uuid: Optional[str]) -> bool:
         return False
     try:
         from src.db import get_db
+        from src.lease_plane.queries import has_live_surface_lease
+
         db = get_db()
         async with db.acquire() as conn:
-            live = await conn.fetchval(
-                """
-                SELECT EXISTS(
-                    SELECT 1 FROM lease_plane.surface_leases
-                    WHERE surface_id = $1
-                      AND released_at IS NULL
-                      AND expires_at > NOW()
-                )
-                """,
-                f"agent:/{agent_uuid}",
-            )
-        return bool(live)
+            return await has_live_surface_lease(conn, f"agent:/{agent_uuid}")
     except Exception as e:  # pragma: no cover - defensive, fail-open to other signals
         logger.debug(f"[PROCESS_BINDING] has_live_agent_lease failed (non-fatal): {e}")
         return False

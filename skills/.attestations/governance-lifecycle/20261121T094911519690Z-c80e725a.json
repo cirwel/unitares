@@ -1,0 +1,47 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-11-21T09:49:11Z",
+  "verified_date": "2026-11-21",
+  "verifier": "w3c-bounds-b1b4-sf: re-checked governance-lifecycle claims after B4 boundary refactor in src/db/mixins/identity.py (added additive fetch_identity_effect_veto_state helper for POST /v1/effect-veto); zero identity, lifecycle, auth, schema, or response changes",
+  "source_digests": {
+    "unitares/commands/closeout.md": "a295890758851260",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/agent_storage.py": "2bfdba81602f6e04",
+    "unitares/src/checkpoints.py": "b2e7e31b7c3ee48b",
+    "unitares/src/db/mixins/checkpoint.py": "cdc7b2972b33061d",
+    "unitares/src/db/mixins/identity.py": "04805548ddaf282b",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/eisv/adapter.py": "8fb7c3a47b9271fa",
+    "unitares/src/governance_monitor.py": "06f64f6c5e944b2e",
+    "unitares/src/interface_contract.py": "529baabefab305a0",
+    "unitares/src/mcp_handlers/admin/handlers.py": "7f25c489f503ad22",
+    "unitares/src/mcp_handlers/core.py": "4b908f81231708a4",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "ea9e105273100b0f",
+    "unitares/src/mcp_handlers/identity/handlers.py": "0ecd5360d3eb2fe5",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "f1b44e32b76a30f7",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "10f49597316e140a",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "3ec16c3c9dff6797",
+    "unitares/src/mcp_handlers/support/agent_auth.py": "3af412ee96fda594",
+    "unitares/src/mcp_handlers/support/pause_ttl.py": "e794ac7a6f1644a0",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "9f40ec72ec4b03a6",
+    "unitares/src/mcp_handlers/updates/phases.py": "a4bb6bd9d19d89a9",
+    "unitares/src/monitor_calibration.py": "5fc4932dd6e3f598",
+    "unitares/src/outcomes.py": "830ead978f3e2a0c",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/services/checkpoint_service.py": "58fe587fb84fef6b",
+    "unitares/src/services/update_response_service.py": "0e6c7afa3c754257",
+    "unitares/src/state_persistence.py": "2d035b23c2d48c8b",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "3ec5f9172f2c7a78",
+  "superseded_digests": {
+    "unitares/src/db/mixins/identity.py": [
+      "6808ebd4aaebdf6d"
+    ]
+  }
+}
