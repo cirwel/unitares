@@ -26,6 +26,8 @@ def test_migration_084_static_contract() -> None:
     sql = MIGRATION_PATH.read_text()
     assert "ADD COLUMN IF NOT EXISTS holder_issuer" in sql
     assert "ADD COLUMN IF NOT EXISTS holder_subject" in sql
+    assert "octet_length(holder_issuer) BETWEEN 1 AND 256" in sql
+    assert "octet_length(holder_subject) BETWEEN 1 AND 256" in sql
     assert "surface_leases_holder_principal_pair_coherent" in sql
     assert "idx_surface_leases_active_principal" in sql
     assert "enforce_immutable_lease_fields()" in sql
@@ -93,7 +95,8 @@ async def test_migration_084_principal_check_and_immutability_trigger() -> None:
             conn, sid_attested, holder_issuer="operator-a", holder_subject="subject-1"
         )
 
-        # Half-set, empty, whitespace, control characters, and >256-char values fail CHECK
+        # Half-set, empty, whitespace, control characters, Unicode whitespace,
+        # and >256 UTF-8 bytes (including multibyte) fail CHECK
         for bad_issuer, bad_subject in [
             ("operator-a", None),
             (None, "subject-1"),
@@ -106,13 +109,25 @@ async def test_migration_084_principal_check_and_immutability_trigger() -> None:
             ("operator\x7fa", "subject-1"),
             ("operator-a", "subject\u00851"),
             ("operator\u00a0a", "subject-1"),
+            ("operator\u2000a", "subject-1"),
+            ("operator-a", "subject\u30001"),
             ("a" * 257, "subject-1"),
             ("operator-a", "s" * 257),
+            ("é" * 129, "subject-1"),
+            ("operator-a", "é" * 129),
         ]:
             with pytest.raises(asyncpg.CheckViolationError):
                 await _seed_lease(
                     conn, sid_bad, holder_issuer=bad_issuer, holder_subject=bad_subject
                 )
+
+        # Verify regex rejects Unicode whitespace & controls even under C/POSIX collation
+        for sample in ("\u00a0", "\u2000", "\u3000", "\u0085", "\x1c"):
+            matched = await conn.fetchval(
+                r"""SELECT ($1::text COLLATE "C") ~ E'[[:space:][:cntrl:]\u0080-\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]'""",
+                f"a{sample}b",
+            )
+            assert matched is True, f"COLLATE C regex missed U+{ord(sample):04X}"
 
         # Immutability trigger blocks changing holder_issuer or holder_subject
         # (including NULL -> non-NULL, non-NULL -> other, and non-NULL -> NULL)

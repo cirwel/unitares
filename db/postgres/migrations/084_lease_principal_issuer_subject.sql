@@ -26,11 +26,11 @@ DO $$ BEGIN
             (holder_issuer IS NULL AND holder_subject IS NULL)
             OR (
                 holder_issuer IS NOT NULL
-                AND length(holder_issuer) BETWEEN 1 AND 256
-                AND holder_issuer !~ E'[[:space:][:cntrl:]\u0085]'
+                AND octet_length(holder_issuer) BETWEEN 1 AND 256
+                AND holder_issuer !~ E'[[:space:][:cntrl:]\u0080-\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]'
                 AND holder_subject IS NOT NULL
-                AND length(holder_subject) BETWEEN 1 AND 256
-                AND holder_subject !~ E'[[:space:][:cntrl:]\u0085]'
+                AND octet_length(holder_subject) BETWEEN 1 AND 256
+                AND holder_subject !~ E'[[:space:][:cntrl:]\u0080-\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]'
             )
         );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
