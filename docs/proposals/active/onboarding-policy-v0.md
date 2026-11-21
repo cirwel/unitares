@@ -1,6 +1,6 @@
 # Onboarding policy v0: the server decides whether harnesses may bind identities
 
-**Status:** Draft (2026-11-21), design only. It answers the operator's direction of 2026-11-21: every agent should be onboarded, across vendors, runtimes and harnesses, and hitching on should be easy and should not assume one workflow. It reverses the plugin's default of 2026-10-03 (`unitares-governance-plugin` #184, auto-onboarding off). Merging this document authorises nothing. Every step in §7 that changes a default or the identity path is operator-reserved.
+**Status:** Draft (2026-11-21). The server half (§7 step 1) is implemented in #3361; the rest is design only. It answers the operator's direction of 2026-11-21: every agent should be onboarded, across vendors, runtimes and harnesses, and hitching on should be easy and should not assume one workflow. It reverses the plugin's default of 2026-10-03 (`unitares-governance-plugin` #184, auto-onboarding off). Merging this document authorises nothing. Every step in §7 that changes a default or the identity path is operator-reserved.
 
 ## 1. Problem
 
@@ -34,11 +34,11 @@ Not goals: changing what an agent-authored `start_session()` does, changing line
 
 A server setting, `UNITARES_HARNESS_ONBOARDING`, takes `welcome` or `agent_only`.
 
-The onboard handler applies it. Under `agent_only`, an onboard call that declares `onboard_origin` of `harness_backstop` or `orchestrated_resume` creates nothing and returns a typed refusal, `harness_onboarding_declined`. An agent-authored call is unaffected. Under `welcome` the call proceeds as today.
+The onboard handler applies it to a call that asks. An adapter marks its identity-creating call `harness_request=true`. Under `agent_only`, such a call creates nothing when it would have created an identity, and returns a typed refusal, `harness_onboarding_declined`. A call that resumes an existing identity is not declined: it creates nothing, and declining it would cost a conversation the identity its agent claimed. An agent-authored call is unaffected. Under `welcome` every call proceeds as today.
 
 Enforcement is on the write path because a published hint binds nobody. A client set explicitly to `on`, an older adapter, or a stale cache would all ignore it.
 
-`onboard_origin` is declared by the caller and is not proof (`src/identity/onboard_provenance.py`). A client could omit it and be treated as an agent. That is the existing trust level of the label, and this design does not raise it: the policy is a control for well-behaved adapters, not a security boundary. §6 says so again.
+The policy is not keyed on `onboard_origin`. That label is observability only and by its own contract must never influence policy (`src/identity/onboard_provenance.py`). `harness_request` is a separate flag whose only meaning is "hold this call to the operator's policy". It is still declared by the caller: a client that omits it is treated as an agent, as now. The policy is a control for adapters that ask, not a security boundary. §6 says so again.
 
 ### 3.2 The default depends on exposure
 
@@ -51,7 +51,7 @@ Whether auth is enabled does not set the default. Auth says who may call; it doe
 
 ### 3.3 Adapters default to asking
 
-`UNITARES_AUTO_ONBOARD` gains `auto` and it becomes the default in the plugin. Under `auto` the adapter attempts the bind at the point it would under `on`, and a `harness_onboarding_declined` answer leaves the session on the identity-free floor without a warning.
+`UNITARES_AUTO_ONBOARD` gains `auto` and it becomes the default in the plugin. Under `auto` the adapter attempts the bind at the point it would under `on`, marked `harness_request=true`, and a `harness_onboarding_declined` answer leaves the session on the identity-free floor without a warning.
 
 Explicit values keep their meaning:
 
@@ -124,7 +124,7 @@ The consult is advice. It is not a review of an implementation.
 
 ## 6. Limits
 
-- The policy relies on the caller declaring `onboard_origin` honestly. It stops a well-behaved adapter, not a hostile client.
+- The policy relies on the adapter sending `harness_request`. It holds an adapter that asks, not a hostile client.
 - A proxied or tunnelled loopback server gets the loopback default.
 - Under `agent_only` the server still receives the onboard attempt before declining it.
 - `spawned_under` records where a process ran, by the plugin's reading of an inherited variable. It is an observation.
