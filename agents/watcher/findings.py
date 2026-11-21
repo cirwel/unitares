@@ -1434,7 +1434,7 @@ def _read_file_lines_cached(
 def _context_window_hash(lines: list[str], idx: int) -> str:
     start = max(0, idx - _CONTEXT_WINDOW_RADIUS)
     end = min(len(lines), idx + _CONTEXT_WINDOW_RADIUS + 1)
-    window = "\n".join(line.strip() for line in lines[start:end])
+    window = "\n".join(line.rstrip() for line in lines[start:end])
     return hashlib.sha256(window.encode()).hexdigest()[:16]
 
 
@@ -1486,27 +1486,26 @@ def _resolve_copy_context_hash(
 ) -> str | None:
     """Resolve and verify a finding's unique ±5-line context hash.
 
-    When the live file exists (and ``path_gone`` is false), always recomputes
-    from disk and rejects any drift, ambiguity, or mismatch against a persisted
-    ``context_hash``. When the file is gone (pruned worktree) and
-    ``require_live_file`` is False, falls back to a non-empty persisted
-    ``context_hash``; otherwise fails closed with None.
+    Checks real file existence on disk independently of any stale ``path_gone``
+    flag: when the file exists on disk, always recomputes from disk and rejects
+    any drift, ambiguity, or mismatch against a persisted ``context_hash``.
+    When the file is absent on disk (pruned worktree) and ``require_live_file``
+    is False, falls back to a non-empty persisted ``context_hash``; otherwise
+    fails closed with None.
     """
     if isinstance(finding, Finding):
         file_path = str(finding.file or "")
         line: Any = finding.line
         line_content_hash = str(finding.line_content_hash or "")
         stored_ctx = str(finding.context_hash or "")
-        path_gone = bool(finding.path_gone)
     else:
         file_path = str(finding.get("file") or "")
         line = finding.get("line")
         line_content_hash = str(finding.get("line_content_hash") or "")
         stored_ctx = str(finding.get("context_hash") or "")
-        path_gone = bool(finding.get("path_gone"))
 
     live_exists = False
-    if not path_gone and file_path:
+    if file_path:
         candidate = Path(file_path)
         if candidate.is_absolute():
             try:

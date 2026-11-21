@@ -1633,6 +1633,132 @@ class TestPersistFindingsFpCarryOver:
         diff_f = _make_finding(trees["feat-diff"] / "pkg/mod.py", line=10)
         assert [f.fingerprint for f in persist_findings([diff_f])] == [diff_f.fingerprint]
 
+    def test_indentation_change_in_context_window_breaks_match_and_suppression(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Preserving leading indentation in the ±5-line context hash ensures
+        control-flow changes (e.g. moving `raise` under an `if` after `return
+        None`) never match across worktrees or self-suppress after dedup expiry."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        original_src = (
+            "# pad 1\n# pad 2\n# pad 3\n# pad 4\n"
+            "def f(flag):\n"
+            "    try:\n"
+            "        return work()\n"
+            "    except Exception:\n"
+            "        if flag:\n"
+            "            return None\n"
+            "        raise\n"
+            "# tail\n"
+        )
+        # Same stripped lines, different indentation: `raise` is now unreachable inside `if flag:`
+        reindented_src = (
+            "# pad 1\n# pad 2\n# pad 3\n# pad 4\n"
+            "def f(flag):\n"
+            "    try:\n"
+            "        return work()\n"
+            "    except Exception:\n"
+            "        if flag:\n"
+            "            return None\n"
+            "            raise\n"
+            "# tail\n"
+        )
+        (trees["main"] / "pkg/mod.py").write_text(original_src, encoding="utf-8")
+        (trees["feat-a"] / "pkg/mod.py").write_text(reindented_src, encoding="utf-8")
+
+        main_f = _make_finding(trees["main"] / "pkg/mod.py", line=8)
+        wt_f = _make_finding(trees["feat-a"] / "pkg/mod.py", line=8)
+        assert len(persist_findings([main_f, wt_f])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert update_finding_status(main_f.fingerprint, "dismissed", reason="fp") == 0
+
+        # Sibling with reindented `raise` must NOT be closed
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[wt_f.fingerprint]["status"] == "open"
+
+        # Editing main's own file to reindent `raise` must NOT self-suppress after dedup expiry
+        (trees["main"] / "pkg/mod.py").write_text(reindented_src, encoding="utf-8")
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        assert [f.fingerprint for f in persist_findings([main_f])] == [main_f.fingerprint]
+
+    def test_stale_path_gone_flag_does_not_bypass_live_file_validation(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A historical row carrying path_gone=True whose file was later
+        restored on disk with changed context must be validated against the
+        live file, never trusted via its stale persisted context_hash."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_mod = trees["main"] / "pkg/mod.py"
+        wt_mod = trees["feat-a"] / "pkg/mod.py"
+        old_ctx = _extract_unique_context_hash(str(main_mod), 10, _DEFAULT_LINE_HASH, {})
+        assert old_ctx is not None
+
+        # Restore main_mod with DIFFERENT surrounding context while row has stale path_gone=True
+        _write_source_blocks(main_mod, [(10, "restored_different")])
+        main_f = _make_finding(main_mod, line=10)
+        wt_f = _make_finding(wt_mod, line=10)
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    main_f.fingerprint,
+                    main_mod,
+                    line=10,
+                    status="open",
+                    path_gone=True,
+                    context_hash=old_ctx,
+                ),
+                _make_row(
+                    wt_f.fingerprint,
+                    wt_mod,
+                    line=10,
+                    status="open",
+                    context_hash=old_ctx,
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        # Dismissing main (stale path_gone=True, changed live file) must NOT close feat-a
+        assert update_finding_status(main_f.fingerprint, "dismissed", reason="fp") == 0
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp[wt_f.fingerprint]["status"] == "open"
+
+        # And persist_findings on a third worktree must NOT auto-carry from main's stale path_gone row
+        trees2 = _repo_with_worktrees(tmp_path / "repo2", "feat-b")
+        mod2_main = trees2["main"] / "pkg/mod.py"
+        mod2_b = trees2["feat-b"] / "pkg/mod.py"
+        ctx2 = _extract_unique_context_hash(str(mod2_main), 10, _DEFAULT_LINE_HASH, {})
+        assert ctx2 is not None
+        _write_source_blocks(mod2_main, [(10, "restored_changed_again")])
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    "aaaa000000000099",
+                    mod2_main,
+                    line=10,
+                    status="dismissed",
+                    resolution_reason="fp",
+                    path_gone=True,
+                    context_hash=ctx2,
+                )
+            ],
+        )
+        b_f = _make_finding(mod2_b, line=10)
+        assert [f.fingerprint for f in persist_findings([b_f])] == [b_f.fingerprint]
+
 
 # ---------------------------------------------------------------------------
 # 4. Regression tests for same-worktree, commit-scan, and summary routes
