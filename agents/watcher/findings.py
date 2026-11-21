@@ -312,18 +312,20 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             dedup[f.fingerprint] = now
             brand_new.append(f)
 
-        present_fingerprints = {
-            fp
-            for row in existing_rows
-            if isinstance((fp := row.get("fingerprint")), str) and fp
-        }
+        # Track the latest row per fingerprint so resurfaced rows take
+        # precedence over historical ones and never inflate per-worktree counts.
+        latest_row_by_fp: dict[str, dict[str, Any]] = {}
+        for row in existing_rows:
+            fp = row.get("fingerprint")
+            if isinstance(fp, str) and fp:
+                latest_row_by_fp[fp] = row
+
+        present_fingerprints = set(latest_row_by_fp)
         fp_row_fingerprints = {
             fp
-            for row in existing_rows
+            for fp, row in latest_row_by_fp.items()
             if row.get("status") == "dismissed"
             and row.get("resolution_reason") == "fp"
-            and isinstance((fp := row.get("fingerprint")), str)
-            and fp
         }
         # Existing dismissed+fp fingerprints and propagated copies of fp
         # dismissals (for expired-dedup self-match guard). When the original
@@ -333,7 +335,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
         # has been compacted away.
         existing_suppressed_fingerprints = fp_row_fingerprints | {
             fp
-            for row in existing_rows
+            for fp, row in latest_row_by_fp.items()
             if row.get("status") == "dismissed"
             and row.get("resolution_reason") == "dup"
             and isinstance((dup_of := row.get("duplicate_of")), str)
@@ -343,8 +345,6 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 if dup_of in present_fingerprints
                 else row.get("duplicate_of_reason") == "fp"
             )
-            and isinstance((fp := row.get("fingerprint")), str)
-            and fp
         }
 
         # Carry forward prior false-positive ("fp") dismissals across different
@@ -364,16 +364,13 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             if new_candidate_keys:
                 matching_fp_candidates = {
                     cand
-                    for row in existing_rows
-                    if row.get("status") == "dismissed"
-                    and row.get("resolution_reason") == "fp"
-                    and isinstance(row.get("fingerprint"), str)
-                    and row.get("fingerprint")
+                    for fp, row in latest_row_by_fp.items()
+                    if fp in fp_row_fingerprints
                     and (cand := _copy_candidate_key(row)) is not None
                     and cand in new_candidate_keys
                 }
                 if matching_fp_candidates:
-                    for row in existing_rows:
+                    for fp, row in latest_row_by_fp.items():
                         if row.get("status") == "aged_out":
                             continue
                         cand = _copy_candidate_key(row)
@@ -384,16 +381,11 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                             continue
                         copy_key, toplevel = resolved
                         existing_wt_counts[(copy_key, toplevel)] += 1
-                        if (
-                            row.get("status") == "dismissed"
-                            and row.get("resolution_reason") == "fp"
-                        ):
-                            prior_fp = row.get("fingerprint")
-                            if isinstance(prior_fp, str) and prior_fp:
-                                fp_sources_by_key.setdefault(copy_key, []).append(
-                                    (prior_fp, toplevel)
-                                )
-                                fp_candidate_keys.add(cand)
+                        if fp in fp_row_fingerprints:
+                            fp_sources_by_key.setdefault(copy_key, []).append(
+                                (fp, toplevel)
+                            )
+                            fp_candidate_keys.add(cand)
 
         new_resolved: list[tuple[CopyGroupKey, str] | None] = []
         new_wt_counts: Counter[tuple[CopyGroupKey, str]] = Counter()
@@ -681,7 +673,8 @@ def update_finding_status(
     if not matches:
         print(f"error: no finding matches fingerprint prefix {fingerprint_prefix!r}")
         return 1
-    if len(matches) > 1:
+    unique_matched_fps = {m.get("fingerprint", "") for m in matches}
+    if len(unique_matched_fps) > 1:
         print(f"error: fingerprint prefix {fingerprint_prefix!r} is ambiguous ({len(matches)} matches):")
         for m in matches:
             print(
@@ -690,56 +683,78 @@ def update_finding_status(
             )
         return 1
 
-    target_row = matches[0]
-    target_fp = target_row.get("fingerprint", "")
+    target_fp = next(iter(unique_matched_fps))
+    matching_indices = [
+        idx for idx, f in enumerate(findings) if f.get("fingerprint") == target_fp
+    ]
+    open_matching_indices = [
+        idx
+        for idx in matching_indices
+        if findings[idx].get("status", "open") in ("open", "surfaced")
+    ]
+    target_index = (
+        open_matching_indices[-1] if open_matching_indices else matching_indices[-1]
+    )
+    target_row = findings[target_index]
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
-    sibling_fps_to_close: set[str] = set()
+    sibling_indices_to_close: set[int] = set()
     if propagate_copies and new_status in ("dismissed", "confirmed"):
         target_candidate = _copy_candidate_key(target_row)
         if target_candidate is not None:
-            candidate_rows = [
-                f
-                for f in findings
-                if f.get("fingerprint") != target_fp
-                and f.get("status", "open") in ("open", "surfaced")
-                and _copy_candidate_key(f) == target_candidate
+            latest_index_by_fp: dict[str, int] = {}
+            for idx, f in enumerate(findings):
+                fp = f.get("fingerprint")
+                if isinstance(fp, str) and fp:
+                    latest_index_by_fp[fp] = idx
+
+            non_aged_candidates = [
+                (fp, idx, findings[idx])
+                for fp, idx in latest_index_by_fp.items()
+                if fp != target_fp
+                and findings[idx].get("status", "open") != "aged_out"
+                and _copy_candidate_key(findings[idx]) == target_candidate
             ]
-            if candidate_rows:
+            has_open_sibling_candidate = any(
+                row.get("status", "open") in ("open", "surfaced")
+                for _fp, _idx, row in non_aged_candidates
+            )
+            if has_open_sibling_candidate:
                 git_cache: GitCache = {}
                 target_resolved = _copy_group_key_with_worktree(target_row, git_cache)
                 if target_resolved is not None:
                     target_copy_key, target_toplevel = target_resolved
-                    same_wt_other_open = False
-                    by_sibling_wt: dict[str, list[str]] = {}
-                    for f in candidate_rows:
-                        sib_fp = f.get("fingerprint")
-                        if not isinstance(sib_fp, str) or not sib_fp:
-                            continue
-                        sib_resolved = _copy_group_key_with_worktree(f, git_cache)
+                    wt_non_aged_counts: Counter[str] = Counter()
+                    open_by_sibling_wt: dict[str, list[int]] = {}
+                    for _fp, idx, row in non_aged_candidates:
+                        sib_resolved = _copy_group_key_with_worktree(row, git_cache)
                         if sib_resolved is None:
                             continue
                         sib_copy_key, sib_toplevel = sib_resolved
                         if sib_copy_key != target_copy_key:
                             continue
-                        if sib_toplevel == target_toplevel:
-                            # Never close another occurrence in the same
-                            # worktree, and treat cross-worktree mapping as
-                            # ambiguous when the target file has >1 live match.
-                            same_wt_other_open = True
-                            continue
-                        by_sibling_wt.setdefault(sib_toplevel, []).append(sib_fp)
-                    if not same_wt_other_open:
-                        for fps in by_sibling_wt.values():
-                            if len(fps) == 1:
-                                sibling_fps_to_close.add(fps[0])
+                        wt_non_aged_counts[sib_toplevel] += 1
+                        if (
+                            sib_toplevel != target_toplevel
+                            and row.get("status", "open") in ("open", "surfaced")
+                        ):
+                            open_by_sibling_wt.setdefault(sib_toplevel, []).append(idx)
+                    # Symmetrical with persist_findings: require zero other
+                    # non-aged_out occurrences in the target worktree, and a
+                    # single unambiguous non-aged_out open/surfaced occurrence
+                    # in each sibling worktree.
+                    if wt_non_aged_counts[target_toplevel] == 0:
+                        for sib_wt, indices in open_by_sibling_wt.items():
+                            if wt_non_aged_counts[sib_wt] == 1 and len(indices) == 1:
+                                sibling_indices_to_close.add(indices[0])
 
     updated: list[dict[str, Any]] = []
     updated_target: dict[str, Any] | None = None
     closed_copies = 0
-    for f in findings:
-        if f.get("fingerprint") == target_fp:
+    for idx, f in enumerate(findings):
+        if idx == target_index:
+            was_propagated_dup = bool(str(f.get("duplicate_of") or "").strip())
             merged = {**f, "status": new_status}
             if timestamp_field:
                 merged[timestamp_field] = now_iso
@@ -747,16 +762,21 @@ def update_finding_status(
                 merged["resolved_by"] = resolver_agent_id
             if reason:
                 merged["resolution_reason"] = reason
+            elif was_propagated_dup and merged.get("resolution_reason") == "dup":
+                merged.pop("resolution_reason", None)
+            if was_propagated_dup and reason != "dup":
+                merged.pop("duplicate_of", None)
+                merged.pop("duplicate_of_reason", None)
             f = merged
             updated_target = merged
-        elif f.get("fingerprint") in sibling_fps_to_close:
+        elif idx in sibling_indices_to_close:
             sibling_merged = {
                 **f,
                 "status": new_status,
                 "resolution_reason": "dup",
                 "duplicate_of": target_fp,
             }
-            if reason:
+            if new_status == "dismissed" and reason:
                 sibling_merged["duplicate_of_reason"] = reason
             if timestamp_field:
                 sibling_merged[timestamp_field] = now_iso
@@ -764,6 +784,16 @@ def update_finding_status(
                 sibling_merged["resolved_by"] = resolver_agent_id
             f = sibling_merged
             closed_copies += 1
+        elif f.get("duplicate_of") == target_fp:
+            # Keep duplicate_of_reason synchronized when an operator
+            # reclassifies the original finding so compacting the original
+            # never leaves a stale "fp" snapshot on existing copies.
+            synced = dict(f)
+            if new_status == "dismissed" and reason:
+                synced["duplicate_of_reason"] = reason
+            else:
+                synced.pop("duplicate_of_reason", None)
+            f = synced
         updated.append(f)
     _write_findings_atomic(updated)
     if updated_finding_sink is not None and updated_target is not None:

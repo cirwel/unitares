@@ -785,6 +785,205 @@ class TestPersistFindingsFpCarryOver:
         resurfaced = persist_findings([wt_finding])
         assert [f.fingerprint for f in resurfaced] == [wt_finding.fingerprint]
 
+    @pytest.mark.parametrize(
+        ("corrected_status", "corrected_reason", "expected_dup_reason"),
+        [
+            ("confirmed", "fixed", None),
+            ("dismissed", "stale", "stale"),
+            ("dismissed", None, None),
+        ],
+    )
+    def test_reclassifying_original_syncs_duplicate_of_reason_before_compaction(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        corrected_status: str,
+        corrected_reason: str | None,
+        expected_dup_reason: str | None,
+    ):
+        """Reclassifying the original finding must synchronize duplicate_of_reason
+        on existing dup copies so compacting the original cannot revive a stale
+        'fp' snapshot."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert len(persist_findings([main_finding, wt_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="fp")
+            == 0
+        )
+        assert (
+            update_finding_status(
+                main_finding.fingerprint,
+                corrected_status,
+                reason=corrected_reason,
+            )
+            == 0
+        )
+
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        wt_row = by_fp[wt_finding.fingerprint]
+        assert wt_row.get("duplicate_of_reason") == expected_dup_reason
+
+        # Compact the original away and expire dedup -> copy must NOT stay suppressed
+        _write_rows(isolated_findings_state, [wt_row])
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        resurfaced = persist_findings([wt_finding])
+        assert [f.fingerprint for f in resurfaced] == [wt_finding.fingerprint]
+
+    def test_resurfaced_copy_can_be_resolved_without_ambiguity(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """After dedup expiry resurfaces a non-fp copy as a new open row sharing
+        the same fingerprint as the historical dismissed/dup row, resolving by
+        fingerprint or unique prefix succeeds and updates only the live row."""
+        from agents.watcher.routes import _watcher_summary_from_rows
+
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert len(persist_findings([main_finding, wt_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="stale")
+            == 0
+        )
+
+        # Dedup expires -> wt_finding resurfaces as a second open row
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        assert [f.fingerprint for f in persist_findings([wt_finding])] == [
+            wt_finding.fingerprint
+        ]
+        rows_before = _read_rows(isolated_findings_state)
+        wt_rows_before = [
+            r for r in rows_before if r["fingerprint"] == wt_finding.fingerprint
+        ]
+        assert len(wt_rows_before) == 2
+
+        # Resolving by 8-char prefix must succeed (not fail as ambiguous)
+        rc = update_finding_status(
+            wt_finding.fingerprint[:8],
+            "confirmed",
+            resolver_agent_id="resolver-uuid-3",
+            reason="fixed now",
+        )
+        assert rc == 0
+
+        wt_rows_after = [
+            r
+            for r in _read_rows(isolated_findings_state)
+            if r["fingerprint"] == wt_finding.fingerprint
+        ]
+        assert len(wt_rows_after) == 2
+        # Historical dismissed/dup row preserved, live resurfaced row confirmed
+        assert wt_rows_after[0]["status"] == "dismissed"
+        assert wt_rows_after[0]["duplicate_of"] == main_finding.fingerprint
+        assert wt_rows_after[1]["status"] == "confirmed"
+        assert wt_rows_after[1]["resolution_reason"] == "fixed now"
+        assert "duplicate_of" not in wt_rows_after[1]
+
+        summary = _watcher_summary_from_rows(
+            wt_rows_after, now=datetime.now(timezone.utc), window_days=3
+        )
+        assert summary["patterns"][0]["confirmed"] == 1
+        assert summary["patterns"][0]["dismissed"] == 0
+
+    def test_closed_occurrence_in_source_or_sibling_worktree_blocks_propagation(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A closed (confirmed/dismissed) occurrence in the same worktree/file
+        must count toward multi-occurrence ambiguity just like an open one."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+        _write_rows(
+            isolated_findings_state,
+            [
+                # Source worktree has a previously confirmed line 3 AND open line 40
+                _make_row("aaaa000000000001", trees["main"] / "pkg/mod.py", line=3, status="confirmed"),
+                _make_row("aaaa000000000002", trees["main"] / "pkg/mod.py", line=40, status="open"),
+                # feat-a has a single open copy -> must NOT be closed (source ambiguous)
+                _make_row("bbbb000000000003", trees["feat-a"] / "pkg/mod.py", line=12, status="open"),
+            ],
+        )
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+
+        assert update_finding_status("aaaa000000000002", "dismissed", reason="fp") == 0
+        by_fp = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp["bbbb000000000003"]["status"] == "open"
+
+        # Sibling side: source has 1 row, feat-b has closed line 3 + open line 40
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row("cccc000000000001", trees["main"] / "pkg/mod.py", line=3, status="open"),
+                _make_row("dddd000000000002", trees["feat-b"] / "pkg/mod.py", line=3, status="confirmed"),
+                _make_row("dddd000000000003", trees["feat-b"] / "pkg/mod.py", line=40, status="open"),
+            ],
+        )
+        assert update_finding_status("cccc000000000001", "dismissed", reason="fp") == 0
+        by_fp2 = {r["fingerprint"]: r for r in _read_rows(isolated_findings_state)}
+        assert by_fp2["dddd000000000003"]["status"] == "open"
+
+    def test_explicit_verdict_on_propagated_copy_clears_dup_metadata_and_counts(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Directly resolving or dismissing a previously propagated dup copy
+        clears duplicate_of/duplicate_of_reason (and stale resolution_reason='dup'
+        when no reason is passed) so calibration and summary count it cleanly."""
+        from agents.watcher.routes import _watcher_summary_from_rows
+
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        main_finding = _make_finding(trees["main"] / "pkg/mod.py", line=3)
+        wt_finding = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert len(persist_findings([main_finding, wt_finding])) == 2
+
+        monkeypatch.setattr(
+            "agents.watcher.agent._post_resolution_event", lambda *a, **kw: None
+        )
+        assert (
+            update_finding_status(main_finding.fingerprint, "dismissed", reason="fp")
+            == 0
+        )
+
+        # Operator directly confirms the propagated copy with no explicit reason
+        assert update_finding_status(wt_finding.fingerprint, "confirmed") == 0
+
+        rows = _read_rows(isolated_findings_state)
+        by_fp = {r["fingerprint"]: r for r in rows}
+        wt_row = by_fp[wt_finding.fingerprint]
+        assert wt_row["status"] == "confirmed"
+        assert "duplicate_of" not in wt_row
+        assert "duplicate_of_reason" not in wt_row
+        assert "resolution_reason" not in wt_row
+
+        now = datetime.now(timezone.utc)
+        stats = precision_by_pattern_and_class(rows, now=now, min_weighted_n=0.5)
+        assert stats[("P006", "app")].weighted_confirmed == pytest.approx(1.0, rel=0.05)
+        assert stats[("P006", "app")].weighted_dismissed == pytest.approx(1.0, rel=0.05)
+
+        summary = _watcher_summary_from_rows(rows, now=now, window_days=3)
+        assert summary["patterns"][0]["confirmed"] == 1
+        assert summary["patterns"][0]["dismissed"] == 1
+        assert summary["patterns"][0]["dismissed_fp"] == 1
+
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
         isolated_findings_state: Path,
