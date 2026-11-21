@@ -1,13 +1,48 @@
 import Config
 
-# Lease plane HTTP boundary. The lease plane binds IPv4 127.0.0.1:8788 only
-# (Bandit does not bind ::1), so the dotted-quad literal is intentional — a
-# `localhost` URL would resolve to ::1 first on macOS Sonoma+ and fail.
+# Lease plane HTTP boundary. Prefer a local Unix domain socket when configured
+# (`UNITARES_LEASE_PLANE_UNIX_SOCKET` or `LEASE_PLANE_UNIX_SOCKET`, or a
+# `unix:///` base URL); otherwise fall back to IPv4 127.0.0.1:8788 (Bandit does
+# not bind ::1, so the dotted-quad literal is intentional — a `localhost` URL
+# would resolve to ::1 first on macOS Sonoma+ and fail).
 config :agent_orchestrator,
   lease_plane_base_url: System.get_env("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788"),
+  lease_plane_unix_socket_path:
+    System.get_env("UNITARES_LEASE_PLANE_UNIX_SOCKET") ||
+      System.get_env("LEASE_PLANE_UNIX_SOCKET"),
   # Bearer is read from env at boot. Absent → LeasePlaneClient returns
   # {:error, :no_bearer} and lease-required agents refuse to start (fail closed).
   lease_plane_bearer_token: System.get_env("LEASE_PLANE_BEARER_TOKEN"),
+  # Governance REST endpoint for request-bound `lat.v1` attestation exchange
+  # (`POST /v1/lease-holder/attest`). Loopback HTTP or HTTPS only unless a host
+  # is explicitly allowlisted via UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS.
+  governance_url:
+    System.get_env("UNITARES_GOVERNANCE_URL") ||
+      System.get_env("GOVERNANCE_URL") || "http://127.0.0.1:8767",
+  governance_api_token:
+    System.get_env("UNITARES_MCP_BEARER_TOKEN") ||
+      System.get_env("UNITARES_HTTP_API_TOKEN"),
+  # Optional standing identity proof (continuity token) exchanged per lease
+  # mutation for a short-lived request-bound `lat.v1` attestation, plus optional
+  # matching default holder UUID for presence leases.
+  lease_identity_proof:
+    System.get_env("AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF") ||
+      System.get_env("UNITARES_LEASE_IDENTITY_PROOF"),
+  lease_holder_agent_uuid: System.get_env("AGENT_ORCHESTRATOR_LEASE_HOLDER_AGENT_UUID"),
+  # Fail-closed gate: when enabled (`1`/`true`/`yes`/`on`), LeasePlaneClient
+  # refuses lease mutations unless a request-bound `lat.v1` attestation is
+  # minted and attached in `x-unitares-identity-proof`.
+  require_lease_identity_proof:
+    System.get_env("AGENT_ORCHESTRATOR_REQUIRE_LEASE_IDENTITY_PROOF", "")
+    |> String.trim()
+    |> String.downcase()
+    |> Kernel.in(["1", "true", "yes", "on"]),
+  insecure_governance_hosts:
+    System.get_env("UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+    |> Enum.reject(&(&1 == ""))
+    |> MapSet.new(),
   # Default TTL for an ephemeral agent's remote_heartbeat lease. The lease is a
   # pure DB TTL row reaped by the lease plane's reaper, so a crashed orchestrator
   # self-heals within one TTL rather than leaking the surface forever.
