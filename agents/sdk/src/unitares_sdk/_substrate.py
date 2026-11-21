@@ -120,6 +120,7 @@ def _make_client():
     base_url = os.environ.get(
         "LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788"
     ).strip()
+    unix_socket = os.environ.get("UNITARES_LEASE_PLANE_UNIX_SOCKET", "").strip() or None
 
     if not token:
         return LeasePlaneDisabledClient()
@@ -129,6 +130,7 @@ def _make_client():
             base_url=base_url,
             bearer_token=token,
             timeout_s=2.0,
+            unix_socket=unix_socket,
         )
     )
 
