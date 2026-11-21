@@ -249,9 +249,9 @@ components. Their meaning and maturity stages are in
   [governance plugin](https://github.com/cirwel/unitares-governance-plugin) for
   MCP, lifecycle hooks, skills, and per-file edit leases via the lease plane in
   Claude Code and Codex ([§2.1](02-install.md#21-docker-quickstart)), or its
-  hook-free portable skill package builder for ChatGPT; see
-  [`CODEX_START.md`](../guides/CODEX_START.md) for the Codex and ChatGPT
-  workflow.
+  [hook-free portable skill package](https://github.com/cirwel/unitares-governance-plugin/blob/master/docs/chatgpt.md)
+  for ChatGPT; see [`CODEX_START.md`](../guides/CODEX_START.md) for the explicit
+  Codex and ChatGPT lifecycle workflow.
 - Hermes Agent: install the reviewed `unitares` plugin from the Hermes plugin
   catalog with `hermes plugins install unitares`
   (`hermes plugins install cirwel/unitares-host-adapter` installs the

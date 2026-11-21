@@ -41,9 +41,9 @@ Any agent or model that speaks MCP or HTTP can write its findings, reviews, and 
 **Digital proprioception** runs on each check-in: **EISV** summarizes behavioral
 observations over time and returns state feedback and a policy recommendation
 ([computation contract](docs/EISV_COMPUTATION.md#role-runtime-and-evidence)).
-When a model endpoint or orchestrator is configured, **`consult`** queries an
-independent model and **dialectic review** records thesis, challenge, and
-resolution on the work.
+**Dialectic review** records thesis, challenge, and resolution on the work; when
+a model endpoint or orchestrator is configured, **`consult`** queries an
+independent model.
 
 ## See the record before installing
 
@@ -69,7 +69,7 @@ search_shared_memory {"query": "upload retry test"}   -> finding a (superseded, 
 start_session  {"force_new": true, "parent_agent_id": "<A's id>", "spawn_reason": "explicit"}
 ```
 
-With the governance plugin enabled in Claude Code or Codex, session-start hooks surface lifecycle guidance and local continuity context. For captured server responses end to end, see the [two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md) or the [recorded service-reload incident](https://cirwel.github.io/unitares/demo.html).
+With the governance plugin enabled in Claude Code or Codex, session-start hooks surface lifecycle guidance and local continuity context. For captured server responses end to end, see the [two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md); to inspect a multi-agent incident in the browser, see the [service-reload fixture demo](https://cirwel.github.io/unitares/demo.html).
 
 ## Install
 
@@ -86,7 +86,7 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 - **One stack per machine:** Docker and Homebrew keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). Because Compose container names are fixed, run `docker compose down` (without `-v`) in an earlier checkout before starting another, or use the [managed launcher](docs/manual/02-install.md#managed-checkout-alternative) (`scripts/install/launch.sh`).
 
 **Connect agents and models** ([Integrating agents](docs/manual/04-integrating-agents.md)):
-- **Claude Code, Codex, and ChatGPT:** [`unitares-governance-plugin`](https://github.com/cirwel/unitares-governance-plugin) wires MCP, skills, lifecycle hooks, and per-file edit leases for Claude Code and Codex (short-lived file locks on the coordination plane that prevent concurrent edits in one checkout from overwriting each other), and builds a hook-free portable skill package for ChatGPT ([Codex and ChatGPT guide](docs/guides/CODEX_START.md)).
+- **Claude Code, Codex, and ChatGPT:** [`unitares-governance-plugin`](https://github.com/cirwel/unitares-governance-plugin) wires MCP, skills, lifecycle hooks, and per-file edit leases for Claude Code and Codex (short-lived file locks on the coordination plane that prevent concurrent edits in one checkout from overwriting each other), and builds a hook-free portable skill package for ChatGPT ([ChatGPT package guide](https://github.com/cirwel/unitares-governance-plugin/blob/master/docs/chatgpt.md)).
 - **Hermes Agent and OpenAI-compatible clients:** [`unitares-host-adapter`](https://github.com/cirwel/unitares-host-adapter).
 - **Other MCP clients, hosted connectors, and Python agents:** [Streamable HTTP MCP](docs/integration/MCP_CLIENTS.md) (`npx mcp-remote` for stdio-only clients; Bearer or OAuth on a dedicated listener for hosted connectors such as Claude.ai and ChatGPT), the [Python SDK](agents/sdk/README.md) (`pip install unitares-sdk`), or the [resident agent runtime](https://github.com/cirwel/unitares-resident).
 - **Optional server-side models:** the core record runs without model APIs or keys. Run `./scripts/unitares model` to connect a local OpenAI-compatible server (Ollama, vLLM, LM Studio, or llama.cpp) for `consult` and in-process review ([choose a model](docs/manual/02-install.md#choose-a-model-optional)), or enable the [agent orchestrator](docs/manual/02-install.md#24-quickstart-defaults-and-a-full-setup) for cross-family CLI review.
