@@ -1701,15 +1701,6 @@ def identity_join_on_id_sql(source_alias: str = "s", identity_alias: str = "i") 
     )
 
 
-async def fetch_identity_id_by_agent_id(conn, agent_id: str) -> Optional[int]:
-    """Return numeric ``identity_id`` for ``agent_id`` from ``core.identities``."""
-    val = await conn.fetchval(
-        "SELECT identity_id FROM core.identities WHERE agent_id = $1",
-        agent_id,
-    )
-    return int(val) if val is not None else None
-
-
 _PROMOTION_TOTAL_UPDATES_EXPR = (
     "COALESCE(NULLIF(metadata->>'total_updates', '')::int, 0)"
 )
