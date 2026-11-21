@@ -281,3 +281,75 @@ class TestScribeStoreGate:
         empty = {"anomalies": []}
         assert anomaly_items(empty) == []
         assert "no anomalous agents" in format_anomalies(empty)
+
+
+class TestClientLocalInferenceEnvParity:
+    """`agents.common.local_inference_env` must stay in exact behavioral parity
+    with `src.local_inference_env` without importing `src.*`."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:11434/v1",
+            "http://host.docker.internal:11434/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://192.168.1.5:11434/v1",
+            "http://10.0.0.2:11434/v1",
+            "http://172.16.5.4:11434/v1",
+            "http://[::ffff:127.0.0.1]:11434/v1",
+            "http://[fe80::1%25eth0]:11434/v1",
+            "https://api.example.com/v1",
+            "http://203.0.113.10:11434/v1",
+            "http://100.64.0.1:11434/v1",
+            "not-a-url",
+        ],
+    )
+    def test_classify_endpoint_matches_server(self, url, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        for var in (
+            "UNITARES_MODEL_PRIVACY",
+            "UNITARES_MODEL_LOCAL_HOSTS",
+            "UNITARES_TRUSTED_NETWORKS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        c = client_env.classify_endpoint(url)
+        s = server_env.classify_endpoint(url)
+        assert c.privacy == s.privacy
+        assert c.is_local == s.is_local
+        assert c.host == s.host
+
+    def test_env_overrides_match_server(self, monkeypatch):
+        from agents.common import local_inference_env as client_env
+        from src import local_inference_env as server_env
+
+        monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
+        assert client_env.classify_endpoint("http://100.64.0.5:11434/v1").is_local is True
+        assert (
+            client_env.classify_endpoint("http://100.64.0.5:11434/v1").privacy
+            == server_env.classify_endpoint("http://100.64.0.5:11434/v1").privacy
+        )
+
+        monkeypatch.setenv("UNITARES_MODEL_LOCAL_HOSTS", "gpu.lan")
+        assert client_env.classify_endpoint("http://gpu.lan:11434/v1").is_local is True
+        assert (
+            client_env.classify_endpoint("http://gpu.lan:11434/v1").privacy
+            == server_env.classify_endpoint("http://gpu.lan:11434/v1").privacy
+        )
+
+        monkeypatch.setenv("UNITARES_MODEL_PRIVACY", "external")
+        assert client_env.classify_endpoint("http://localhost:11434/v1").is_local is False
+        assert (
+            client_env.classify_endpoint("http://localhost:11434/v1").privacy
+            == server_env.classify_endpoint("http://localhost:11434/v1").privacy
+        )
+
+    def test_no_redirect_http_client_refuses_redirects(self):
+        from agents.common import local_inference_env as client_env
+
+        assert client_env.no_redirect_http_client().follow_redirects is False
+        assert client_env.no_redirect_http_client(asynchronous=False).follow_redirects is False
+        assert client_env.no_redirect_http_client(local=False).follow_redirects is False
