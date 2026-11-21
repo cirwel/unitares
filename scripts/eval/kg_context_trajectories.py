@@ -30,8 +30,7 @@ from unittest.mock import AsyncMock, patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.mcp_handlers.knowledge import handlers  # noqa: E402
-from src.mcp_handlers.knowledge import imported_preview  # noqa: E402
+from src.mcp_handlers.knowledge import handlers, imported_preview, search_helpers  # noqa: E402
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope  # noqa: E402
 from src.mcp_handlers.support import antigravity_cli_client as agy  # noqa: E402
 from src.storage.knowledge_graph_age import KnowledgeGraphAGE  # noqa: E402
@@ -283,6 +282,7 @@ class Fixture:
             # Keep metadata age stable on later replays without changing the
             # production age calculation or labelling an old record fresh.
             with patch.object(handlers, "datetime", FixtureDateTime), \
+                 patch.object(search_helpers, "datetime", FixtureDateTime), \
                  patch.object(imported_preview, "datetime", FixtureDateTime):
                 rows = handlers._serialize_search_discoveries(state, include_details=False)
             await handlers._annotate_supersession(rows, self)

@@ -147,7 +147,11 @@ The governance MCP's background deep-health probe calls `GET /v1/health` every 3
 
 A successful `/v1/health` probe returns HTTP 200 with `ok`, `status`,
 `protocol_version`, and an `identity_binding` object carrying `mode`,
-`proof_format` and `metrics` (from `IdentityMetrics.snapshot()`).
+`bound_surface_kinds`, `warning`, `proof_format` and `metrics` (from
+`IdentityMetrics.snapshot()`). `mode` is `log` when
+`UNITARES_LEASE_IDENTITY_BINDING` is unset. `warning` is `null` only when the
+mode is `enforce` and every surface kind is bound; otherwise it names what is
+accepted without a verified identity proof, and the same text is logged at boot.
 `protocol_version` is not in the route's own map: the shared `json/3` helper
 injects it into every response, and `elixir/lease_plane/test/health_test.exs`
 pins it for this route. A 200 here proves:

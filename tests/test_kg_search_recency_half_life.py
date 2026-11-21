@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers
+from src.mcp_handlers.knowledge import handlers, search_helpers
 from src.mcp_handlers.knowledge.handlers import (
     _SearchParameterError,
     _parse_knowledge_search_request,
@@ -152,7 +152,7 @@ async def test_response_echoes_the_half_life():
     )
     state = handlers._KnowledgeSearchState(request=request, graph=graph)
     with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+         patch.object(search_helpers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
         response = await handlers._execute_knowledge_search(state)
     assert response["recency_half_life_days"] == 30.0
     assert handlers._lean_search_payload(response)["recency_half_life_days"] == 30.0

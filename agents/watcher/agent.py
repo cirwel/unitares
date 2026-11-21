@@ -1480,6 +1480,32 @@ def _classify_model_failure(exc: Exception) -> str:
 _chunk_pass: dict | None = None
 
 
+# Exit status for `--exit-incomplete` when a region that should have been
+# scanned was not. 75 is EX_TEMPFAIL in sysexits.h: try again later.
+EXIT_SCAN_INCOMPLETE = 75
+
+# Regions this process tried to scan, by whether the model's answer was read.
+# A region the model was too busy for, whose call failed, whose reply was
+# unusable or whose text could not be read is "not_run". A file the scanner
+# declines (should_skip) is neither: there was nothing to scan.
+_region_outcomes = {"ran": 0, "not_run": 0}
+
+
+def _note_region_outcome(ran: bool) -> None:
+    _region_outcomes["ran" if ran else "not_run"] += 1
+
+
+def _scan_exit_status(exit_incomplete: bool) -> int:
+    """0, or EXIT_SCAN_INCOMPLETE when asked for and a region was not scanned.
+
+    Without the flag every scan exits 0, as it always has: the hook is
+    best-effort and reads nothing from the status.
+    """
+    if exit_incomplete and _region_outcomes["not_run"]:
+        return EXIT_SCAN_INCOMPLETE
+    return 0
+
+
 def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list:
     """Scan every region, then settle the failure counter for the whole file."""
     global _chunk_pass
@@ -3720,6 +3746,7 @@ def scan_file(
         code_snippet, region_start, region_end = read_file_region(file_path, region)
     except (OSError, UnicodeDecodeError) as e:
         log(f"failed to read {file_path}: {e}", "error")
+        _note_region_outcome(False)
         return []
 
     # Build a line_number → raw line content lookup so verification can compare
@@ -3747,10 +3774,12 @@ def scan_file(
         # meaningful; counting this would fire "detector down" under load.
         log(f"scan skipped — {e}", "warning")
         _note_busy_region("scan")
+        _note_region_outcome(False)
         return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
         _record_model_failure(e)
+        _note_region_outcome(False)
         return []
 
     try:
@@ -3769,9 +3798,11 @@ def scan_file(
         recovered = _retry_scan_constrained(prompt, file_path, region_start)
         if recovered is None:
             _record_model_failure(e)
+            _note_region_outcome(False)
             return []
         parsed, result = recovered
     _clear_model_failures()
+    _note_region_outcome(True)
     findings: list[Finding] = []
     for f, raw_evidence in parsed:
         if not _verify_finding_against_source(
@@ -3854,6 +3885,7 @@ def review_file(
         code_snippet, region_start, region_end = read_file_region(file_path, region)
     except (OSError, UnicodeDecodeError) as e:
         log(f"failed to read {file_path}: {e}", "error")
+        _note_region_outcome(False)
         return []
 
     prompt = build_review_prompt(file_path, code_snippet)
@@ -3865,10 +3897,12 @@ def review_file(
         # meaningful; counting this would fire "detector down" under load.
         log(f"scan skipped — {e}", "warning")
         _note_busy_region("review")
+        _note_region_outcome(False)
         return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
         _record_model_failure(e, "review")
+        _note_region_outcome(False)
         return []
 
     raw_text = result["text"]
@@ -3915,8 +3949,10 @@ def review_file(
         e = ModelOutputUnusable(problem)
         log(f"model output unusable: {e}", "error")
         _record_model_failure(e, "review")
+        _note_region_outcome(False)
         return []
     _clear_model_failures("review")
+    _note_region_outcome(True)
 
     findings = []
     for item in data["findings"]:
@@ -4094,6 +4130,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all", action="store_true",
         help="run pattern scan AND reasoning review in one process (hook default)",
+    )
+    parser.add_argument(
+        "--exit-incomplete", action="store_true",
+        help=(
+            f"with --file, exit {EXIT_SCAN_INCOMPLETE} when a region was not scanned "
+            "(model busy, call failed, reply unusable, file unreadable)"
+        ),
     )
     parser.add_argument(
         "--self-test", action="store_true", help="scan a synthetic buggy file and verify"
@@ -4349,6 +4392,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
+    _region_outcomes.update(ran=0, not_run=0)
+
     if args.all:
         # Pattern scan first — cheap, bounded, library-driven.
         # Review scan second — broader reasoning, persists R000 findings.
@@ -4359,13 +4404,15 @@ def main(argv: list[str] | None = None) -> int:
             pattern_fresh = scan_file(args.file, args.region)
         except Exception as e:
             log(f"--all: scan_file failed: {e}", "error")
+            _note_region_outcome(False)
         try:
             review_file(args.file, args.region)
         except Exception as e:
             log(f"--all: review_file failed: {e}", "error")
+            _note_region_outcome(False)
         for f in pattern_fresh:
             print(f"[{f.severity}] {f.pattern} {f.file}:{f.line} — {f.hint}")
-        return 0
+        return _scan_exit_status(args.exit_incomplete)
 
     if args.review:
         findings = review_file(args.file, args.region)
@@ -4374,7 +4421,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{f.severity}] {f.file}:{f.line} — {f.hint}")
         else:
             print("No issues found.")
-        return 0
+        return _scan_exit_status(args.exit_incomplete)
 
     fresh = scan_file(args.file, args.region)
     if fresh:
@@ -4382,7 +4429,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"[{f.severity}] {f.pattern} {f.file}:{f.line} — {f.hint}"
             )
-    return 0
+    return _scan_exit_status(args.exit_incomplete)
 
 
 if __name__ == "__main__":
