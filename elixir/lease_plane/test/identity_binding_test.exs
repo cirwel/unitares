@@ -61,8 +61,40 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
              IdentityBinding.authorize(holder, "proof")
   end
 
+  test "an unset mode verifies and logs rather than inspecting nothing" do
+    assert IdentityBinding.parse_mode(nil) == :log
+    assert IdentityBinding.parse_mode("") == :log
+    assert IdentityBinding.parse_mode("off") == :off
+
+    Application.delete_env(:lease_plane, :identity_binding_mode)
+    assert IdentityBinding.mode() == :log
+    assert IdentityBinding.enabled?()
+  end
+
+  test "posture warning names anything short of enforce on every kind" do
+    Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+    Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+    assert IdentityBinding.posture_warning() == nil
+    assert IdentityBinding.bound_surface_kinds() == :all
+
+    Application.put_env(
+      :lease_plane,
+      :identity_bound_surface_kinds,
+      MapSet.new(["maintenance", "agent"])
+    )
+
+    assert IdentityBinding.bound_surface_kinds() == ["agent", "maintenance"]
+    assert IdentityBinding.posture_warning() =~ "enforces only surface kinds [agent,maintenance]"
+
+    Application.put_env(:lease_plane, :identity_binding_mode, :log)
+    Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+    assert IdentityBinding.posture_warning() =~ "mode is log"
+
+    Application.put_env(:lease_plane, :identity_binding_mode, :off)
+    assert IdentityBinding.posture_warning() =~ "mode is off"
+  end
+
   test "mode parser fails closed on a misspelled rollout value" do
-    assert IdentityBinding.parse_mode(nil) == :off
     assert IdentityBinding.parse_mode("LOG") == :log
     assert IdentityBinding.parse_mode(" enforce ") == :enforce
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -30,12 +29,6 @@ from src.mcp_handlers.support.param_normalization import (
 logger = get_logger(__name__)
 
 _RECOVERY_RISK_CEILING = 0.40
-
-
-def _step_attr(name: str, default: Any = None) -> Any:
-    """Read canonical constants from envelope_step so tests and runtime share one source."""
-    mod = sys.modules.get("src.mcp_handlers.middleware.envelope_step")
-    return getattr(mod, name, default) if mod is not None else default
 
 
 def _review_risk_limit() -> float:
@@ -330,10 +323,9 @@ def _coherence_and_risk(payload: Dict[str, Any]) -> tuple[Optional[float], Optio
 def _risk_summary(coherence: Optional[float], risk: Optional[float]) -> Optional[str]:
     if risk is None:
         return None
-    gov_cfg = _step_attr("GovernanceConfig", GovernanceConfig)
-    if risk < gov_cfg.RISK_APPROVE_THRESHOLD:
+    if risk < GovernanceConfig.RISK_APPROVE_THRESHOLD:
         band = "low"
-    elif risk < gov_cfg.RISK_REVISE_THRESHOLD:
+    elif risk < GovernanceConfig.RISK_REVISE_THRESHOLD:
         band = "elevated"
     else:
         band = "high"
@@ -540,8 +532,9 @@ def _action_summary(
 
     raw_action = decision.get("action") or _decision_action(payload)
     raw_action = str(raw_action).strip().lower() if raw_action is not None else None
-    action_aliases = _step_attr("_ACTION_ALIASES", {})
-    inferred_action, inferred_sub_action = action_aliases.get(
+    from .envelope_step import _ACTION_ALIASES
+
+    inferred_action, inferred_sub_action = _ACTION_ALIASES.get(
         raw_action,
         (raw_action, None),
     )
@@ -554,7 +547,7 @@ def _action_summary(
     if not sub_action and inferred_action == "proceed":
         # recent_decisions stores the bare action ("proceed"); a guided
         # verdict ("caution"/"guide") still carries the guide sub_action.
-        verdict_sub = action_aliases.get(str(_verdict_value(payload) or "").lower())
+        verdict_sub = _ACTION_ALIASES.get(str(_verdict_value(payload) or "").lower())
         if verdict_sub and verdict_sub[0] == "proceed" and verdict_sub[1]:
             sub_action = verdict_sub[1]
 
@@ -1025,10 +1018,9 @@ def _recovery_hint(
         )
         # Only true while the cold-start guard leaves an agent's own report
         # out (COLD_START_GUARD_INCLUDE_AUTHORED off, or the guard disabled).
-        gov_cfg = _step_attr("GovernanceConfig", GovernanceConfig)
         authored_can_pause = not (
-            gov_cfg.NON_AUTHORED_COLD_START_GUARD_ENABLED
-            and gov_cfg.COLD_START_GUARD_INCLUDE_AUTHORED
+            GovernanceConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED
+            and GovernanceConfig.COLD_START_GUARD_INCLUDE_AUTHORED
         )
         if authored_can_pause and _cold_start_pause_deferred(payload, risk):
             hint += (
@@ -2022,10 +2014,12 @@ def _attach_response_size(
 
 def _prune_resolution_notes_hint(envelope: Dict[str, Any], notes_in_more: bool) -> None:
     """Keep note coaching only while a digest or bounded extra row uses it."""
+    from .envelope_step import _MEMORY_SUGGESTION_LIMIT
+
     suggestions = envelope.get("memory_suggestions") or []
     if any(isinstance(row, dict) and "resolution_notes" in row for row in suggestions):
         return
-    if notes_in_more and len(suggestions) == _step_attr("_MEMORY_SUGGESTION_LIMIT", 3):
+    if notes_in_more and len(suggestions) == _MEMORY_SUGGESTION_LIMIT:
         return
     envelope.pop("resolution_notes_hint", None)
 

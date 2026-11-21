@@ -109,7 +109,7 @@ def patch_common(mock_mcp_server, mock_graph):
          patch("src.mcp_handlers.knowledge.mutation_helpers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
          patch("src.mcp_handlers.knowledge.mutation_helpers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
-         patch("src.mcp_handlers.knowledge.handlers.record_recall_event", recall_event_recorder), \
+         patch("src.mcp_handlers.knowledge.search_helpers.record_recall_event", recall_event_recorder), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"):
         mock_mcp_server.recall_event_recorder = recall_event_recorder
         yield mock_mcp_server, mock_graph
@@ -2322,7 +2322,7 @@ class TestSearchKnowledgeGraphAdditional:
         discoveries = [make_discovery(id=f"d-{i}", summary=f"Item {i}") for i in range(5)]
         mock_graph.query = AsyncMock(return_value=discoveries)
 
-        with patch("src.mcp_handlers.knowledge.handlers.synthesize_results",
+        with patch("src.mcp_handlers.knowledge.search_helpers.synthesize_results",
                     new_callable=AsyncMock,
                     return_value={"summary": "Synthesized results"}):
             result = await handle_search_knowledge_graph({
@@ -3289,3 +3289,80 @@ class TestClosureStandardInDigest:
         env = await _friendly_search(mock_graph, rows)
         for d in env["memory_suggestions"]:
             assert "closure_standard" not in d and "closure_class" not in d
+
+
+class TestHybridOrFallbackAndDetailsHint:
+    """Hybrid search retries FTS with damped OR when AND returns 0 hits, and
+    paginated details responses advertise the `length` parameter."""
+
+    @pytest.mark.asyncio
+    async def test_hybrid_and_miss_retries_weighted_or_and_clears_low_confidence(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        sem_only = make_discovery(id="sem-1", summary="tangential neighbor")
+        both_hit = make_discovery(id="both-1", summary="Vigil auth error update fix")
+        fts_only = make_discovery(id="fts-1", summary="Vigil note")
+
+        async def fts_side_effect(query, limit=50, operator="AND", **kwargs):
+            if operator == "AND":
+                return []
+            assert operator == "OR"
+            return [fts_only, both_hit]
+
+        mock_graph.semantic_search = AsyncMock(return_value=[(sem_only, 0.72), (both_hit, 0.70)])
+        mock_graph.full_text_search = AsyncMock(side_effect=fts_side_effect)
+
+        result = await handle_search_knowledge_graph({
+            "query": "Vigil auth_error knowledge update supersede",
+            "search_mode": "hybrid",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["operator_used"] == "OR"
+        assert data["fts_fallback_used"] is True
+        assert data.get("low_confidence") is not True
+        # both_hit appears in both semantic (1.0/62) and damped OR (0.5/62) so it leads;
+        # sem_only (1.0/61) outranks fts_only (0.5/61) because OR fallback is damped.
+        ids = [d["id"] for d in data["discoveries"]]
+        assert ids == ["both-1", "sem-1", "fts-1"]
+
+    @pytest.mark.asyncio
+    async def test_hybrid_explicit_and_does_not_retry_or(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        sem_only = make_discovery(id="sem-1", summary="semantic hit")
+        mock_graph.semantic_search = AsyncMock(return_value=[(sem_only, 0.70)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "Vigil auth_error knowledge update",
+            "search_mode": "hybrid",
+            "operator": "AND",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["operator_used"] == "AND"
+        assert data.get("fts_fallback_used") is not True
+        assert mock_graph.full_text_search.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_details_pagination_includes_length_hint_when_has_more(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        long_disc = make_discovery(id="long-1", summary="long entry", details="x" * 5000)
+        mock_graph.get_discovery = AsyncMock(return_value=long_disc)
+
+        res = parse_result(await handle_get_discovery_details({"discovery_id": "long-1"}))
+        assert res["pagination"]["has_more"] is True
+        assert "length=" in res["pagination"]["hint"]
+        assert "offset=2000" in res["pagination"]["hint"]
+
+        res_full = parse_result(await handle_get_discovery_details({"discovery_id": "long-1", "length": 6000}))
+        assert "pagination" not in res_full

@@ -328,7 +328,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 2.3.0 (2026-10-26): Expose opt-in compact dialectic reads and executable duplicate-session recovery.
 # 2.4.0 (2026-11-02): Accept neutral durable check-in checkpoints and optional identity-scoped idempotency keys independently of assessment persistence.
 # 2.4.1 (2026-11-05): Finding aliases advertise their existing required inputs as non-null strings: store_finding.summary and update_finding.discovery_id.
-INTERFACE_CONTRACT_VERSION = "2.4.1"
+# 2.4.2 (2026-11-20): Imported-memory close-contest ranking_multiplier relaxes from 0.55 to 0.85 while channel_message stays 0.55.
+INTERFACE_CONTRACT_VERSION = "2.4.2"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

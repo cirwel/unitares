@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import src.mcp_handlers.context as ctx
+import src.mcp_handlers.dialectic.actionability as actionability
 import src.mcp_handlers.dialectic.handlers as handlers
 from src.mcp_handlers.dialectic import wait_assessment as wa
 from tests.helpers import parse_result
@@ -27,10 +28,10 @@ from tests.helpers import parse_result
 
 @pytest.fixture(autouse=True)
 def runner_metadata(monkeypatch):
-    # Replace the handler's proxy reference, not a delegated proxy attribute.
+    # Replace the executing module's proxy reference, not a delegated proxy attribute.
     # Restoring an attribute resolved through __getattr__ would leave a shadow
     # attribute on the shared proxy and bypass later get_mcp_server patches.
-    monkeypatch.setattr(handlers, "mcp_server", SimpleNamespace(agent_metadata={
+    monkeypatch.setattr(actionability, "mcp_server", SimpleNamespace(agent_metadata={
         "B": {"model_type": "dialectic_reviewer:configured-model"},
     }))
 
@@ -331,7 +332,7 @@ def test_terminal_status_does_not_inherit_stale_phase_wait(status, phase):
 
 
 def test_object_messages_and_runner_metadata_are_supported(monkeypatch):
-    monkeypatch.setattr(handlers.mcp_server, "agent_metadata", {
+    monkeypatch.setattr(actionability.mcp_server, "agent_metadata", {
         "B": SimpleNamespace(model_type="dialectic_reviewer:configured-model"),
     })
     data = _synthesis_view()
@@ -357,7 +358,7 @@ def test_budget_is_not_assumed_by_default():
 
 
 def test_explicit_runner_provenance_works_without_cached_identity(monkeypatch):
-    monkeypatch.setattr(handlers.mcp_server, "agent_metadata", {})
+    monkeypatch.setattr(actionability.mcp_server, "agent_metadata", {})
     data = _synthesis_view()
     data["transcript"][-1]["observed_metrics"] = {"reviewer_backend": {"reviewer_kind": "orchestrated"}}
     with patch.object(ctx, "get_context_agent_id", return_value="A"):

@@ -12,7 +12,6 @@ import math
 import os
 from numbers import Real
 import re
-import sys
 from datetime import datetime, timezone
 
 from .wait_assessment import assess_wait, suggests_facilitation
@@ -31,21 +30,9 @@ from .responses import (
     default_resume_steps,
 )
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as _default_mcp_server
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
-
-
-class _McpServerProxy:
-    """Resolve ``mcp_server`` through ``dialectic.handlers`` so test monkeypatches take effect."""
-
-    def __getattr__(self, name: str) -> Any:
-        mod = sys.modules.get("src.mcp_handlers.dialectic.handlers")
-        target = getattr(mod, "mcp_server", _default_mcp_server) if mod is not None else _default_mcp_server
-        return getattr(target, name)
-
-
-mcp_server = _McpServerProxy()
 
 def _synthetic_review_budget(default: float = 55.0) -> float:
     """Wall-clock cap for the inline synthetic review (antithesis + synthesis).
