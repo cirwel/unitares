@@ -414,8 +414,8 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
         # Resolve label to UUID if needed (consistent with observe_agent)
         try:
             if not (len(agent_id) == 36 and agent_id.count('-') == 4):
-                from src.mcp_handlers.identity.handlers import _find_agent_by_label
-                resolved = await _find_agent_by_label(agent_id)
+                from src.mcp_handlers.identity.handlers import find_agent_by_label
+                resolved = await find_agent_by_label(agent_id)
                 if resolved:
                     agent_id = resolved
         except Exception:

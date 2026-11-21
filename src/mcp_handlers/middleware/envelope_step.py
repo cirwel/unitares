@@ -746,9 +746,9 @@ def _onboard_built_full_shape(arguments: Dict[str, Any]) -> bool:
     onboard then falls back to the verbose flag, so ("detailed", verbose)
     builds the full shape although the envelope sees no explicit request.
     """
-    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
+    from src.mcp_handlers.identity.handlers import derive_onboard_response_mode
 
-    return _derive_onboard_response_mode(arguments)[1] == "full"
+    return derive_onboard_response_mode(arguments)[1] == "full"
 
 
 

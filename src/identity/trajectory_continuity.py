@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from src.trajectory_identity import _dtw_similarity
+from src.trajectory_identity import dtw_similarity
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ async def score_trajectory_continuity(
                 f"(min_observations={min_observations})"
             )
             continue
-        sim = _dtw_similarity(parent_series[dim], successor_series[dim])
+        sim = dtw_similarity(parent_series[dim], successor_series[dim])
         components[dim] = float(sim)
 
     contributing = [v for v in components.values() if v is not None]
