@@ -72,10 +72,10 @@ def _validate_principal_component(
     if not isinstance(value, str):
         raise ValueError(f"{where}: {field_name} must be a string")
     if not (1 <= len(value.encode("utf-8")) <= 256) or any(
-        ch.isspace() for ch in value
+        ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value
     ):
         raise ValueError(
-            f"{where}: {field_name} must be 1..256 bytes without whitespace"
+            f"{where}: {field_name} must be 1..256 bytes without whitespace or control characters"
         )
     return value
 

@@ -8,7 +8,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
   in PostgreSQL before the mutation proceeds, making its `jti` single-use.
   """
 
-  alias UnitaresLeasePlane.{OperatorKeyCache, Repo}
+  alias UnitaresLeasePlane.{IdentityBinding, OperatorKeyCache, Repo}
 
   @prefix "lat.v1."
   @clock_skew_seconds 5
@@ -34,7 +34,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
 
   def verify_principal(expected_subject, token, context, opts)
       when is_binary(expected_subject) and is_binary(token) and is_map(context) and is_list(opts) do
-    with true <- valid_principal_component?(expected_subject),
+    with true <- IdentityBinding.valid_principal_component?(expected_subject),
          {:ok, audience} <- configured_audience(),
          {:ok, claims, signing_input, signature} <- parse_token(token),
          {:ok, issuer, kid, jwks_url} <- trusted_key_location(claims, opts),
@@ -125,7 +125,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     expected_issuer = Keyword.get(opts, :expected_issuer)
 
     cond do
-      not valid_principal_component?(issuer) ->
+      not IdentityBinding.valid_principal_component?(issuer) ->
         {:error, :invalid}
 
       not is_binary(kid) or byte_size(kid) == 0 or byte_size(kid) > 128 ->
@@ -151,13 +151,6 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
         {:ok, issuer, kid, Map.fetch!(trusted, issuer)}
     end
   end
-
-  defp valid_principal_component?(value)
-       when is_binary(value) and byte_size(value) in 1..256 do
-    not String.match?(value, ~r/[[:space:]]/u)
-  end
-
-  defp valid_principal_component?(_value), do: false
 
   defp resolve_public_key(issuer, kid, jwks_url, audience) do
     case OperatorKeyCache.get(issuer, kid) do

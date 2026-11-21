@@ -270,8 +270,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     case Jason.decode(value) do
       {:ok, %{} = issuers} when map_size(issuers) <= @max_trusted_issuers ->
         if Enum.all?(issuers, fn {issuer, url} ->
-             is_binary(issuer) and byte_size(issuer) in 1..256 and
-               not String.match?(issuer, ~r/[[:space:]]/u) and
+             valid_principal_component?(issuer) and
                is_binary(url) and byte_size(url) in 1..2_048 and valid_trusted_url?(url)
            end) do
           issuers
@@ -308,6 +307,39 @@ defmodule UnitaresLeasePlane.IdentityBinding do
             "UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS must list at most eight exact HTTP JWKS URLs"
     end
   end
+
+  @doc """
+  Boot warning emitted when more than one trusted issuer is configured.
+
+  `/v1/lease/*` persists `(holder_issuer, holder_subject)` and supports up to
+  32 trusted issuers; `/v1/msg/*` and `/v1/dialectic/*` stay fail-closed with
+  `503 identity_verification_unavailable` under multi-issuer config until their
+  backing tables persist issuer attribution.
+  """
+  @spec multi_issuer_route_warning(map()) :: String.t() | nil
+  def multi_issuer_route_warning(issuers) when is_map(issuers) and map_size(issuers) > 1 do
+    "UNITARES_LEASE_TRUSTED_ISSUERS configures #{map_size(issuers)} trusted issuers: " <>
+      "/v1/lease/* routes support multi-issuer principals, while /v1/msg/* and " <>
+      "/v1/dialectic/* remain single-issuer and fail closed with 503 " <>
+      "identity_verification_unavailable for lat.v1. attestations until those tables persist issuer"
+  end
+
+  def multi_issuer_route_warning(_issuers), do: nil
+
+  @doc """
+  Validate one component (`issuer` or `subject`) of a persisted lease principal.
+
+  Must be a non-empty binary of at most 256 bytes containing no whitespace,
+  ASCII/C1 control characters, or U+0085 (NEL), matching the migration-084
+  CHECK constraint and Python SDK validation.
+  """
+  @spec valid_principal_component?(term()) :: boolean()
+  def valid_principal_component?(value)
+      when is_binary(value) and byte_size(value) in 1..256 do
+    not String.match?(value, ~r/[[:space:][:cntrl:]]|\x{0085}/u)
+  end
+
+  def valid_principal_component?(_value), do: false
 
   @doc "True when at most one trusted attestation issuer is configured."
   @spec single_or_no_trusted_issuer?() :: boolean()
@@ -545,13 +577,6 @@ defmodule UnitaresLeasePlane.IdentityBinding do
          _require_attestation
        ),
        do: {:error, :invalid}
-
-  defp valid_principal_component?(value)
-       when is_binary(value) and byte_size(value) in 1..256 do
-    not String.match?(value, ~r/[[:space:]]/u)
-  end
-
-  defp valid_principal_component?(_value), do: false
 
   defp verify(expected_holder_uuid, proof, request_context) do
     proof_type = proof_type(proof)

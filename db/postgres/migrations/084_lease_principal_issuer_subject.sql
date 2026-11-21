@@ -27,10 +27,10 @@ DO $$ BEGIN
             OR (
                 holder_issuer IS NOT NULL
                 AND length(holder_issuer) BETWEEN 1 AND 256
-                AND holder_issuer !~ '[[:space:]]'
+                AND holder_issuer !~ E'[[:space:][:cntrl:]\u0085]'
                 AND holder_subject IS NOT NULL
                 AND length(holder_subject) BETWEEN 1 AND 256
-                AND holder_subject !~ '[[:space:]]'
+                AND holder_subject !~ E'[[:space:][:cntrl:]\u0085]'
             )
         );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;

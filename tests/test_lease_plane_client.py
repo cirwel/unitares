@@ -627,7 +627,7 @@ def test_acquire_request_accepts_and_serializes_holder_subject():
     assert result.lease.holder_issuer == "operator-a"
     assert result.lease.holder_subject == "sentinel-principal-1"
 
-    for bad_subject in ("", "has space", "s" * 257):
+    for bad_subject in ("", "has space", "ctrl\x1csep", "bell\x07char", "del\x7fchar", "nel\u0085char", "s" * 257):
         try:
             AcquireRequest(
                 surface_id="resident:/sentinel",
@@ -682,7 +682,7 @@ def test_handoff_offer_request_accepts_and_serializes_recipient_principal():
     assert issuer_only.to_holder_issuer == "operator-b"
     assert issuer_only.to_holder_subject is None
 
-    for bad_val in ("", "bad issuer", "x" * 257):
+    for bad_val in ("", "bad issuer", "ctrl\x1csep", "bell\x07char", "nel\u0085char", "x" * 257):
         try:
             HandoffOfferRequest(
                 lease_id=lease_id,

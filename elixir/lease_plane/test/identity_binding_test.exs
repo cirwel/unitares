@@ -142,8 +142,45 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
       IdentityBinding.parse_trusted_issuers(too_many)
     end
 
+    assert IdentityBinding.multi_issuer_route_warning(%{}) == nil
+
+    assert IdentityBinding.multi_issuer_route_warning(%{
+             "operator-a" => "https://a.example/keys"
+           }) == nil
+
+    multi_warning =
+      IdentityBinding.multi_issuer_route_warning(%{
+        "operator-a" => "https://a.example/keys",
+        "operator-b" => "https://b.example/keys"
+      })
+
+    assert multi_warning =~ "/v1/msg/*"
+    assert multi_warning =~ "/v1/dialectic/*"
+
+    assert IdentityBinding.valid_principal_component?("operator-a")
+
+    for bad <- [
+          "",
+          "bad space",
+          "a\x1cb",
+          "a\x07b",
+          "a\x7fb",
+          "a\u0085b",
+          "a\u00a0b",
+          String.duplicate("x", 257)
+        ] do
+      refute IdentityBinding.valid_principal_component?(bad),
+             "expected #{inspect(bad)} to be rejected"
+    end
+
     assert_raise ArgumentError, fn ->
       IdentityBinding.parse_trusted_issuers(~s({"bad issuer":"https://a.example/keys"}))
+    end
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_trusted_issuers(
+        Jason.encode!(%{"bad\x1cissuer" => "https://a.example/keys"})
+      )
     end
 
     assert IdentityBinding.parse_attestation_audience(" plane-a ") == "plane-a"

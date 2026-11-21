@@ -157,10 +157,15 @@ live coordination boundary by onboarding two participants, rejecting A's
 request-bound attestation when it claims B's UUID, refusing replay of a captured
 attestation, acquiring one `maintenance:/` surface, refusing a second holder,
 handing ownership over through identity-checked mutations, and releasing it.
-The local proof uses one operator and a deployment-specific audience. This
-version intentionally permits one trusted issuer because lease rows do not yet
-persist issuer-qualified principals; it does not establish cross-operator trust
-or outcome benefit.
+The local proof uses one operator and a deployment-specific audience. Lease
+rows (`/v1/lease/*`) persist verified `(holder_issuer, holder_subject)`
+principals and `UNITARES_LEASE_TRUSTED_ISSUERS` supports up to 32 trusted
+issuers for lease acquire, lifecycle mutations, and handoff. Non-lease routes
+(`/v1/msg/*` and `/v1/dialectic/*`) still permit at most one trusted issuer for
+`lat.v1.` attestations (returning `503 identity_verification_unavailable` when
+more than one trusted issuer is configured) until their tables also persist
+issuer attribution. Multi-issuer lease verification does not establish
+cross-operator trust or outcome benefit.
 
 The same lease plane protects files. With the
 [governance plugin](https://github.com/cirwel/unitares-governance-plugin)
@@ -518,10 +523,11 @@ Production hardening, bearer rotation, and remote exposure belong in
 
 For a shared deployment, replace the Compose-only development Ed25519 seed in
 `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, set a stable
-`UNITARES_LEASE_ATTESTATION_ISSUER`, and configure each trusted peer as an
-issuer-to-HTTPS `/v1/lease-holder/keys` entry in
-`UNITARES_LEASE_TRUSTED_ISSUERS`. Never copy a private seed or continuity token
-into the lease plane.
+`UNITARES_LEASE_ATTESTATION_ISSUER`, and configure each trusted peer (up to 32
+for `/v1/lease/*`; `/v1/msg/*` and `/v1/dialectic/*` remain single-issuer until
+their tables persist issuer) as an issuer-to-HTTPS `/v1/lease-holder/keys` entry
+in `UNITARES_LEASE_TRUSTED_ISSUERS`. Never copy a private seed or continuity
+token into the lease plane.
 
 To see what the quickstart leaves off and how to turn each part on, read
 [§2.4](#24-quickstart-defaults-and-a-full-setup).

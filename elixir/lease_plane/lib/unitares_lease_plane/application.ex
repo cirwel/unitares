@@ -154,13 +154,16 @@ defmodule UnitaresLeasePlane.Application do
       )
     )
 
-    Application.put_env(
-      :lease_plane,
-      :trusted_identity_issuers,
+    trusted_issuers =
       UnitaresLeasePlane.IdentityBinding.parse_trusted_issuers(
         System.get_env("UNITARES_LEASE_TRUSTED_ISSUERS")
       )
-    )
+
+    Application.put_env(:lease_plane, :trusted_identity_issuers, trusted_issuers)
+
+    if warning = UnitaresLeasePlane.IdentityBinding.multi_issuer_route_warning(trusted_issuers) do
+      Logger.warning(warning)
+    end
 
     Application.put_env(
       :lease_plane,

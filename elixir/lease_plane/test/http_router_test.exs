@@ -2323,10 +2323,11 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                })
     end
 
-    test "pre-084 issuerless rows and unpinned handoffs fail closed under multi-issuer config and work under single-issuer",
+    test "pre-084 issuerless rows fail closed on mutation under multi-issuer config while unpinned handoff accepts persist recipient principal",
          ctx do
       holder = random_uuid()
       recipient = random_uuid()
+      recipient_subject = "recipient-durable-principal"
 
       # Seed an active pre-084 (holder_issuer=nil, holder_subject=nil) lease directly via Repo
       assert {:ok, legacy_lease, :new} =
@@ -2341,7 +2342,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert legacy_lease.holder_issuer == nil
       assert legacy_lease.holder_subject == nil
 
-      # With 2 trusted issuers configured, mutating an issuerless row fails closed (503)
+      # With 2 trusted issuers configured, mutating an issuerless existing row fails closed (503)
       multi_renew_b =
         post_attested(
           "/v1/lease/renew",
@@ -2374,11 +2375,16 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert single_renew_a.status == 200
 
-      # Create an unpinned handoff offer (no to_holder_issuer) while single-issuer
+      # Create an unpinned (no to_holder_issuer) subject-only handoff offer
       offer =
         post_attested(
           "/v1/lease/handoff/offer",
-          %{lease_id: legacy_lease.lease_id, to_holder_agent_uuid: recipient, ttl_s: 45},
+          %{
+            lease_id: legacy_lease.lease_id,
+            to_holder_agent_uuid: recipient,
+            to_holder_subject: recipient_subject,
+            ttl_s: 45
+          },
           "operator-a",
           "kid-a",
           ctx.priv_a,
@@ -2389,11 +2395,42 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert offer.status == 200
       handoff_id = parsed(offer)["handoff_id"]
 
-      # Re-enable 2 trusted issuers: accepting an unpinned handoff fails closed (503)
+      # Re-enable 2 trusted issuers:
       Application.put_env(:lease_plane, :trusted_identity_issuers, %{
         "operator-a" => "https://operator-a.example/keys",
         "operator-b" => "https://operator-b.example/keys"
       })
+
+      # Distinct to_holder_subject refuses unattested accept in :enforce/:hybrid (legacy proof), :log, and :off
+      legacy_accept =
+        post_json_with_proof(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "v1.legacy-recipient.sig"
+        )
+
+      assert legacy_accept.status == 403
+      assert parsed(legacy_accept)["reason"] == "identity_proof_invalid"
+
+      Application.put_env(:lease_plane, :identity_binding_mode, :log)
+
+      log_unattested_accept =
+        post_json_without_proof("/v1/lease/handoff/accept", %{handoff_id: handoff_id})
+
+      assert log_unattested_accept.status == 403
+      assert parsed(log_unattested_accept)["reason"] == "identity_proof_invalid"
+
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+      off_unattested_accept =
+        post_json_without_proof("/v1/lease/handoff/accept", %{handoff_id: handoff_id})
+
+      assert off_unattested_accept.status == 403
+      assert parsed(off_unattested_accept)["reason"] == "identity_proof_invalid"
+
+      # Under :enforce with 2 trusted issuers, unpinned / subject-only handoff accept succeeds
+      # and persists the accepting recipient's verified (issuer, subject) on the new lease row
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
 
       multi_accept =
         post_attested(
@@ -2402,30 +2439,11 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
           "operator-b",
           "kid-b",
           ctx.priv_b,
-          recipient,
+          recipient_subject,
           ctx.now
         )
 
-      assert multi_accept.status == 503
-      assert parsed(multi_accept)["reason"] == "identity_verification_unavailable"
-
-      # Back to single-issuer: unpinned handoff accept succeeds and persists verified principal
-      Application.put_env(:lease_plane, :trusted_identity_issuers, %{
-        "operator-a" => "https://operator-a.example/keys"
-      })
-
-      single_accept =
-        post_attested(
-          "/v1/lease/handoff/accept",
-          %{handoff_id: handoff_id},
-          "operator-a",
-          "kid-a",
-          ctx.priv_a,
-          recipient,
-          ctx.now
-        )
-
-      assert single_accept.status == 200
+      assert multi_accept.status == 200
 
       status =
         :get
@@ -2433,8 +2451,10 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
         |> authed()
         |> HTTPRouter.call(@opts)
 
-      assert parsed(status)["lease"]["holder_issuer"] == "operator-a"
-      assert parsed(status)["lease"]["holder_subject"] == recipient
+      new_lease = parsed(status)["lease"]
+      assert new_lease["holder_agent_uuid"] == recipient
+      assert new_lease["holder_issuer"] == "operator-b"
+      assert new_lease["holder_subject"] == recipient_subject
     end
 
     test "pre-084 issuerless row allows attested idempotent reacquire (and substrate update) only under single-issuer config",
@@ -2533,14 +2553,16 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "invalid holder_subject and handoff principal fields return 422 schema_invalid", ctx do
-      bad_acquire =
-        post_json_without_proof(
-          "/v1/lease/acquire",
-          acquire_body(ctx.surface) |> Map.put(:holder_subject, "has space")
-        )
+      for bad <- ["has space", "ctrl\x1csep", "bell\x07char", "nel\u0085char"] do
+        bad_acquire =
+          post_json_without_proof(
+            "/v1/lease/acquire",
+            acquire_body(ctx.surface) |> Map.put(:holder_subject, bad)
+          )
 
-      assert bad_acquire.status == 422
-      assert parsed(bad_acquire)["error"] == "schema_invalid"
+        assert bad_acquire.status == 422, "expected 422 for holder_subject=#{inspect(bad)}"
+        assert parsed(bad_acquire)["error"] == "schema_invalid"
+      end
 
       bad_offer =
         post_json_without_proof("/v1/lease/handoff/offer", %{

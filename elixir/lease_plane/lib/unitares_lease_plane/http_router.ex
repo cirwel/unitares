@@ -1105,44 +1105,55 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp authorize_handoff_recipient(conn, handoff_id) do
-    if IdentityBinding.enabled?() do
-      case HandoffServer.authorization_context(handoff_id) do
-        {:ok,
-         %{
-           recipient_uuid: recipient_uuid,
-           recipient_issuer: recipient_issuer,
-           recipient_subject: recipient_subject,
-           lease_id: lease_id
-         }} ->
-          case Repo.active_lease(lease_id) do
-            {:ok, lease} ->
-              distinct_subject? =
-                is_binary(recipient_subject) and recipient_subject != recipient_uuid
+    case HandoffServer.authorization_context(handoff_id) do
+      {:ok,
+       %{
+         recipient_uuid: recipient_uuid,
+         recipient_issuer: recipient_issuer,
+         recipient_subject: recipient_subject,
+         lease_id: lease_id
+       }} ->
+        distinct_recipient_subject? =
+          is_binary(recipient_subject) and recipient_subject != recipient_uuid
 
-              expected_subject = recipient_subject || recipient_uuid
+        cond do
+          not IdentityBinding.enabled?() and distinct_recipient_subject? ->
+            {:error, :identity_proof_invalid}
 
-              IdentityBinding.authorize_lease_principal(
-                expected_subject,
-                IdentityBinding.proof_from_conn(conn),
-                lease.surface_kind,
-                IdentityBinding.request_context(conn),
-                expected_issuer: recipient_issuer,
-                require_attestation: distinct_subject?,
-                allow_multiple_issuers: is_binary(recipient_issuer)
-              )
+          not IdentityBinding.enabled?() ->
+            {:ok, nil}
 
-            {:error, :not_found} ->
-              {:error, :not_found}
+          true ->
+            case Repo.active_lease(lease_id) do
+              {:ok, lease} ->
+                expected_subject = recipient_subject || recipient_uuid
 
-            {:error, _reason} ->
-              {:error, :identity_verification_unavailable}
-          end
+                case IdentityBinding.authorize_lease_principal(
+                       expected_subject,
+                       IdentityBinding.proof_from_conn(conn),
+                       lease.surface_kind,
+                       IdentityBinding.request_context(conn),
+                       expected_issuer: recipient_issuer,
+                       require_attestation: distinct_recipient_subject?,
+                       allow_multiple_issuers: true
+                     ) do
+                  {:ok, nil} when distinct_recipient_subject? ->
+                    {:error, :identity_proof_invalid}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:ok, nil}
+                  other ->
+                    other
+                end
+
+              {:error, :not_found} ->
+                {:error, :not_found}
+
+              {:error, _reason} ->
+                {:error, :identity_verification_unavailable}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1656,12 +1667,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp extract_handoff_offer_params(_), do: {:error, "body must be a JSON object"}
 
-  defp valid_principal_component?(value)
-       when is_binary(value) and byte_size(value) in 1..256 do
-    not String.match?(value, ~r/[[:space:]]/u)
-  end
-
-  defp valid_principal_component?(_), do: false
+  defp valid_principal_component?(value), do: IdentityBinding.valid_principal_component?(value)
 
   defp extract_handoff_accept_params(%{"handoff_id" => handoff_id})
        when is_binary(handoff_id) and byte_size(handoff_id) > 0 do

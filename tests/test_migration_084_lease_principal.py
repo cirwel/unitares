@@ -93,7 +93,7 @@ async def test_migration_084_principal_check_and_immutability_trigger() -> None:
             conn, sid_attested, holder_issuer="operator-a", holder_subject="subject-1"
         )
 
-        # Half-set, empty, whitespace, and >256-char values fail CHECK
+        # Half-set, empty, whitespace, control characters, and >256-char values fail CHECK
         for bad_issuer, bad_subject in [
             ("operator-a", None),
             (None, "subject-1"),
@@ -101,6 +101,11 @@ async def test_migration_084_principal_check_and_immutability_trigger() -> None:
             ("operator-a", ""),
             ("operator a", "subject-1"),
             ("operator-a", "subject\t1"),
+            ("operator\x1ca", "subject-1"),
+            ("operator-a", "subject\x071"),
+            ("operator\x7fa", "subject-1"),
+            ("operator-a", "subject\u00851"),
+            ("operator\u00a0a", "subject-1"),
             ("a" * 257, "subject-1"),
             ("operator-a", "s" * 257),
         ]:
