@@ -430,4 +430,108 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     assert res["verdict_acceptance"] == "not_applicable"
     refute res["note"] =~ "rejection was standing"
   end
+
+  describe "snapshot/1 exit races" do
+    test "returns :gone when a live watcher stops normally while :snapshot is queued" do
+      session_id = insert_dialectic_session(status: "resolved", phase: "resolved")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      :started =
+        DialecticLivenessSupervisor.ensure_started(session_id,
+          hard_timeout_s: 0,
+          initial_check_ms: 60_000,
+          check_interval_ms: 60_000
+        )
+
+      [{pid, _}] = Registry.lookup(UnitaresLeasePlane.DialecticLivenessRegistry, session_id)
+      ref = Process.monitor(pid)
+
+      # Suspend the watcher, queue :check ahead of :snapshot, then resume so
+      # the GenServer returns {:stop, :normal, state} before replying to :snapshot.
+      :ok = :sys.suspend(pid)
+      send(pid, :check)
+      task = Task.async(fn -> DialecticLiveness.snapshot(session_id) end)
+
+      assert :ok =
+               wait_until(fn ->
+                 match?(
+                   {:message_queue_len, n} when n >= 2,
+                   Process.info(pid, :message_queue_len)
+                 )
+               end)
+
+      :ok = :sys.resume(pid)
+
+      assert :gone == Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    for {label, reason} <- [
+          {"normal", :normal},
+          {"shutdown", :shutdown},
+          {"shutdown tuple", {:shutdown, :supervisor_stop}}
+        ] do
+      test "returns :gone when registered process exits with #{label} during :snapshot" do
+        session_id = "test_elixir_snapshot_exit_#{System.unique_integer([:positive])}"
+        parent = self()
+        exit_reason = unquote(Macro.escape(reason))
+
+        pid =
+          spawn(fn ->
+            {:ok, _} =
+              Registry.register(UnitaresLeasePlane.DialecticLivenessRegistry, session_id, nil)
+
+            send(parent, {:registered, self()})
+
+            receive do
+              {:"$gen_call", _from, :snapshot} -> exit(exit_reason)
+            end
+          end)
+
+        ref = Process.monitor(pid)
+        assert_receive {:registered, ^pid}, 1_000
+
+        assert :gone == DialecticLiveness.snapshot(session_id)
+        assert_receive {:DOWN, ^ref, :process, ^pid, ^exit_reason}, 1_000
+      end
+    end
+
+    test "returns :gone on a stale/already-exited pid (:noproc) and unknown session" do
+      pid = spawn(fn -> :ok end)
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+
+      assert :gone == DialecticLiveness.snapshot_pid(pid)
+
+      assert :gone ==
+               DialecticLiveness.snapshot(
+                 "test_elixir_missing_#{System.unique_integer([:positive])}"
+               )
+    end
+
+    test "does not swallow abnormal crash exits during :snapshot" do
+      session_id = "test_elixir_snapshot_crash_#{System.unique_integer([:positive])}"
+      parent = self()
+
+      pid =
+        spawn(fn ->
+          {:ok, _} =
+            Registry.register(UnitaresLeasePlane.DialecticLivenessRegistry, session_id, nil)
+
+          send(parent, {:registered, self()})
+
+          receive do
+            {:"$gen_call", _from, :snapshot} -> exit(:unexpected_boom)
+          end
+        end)
+
+      ref = Process.monitor(pid)
+      assert_receive {:registered, ^pid}, 1_000
+
+      assert {:unexpected_boom, {GenServer, :call, [^pid, :snapshot | _]}} =
+               catch_exit(DialecticLiveness.snapshot(session_id))
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :unexpected_boom}, 1_000
+    end
+  end
 end
