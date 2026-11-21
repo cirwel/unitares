@@ -425,10 +425,10 @@ async def perf_monitor_persist_task(interval_minutes: float = 5.0):
 async def transport_binding_cache_warmup():
     """Pre-populate the sticky transport-binding cache from Redis at startup.
 
-    Reads the transport_binding:* keys that identity_step.py writes. Running
-    this at boot means the dispatch-path Redis read (guarded by wait_for)
-    rarely has to fire, which keeps the anyio-asyncio deadlock off the
-    critical path.
+    Waits 2 seconds for Redis to be ready, scans up to 500 ``transport_binding:*``
+    entries written by ``identity_step.py``, and pre-populates warmed entries in
+    memory. This reduces (rather than eliminates) Redis reads (guarded by
+    ``wait_for``) on cold dispatch paths.
     """
     await asyncio.sleep(2)  # Wait for DB and Redis to be ready
     try:
