@@ -226,3 +226,16 @@ def test_launchctl_failure_degrades_to_config_only(census_mod, monkeypatch):
     warnings: list[str] = []
     assert census_mod.launchd_runtime(warnings) == (None, {})
     assert warnings and "list unavailable" in warnings[0]
+
+
+def test_empty_unloaded_launchd_stub_is_skipped(census_mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(census_mod, "HOME", tmp_path)
+    launch_dir = tmp_path / "Library" / "LaunchAgents"
+    launch_dir.mkdir(parents=True)
+    with (launch_dir / "com.google.keystone.agent.plist").open("wb") as handle:
+        plistlib.dump({}, handle)
+    _plist(tmp_path, "job.real", ["/usr/bin/true"])
+    monkeypatch.setattr(census_mod, "launchd_runtime", lambda _warnings: ({}, {}))
+
+    items = census_mod.collect_launchd([])
+    assert [item.name for item in items] == ["job.real"]
