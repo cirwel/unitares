@@ -17,5 +17,18 @@ defmodule AgentOrchestrator.LeasePlaneClient.Behaviour do
               ttl_s :: pos_integer()
             ) :: {:ok, String.t()} | {:error, term()}
 
+  @callback acquire(
+              surface_id :: String.t(),
+              holder_agent_uuid :: String.t(),
+              holder_kind :: String.t(),
+              ttl_s :: pos_integer(),
+              opts :: keyword()
+            ) :: {:ok, String.t()} | {:error, term()}
+
   @callback release(lease_id :: String.t(), reason :: String.t()) :: :ok | {:error, term()}
+
+  @callback release(lease_id :: String.t(), reason :: String.t(), opts :: keyword()) ::
+              :ok | {:error, term()}
+
+  @optional_callbacks [acquire: 5, release: 3]
 end
