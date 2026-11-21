@@ -15,61 +15,11 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from src.db import get_db
+from src.db.mixins.knowledge_graph import KG_S22_SQL
+from src.db.mixins.state_queries import AGENT_STATE_S22_SQL
 
 
 DEFAULT_REQUIRED_HARNESSES = ("hermes", "claude-code", "codex-cli")
-
-AGENT_STATE_S22_SQL = """
-SELECT
-    s.state_id::TEXT AS entry_id,
-    'agent_state' AS source,
-    i.agent_id AS agent_id,
-    s.recorded_at AS recorded_at,
-    s.state_json->'provenance_context' AS s22_context,
-    s.state_json AS state_json
-FROM core.agent_state s
-JOIN core.identities i ON i.identity_id = s.identity_id
-WHERE s.state_json ? 'provenance_context'
-  AND (
-    $2::TEXT IS NULL
-    OR COALESCE(
-        s.state_json#>>'{provenance_context,comparison_key}',
-        s.state_json#>>'{provenance_context,task_label}',
-        s.state_json#>>'{provenance_context,task}'
-    ) = $2
-  )
-ORDER BY s.recorded_at DESC
-LIMIT $1
-"""
-
-KG_S22_SQL = """
-SELECT
-    d.id::TEXT AS entry_id,
-    'knowledge_discovery' AS source,
-    d.agent_id AS agent_id,
-    d.created_at AS recorded_at,
-    d.provenance->'s22_context' AS s22_context,
-    jsonb_build_object(
-        'summary', d.summary,
-        'type', d.type,
-        'status', d.status,
-        'tags', d.tags,
-        'response_to_id', d.response_to_id,
-        'response_type', d.response_type
-    ) AS state_json
-FROM knowledge.discoveries d
-WHERE d.provenance ? 's22_context'
-  AND (
-    $2::TEXT IS NULL
-    OR COALESCE(
-        d.provenance#>>'{s22_context,comparison_key}',
-        d.provenance#>>'{s22_context,task_label}',
-        d.provenance#>>'{s22_context,task}'
-    ) = $2
-  )
-ORDER BY d.created_at DESC
-LIMIT $1
-"""
 
 
 @dataclass(frozen=True)

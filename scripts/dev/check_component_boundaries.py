@@ -95,6 +95,7 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
     "identity": ("src/mcp_handlers/identity/", "src/identity/", "src/db/mixins/identity.py"),
     "eisv": (
         "governance_core/", "src/db/mixins/state.py",
+        "src/db/mixins/state_queries.py",
         "src/agent_monitor_state.py", "src/eisv/adapter.py",
     ),
     "knowledge": (

@@ -12,9 +12,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from src.db import get_db
+from src.db.mixins.state import SYNTHETIC_STATE_SQL
+from src.db.mixins.state_queries import (
+    agent_state_left_join_on_identity_sql,
+    latest_state_provenance_lateral_sql,
+)
 
+_AGENT_STATE_LEFT_JOIN_SQL = agent_state_left_join_on_identity_sql("s", "i")
+_LATEST_STATE_PROVENANCE_SQL = latest_state_provenance_lateral_sql("i", "s2")
 
-IDENTITY_FRAGMENTATION_SQL = """
+IDENTITY_FRAGMENTATION_SQL = f"""
 WITH per_identity AS (
     SELECT
         i.identity_id,
@@ -52,18 +59,8 @@ WITH per_identity AS (
         latest.context_source
     FROM core.identities i
     LEFT JOIN core.agents a ON a.id = i.agent_id
-    LEFT JOIN core.agent_state s ON s.identity_id = i.identity_id
-    LEFT JOIN LATERAL (
-        SELECT
-            s2.state_json#>>'{provenance_context,session_resolution_source}'
-                AS session_resolution_source,
-            s2.state_json#>>'{provenance_context,transport}' AS transport,
-            s2.state_json#>>'{provenance_context,context_source}' AS context_source
-        FROM core.agent_state s2
-        WHERE s2.identity_id = i.identity_id
-        ORDER BY s2.recorded_at DESC
-        LIMIT 1
-    ) latest ON TRUE
+    {_AGENT_STATE_LEFT_JOIN_SQL}
+    LEFT JOIN LATERAL ({_LATEST_STATE_PROVENANCE_SQL}) latest ON TRUE
     GROUP BY
         i.identity_id,
         i.agent_id,
@@ -90,8 +87,6 @@ FROM per_identity
 WHERE ($1::TIMESTAMPTZ IS NULL OR created_at >= $1::TIMESTAMPTZ)
 ORDER BY created_at DESC
 """
-
-from src.db.mixins.state import SYNTHETIC_STATE_SQL
 
 
 async def collect_agent_fragmentation(

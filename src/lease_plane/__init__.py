@@ -19,11 +19,17 @@ import sys
 import unitares_sdk.lease_plane as _canonical
 from unitares_sdk.lease_plane import advisory, canonicalize, client, models
 
+# Load server-local SQL query helpers before self-replacement swaps
+# ``sys.modules[__name__]`` to ``unitares_sdk.lease_plane`` (whose ``__path__``
+# does not include ``src/lease_plane``).
+from . import queries as _queries
+
 for _name, _mod in (
     ("client", client),
     ("models", models),
     ("advisory", advisory),
     ("canonicalize", canonicalize),
+    ("queries", _queries),
 ):
     sys.modules[f"{__name__}.{_name}"] = _mod
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.db import get_db
+from src.db.mixins.audit import R2_PHASE1_AUDIT_TELEMETRY_SQL as AUDIT_TELEMETRY_SQL
 
 
 DEFAULT_PHASE1_START = datetime(2026, 5, 5, tzinfo=timezone.utc)
@@ -67,19 +68,6 @@ SELECT
         WHERE lineage_last_eval_at >= $1
     ) AS last_eval_since
 FROM core.identities
-"""
-
-AUDIT_TELEMETRY_SQL = """
-SELECT
-    event_type,
-    COUNT(*)::BIGINT AS event_count,
-    MIN(ts) AS first_seen_at,
-    MAX(ts) AS last_seen_at
-FROM audit.events
-WHERE ts >= $1
-  AND event_type = ANY($2::TEXT[])
-GROUP BY event_type
-ORDER BY event_type
 """
 
 

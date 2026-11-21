@@ -199,6 +199,68 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
+def _endpoint_addresses(url: str) -> tuple[str, int | None, set[str]] | None:
+    """The host, port and every address ``url`` can reach: its IP literal,
+    numeric IPv4 shorthand the resolver accepts (``127.1``, ``2130706433``,
+    ``0x7f000001``) parsed as the C library parses it, and whatever the name
+    resolves to now. None for a URL that names no host or does not parse."""
+    import socket
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    addresses: set[str] = set()
+    addr = _ip_literal(host)
+    if addr is not None:
+        addresses.add(str(addr))
+    else:
+        try:
+            addresses.add(str(ipaddress.IPv4Address(socket.inet_aton(host))))
+        except (OSError, ValueError):
+            pass
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, UnicodeError):
+            infos = []
+        for info in infos:
+            try:
+                addresses.add(str(ipaddress.ip_address(info[4][0].split("%", 1)[0])))
+            except ValueError:
+                continue
+    return host, port, addresses
+
+
+def endpoint_reaches_local_address(url: str) -> bool:
+    """Whether ``url`` can reach the operator's own machine or network."""
+    found = _endpoint_addresses(url)
+    if found is None:
+        return False
+    host, _port, addresses = found
+    if host in _local_hostnames():
+        return True
+    for text in addresses:
+        addr = ipaddress.ip_address(text)
+        if addr.is_unspecified or addr.is_loopback or is_trusted_address(addr):
+            return True
+    return False
+
+
+def same_endpoint(url_a: str, url_b: str) -> bool:
+    """Whether two URLs reach the same server: the same port, and the same host
+    name or a shared address."""
+    a, b = _endpoint_addresses(url_a), _endpoint_addresses(url_b)
+    if a is None or b is None or a[1] != b[1]:
+        return False
+    return a[0] == b[0] or bool(a[2] & b[2])
+
+
 def local_refusal_message(classification: EndpointPrivacy) -> str:
     return (
         f"The local model endpoint is classified external ({classification.reason}), "
