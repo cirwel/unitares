@@ -3,7 +3,7 @@
   "skill": "knowledge-graph",
   "verified_at": "2026-11-20T20:28:05Z",
   "verified_date": "2026-11-20",
-  "verifier": "gemini-4-neon-xhigh (agent fded7e7e): re-checked knowledge-graph after merging origin/master and B1p/B3/B4 boundary refactor (knowledge-graph mixin helpers called by stuck.py and observability/handlers.py); zero API or schema changes",
+  "verifier": "gemini-4-neon-xhigh (agent fded7e7e): re-checked knowledge-graph after merging origin/master and B1p/B3/B4 boundary refactor (knowledge-graph mixin helper has_open_discovery_with_tag, called only by lifecycle/stuck.py); zero API or schema changes",
   "source_digests": {
     "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
     "unitares/src/alias_schema.py": "3746fd4d6b089dea",
