@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-21T11:23:18Z",
+  "verified_at": "2026-11-21T11:35:27Z",
   "verified_date": "2026-11-21",
-  "verifier": "gemini-4-neon-high re-checked unitares-dashboard SKILL.md against baseline security headers and CSP added to src/http_routes/dashboard.py; all route, caching, auth-gate, and extension conventions remain accurate",
+  "verifier": "gemini-4-neon-high re-checked unitares-dashboard SKILL.md against baseline security headers and CSP across all success, redirect, and error responses in src/http_routes/dashboard.py",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "6ec22f988af49425",
@@ -27,7 +27,7 @@
     "unitares/src/governance_trend.py": "78c232e8c94332cc",
     "unitares/src/http_api.py": "d447cec5463f73be",
     "unitares/src/http_routes/connectors.py": "4397034d3c844dc7",
-    "unitares/src/http_routes/dashboard.py": "5bc9d2a41589bdf4",
+    "unitares/src/http_routes/dashboard.py": "3d127da722a97b53",
     "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
     "unitares/src/http_routes/telemetry.py": "a6747509bc3f8cae",
     "unitares/src/oauth_connectors.py": "370658a9f3414d3b"

@@ -149,3 +149,38 @@ def test_dashboard_classic_redirect_sends_baseline_security_headers():
     assert resp.status_code == 302
     assert resp.headers["location"] == "/dashboard"
     _assert_security_headers(resp.headers)
+
+
+@pytest.mark.parametrize(
+    "path, peer, expected_status",
+    [
+        ("/dashboard/redesign/does-not-exist.js", ("127.0.0.1", 50000), 404),
+        ("/dashboard/redesign/auth/signin.html", ("127.0.0.1", 50000), 404),
+        ("/dashboard/redesign/shot-eisv.png", ("127.0.0.1", 50000), 403),
+        ("/dashboard/redesign/snapshot.js", ("203.0.113.7", 44444), 401),
+        ("/dashboard/not-allowed.js", ("127.0.0.1", 50000), 403),
+    ],
+)
+def test_dashboard_error_responses_send_baseline_security_headers(path, peer, expected_status):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from src.http_routes.dashboard import http_dashboard_static
+
+    app = Starlette(
+        routes=[
+            Route("/dashboard/redesign/{file:path}", http_dashboard_redesign, methods=["GET"]),
+            Route("/dashboard/{file}", http_dashboard_static, methods=["GET"]),
+        ]
+    )
+    resp = TestClient(app, client=peer).get(path)
+    assert resp.status_code == expected_status, f"{path} -> {resp.status_code}"
+    _assert_security_headers(resp.headers)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_bad_request_sends_baseline_security_headers():
+    resp = await http_dashboard_redesign(_req("../http_api.py"))
+    assert resp.status_code == 400
+    _assert_security_headers(resp.headers)

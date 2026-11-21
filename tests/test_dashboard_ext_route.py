@@ -79,11 +79,25 @@ def test_extensions_are_not_public(ext_dir, path):
     r = _client(ANON).get(f"/dashboard/ext/{path}")
     assert r.status_code == 401
     assert "Queue" not in r.text
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
 def test_rejects_traversal_and_other_types(ext_dir):
     c = _client(TRUSTED)
     assert c.get("/dashboard/ext/../outside.js").status_code in (400, 404)
     assert c.get("/dashboard/ext/%2e%2e/outside.js").status_code in (400, 404)
-    assert c.get("/dashboard/ext/notes.md").status_code == 403
-    assert c.get("/dashboard/ext/missing.js").status_code == 404
+    forbidden = c.get("/dashboard/ext/notes.md")
+    assert forbidden.status_code == 403
+    assert forbidden.headers["x-content-type-options"] == "nosniff"
+    assert forbidden.headers["referrer-policy"] == "no-referrer"
+    assert forbidden.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in forbidden.headers["content-security-policy"]
+    missing = c.get("/dashboard/ext/missing.js")
+    assert missing.status_code == 404
+    assert missing.headers["x-content-type-options"] == "nosniff"
+    assert missing.headers["referrer-policy"] == "no-referrer"
+    assert missing.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in missing.headers["content-security-policy"]
