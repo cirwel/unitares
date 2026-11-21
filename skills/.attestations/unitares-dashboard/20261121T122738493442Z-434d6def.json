@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-21T10:07:03Z",
+  "verified_at": "2026-11-21T12:27:38Z",
   "verified_date": "2026-11-21",
-  "verifier": "gemini: re-checked skills/unitares-dashboard/SKILL.md against src/http_routes/telemetry.py audit-DB full-field HMAC verification and provenance_mac stripping (dashboard endpoints/views unchanged)",
+  "verifier": "gemini-4-neon-high: re-checked unitares-dashboard after queue merge with master (telemetry.py strips provenance_mac only; no dashboard API or schema change)",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "6ec22f988af49425",
@@ -29,13 +29,13 @@
     "unitares/src/http_routes/connectors.py": "4397034d3c844dc7",
     "unitares/src/http_routes/dashboard.py": "0c00830ee2f2a569",
     "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
-    "unitares/src/http_routes/telemetry.py": "ea0e9ccc3ec4e335",
+    "unitares/src/http_routes/telemetry.py": "238a63deccc2d82b",
     "unitares/src/oauth_connectors.py": "370658a9f3414d3b"
   },
   "skill_digest": "ed8c417af389aaf4",
   "superseded_digests": {
     "unitares/src/http_routes/telemetry.py": [
-      "162ce2acbd69262e"
+      "a6747509bc3f8cae"
     ]
   }
 }
