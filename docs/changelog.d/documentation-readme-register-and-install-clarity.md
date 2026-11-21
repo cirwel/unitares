@@ -1,1 +1,1 @@
-- **README:** tighten landing-page register, unpack `#install` stack and lifecycle-update guidance, deduplicate cross-section repetition, and align companion-plugin client coverage with Claude Code, Codex, and ChatGPT.
+- **README:** tighten landing-page register, unpack `#install` stack and lifecycle-update guidance, deduplicate cross-section repetition, and distinguish `unitares-governance-plugin` hook/lease support in Claude Code and Codex from its hook-free skill package for ChatGPT (#3357).
