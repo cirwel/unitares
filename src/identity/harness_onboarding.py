@@ -15,9 +15,12 @@ stays descriptive and never affects policy (``onboard_provenance``).
 
 Unset, the policy follows exposure. A server listening on loopback is reached
 by its own operator and defaults to ``welcome``. A server listening beyond
-loopback defaults to ``agent_only`` until its operator says otherwise. A
-loopback server published through a proxy or tunnel is exposed in fact and
-still reads as loopback here: set the policy deliberately for those.
+loopback, or one that brings up its separate public listener for a tunnel,
+defaults to ``agent_only`` until its operator says otherwise. The server
+records what it actually bound at startup (``record_listen_exposure``), so a
+``--host`` given on the command line counts. A loopback server published by a
+proxy this process knows nothing about still reads as loopback: set the policy
+deliberately for those.
 
 A nested process's identity may also carry ``spawned_under``: the thread
 anchor of the conversation it was started inside, as its adapter observed it.
@@ -55,7 +58,24 @@ def is_loopback_host(host: object) -> bool:
         return False
 
 
+# What the running server bound, recorded once at startup. None before that
+# and in anything that is not the server process (tests, generators), where
+# the environment's default listen address is the best available reading.
+_recorded_host: Optional[str] = None
+_recorded_public_listener = False
+
+
+def record_listen_exposure(host: Optional[str], *, public_listener: bool = False) -> None:
+    """Record the address the main listener bound and whether the public
+    listener is up. Called by server startup; the default policy reads it."""
+    global _recorded_host, _recorded_public_listener
+    _recorded_host = host if isinstance(host, str) and host.strip() else None
+    _recorded_public_listener = bool(public_listener)
+
+
 def _listen_host() -> str:
+    if _recorded_host is not None:
+        return _recorded_host
     from src.mcp_listen_config import default_listen_host
 
     return default_listen_host()
@@ -73,7 +93,7 @@ def harness_onboarding_policy(
     if declared in HARNESS_ONBOARDING_POLICIES:
         return cast(HarnessOnboardingPolicy, declared), "explicit"
     host = listen_host if listen_host is not None else _listen_host()
-    if is_loopback_host(host):
+    if is_loopback_host(host) and not _recorded_public_listener:
         return "welcome", "default_loopback"
     return "agent_only", "default_exposed"
 

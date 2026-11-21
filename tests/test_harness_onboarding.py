@@ -14,6 +14,7 @@ from src.identity.harness_onboarding import (
     harness_onboarding_summary,
     is_loopback_host,
     normalize_spawned_under,
+    record_listen_exposure,
 )
 
 NOW = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
@@ -23,6 +24,9 @@ NOW = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
 def _no_ambient_policy(monkeypatch):
     for name in (HARNESS_ONBOARDING_ENV, "UNITARES_MCP_HOST", "UNITARES_BIND_ALL_INTERFACES"):
         monkeypatch.delenv(name, raising=False)
+    record_listen_exposure(None)
+    yield
+    record_listen_exposure(None)
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.53", "::1", "[::1]", "localhost", " LOCALHOST "])
@@ -122,3 +126,37 @@ def test_nothing_declared_is_nothing_stored():
 def test_malformed_spawned_under_is_rejected(value):
     with pytest.raises(ValueError):
         normalize_spawned_under(value)
+
+
+@pytest.mark.parametrize("host,public,expected", [
+    ("127.0.0.1", False, ("welcome", "default_loopback")),
+    ("localhost", False, ("welcome", "default_loopback")),
+    # --host on the command line, with nothing in the environment.
+    ("0.0.0.0", False, ("agent_only", "default_exposed")),
+    ("192.168.1.10", False, ("agent_only", "default_exposed")),
+    # Loopback main listener, with the public listener up for a tunnel.
+    ("127.0.0.1", True, ("agent_only", "default_exposed")),
+])
+def test_the_default_follows_what_the_server_actually_bound(host, public, expected):
+    record_listen_exposure(host, public_listener=public)
+    assert harness_onboarding_policy() == expected
+
+
+def test_what_was_bound_outranks_the_environment_default(monkeypatch):
+    monkeypatch.setenv("UNITARES_BIND_ALL_INTERFACES", "1")
+    record_listen_exposure("127.0.0.1")
+    assert harness_onboarding_policy() == ("welcome", "default_loopback")
+
+
+def test_the_operators_setting_outranks_what_was_bound(monkeypatch):
+    record_listen_exposure("0.0.0.0", public_listener=True)
+    monkeypatch.setenv(HARNESS_ONBOARDING_ENV, "welcome")
+    assert harness_onboarding_policy() == ("welcome", "explicit")
+
+
+def test_server_startup_records_the_bound_address():
+    """The default must not depend on someone remembering to call this."""
+    from pathlib import Path
+
+    source = (Path(__file__).parent.parent / "src" / "mcp_server.py").read_text()
+    assert "record_listen_exposure(args.host, public_listener=_public_socket is not None)" in source
