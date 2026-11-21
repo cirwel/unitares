@@ -312,12 +312,23 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             dedup[f.fingerprint] = now
             brand_new.append(f)
 
-        # Existing dismissed+fp fingerprints (for expired-dedup self-match guard).
-        existing_fp_fingerprints = {
+        # Existing dismissed+fp fingerprints and propagated dismissed+dup
+        # copies (for expired-dedup self-match guard). Without including
+        # propagated dup copies here, rescanning a sibling worktree after
+        # FINDINGS_TTL_DAYS drops its dedup entry would append a second open
+        # row with the same fingerprint.
+        existing_suppressed_fingerprints = {
             fp
             for row in existing_rows
             if row.get("status") == "dismissed"
-            and row.get("resolution_reason") == "fp"
+            and (
+                row.get("resolution_reason") == "fp"
+                or (
+                    row.get("resolution_reason") == "dup"
+                    and isinstance(row.get("duplicate_of"), str)
+                    and bool(row.get("duplicate_of"))
+                )
+            )
             and isinstance((fp := row.get("fingerprint")), str)
             and fp
         }
@@ -385,7 +396,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
         fresh: list[Finding] = []
         rows_to_append: list[dict[str, Any]] = []
         for f, resolved in zip(brand_new, new_resolved):
-            if f.fingerprint in existing_fp_fingerprints:
+            if f.fingerprint in existing_suppressed_fingerprints:
                 continue
             prior_fp: str | None = None
             if resolved is not None:

@@ -645,6 +645,56 @@ class TestPersistFindingsFpCarryOver:
         assert rows[0]["resolution_reason"] == "fp"
         assert "duplicate_of" not in rows[0]
 
+    def test_expired_dedup_on_propagated_dup_copy_does_not_resurface_or_duplicate(
+        self,
+        isolated_findings_state: Path,
+        tmp_path: Path,
+    ):
+        """After FINDINGS_TTL_DAYS expires a sibling worktree's dedup entry,
+        rescanning the propagated dismissed/dup copy must refresh dedup without
+        re-opening or appending a colliding duplicate-fingerprint row — whether
+        or not the original fp row is still present."""
+        trees = _repo_with_worktrees(tmp_path, "feat-a")
+        prior_fp = "aaaa000000000001"
+        _write_rows(
+            isolated_findings_state,
+            [
+                _make_row(
+                    prior_fp,
+                    trees["main"] / "pkg/mod.py",
+                    line=3,
+                    status="dismissed",
+                    resolution_reason="fp",
+                )
+            ],
+        )
+
+        wt_copy = _make_finding(trees["feat-a"] / "pkg/mod.py", line=15)
+        assert persist_findings([wt_copy]) == []
+        assert len(_read_rows(isolated_findings_state)) == 2
+
+        # Simulate dedup TTL expiry by clearing dedup.json.
+        (isolated_findings_state / "dedup.json").write_text("{}")
+
+        assert persist_findings([wt_copy]) == []
+        rows = _read_rows(isolated_findings_state)
+        assert len(rows) == 2
+        assert [r["fingerprint"] for r in rows].count(wt_copy.fingerprint) == 1
+        assert rows[1]["status"] == "dismissed"
+        assert rows[1]["resolution_reason"] == "dup"
+        assert rows[1]["duplicate_of"] == prior_fp
+        dedup_after = json.loads((isolated_findings_state / "dedup.json").read_text())
+        assert wt_copy.fingerprint in dedup_after
+
+        # Even if the original fp row was compacted away, the remaining
+        # propagated dup row still prevents resurfacing on dedup expiry.
+        _write_rows(isolated_findings_state, [rows[1]])
+        (isolated_findings_state / "dedup.json").write_text("{}")
+        assert persist_findings([wt_copy]) == []
+        rows_after_compact = _read_rows(isolated_findings_state)
+        assert len(rows_after_compact) == 1
+        assert rows_after_compact[0]["status"] == "dismissed"
+
     def test_persist_without_matching_fp_spawns_no_git_subprocesses(
         self,
         isolated_findings_state: Path,

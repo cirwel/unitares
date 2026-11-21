@@ -79,10 +79,10 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         severity = str(row.get("severity") or "?")
         by_status[status] += 1
 
-        is_propagated_dup = (
-            str(row.get("resolution_reason") or "") == "dup"
-            or bool(row.get("duplicate_of"))
-        )
+        # Propagated worktree-copy rows always carry duplicate_of=<target_fp>.
+        # Standalone manual `--dismiss --reason dup` rows have no duplicate_of
+        # and stay counted in pattern and daily resolution stats.
+        is_propagated_dup = bool(str(row.get("duplicate_of") or "").strip())
 
         bucket = by_pattern[pattern]
         if status in ("confirmed", "dismissed"):
