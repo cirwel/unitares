@@ -405,7 +405,7 @@ def reading_insufficient(
     *,
     hold_unread: bool,
     behavioral_confidence: Any,
-    attainable_confidence: Any,
+    checkin_confidence: Any,
     behavioral_enabled: bool,
     phi_telemetry: bool,
 ) -> bool:
@@ -421,8 +421,8 @@ def reading_insufficient(
     ``insufficient_reading``.
 
     Cold start ends where an agent that supplied everything would have
-    reached authority: ``attainable_confidence``
-    (``BehavioralEISV.attainable_confidence``) at the threshold, which under
+    reached authority: ``checkin_confidence``
+    (``BehavioralEISV.checkin_confidence``) at the threshold, which under
     the hold is check-in 6, because the sensor cannot read on the first three.
     Until then the prior decides, so an alarming first few check-ins keep
     their verdict while no behavioral reading is possible yet. False whenever
@@ -433,12 +433,12 @@ def reading_insufficient(
     if not (hold_unread and behavioral_enabled and phi_telemetry):
         return False
     confidence = _finite_number(behavioral_confidence)
-    attainable = _finite_number(attainable_confidence)
-    if confidence is None or attainable is None:
+    by_checkins = _finite_number(checkin_confidence)
+    if confidence is None or by_checkins is None:
         return False
     return (
         confidence < BEHAVIORAL_AUTHORITY_THRESHOLD
-        and attainable >= BEHAVIORAL_AUTHORITY_THRESHOLD
+        and by_checkins >= BEHAVIORAL_AUTHORITY_THRESHOLD
     )
 
 

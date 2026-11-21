@@ -426,7 +426,7 @@ class BehavioralEISV:
         return count / BOOTSTRAP_UPDATES
 
     @property
-    def attainable_confidence(self) -> float:
+    def checkin_confidence(self) -> float:
         """The confidence this state could have reached by now.
 
         It is the bootstrap ramp counted over every check-in the sensor could

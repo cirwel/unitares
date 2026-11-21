@@ -26,7 +26,7 @@ def _insufficient(**overrides) -> bool:
     arguments = dict(
         hold_unread=True,
         behavioral_confidence=0.0,
-        attainable_confidence=1.0,
+        checkin_confidence=1.0,
         behavioral_enabled=True,
         phi_telemetry=True,
     )
@@ -43,8 +43,8 @@ def test_past_cold_start_with_nothing_read_is_insufficient():
 
 def test_cold_start_by_checkin_count_stays_with_the_prior():
     below = BEHAVIORAL_AUTHORITY_THRESHOLD - 0.1
-    assert _insufficient(attainable_confidence=below) is False
-    assert _insufficient(attainable_confidence=BEHAVIORAL_AUTHORITY_THRESHOLD) is True
+    assert _insufficient(checkin_confidence=below) is False
+    assert _insufficient(checkin_confidence=BEHAVIORAL_AUTHORITY_THRESHOLD) is True
 
 
 def test_a_state_with_authority_is_not_insufficient():
@@ -65,7 +65,7 @@ def test_a_little_read_is_treated_like_nothing_read():
         # Phi configured to floor the verdict is an authority the operator chose.
         {"phi_telemetry": False},
         {"behavioral_confidence": None},
-        {"attainable_confidence": None},
+        {"checkin_confidence": None},
         {"behavioral_confidence": float("nan")},
     ],
 )
@@ -73,22 +73,22 @@ def test_the_rule_is_off_outside_its_scope(overrides):
     assert _insufficient(**overrides) is False
 
 
-def test_attainable_confidence_skips_the_checkins_the_sensor_cannot_read():
+def test_checkin_confidence_skips_the_checkins_the_sensor_cannot_read():
     from src.behavioral_sensor import SENSOR_MIN_HISTORY
 
     state = BehavioralEISV()
     for _ in range(SENSOR_MIN_HISTORY):
         state.update(None, None, None)
     assert state.confidence == 0.0
-    assert state.attainable_confidence == 0.0
+    assert state.checkin_confidence == 0.0
     for _ in range(3):
         state.update(None, None, None)
     # Check-in 6: where an agent that supplied everything reaches authority.
     assert state.update_count == 6
-    assert state.attainable_confidence == pytest.approx(BEHAVIORAL_AUTHORITY_THRESHOLD)
+    assert state.checkin_confidence == pytest.approx(BEHAVIORAL_AUTHORITY_THRESHOLD)
     for _ in range(BOOTSTRAP_UPDATES):
         state.update(None, None, None)
-    assert state.attainable_confidence == 1.0
+    assert state.checkin_confidence == 1.0
 
 
 def test_the_sensor_reads_nothing_before_its_minimum_history():
@@ -118,16 +118,16 @@ def test_a_supplying_agent_has_authority_exactly_where_cold_start_ends():
             state.update(0.7, 0.7, 0.2)
         assert not _insufficient(
             behavioral_confidence=state.confidence,
-            attainable_confidence=state.attainable_confidence,
+            checkin_confidence=state.checkin_confidence,
         ), index
 
 
-def test_attainable_confidence_equals_confidence_with_the_hold_off(monkeypatch):
+def test_checkin_confidence_equals_confidence_with_the_hold_off(monkeypatch):
     monkeypatch.setenv("UNITARES_HOLD_UNREAD_AXES", "0")
     state = BehavioralEISV()
     for _ in range(4):
         state.update(0.7, 0.7, 0.2)
-        assert state.attainable_confidence == state.confidence
+        assert state.checkin_confidence == state.confidence
 
 
 def test_an_agent_whose_readings_went_stale_becomes_insufficient():
@@ -135,12 +135,12 @@ def test_an_agent_whose_readings_went_stale_becomes_insufficient():
     for _ in range(12):
         state.update(0.7, 0.7, 0.2)
     assert not _insufficient(
-        behavioral_confidence=state.confidence, attainable_confidence=state.attainable_confidence
+        behavioral_confidence=state.confidence, checkin_confidence=state.checkin_confidence
     )
     for _ in range(STALE_AFTER_UPDATES):
         state.update(None, None, None)
     assert _insufficient(
-        behavioral_confidence=state.confidence, attainable_confidence=state.attainable_confidence
+        behavioral_confidence=state.confidence, checkin_confidence=state.checkin_confidence
     )
 
 
