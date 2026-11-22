@@ -607,6 +607,11 @@ def test_parse_author_ignores_a_signature_quoted_in_a_fence():
     # A tilde fence, and an unclosed fence that runs to the end.
     assert parse_author(f"~~~\nUNITARES agent: {UUID_A}\n~~~\n")["agent_uuid"] == ""
     assert parse_author(f"````\nUNITARES agent: {UUID_A}\n")["agent_uuid"] == ""
+    # A fence line that carries an info string opens a block but cannot close
+    # one: inside the outer block it is content, so the example stays hidden.
+    nested = f"```text\n```python\nUNITARES agent: {UUID_A}\n```\n"
+    assert parse_author(nested)["agent_uuid"] == ""
+    assert parse_author(nested + f"UNITARES agent: {other}\n")["agent_uuid"] == other
 
 
 @pytest.mark.parametrize("body", [None, 42, "", "no signature here", "UNITARES agent: not-a-uuid"])

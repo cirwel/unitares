@@ -298,7 +298,13 @@ def _without_fenced_blocks(body: str) -> str:
     for line in body.splitlines(keepends=True):
         match = _FENCE_RE.match(line)
         if fence:
-            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
+            # A closing fence carries nothing but whitespace after its run.
+            if (
+                match
+                and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= len(fence)
+                and not line[match.end():].strip()
+            ):
                 fence = ""
             continue
         if match:
