@@ -73,6 +73,9 @@ class _FakeConn:
     async def fetchrow(self, *_a, **_k):
         return self._row
 
+    async def fetchval(self, *_a, **_k):
+        return False  # no purge watermark at or after the grant
+
     async def execute(self, *_a, **_k):
         if self._execute_exc:
             raise self._execute_exc
@@ -576,3 +579,38 @@ def test_a_grant_carrying_the_reserved_watermark_key_is_vetoed():
     assert j["binding_ok"] is False
     assert j["vetoed"] is True
     assert "binding_bad_nonce" in r.text
+
+
+@pytest.mark.asyncio
+async def test_a_replay_racing_an_uncommitted_purge_is_still_refused():
+    """A purge has deleted a consumed nonce and advanced the watermark but not
+    yet committed; the clock has been set back, so the grant verifies again.
+    The replay's consume waits on the deleted row and runs after the purge
+    commits, and must still be refused."""
+    import asyncpg
+
+    from src.effect_grant import GRANT_CLOCK_SKEW_SECONDS, MAX_GRANT_TTL_SECONDS
+    from src.http_routes.effects import _purge_consumed_nonces
+    from tests.test_db_utils import TEST_DB_URL
+
+    conn = await _real_db_conn()
+    purger = await asyncpg.connect(TEST_DB_URL)
+    try:
+        now = int(await conn.fetchval("SELECT extract(epoch FROM now())"))
+        nonce, exp = _PURGE_PREFIX + "race", now + 30
+        assert await _consume(conn, nonce, exp) == "INSERT 0 1"
+
+        txn = purger.transaction()
+        await txn.start()
+        try:
+            later = exp + MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS + 1
+            await _purge_consumed_nonces(purger, now=later)
+            replay = asyncio.create_task(_consume(conn, nonce, exp))
+            await asyncio.sleep(0.3)
+            assert not replay.done()  # waiting on the purge's deleted row
+        finally:
+            await txn.commit()
+        assert await asyncio.wait_for(replay, timeout=5) == "INSERT 0 0"
+    finally:
+        await purger.close()
+        await _close_real_db_conn(conn)

@@ -291,10 +291,17 @@ async def _consume_nonce(conn, nonce: str, exp: int) -> str:
 
     ``INSERT 0 1`` means first use. ``INSERT 0 0`` means the nonce is already
     in the ledger, or the grant expired no later than the purge watermark, so
-    a purged earlier use cannot be ruled out. One statement, so there is no
-    gap between the check and the insert.
+    a purged earlier use cannot be ruled out.
+
+    The insert and its watermark check are one statement, but that is not
+    enough against a purge in flight. A purge that has deleted this nonce and
+    not yet committed leaves the insert waiting on the deleted row; once the
+    purge commits, the insert goes through, judged against the watermark the
+    statement read before the purge. So a successful insert is checked again
+    in a new statement, which reads the committed watermark: a purge that
+    freed this nonce has committed by then, since the insert waited for it.
     """
-    return await conn.execute(
+    result = await conn.execute(
         """
         INSERT INTO effects.consumed_nonces (nonce, grant_exp)
         SELECT $1, to_timestamp($2)
@@ -306,6 +313,17 @@ async def _consume_nonce(conn, nonce: str, exp: int) -> str:
         """,
         nonce, int(exp), _PURGE_WATERMARK_KEY,
     )
+    if str(result).split()[-1] == "1" and await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM effects.consumed_nonces
+            WHERE nonce = $1 AND grant_exp >= to_timestamp($2)
+        )
+        """,
+        _PURGE_WATERMARK_KEY, int(exp),
+    ):
+        return "INSERT 0 0"
+    return result
 
 
 async def _run_nonce_purge(db) -> None:
