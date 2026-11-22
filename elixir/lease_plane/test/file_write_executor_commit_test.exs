@@ -46,6 +46,21 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
     def rm(path), do: EffectFileOps.rm(path)
   end
 
+  # The real seam, with a FIFO created at the leased path just AFTER the
+  # pre-image read found nothing there.
+  defmodule FifoAfterReadFileOps do
+    alias UnitaresLeasePlane.EffectFileOps
+
+    def read(path) do
+      result = EffectFileOps.read(path)
+      {_, 0} = System.cmd("mkfifo", [path])
+      result
+    end
+
+    def write(path, bytes), do: EffectFileOps.write(path, bytes)
+    def rm(path), do: EffectFileOps.rm(path)
+  end
+
   # NOTE: this fake is deliberately lenient — it exercises the EXECUTOR's commit
   # logic in isolation (write / mark / compensation), assuming the durable row
   # already exists (the DISPATCH inserts it). It does NOT model the real
@@ -191,5 +206,20 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
     refute File.exists?(target)
     refute_received {:repo, :mark_committed}
     assert_received {:repo, {:quarantine, "eC7"}}
+  end
+
+  @tag :tmp_dir
+  test "an entry that appears after an absent pre-image is left in place", %{
+    payload: p,
+    leases: l
+  } do
+    path = p["path"]
+    Application.put_env(:lease_plane, :effect_file_ops, FifoAfterReadFileOps)
+    on_exit(fn -> File.rm(path) end)
+
+    assert {:rejected, :rollback_failed} = FileWriteExecutor.apply_effect("eC8", p, l)
+    assert {:ok, %File.Stat{type: :other}} = File.lstat(path)
+    assert_received {:repo, {:quarantine, "eC8"}}
+    refute_received {:repo, {:tombstone, _}}
   end
 end
