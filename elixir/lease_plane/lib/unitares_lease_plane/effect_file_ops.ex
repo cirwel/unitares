@@ -30,14 +30,19 @@ defmodule UnitaresLeasePlane.EffectFileOps do
 
     * a symbolic link at any component, the leaf included, fails the open
       (`{:error, :symlink_in_path}`); nothing is created or followed;
-    * an existing leaf is opened read-write WITHOUT `O_CREAT` and without
-      truncation. It is truncated and written only after `fstat` on that
-      descriptor shows a regular file with a single link;
+    * an existing leaf is opened write-only WITHOUT `O_CREAT` and without
+      truncation, so a file the service may write but not read is written as
+      before. It is truncated and written only after `fstat` on that
+      descriptor shows a regular file with a single link. A FIFO with no
+      reader fails that open with `ENXIO`, reported as `:not_regular_file`;
     * a missing leaf is created with `O_CREAT|O_EXCL|O_NOFOLLOW` inside the
       directory already held. An entry that appears in between is retried once
       under the overwrite rule above;
-    * `rm/1` unlinks the leaf name inside the directory already held, and
-      refuses a leaf that is a link;
+    * `rm/1` unlinks the leaf name inside the directory already held. It
+      refuses a link, a non-regular leaf and a hard-linked leaf: compensation
+      removes only what a refused write could have created, a regular file
+      with one link, so an entry another process put there is left for the
+      operator;
     * opens use `O_NONBLOCK`, so a FIFO swapped in never blocks the executor.
 
   `read/1` and `write/2` accept only a regular file with a single link. A
@@ -73,7 +78,7 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   @helper ~S"""
   use strict;
   use warnings;
-  use Fcntl qw(O_RDONLY O_WRONLY O_RDWR O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK O_NOCTTY O_DIRECTORY);
+  use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK O_NOCTTY O_DIRECTORY);
   use Errno ();
   use Config ();
   $| = 1;
@@ -83,7 +88,8 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   sub fail_errno {
     fail($!{ELOOP} ? "symlink_in_path" : $!{ENOENT} ? "enoent" : $!{ENOTDIR} ? "enotdir"
        : $!{EACCES} ? "eacces" : $!{EPERM} ? "eperm" : $!{EEXIST} ? "eexist"
-       : $!{EISDIR} ? "eisdir" : $!{ENOSPC} ? "enospc" : $!{EROFS} ? "erofs" : "io_error");
+       : $!{EISDIR} ? "eisdir" : $!{ENOSPC} ? "enospc" : $!{EROFS} ? "erofs"
+       : $!{ENXIO} ? "not_regular_file" : "io_error");
   }
   sub check_leaf {
     my @st = stat($_[0]) or fail_errno();
@@ -154,7 +160,7 @@ defmodule UnitaresLeasePlane.EffectFileOps do
   if ($op eq "write") {
     my $f;
     OPEN: for my $attempt (1, 2) {
-      if (sysopen($f, $leaf, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY)) {
+      if (sysopen($f, $leaf, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY)) {
         check_leaf($f);
         truncate($f, 0) or fail_errno();
         last OPEN;
@@ -173,8 +179,10 @@ defmodule UnitaresLeasePlane.EffectFileOps do
     exit 0;
   }
   if ($op eq "rm") {
-    lstat($leaf) or fail_errno();
+    my @st = lstat($leaf) or fail_errno();
     -l _ and fail("symlink_in_path");
+    -f _ or fail("not_regular_file");
+    $st[3] == 1 or fail("hardlinked_leaf");
     unlink($leaf) or fail_errno();
     exit 0;
   }

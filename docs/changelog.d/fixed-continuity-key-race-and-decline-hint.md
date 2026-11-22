@@ -1,0 +1,2 @@
+- **identity:** two servers starting at once against a missing continuity key no longer race. The generated key is written to a private temporary file and hard-linked into place, so the key path never exists empty and the second server reads the first one's key instead of refusing to start.
+- **identity:** the harness-onboarding decline now tells the agent to call `start_session(force_new=true)`. The bare `start_session()` it named is refused as `lineage_declaration_required` on a strict server.
