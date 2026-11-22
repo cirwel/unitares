@@ -1,0 +1,1 @@
+- **release:** the weekly server release-sync report now flags a `VERSION` that has led every tag for more than two days (`source_version_untagged`), with the tag command for the commit that set it. v4.0.0 sat prepared and untagged from 2026-11-06 to 2026-11-21 while the report said "synced".

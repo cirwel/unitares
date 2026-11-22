@@ -6,9 +6,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ci"))
 
 import io  # noqa: E402
+import os  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
 import urllib.error  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -48,6 +50,70 @@ def test_source_may_lead_the_newest_tag_between_releases():
         digests={"latest": B, "v2.23.0": B},
     )
     assert report["synced"] is True
+
+
+def test_release_prepared_and_never_tagged_is_drift():
+    """The 2026-11-21 state: #3217 set VERSION to 4.0.0 on 2026-11-06 and no tag followed."""
+    report = assess(
+        source="4.0.0",
+        published="3.6.0",
+        tagged={"3.5.0", "3.6.0"},
+        on_head={"3.5.0", "3.6.0"},
+        released={"3.5.0", "3.6.0"},
+        digests={"latest": B, "v3.6.0": B, "v3.5.0": A},
+        source_age=timedelta(days=15),
+        source_age_read=True,
+        source_commit="8c343e85f",
+    )
+    assert report["synced"] is False
+    assert _codes(report) == {"source_version_untagged"}
+    issue = report["issues"][0]
+    assert issue["next_command"].startswith('git tag -s v4.0.0 8c343e85f -m "UNITARES v4.0.0"')
+    assert "for 15 days" in issue["detail"]
+
+
+def test_release_inside_the_tagging_window_is_not_drift():
+    report = assess(
+        source="4.0.0",
+        published="3.6.0",
+        tagged={"3.6.0"},
+        on_head={"3.6.0"},
+        released={"3.6.0"},
+        digests={"latest": B, "v3.6.0": B},
+        source_age=timedelta(hours=6),
+        source_age_read=True,
+    )
+    assert report["synced"] is True
+
+
+def test_undatable_source_version_is_not_collapsed_to_fresh():
+    report = assess(
+        source="4.0.0",
+        published="3.6.0",
+        tagged={"3.6.0"},
+        on_head={"3.6.0"},
+        released={"3.6.0"},
+        digests={"latest": B, "v3.6.0": B},
+        source_age=None,
+        source_age_read=True,
+    )
+    assert _codes(report) == {"source_version_untagged"}
+    assert "<release-commit-sha>" in report["issues"][0]["next_command"]
+
+
+def test_tagged_source_version_is_not_reported_as_untagged():
+    report = assess(
+        source="4.0.0",
+        published="3.6.0",
+        tagged={"3.6.0", "4.0.0"},
+        on_head={"3.6.0", "4.0.0"},
+        released={"3.6.0", "4.0.0"},
+        digests={"latest": B, "v3.6.0": B, "v4.0.0": C},
+        source_age=timedelta(days=15),
+        source_age_read=True,
+    )
+    assert "source_version_untagged" not in _codes(report)
+    assert "release_awaiting_publication" in _codes(report)
 
 
 def test_stalled_maintenance_release_reports_every_split():
@@ -231,6 +297,36 @@ def test_tags_and_ancestry_come_from_the_checkout(tmp_path):
     assert server_release_sync.tagged_versions(repo) == {"2.22.0", "2.22.1"}
     assert server_release_sync.tag_on_head(repo, "2.22.0") is True
     assert server_release_sync.tag_on_head(repo, "2.22.1") is False
+
+
+def test_source_age_is_read_from_the_commit_that_set_version(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "master")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "VERSION").write_text("4.0.0\n")
+    _git(repo, "add", "VERSION")
+    env_date = "2026-11-06T07:00:00+00:00"
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "prepare v4.0.0"],
+        check=True,
+        capture_output=True,
+        env={**os.environ, "GIT_COMMITTER_DATE": env_date, "GIT_AUTHOR_DATE": env_date},
+    )
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "later work")
+
+    now = datetime(2026, 11, 21, 7, 0, tzinfo=timezone.utc)
+    age, sha = server_release_sync.source_untagged_for(repo, now=now)
+    assert age == timedelta(days=15)
+    expected = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD~1"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert sha == expected
+
+
+def test_source_age_outside_a_checkout_is_unreadable(tmp_path):
+    assert server_release_sync.source_untagged_for(tmp_path) == (None, None)
 
 
 def test_unreadable_registry_is_indeterminate_not_synced(tmp_path, monkeypatch):

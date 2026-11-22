@@ -9,7 +9,7 @@ closes that issue once the surfaces converge.
 
 Each surface is read from its own authority:
 
-* source intent: ``VERSION``;
+* source intent: ``VERSION``, and when it was last set on this checkout;
 * verified publication: ``PUBLISHED_VERSION``;
 * release trigger: the local ``v*`` tag set, and its ancestry on this checkout;
 * release page: the GitHub releases API;
@@ -30,6 +30,7 @@ import ssl
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,11 @@ SERVER_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 RELEASE_BY_TAG = f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{{tag}}"
 GHCR_TOKEN = f"https://ghcr.io/token?scope=repository:{REPOSITORY}:pull&service=ghcr.io"
 GHCR_MANIFEST = f"https://ghcr.io/v2/{REPOSITORY}/manifests/{{ref}}"
+# RELEASE_PROCESS.md step 5 tags the merged release commit immediately. A
+# VERSION that has led every tag for longer than this is a release prepared on
+# master and never tagged, not one still being cut (v4.0.0 sat that way from
+# 2026-11-06 to 2026-11-21 while this report said "synced").
+UNTAGGED_GRACE = timedelta(days=2)
 MANIFEST_TYPES = ", ".join(
     (
         "application/vnd.oci.image.index.v1+json",
@@ -76,6 +82,25 @@ def tagged_versions(root: Path = REPO_ROOT) -> set[str]:
 
 def tag_on_head(root: Path, version: str) -> bool:
     return _git(root, "merge-base", "--is-ancestor", f"v{version}", "HEAD").returncode == 0
+
+
+def source_untagged_for(
+    root: Path, now: datetime | None = None
+) -> tuple[timedelta | None, str | None]:
+    """How long ago the commit that last set ``VERSION`` landed, and its sha.
+
+    ``(None, None)`` when the checkout cannot date it; the caller must not
+    read that as "just set".
+    """
+    result = _git(root, "log", "-1", "--format=%H %cI", "--", "VERSION")
+    if result.returncode != 0 or not result.stdout.strip():
+        return None, None
+    sha, stamp = result.stdout.split()
+    try:
+        landed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None, sha
+    return (now or datetime.now(timezone.utc)) - landed, sha
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -149,10 +174,43 @@ def assess(
     on_head: set[str],
     released: set[str],
     digests: dict[str, str | None],
+    source_age: timedelta | None = None,
+    source_age_read: bool = False,
+    source_commit: str | None = None,
 ) -> dict[str, Any]:
-    """Return every disagreement; never collapse an unread surface to clean."""
+    """Return every disagreement; never collapse an unread surface to clean.
+
+    ``source_age`` is how long ``VERSION`` has held its value on this checkout.
+    A caller that read it passes ``source_age_read=True``; an unreadable age
+    then counts as past the grace window rather than as freshly set.
+    """
     issues: list[dict[str, str]] = []
     newest = max(tagged, key=_key) if tagged else None
+
+    if source_age_read and source not in tagged and (
+        newest is None or _key(source) > _key(newest)
+    ):
+        if source_age is None or source_age > UNTAGGED_GRACE:
+            commit = source_commit or "<release-commit-sha>"
+            next_cmd = (
+                f'git tag -s v{source} {commit} -m "UNITARES v{source}" && '
+                f"unitares-github -- git push origin v{source}"
+            )
+            held = (
+                f"for {source_age.days} days"
+                if source_age is not None
+                else "for an unreadable length of time"
+            )
+            issues.append(
+                {
+                    "code": "source_version_untagged",
+                    "detail": (
+                        f"VERSION has been {source} on master {held}, but v{source} is not tagged; "
+                        f"tag the merged release commit or revert VERSION (next: `{next_cmd}`)"
+                    ),
+                    "next_command": next_cmd,
+                }
+            )
 
     if published not in tagged:
         next_cmd = f'git tag -s v{published} <release-commit-sha> -m "v{published}" && git push origin v{published}'
@@ -296,6 +354,7 @@ def collect(root: Path = REPO_ROOT) -> dict[str, Any]:
     published = _read_version(root, "PUBLISHED_VERSION")
     tagged = tagged_versions(root)
     on_head = {version for version in tagged if tag_on_head(root, version)}
+    source_age, source_commit = source_untagged_for(root)
     newest = sorted(tagged, key=_key)[-5:]
     refs = ["latest", *{f"v{version}" for version in [*newest, published]}]
     try:
@@ -323,6 +382,9 @@ def collect(root: Path = REPO_ROOT) -> dict[str, Any]:
         on_head=on_head,
         released=released,
         digests=digests,
+        source_age=source_age,
+        source_age_read=True,
+        source_commit=source_commit,
     )
 
 
