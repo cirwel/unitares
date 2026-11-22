@@ -652,18 +652,33 @@ latest_label_time() {
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
 
-# <head-sha> -> why this head's `review` does not show two model families;
-# fails when it does, or when there is no `review` check yet (the required
-# checks report that). The review gate turns `review` green on ONE family when
+# <pr> <head-sha> -> why this PR's `review` on this head does not show two
+# model families; fails when it does, or when the head has no `review` check
+# yet (the required checks report that). A check run lives on a commit, not a
+# PR, so two open PRs on one head share their runs. review_gate.py post_check
+# tags each run `unitares-review:<pr>:<head>`; a run tagged for another PR
+# never decides this one, and a head carrying only other PRs' runs has not
+# reported for this one. The review gate turns `review` green on ONE family when
 # an operator waiver covers the second, and says so in the check's title
 # ("second family waived by the operator", review_gate.py apply_waiver). The
 # ruling asks for two families, and a waiver of the second review is not a
 # waiver of that, so a waived head is a hand merge. Unreadable: the same.
 review_waived() {
   local runs title
-  runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
+  runs=$(gh api "repos/$REPO/commits/$2/check-runs?check_name=review&per_page=100" 2>/dev/null) \
     && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
     || { echo "its review check could not be read"; return 0; }
+  # Keep this PR's runs. A run with no tag predates the tag or came from
+  # something other than the gate, and is read as before.
+  runs=$(jq -c --arg id "unitares-review:$1:$2" \
+           '.check_runs as $all
+            | .check_runs = [$all[] | select(.name == "review"
+                                            and ((.external_id // "") as $e | $e == "" or $e == $id))]
+            | .others = ([$all[] | select(.name == "review")] | length) - (.check_runs | length)' <<<"$runs") \
+    || { echo "its review check could not be read"; return 0; }
+  if jq -e '(.check_runs | length) == 0 and .others > 0' <<<"$runs" >/dev/null; then
+    echo "its review check has not reported for this PR (this head carries only other PRs' review runs)"; return 0
+  fi
   # The run that decides, chosen as `rollup` chooses it: skipped runs (a
   # workflow that also fires on `labeled` adds one) never count, and the
   # newest of the rest by start time wins. One still running has no verdict
@@ -846,7 +861,7 @@ while read -r pr; do
     esac
     continue
   fi
-  if [ "$declared_class" = "capability" ] && waived=$(review_waived "$head"); then
+  if [ "$declared_class" = "capability" ] && waived=$(review_waived "$n" "$head"); then
     log "#$n declared ready as Classification: capability, but $waived; skipped"
     notify "$n" declared-capability-waived "$head" "not promoted: this \`Classification: capability\` draft requires two reviewing model families, and $waived."
     continue
@@ -976,7 +991,7 @@ armed_sensitive_reason() {
   if blocker=$(delegation_blocker "$2" "$at"); then
     echo "it touches a governance-sensitive surface ($why) and ${blocker#*$'\t'}"; return 0
   fi
-  blocker=$(review_waived "$(jq -r .headRefOid <<<"$2")") || return 1
+  blocker=$(review_waived "$1" "$(jq -r .headRefOid <<<"$2")") || return 1
   echo "it touches a governance-sensitive surface ($why) and $blocker"
 }
 
@@ -1278,7 +1293,7 @@ while read -r labelled_at n head; do
       esac
       continue
     fi
-    if waived=$(review_waived "$head"); then
+    if waived=$(review_waived "$n" "$head"); then
       log "#$n touches a governance-sensitive surface ($why): $waived; the operator merges it by hand; skipped"
       notify "$n" sensitive-waived "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`), and $waived. The queue lands such a PR only on two reviewing families, so the operator merges this one by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."
       continue
@@ -1413,7 +1428,7 @@ while read -r labelled_at n head; do
   # started since. Any arm on the base, or a fresh operator-armed label, and
   # this tick arms nothing.
   live=$(gh pr list -R "$REPO" --state open --limit 500 --base "$BASE" \
-    --json number,autoMergeRequest,labels) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
+    --json number,autoMergeRequest,labels,body) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
   # PRs this tick just disarmed can still read as armed for a moment.
   if other=$(jq -r --arg skip "$disarmed" '[.[] | select(.autoMergeRequest != null)
                  | select(.number as $x | $skip | contains(" \($x) ") | not) | .number] | first // empty' <<<"$live") \
@@ -1431,6 +1446,12 @@ while read -r labelled_at n head; do
   if [ -n "$delegated" ] && ! jq -e --argjson n "$n" --arg l "$LABEL" \
        'any(.[]; .number == $n and any(.labels[]?; .name == $l))' <<<"$live" >/dev/null; then
     log "#$n lost $LABEL since this tick began (a veto); not armed"
+    continue
+  fi
+  # Likewise its stated effect: the gate read the snapshot's body, and an
+  # edit since then that removed the line would otherwise go unseen.
+  if [ -n "$delegated" ] && ! expected_effect "$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$live")" >/dev/null; then
+    log "#$n lost its Expected effect: line since this tick began; not armed"
     continue
   fi
   # And a veto that was undone: removing and re-adding the label inside the

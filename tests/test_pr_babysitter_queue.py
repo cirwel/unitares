@@ -2314,6 +2314,47 @@ def test_a_review_that_passed_on_a_waiver_is_not_two_families(tmp_path: Path, ti
     assert why in out and "the operator merges it by hand" in out
 
 
+WAIVED = "second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny"
+
+
+def _tagged_run(pr: int, title: str, day: int, head: str = "aaa") -> dict:
+    return {"name": "review", "status": "completed", "conclusion": "success",
+            "external_id": f"unitares-review:{pr}:{head}",
+            "started_at": f"2026-01-0{day}T00:00:00Z", "completed_at": f"2026-01-0{day}T00:01:00Z",
+            "output": {"title": title}}
+
+
+@pytest.mark.parametrize("runs, armed, why", [
+    # Another open PR on the same head passed later; its run is not this PR's.
+    ([_tagged_run(1, WAIVED, 1), _tagged_run(2, "clean (codex, antigravity)", 2)], False,
+     "its review passed on an operator waiver, not on two model families"),
+    # Only the other PR has reported on this head.
+    ([_tagged_run(2, "clean (codex, antigravity)", 2)], False,
+     "its review check has not reported for this PR"),
+    # This PR's own two-family pass still lands it, whatever the other PR's run says.
+    ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None),
+])
+def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs, armed, why) -> None:
+    pr, timeline = _delegable(tmp_path)
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == ([_arm(1, "aaa")] if armed else [])
+    if why:
+        assert why in out
+
+
+def test_an_effect_line_removed_since_the_snapshot_stops_the_arm(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "prs_live.json").write_text(json.dumps([{**pr, "body": "No stated effect any more."}]))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "#1 lost its Expected effect: line since this tick began; not armed" in out
+
+
 def test_the_waiver_wording_the_queue_looks_for_is_the_gates(tmp_path: Path) -> None:
     gate = (Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py").read_text()
     assert 'return ("success", f"second family waived by the operator (' in gate
