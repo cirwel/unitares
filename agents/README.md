@@ -1,6 +1,6 @@
 # agents/
 
-Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/` and `sentinel/` as examples of how to build a resident agent, not as load-bearing governance internals.
+Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `sentinel/` as an example of how to build a resident agent, not as load-bearing governance internals.
 
 These implementations are optional. Installing the server does not select a
 resident fleet or enable a scheduler. Configure names, capabilities, endpoints,
@@ -19,7 +19,6 @@ governance database directly, or receive a privileged measurement path.
 |-------------|--------------------------------------------------------------------------------|
 | `sdk/`      | **Integral.** Public agent-to-governance contract (`unitares-sdk` package).   |
 | `common/`   | Shared helpers used by the residents in this tree (findings, config, log). |
-| `vigil/`    | Reference **janitorial** resident — runs on a schedule, posts health findings. |
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
 | `github_observer/` | Optional **observer**, not a resident: reads CI results, review records and state changes on agent-signed pull requests from GitHub. Dry run only until its write route lands (`docs/proposals/active/github-outcome-observer-v0.md`). |
 | `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin (`scripts/dev/sync-plugin-agents.sh`); see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
@@ -27,9 +26,10 @@ governance database directly, or receive a privileged measurement path.
 ## Residents that have moved out
 
 A deployment's residents belong in its deployment repository, built on the
-public SDK. Two that used to live here moved out on that basis: the
-code-watcher resident (Watcher, `agents/watcher/`) and the daily metrics
-scraper (Chronicler, `agents/chronicler/`). The residents still in this tree
+public SDK. Three that used to live here moved out on that basis: the
+code-watcher resident (Watcher, `agents/watcher/`), the daily metrics
+scraper (Chronicler, `agents/chronicler/`), and the janitorial health
+resident (Vigil, `agents/vigil/`). The residents still in this tree
 are slated to follow. Core keeps only what a deployment-owned resident reads
 through: the Watcher state-location contract (`src/watcher_state_reader.py`)
 and the extra-metrics-catalog mechanism (`UNITARES_METRICS_CATALOG_EXTRA`).
@@ -40,7 +40,7 @@ at `scripts/dev/branch_hygiene/`.
 
 ## Running your own
 
-To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle` pattern shown in `vigil/agent.py` or `sentinel/agent.py`.
+To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle` pattern shown in `sentinel/agent.py`.
 
 Lumen (the embodied agent) lives in a separate repo (`anima-mcp`) and shows that a resident can run **out-of-tree** — it is declared through `UNITARES_RESIDENTS` like any other. It is *not* an SDK consumer, though: it talks to governance directly and imports nothing from `unitares_sdk`. As of 2026-08, every SDK consumer is in this repo, so the `sdk-package` CI job is what stands in for an outside consumer.
 

@@ -32,7 +32,8 @@ selects names only; `GITHUB_SCRAPE_ORG` selects the measured owner.
 
 ## Hook and draft-PR checks
 
-Vigil's hook divergence check requires both `VIGIL_ACTIVITY_PATH` and
+Vigil lives with the deployment that runs it, not in this repository. Its hook
+divergence check requires both `VIGIL_ACTIVITY_PATH` and
 `VIGIL_HOOK_ARTIFACT_PATHS` (colon-separated paths). The activity file must
 advance independently of the hooks; the artifact paths must be written when
 hooks dispatch. Missing configuration produces `not configured` without

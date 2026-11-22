@@ -13,22 +13,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-# Redirect Vigil's log file to a temp path BEFORE any test imports the agent
-# module. The agent's LOG_FILE is resolved at module-import time from the
-# VIGIL_LOG_FILE env var, so this must happen before the first
-# `from agents.vigil.agent import …` anywhere in the test suite.
-#
-# Without this, tests that mock client.audit_knowledge to raise
-# (e.g. RuntimeError("boom")) and call _run_stale_opens_sweep through a real
-# VigilAgent log "stale-opens sweep failed (boom); continuing cycle" to the
-# operator's production Vigil log at ~/Library/Logs/unitares-vigil.log —
-# observed in the wild as a steady stream of test-injected noise.
-os.environ.setdefault(
-    "VIGIL_LOG_FILE",
-    str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
-)
-
-# Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
+# Redirect Python Sentinel's log (#2942) to a temp path BEFORE any test imports
+# the agent module. Even though Python Sentinel is retired,
 # tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
 # to ~/Library/Logs/unitares-sentinel.log unless redirected before import.
 os.environ.setdefault(

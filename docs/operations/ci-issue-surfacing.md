@@ -5,7 +5,7 @@ run deterministic collectors on a PR / on demand, and turn each *new* finding
 into a deduped GitHub issue.
 
 This is the CI-side counterpart to the in-server surfacing agents
-(a deployment's Watcher, `agents/vigil`). Those need a live governance server and an
+(a deployment's Watcher and Vigil residents). Those need a live governance server and an
 LLM detector; a stock GitHub runner has neither. So the CI bridge uses
 collectors that run on a vanilla `ubuntu-latest` with no Postgres, no Ollama,
 and no secrets beyond `GITHUB_TOKEN`.
@@ -96,7 +96,7 @@ and the hidden `<!-- finding-fingerprint: X -->` marker.
 Before this producer, nothing carried a finding into the record at all. The CI
 side files GitHub issues, `scripts/ci/surface_findings.py` emits the findings
 JSON the workflow files them from, and the in-server surfacing agents
-(a deployment's Watcher, `agents/vigil`) read governance anomalies rather than GitHub
+(a deployment's Watcher and Vigil residents) read governance anomalies rather than GitHub
 issues. A finding could therefore sit fully visible on the issue board and be
 entirely absent from the record a later agent searches. The previous section
 names the deduped `ci-finding` issues as the hand-off point a fix loop would

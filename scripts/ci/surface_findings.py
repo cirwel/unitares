@@ -7,7 +7,7 @@ fingerprinted findings feed. A companion GitHub Actions step
 a deduped GitHub issue.
 
 This is the CI-side counterpart to the in-editor / in-server surfacing agents
-(a deployment's Watcher, ``agents/vigil``). Those run against a live governance
+(a deployment's Watcher and Vigil residents). Those run against a live governance
 server and an LLM detector, neither of which exists on a stock GitHub runner.
 The collectors here are stdlib/CLI-only so they run on a vanilla
 ``ubuntu-latest`` with no Postgres, no Ollama, and no secrets beyond the
