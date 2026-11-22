@@ -308,6 +308,49 @@ def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
 
+# <head-sha> -> {"check_runs": [every `review` run on that head]}; fails when
+# they cannot be read. `filter=all`, because GitHub's default returns only the
+# latest run of each name, which on a head shared by two PRs is one PR's.
+review_check_runs() {
+  local pages
+  pages=$(gh api --paginate "repos/$REPO/commits/$1/check-runs?check_name=review&filter=all&per_page=100" 2>/dev/null) \
+    || return 1
+  jq -cs 'if length > 0 and all(.[]; (.check_runs | type) == "array")
+          then {check_runs: [.[].check_runs[] | select(.name == "review")]} else error("unreadable") end' \
+    <<<"$pages" 2>/dev/null
+}
+
+# A check run belongs to a commit, so on a head shared by two PRs each PR's
+# statusCheckRollup carries both PRs' `review` runs, and the newest decides
+# for both: the other PR's pass, findings or pending run would stand in for
+# this one's. The gate tags each run `unitares-review:<pr>:<head>`
+# (review_gate.py post_check). For every PR the queue may act on, the rollup's
+# `review` entries are replaced here with that PR's own runs, so every later
+# check (required, failed, pending, parked) reads this PR's review. Untagged
+# runs predate the tag and are kept; a head with no tagged run at all is left
+# as GitHub reported it. A head carrying only other PRs' runs then has no
+# `review` for this PR (MISSING). Unreadable runs read as pending.
+review_pending='[{"__typename":"CheckRun","name":"review","status":"PENDING","conclusion":null}]'
+for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelled($r))
+             | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
+  head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
+  mine=$review_pending
+  if runs=$(review_check_runs "$head"); then
+    mine=$(jq -c --arg id "unitares-review:$n:$head" '
+      if any(.check_runs[]; (.external_id // "") != "") | not then null
+      else [.check_runs[] | select((.external_id // "") as $e | $e == "" or $e == $id)
+            | {__typename: "CheckRun", name,
+               status: ((.status // "completed") | ascii_upcase),
+               conclusion: ((.conclusion // "") | ascii_upcase | if . == "" then null else . end),
+               startedAt: .started_at, completedAt: .completed_at, detailsUrl: .details_url}]
+      end' <<<"$runs") || mine=$review_pending
+  fi
+  [ "$mine" = "null" ] && continue
+  prs=$(jq --argjson n "$n" --argjson m "$mine" \
+    'map(if .number == $n then .statusCheckRollup = ([.statusCheckRollup[] | select((.name // .context) != "review")] + $m) else . end)' \
+    <<<"$prs") || { log "#$n review runs could not be applied; nothing done"; exit 1; }
+done
+
 # GitHub labels remain on a merged PR, but they are not part of the landed Git
 # object. Preserve the exact model identifier from the PR's final `Model:` line
 # in the squash subject, where it survives branch deletion and is visible to
@@ -476,12 +519,6 @@ unmet_required_checks() {
              | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
              | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
                else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
-    # The rollup is the head's, and a head shared by two PRs carries both
-    # PRs' review runs: a newer pass on the other PR would hide this one's
-    # findings. A passing review is confirmed against this PR's own run.
-    if [ "$check" = "review" ] && [ "$state" = "SUCCESS" ]; then
-      state=$(review_run_state "$(jq -r .number <<<"$1")" "$(jq -r .headRefOid <<<"$1")")
-    fi
     [ "$state" = "SUCCESS" ] && continue
     unmet+=" $check=$state"
     [ "$check" = "review" ] && [ -n "$auth" ] && unmet+=" (required on an auth path: $auth)"
@@ -658,29 +695,6 @@ latest_label_time() {
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
 
-# <pr> <head-sha> -> the state of this PR's own `review` run on that head:
-# SUCCESS, PENDING (still running, or the runs could not be read), MISSING (the
-# head carries only other PRs' runs) or the run's conclusion in capitals. The
-# gate tags each run `unitares-review:<pr>:<head>` (review_gate.py post_check);
-# an untagged run predates the tag and is read as before, and so is a run with
-# no conclusion recorded. The run that decides is chosen as `rollup` chooses
-# it: skipped runs never count, and the newest of the rest wins.
-review_run_state() {
-  local runs
-  runs=$(gh api "repos/$REPO/commits/$2/check-runs?check_name=review&per_page=100" 2>/dev/null) \
-    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
-    || { echo PENDING; return; }
-  jq -r --arg id "unitares-review:$1:$2" '
-    [.check_runs[] | select(.name == "review")] as $all
-    | [$all[] | select((.external_id // "") as $e | $e == "" or $e == $id)] as $mine
-    | [$mine[] | select((.conclusion // "") != "skipped")]
-    | sort_by([(.started_at // .completed_at // ""), (.completed_at // "")]) | last
-    | if . == null then (if ($all | length) > ($mine | length) then "MISSING" else "SUCCESS" end)
-      elif (.status // "completed") != "completed" then "PENDING"
-      elif (.conclusion // "") == "" then "SUCCESS"
-      else .conclusion | ascii_upcase end' <<<"$runs" 2>/dev/null || echo PENDING
-}
-
 # <pr> <head-sha> -> why this PR's `review` on this head does not show two
 # model families; fails when it does, or when the head has no `review` check
 # yet (the required checks report that). A check run lives on a commit, not a
@@ -694,9 +708,7 @@ review_run_state() {
 # waiver of that, so a waived head is a hand merge. Unreadable: the same.
 review_waived() {
   local runs title
-  runs=$(gh api "repos/$REPO/commits/$2/check-runs?check_name=review&per_page=100" 2>/dev/null) \
-    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
-    || { echo "its review check could not be read"; return 0; }
+  runs=$(review_check_runs "$2") || { echo "its review check could not be read"; return 0; }
   # Keep this PR's runs. A run with no tag predates the tag or came from
   # something other than the gate, and is read as before.
   runs=$(jq -c --arg id "unitares-review:$1:$2" \
