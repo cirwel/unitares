@@ -2317,8 +2317,9 @@ def test_a_review_that_passed_on_a_waiver_is_not_two_families(tmp_path: Path, ti
 WAIVED = "second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny"
 
 
-def _tagged_run(pr: int, title: str, day: int, head: str = "aaa") -> dict:
-    return {"name": "review", "status": "completed", "conclusion": "success",
+def _tagged_run(pr: int, title: str, day: int, head: str = "aaa", conclusion: str = "success",
+                status: str = "completed") -> dict:
+    return {"name": "review", "status": status, "conclusion": conclusion,
             "external_id": f"unitares-review:{pr}:{head}",
             "started_at": f"2026-01-0{day}T00:00:00Z", "completed_at": f"2026-01-0{day}T00:01:00Z",
             "output": {"title": title}}
@@ -2333,6 +2334,12 @@ def _tagged_run(pr: int, title: str, day: int, head: str = "aaa") -> dict:
      "its review check has not reported for this PR"),
     # This PR's own two-family pass still lands it, whatever the other PR's run says.
     ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None),
+    # This PR's review needs action; a newer pass on the other PR does not hide it.
+    ([_tagged_run(1, "FINDINGS(1)", 1, conclusion="action_required"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=ACTION_REQUIRED"),
+    # This PR's review is still running.
+    ([_tagged_run(1, "", 1, conclusion=None, status="in_progress"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=PENDING"),
 ])
 def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs, armed, why) -> None:
     pr, timeline = _delegable(tmp_path)

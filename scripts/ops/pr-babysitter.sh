@@ -476,6 +476,12 @@ unmet_required_checks() {
              | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
              | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
                else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
+    # The rollup is the head's, and a head shared by two PRs carries both
+    # PRs' review runs: a newer pass on the other PR would hide this one's
+    # findings. A passing review is confirmed against this PR's own run.
+    if [ "$check" = "review" ] && [ "$state" = "SUCCESS" ]; then
+      state=$(review_run_state "$(jq -r .number <<<"$1")" "$(jq -r .headRefOid <<<"$1")")
+    fi
     [ "$state" = "SUCCESS" ] && continue
     unmet+=" $check=$state"
     [ "$check" = "review" ] && [ -n "$auth" ] && unmet+=" (required on an auth path: $auth)"
@@ -650,6 +656,29 @@ latest_label_time() {
   local t
   t=$(approval_times "$1") || return 2
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
+}
+
+# <pr> <head-sha> -> the state of this PR's own `review` run on that head:
+# SUCCESS, PENDING (still running, or the runs could not be read), MISSING (the
+# head carries only other PRs' runs) or the run's conclusion in capitals. The
+# gate tags each run `unitares-review:<pr>:<head>` (review_gate.py post_check);
+# an untagged run predates the tag and is read as before, and so is a run with
+# no conclusion recorded. The run that decides is chosen as `rollup` chooses
+# it: skipped runs never count, and the newest of the rest wins.
+review_run_state() {
+  local runs
+  runs=$(gh api "repos/$REPO/commits/$2/check-runs?check_name=review&per_page=100" 2>/dev/null) \
+    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
+    || { echo PENDING; return; }
+  jq -r --arg id "unitares-review:$1:$2" '
+    [.check_runs[] | select(.name == "review")] as $all
+    | [$all[] | select((.external_id // "") as $e | $e == "" or $e == $id)] as $mine
+    | [$mine[] | select((.conclusion // "") != "skipped")]
+    | sort_by([(.started_at // .completed_at // ""), (.completed_at // "")]) | last
+    | if . == null then (if ($all | length) > ($mine | length) then "MISSING" else "SUCCESS" end)
+      elif (.status // "completed") != "completed" then "PENDING"
+      elif (.conclusion // "") == "" then "SUCCESS"
+      else .conclusion | ascii_upcase end' <<<"$runs" 2>/dev/null || echo PENDING
 }
 
 # <pr> <head-sha> -> why this PR's `review` on this head does not show two
