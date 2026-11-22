@@ -320,7 +320,7 @@ def test_purge_cutoff_is_the_verifier_clock_passed_as_a_parameter():
     sql, args = next((s, a) for s, a in conn.calls if "DELETE" in s)
     assert "now()" not in sql.lower()
     assert "to_timestamp($1)" in sql
-    assert args == (1_000_000 - MAX_GRANT_TTL_SECONDS - GRANT_CLOCK_SKEW_SECONDS,)
+    assert args[0] == 1_000_000 - MAX_GRANT_TTL_SECONDS - GRANT_CLOCK_SKEW_SECONDS
 
 
 _PURGE_PREFIX = "purge-test-"
@@ -344,27 +344,32 @@ async def _real_db_conn():
     if exists is None:
         await conn.close()
         pytest.skip("effects.consumed_nonces not present in governance_test")
-    await conn.execute(
-        "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", _PURGE_PREFIX + "%"
-    )
+    await _clear_test_rows(conn)
     return conn
+
+
+async def _clear_test_rows(conn):
+    # The purge watermark is shared by the whole table; a watermark left by one
+    # test would refuse the old rows the next one inserts.
+    from src.http_routes.effects import _PURGE_WATERMARK_KEY
+
+    await conn.execute(
+        "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1 OR nonce = $2",
+        _PURGE_PREFIX + "%", _PURGE_WATERMARK_KEY,
+    )
 
 
 async def _close_real_db_conn(conn):
     try:
-        await conn.execute(
-            "DELETE FROM effects.consumed_nonces WHERE nonce LIKE $1", _PURGE_PREFIX + "%"
-        )
+        await _clear_test_rows(conn)
     finally:
         await conn.close()
 
 
 async def _consume(conn, nonce, exp):
-    return await conn.execute(
-        "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
-        "VALUES ($1, to_timestamp($2)) ON CONFLICT (nonce) DO NOTHING",
-        nonce, int(exp),
-    )
+    from src.http_routes.effects import _consume_nonce
+
+    return await _consume_nonce(conn, nonce, exp)
 
 
 @pytest.mark.asyncio
@@ -463,3 +468,111 @@ async def test_purge_never_frees_a_nonce_whose_grant_still_verifies(clock_offset
             assert await _consume(conn, again.nonce, again.exp) == "INSERT 0 0"
     finally:
         await _close_real_db_conn(conn)
+
+
+@pytest.mark.asyncio
+async def test_a_clock_set_back_after_a_purge_does_not_reopen_replay():
+    """Consume a grant, purge once it has expired past the retention margin,
+    then set the verifier clock back to before the grant's exp: the grant
+    verifies again, and its nonce row is gone, so the ledger must still refuse
+    it."""
+    from src.effect_grant import (
+        GRANT_CLOCK_SKEW_SECONDS,
+        MAX_GRANT_TTL_SECONDS,
+        verify_effect_grant,
+    )
+    from src.http_routes.effects import _purge_consumed_nonces
+
+    conn = await _real_db_conn()
+    try:
+        minted_at = int(await conn.fetchval("SELECT extract(epoch FROM now())"))
+        fields = {"aid": PROPOSER, **_CONTENT}
+        with patch("src.effect_grant.grant_clock", return_value=minted_at):
+            grant = mint_effect_grant(
+                ttl_seconds=30, nonce=_PURGE_PREFIX + "rollback", **fields
+            )
+            first = verify_effect_grant(grant, **fields)
+            assert first.ok
+            assert await _consume(conn, first.nonce, first.exp) == "INSERT 0 1"
+
+        later = first.exp + MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS + 1
+        await _purge_consumed_nonces(conn, now=later)
+        gone = await conn.fetchval(
+            "SELECT count(*) FROM effects.consumed_nonces WHERE nonce = $1", first.nonce
+        )
+        assert gone == 0
+
+        with patch("src.effect_grant.grant_clock", return_value=minted_at):
+            again = verify_effect_grant(grant, **fields)
+            assert again.ok
+            assert await _consume(conn, again.nonce, again.exp) == "INSERT 0 0"
+
+        # Once the clock is back past the watermark, fresh grants pass again.
+        with patch("src.effect_grant.grant_clock", return_value=later):
+            fresh = verify_effect_grant(
+                mint_effect_grant(ttl_seconds=30, nonce=_PURGE_PREFIX + "fresh", **fields),
+                **fields,
+            )
+            assert fresh.ok
+            assert await _consume(conn, fresh.nonce, fresh.exp) == "INSERT 0 1"
+    finally:
+        await _close_real_db_conn(conn)
+
+
+@pytest.mark.asyncio
+async def test_the_purge_watermark_only_advances_and_is_never_purged():
+    from src.effect_grant import GRANT_CLOCK_SKEW_SECONDS, MAX_GRANT_TTL_SECONDS
+    from src.http_routes.effects import _PURGE_WATERMARK_KEY, _purge_consumed_nonces
+
+    retention = MAX_GRANT_TTL_SECONDS + GRANT_CLOCK_SKEW_SECONDS
+
+    async def raw_row(name, exp):
+        # Bypasses the consume path, which would refuse a row at or before
+        # the watermark.
+        await conn.execute(
+            "INSERT INTO effects.consumed_nonces (nonce, grant_exp) "
+            "VALUES ($1, to_timestamp($2))",
+            _PURGE_PREFIX + name, exp,
+        )
+
+    async def watermark():
+        return await conn.fetchval(
+            "SELECT extract(epoch FROM grant_exp)::bigint "
+            "FROM effects.consumed_nonces WHERE nonce = $1",
+            _PURGE_WATERMARK_KEY,
+        )
+
+    conn = await _real_db_conn()
+    try:
+        base = int(await conn.fetchval("SELECT extract(epoch FROM now())"))
+        await raw_row("first", base)
+        await _purge_consumed_nonces(conn, now=base + retention + 1)
+        assert await watermark() == base
+
+        # A later purge whose cutoff is past the watermark row itself keeps
+        # that row and moves it to the newest grant_exp it deleted.
+        await raw_row("second", base + 100)
+        await _purge_consumed_nonces(conn, now=base + 100 + retention + 1)
+        assert await watermark() == base + 100
+
+        # Deleting an older row never moves the watermark back.
+        await raw_row("older", base - 1000)
+        await _purge_consumed_nonces(conn, now=base + 100 + retention + 1)
+        assert await watermark() == base + 100
+        assert await conn.fetchval(
+            "SELECT count(*) FROM effects.consumed_nonces WHERE nonce LIKE $1",
+            _PURGE_PREFIX + "%",
+        ) == 0
+    finally:
+        await _close_real_db_conn(conn)
+
+
+def test_a_grant_carrying_the_reserved_watermark_key_is_vetoed():
+    from src.http_routes.effects import _PURGE_WATERMARK_KEY
+
+    r = _post(_body(grant=_grant(nonce=_PURGE_WATERMARK_KEY)))
+    assert r.status_code == 200
+    j = r.json()
+    assert j["binding_ok"] is False
+    assert j["vetoed"] is True
+    assert "binding_bad_nonce" in r.text
