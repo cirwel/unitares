@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [4.1.0] - 2026-11-21
+## [4.1.0] - 2026-11-22
 
 <!-- plugin-bundle-recut: v0.4.34 -->
 
@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the component record and changes no value, verdict or policy input (#3255).
 
 ### Changed
+- **identity:** interface contract 2.5.0: a server's operator decides whether a harness may ask for an identity (`UNITARES_HARNESS_ONBOARDING`, `welcome` or `agent_only`; unset, `welcome` on loopback and `agent_only` beyond it). `onboard` accepts adapter-only `harness_request` and `spawned_under`; under `agent_only` a harness request that would create an identity returns `harness_onboarding_declined` and creates nothing. `GET /health` reports the policy under `onboarding` (#3361).
 - **Scoped per-agent REST tokens:** `UNITARES_HTTP_AGENT_TOKENS` accepts optional `:<scope1+scope2>` (`checkin`, `outcome`, `knowledge_store`; omitted defaults to `checkin`), enforces flat top-level arguments requiring explicit body `client_session_id` (refusing `kwargs`/`arguments`/`params` wrappers, `X-Agent-Id`, and `X-Session-ID`-only calls), applies strict argument allowlists on `outcome` and `knowledge_store`, and keeps `knowledge_store` append-only and non-permanent (#3320).
 - **eisv:** a behavioral axis with no supplied base term is now held instead of filled with a constant (`UNITARES_HOLD_UNREAD_AXES`, default on, instrument era `HU1`). The smoothed value keeps its last reading, `V` steps only when `E` and `I` were both read, the first reading on an axis seeds it, and the assessment scores an axis only while it has a reading from the last 10 check-ins. Unscored axes are listed in `behavioral.assessment.unscored_axes`. The legacy ODE anchor and the component record are unchanged. Set the flag to `0` to restore filling (#3259).
 - Interface contract 2.4.2: Imported-memory close-contest ranking_multiplier relaxes from 0.55 to 0.85 while channel_message stays 0.55 (#3325).
@@ -115,6 +116,7 @@ audit evidence and do not write EISV, predictions or liveness.
 - **lease plane:** guard `DialecticLiveness.snapshot/1` and `LeaseHolder` synchronous call exit races during concurrent holder termination (#3354).
 
 ### Removed
+- **residents:** The Watcher code-scanning resident (`agents/watcher/`) is no longer shipped in this repository; a deployment that runs one keeps it in its own deployment repository as an SDK client. Core keeps only the reader side of the state-location contract (`src/watcher_state_reader.py`). Tooling that called the in-repo agent (`scripts/dev/housekeeping_inventory.py`, `scripts/dev/autopilot_closeout.py`, the opt-in `watcher` collector in `scripts/ci/surface_findings.py`) now finds a Watcher through `UNITARES_WATCHER_AGENT` and skips when it is unset. Vigil no longer rebuilds Watcher's calibration floor or runs its commit scan; the Watcher's own schedule does. The check that a Watcher's pattern ids match `src/violation_taxonomy.yaml` now belongs with that Watcher (#3352).
 - **background tasks:** removed the dead `identity_cache_warmup()` startup task from `src/background_maintenance_tasks.py` and `src/background_tasks.py` (#3323). `transport_binding_cache_warmup()` already warms `transport_binding:*` entries at boot without re-enabling weak `sticky:<ip_ua>` bindings from `session:*` keys (#3346).
 
 ### Security

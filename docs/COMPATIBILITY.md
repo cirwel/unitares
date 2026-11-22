@@ -35,7 +35,7 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v4.1.0 moves the negotiated interface contract from 2.4.1 to 2.4.2 and adds
+- v4.1.0 moves the negotiated interface contract from 2.4.1 to 2.5.0 and adds
   two additive startup migrations: `082_oauth_connectors.sql` (dynamic OAuth
   connector registry) and `083_external_event_fingerprints.sql` (durable
   external outcome event deduplication). MCP tool names remain unchanged, while
@@ -53,7 +53,11 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   a usable continuity-token secret unless `UNITARES_ALLOW_NO_CONTINUITY_SECRET=1`
   is set. Lease-plane identity binding defaults to `log` and both the lease
   plane and `unitares-sdk` `0.7.0` add opt-in owner-only Unix domain socket
-  transport while keeping loopback TCP enabled by default; published install
+  transport while keeping loopback TCP enabled by default. A server's operator
+  now decides whether a harness may ask for an identity
+  (`UNITARES_HARNESS_ONBOARDING`; unset, `welcome` on loopback and
+  `agent_only` beyond it), and the Watcher resident no longer ships in this
+  repository (`UNITARES_WATCHER_AGENT` points tooling at one). Published install
   pins stay on `v3.6.0` / `0.6.1` until release promotion verifies the
   published artifacts.
 

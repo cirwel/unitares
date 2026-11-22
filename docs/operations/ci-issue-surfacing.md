@@ -5,7 +5,7 @@ run deterministic collectors on a PR / on demand, and turn each *new* finding
 into a deduped GitHub issue.
 
 This is the CI-side counterpart to the in-server surfacing agents
-(`agents/watcher`, `agents/vigil`). Those need a live governance server and an
+(a deployment's Watcher, `agents/vigil`). Those need a live governance server and an
 LLM detector; a stock GitHub runner has neither. So the CI bridge uses
 collectors that run on a vanilla `ubuntu-latest` with no Postgres, no Ollama,
 and no secrets beyond `GITHUB_TOKEN`.
@@ -31,9 +31,10 @@ producer that reads those issues into the governance record.
   checks. Meaningful only on a host that *has* the governance stack; on a bare
   runner it would surface "no Postgres" noise, so it is **not** a default.
   Enable it (`--collectors ruff doctor`) on a job that provisions Postgres.
-- **`watcher`** (opt-in, LLM) — defers to `agents.watcher`. Probes
-  `WATCHER_OLLAMA_URL` first and skips cleanly when the endpoint is absent (the
-  normal CI case). Off unless `--enable-watcher` is passed.
+- **`watcher`** (opt-in, LLM) — defers to a deployment's own Watcher, loaded
+  from the agent script named in `UNITARES_WATCHER_AGENT`; this repository
+  ships none. Skips cleanly when that is unset or `WATCHER_OLLAMA_URL` does not
+  answer (the normal CI case). Off unless `--enable-watcher` is passed.
 
 ## Dedup contract
 
@@ -95,7 +96,7 @@ and the hidden `<!-- finding-fingerprint: X -->` marker.
 Before this producer, nothing carried a finding into the record at all. The CI
 side files GitHub issues, `scripts/ci/surface_findings.py` emits the findings
 JSON the workflow files them from, and the in-server surfacing agents
-(`agents/watcher`, `agents/vigil`) read governance anomalies rather than GitHub
+(a deployment's Watcher, `agents/vigil`) read governance anomalies rather than GitHub
 issues. A finding could therefore sit fully visible on the issue board and be
 entirely absent from the record a later agent searches. The previous section
 names the deduped `ci-finding` issues as the hand-off point a fix loop would

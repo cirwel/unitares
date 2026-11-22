@@ -24,14 +24,13 @@ What it does each cycle:
 """
 
 import asyncio
-import functools
 import inspect
 import json
 import os
 import time
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,7 +54,6 @@ from agents.common.findings import (
 from agents.vigil.checks.registry import load_plugins
 from agents.vigil.checks.runner import run_health_checks
 from agents.vigil.remote_eval import run_remote_retrieval_eval
-from agents.watcher.floor_state import load_floor, recompute_floor
 
 # Paths
 ANIMA_PROJECT = Path(os.getenv("ANIMA_PROJECT", str(project_root.parent / "anima-mcp")))
@@ -92,47 +90,6 @@ RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
 NDCG_REGRESSION_THRESHOLD = 0.05  # absolute drop in nDCG@10 that flags regression
 
 # Watcher calibration: recompute the precision floor at most once per day.
-# Vigil cycles every 30min, so a 24h gate keeps us from recomputing 48× per day.
-WATCHER_FLOOR_MAX_AGE_HOURS = 24.0
-
-
-def _last_floor_recompute_iso() -> str | None:
-    """Read pattern_floor.json's updated_at field. Returns None if the
-    file is missing/unparseable so the caller falls through to a recompute."""
-    try:
-        return load_floor().updated_at
-    except Exception:
-        return None
-
-
-def maybe_recompute_watcher_floor(
-    *,
-    max_age_hours: float = WATCHER_FLOOR_MAX_AGE_HOURS,
-    governed_identity: dict | None = None,
-) -> bool:
-    """Trigger a watcher floor recompute if the last one is older than
-    ``max_age_hours``. Returns True if a recompute fired.
-
-    Called from Vigil's run_cycle. When ``governed_identity`` is supplied the
-    floor is persisted through a governed ``file_write`` effect (the first real
-    consumer of that surface); it falls back to the local atomic write on any
-    failure, so a concurrent surface hook never sees a half-written file.
-    """
-    last_iso = _last_floor_recompute_iso()
-    if last_iso:
-        try:
-            last = datetime.strptime(last_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
-            )
-            age = datetime.now(timezone.utc) - last
-            if age < timedelta(hours=max_age_hours):
-                return False
-        except (TypeError, ValueError):
-            pass  # unparseable → recompute (safer to refresh than skip)
-    recompute_floor(governed_identity=governed_identity)
-    return True
-
-
 _interactive = sys.stdout.isatty()
 
 
@@ -1014,21 +971,6 @@ class VigilAgent(GovernanceAgent):
                     pass
                 log(f"GROUNDSKEEPER: {note_text}")
 
-        # --- Watcher commit-scan: auto-resolve findings referenced in recent commits ---
-        try:
-            scan_proc = subprocess.run(
-                [sys.executable, str(project_root / "agents" / "watcher" / "agent.py"), "--scan-commits"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if scan_proc.returncode != 0:
-                log(f"GROUNDSKEEPER: watcher --scan-commits exited {scan_proc.returncode}: {scan_proc.stderr[:200]}")
-            else:
-                log(f"GROUNDSKEEPER: watcher --scan-commits: {scan_proc.stdout.strip()[:100]}")
-        except Exception as e:
-            log(f"GROUNDSKEEPER: watcher --scan-commits failed ({type(e).__name__}: {e})")
-
         return summary
 
     async def _run_aged_candidate_archive(
@@ -1478,34 +1420,6 @@ class VigilAgent(GovernanceAgent):
                 f"hygiene: auto-archived {auto_archive['archived']} aged "
                 f"candidate(s) of {auto_archive.get('candidates_seen', 0)}"
             )
-
-        # --- 4.6. Watcher calibration floor (24h gated) ---
-        # Recompute pattern_floor.json from findings.jsonl so the surface
-        # hook's demotion logic stays current. The function is gated on
-        # 24h staleness internally, so calling it every cycle is cheap.
-        try:
-            loop = asyncio.get_running_loop()
-            # Route the floor write through governed file_write (audited +
-            # rollback-tracked + lease-coordinated) using Vigil's own identity;
-            # save_floor_governed falls back to the atomic local write on any
-            # plane failure, so this can never lose the floor.
-            gov_id = None
-            if client.agent_uuid and client.continuity_token:
-                gov_id = {
-                    "proposer_uuid": client.agent_uuid,
-                    "continuity_token": client.continuity_token,
-                    "session_id": client.client_session_id or "",
-                }
-            recomputed = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    maybe_recompute_watcher_floor, governed_identity=gov_id
-                ),
-            )
-            if recomputed:
-                findings.append("watcher_floor: recomputed")
-        except Exception as e:
-            log(f"watcher_floor recompute skipped: {e}")
 
         # --- 4.7. KG hygiene v1: retrieval-eval step (optional) ---
         eval_result = await self._run_eval_step()

@@ -155,7 +155,14 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # validation schema; the advertised description is already only 38 bytes.
 # The key lets a retry recover its original durable checkpoint without
 # repeating assessment. Omitting it preserves a new occurrence per call.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 42_000
+# Raised 2026-11-21 to 42,200 B: onboard/start_session's adapter-only
+# harness_request and spawned_under measure 42,147 B with the shortest briefs
+# that still say who they are for. harness_request is how an adapter asks to
+# be held to the operator's harness-onboarding policy; spawned_under records
+# which conversation a nested process ran under. Neither can ride an existing
+# field: onboard_origin must stay descriptive, and host_session names a
+# vendor session, not a conversation.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 42_200
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

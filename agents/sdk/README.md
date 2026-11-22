@@ -230,9 +230,9 @@ for that migration window.
 - The violation taxonomy is server-owned vocabulary
   (`src/violation_taxonomy.yaml`); consume it via the `/v1/taxonomy`
   endpoint rather than importing server code.
-- Watcher (`agents/watcher/agent.py`) uses a different execution
-  model (sync, hook-driven, one-shot per tool-use event) and does not
-  subclass `GovernanceAgent`.
+- A hook-driven resident such as a code watcher (sync, one-shot per
+  tool-use event) does not need to subclass `GovernanceAgent`; it can use
+  `SyncGovernanceClient` directly.
 
 ## NeMo Relay integration
 

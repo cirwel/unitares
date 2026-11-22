@@ -28,7 +28,6 @@ CLIENT_RESIDENT_DIRS = (
     "agents/chronicler",
     "agents/sentinel",
     "agents/vigil",
-    "agents/watcher",
     "agents/steward",
     "agents/common",
 )

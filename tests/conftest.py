@@ -28,16 +28,6 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
 )
 
-# Same leak, Watcher's log. The watcher tests under tests/ (path exclusion,
-# state-dir migration, detector capability) call into agents.watcher, which
-# logs every drop and migration to ~/Library/Logs/unitares-watcher.log. On
-# 2026-09-24 those fixture lines were about 1 in 5 lines of the operator's log,
-# including the model_not_found / timeout lines that read as detector outages.
-os.environ.setdefault(
-    "UNITARES_WATCHER_LOG_FILE",
-    str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
-)
-
 # Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
 # tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
 # to ~/Library/Logs/unitares-sentinel.log unless redirected before import.

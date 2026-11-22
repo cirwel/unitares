@@ -115,7 +115,6 @@ def _cycle_agent(tmp_path, monkeypatch, posted: list, outcome: str = DELIVERED):
     agent = vigil.VigilAgent(mcp_url="http://localhost:8767/mcp/", with_hygiene=True)
     agent.state_file = tmp_path / "vigil_state.json"
     monkeypatch.setattr(vigil, "run_health_checks", AsyncMock(return_value=[]))
-    monkeypatch.setattr(vigil, "maybe_recompute_watcher_floor", lambda **_: False)
     agent._read_sentinel_findings = AsyncMock(return_value=[])
     agent._run_groundskeeper = AsyncMock(return_value={
         "audit_run": True, "stale_found": 80, "archive_candidates": 78,
