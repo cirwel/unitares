@@ -82,8 +82,13 @@ if [ "$1" = "api" ]; then
     */check-runs*)
       sha=$(sed -E 's#.*commits/([^/]+)/check-runs.*#\1#' <<<"$*")
       [ -f "$d/checkruns_$sha.fail" ] && exit 1
-      cat "$d/checkruns_$sha.json" 2>/dev/null \
-        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}'
+      runs=$(cat "$d/checkruns_$sha.json" 2>/dev/null \
+        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}')
+      # Like GitHub, return only the newest run of each name unless asked for all.
+      case "$*" in
+        *filter=all*) echo "$runs" ;;
+        *) jq -c '.check_runs |= (group_by(.name) | map(max_by(.started_at // .completed_at // "")))' <<<"$runs" ;;
+      esac
       exit 0 ;;
     */commits/*)
       # A later read in the same tick may see master moved (base_moved).
@@ -2325,24 +2330,30 @@ def _tagged_run(pr: int, title: str, day: int, head: str = "aaa", conclusion: st
             "output": {"title": title}}
 
 
-@pytest.mark.parametrize("runs, armed, why", [
+@pytest.mark.parametrize("runs, armed, why, rollup", [
     # Another open PR on the same head passed later; its run is not this PR's.
     ([_tagged_run(1, WAIVED, 1), _tagged_run(2, "clean (codex, antigravity)", 2)], False,
-     "its review passed on an operator waiver, not on two model families"),
+     "its review passed on an operator waiver, not on two model families", "SUCCESS"),
     # Only the other PR has reported on this head.
     ([_tagged_run(2, "clean (codex, antigravity)", 2)], False,
-     "its review check has not reported for this PR"),
+     "its review check has not reported for this PR", "SUCCESS"),
     # This PR's own two-family pass still lands it, whatever the other PR's run says.
-    ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None),
+    ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None, "SUCCESS"),
     # This PR's review needs action; a newer pass on the other PR does not hide it.
     ([_tagged_run(1, "FINDINGS(1)", 1, conclusion="action_required"),
-      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=ACTION_REQUIRED"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "ACTION_REQUIRED", "SUCCESS"),
     # This PR's review is still running.
     ([_tagged_run(1, "", 1, conclusion=None, status="in_progress"),
-      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=PENDING"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=PENDING", "SUCCESS"),
+    # This PR passed; the other PR's newer unreviewed or findings run, which
+    # is what the head's rollup shows, does not hold it back.
+    ([_tagged_run(1, "clean (codex, antigravity)", 1),
+      _tagged_run(2, "unreviewed", 2, conclusion="neutral")], True, None, "NEUTRAL"),
+    ([_tagged_run(1, "clean (codex, antigravity)", 1),
+      _tagged_run(2, "FINDINGS(1)", 2, conclusion="action_required")], True, None, "ACTION_REQUIRED"),
 ])
-def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs, armed, why) -> None:
-    pr, timeline = _delegable(tmp_path)
+def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs, armed, why, rollup) -> None:
+    pr, timeline = _delegable(tmp_path, review=rollup)
     (tmp_path / "gh").mkdir()
     (tmp_path / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
