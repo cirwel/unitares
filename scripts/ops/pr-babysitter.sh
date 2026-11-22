@@ -328,23 +328,26 @@ review_check_runs() {
 # `review` entries are replaced here with that PR's own runs, so every later
 # check (required, failed, pending, parked) reads this PR's review. Untagged
 # runs predate the tag and are kept; a head with no tagged run at all is left
-# as GitHub reported it. A head carrying only other PRs' runs then has no
-# `review` for this PR (MISSING). Unreadable runs read as pending.
-review_pending='[{"__typename":"CheckRun","name":"review","status":"PENDING","conclusion":null}]'
+# as GitHub reported it, and so is a head whose runs cannot be read this tick
+# (logged), which leaves exactly the reading this replacement refines. Skipped
+# runs (a workflow that also fires on `labeled` adds one) never count, so a
+# head carrying only other PRs' runs has no `review` for this PR: MISSING,
+# which the queue waits on.
 for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelled($r))
              | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
   head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
-  mine=$review_pending
-  if runs=$(review_check_runs "$head"); then
-    mine=$(jq -c --arg id "unitares-review:$n:$head" '
+  runs=$(review_check_runs "$head") \
+    || { log "#$n review runs on ${head:0:8} could not be read; its rollup is read as reported"; continue; }
+  mine=$(jq -c --arg id "unitares-review:$n:$head" '
       if any(.check_runs[]; (.external_id // "") != "") | not then null
       else [.check_runs[] | select((.external_id // "") as $e | $e == "" or $e == $id)
+            | select((.conclusion // "") != "skipped")
             | {__typename: "CheckRun", name,
                status: ((.status // "completed") | ascii_upcase),
                conclusion: ((.conclusion // "") | ascii_upcase | if . == "" then null else . end),
                startedAt: .started_at, completedAt: .completed_at, detailsUrl: .details_url}]
-      end' <<<"$runs") || mine=$review_pending
-  fi
+      end' <<<"$runs") \
+    || { log "#$n review runs on ${head:0:8} could not be parsed; its rollup is read as reported"; continue; }
   [ "$mine" = "null" ] && continue
   prs=$(jq --argjson n "$n" --argjson m "$mine" \
     'map(if .number == $n then .statusCheckRollup = ([.statusCheckRollup[] | select((.name // .context) != "review")] + $m) else . end)' \
@@ -700,8 +703,9 @@ latest_label_time() {
 # yet (the required checks report that). A check run lives on a commit, not a
 # PR, so two open PRs on one head share their runs. review_gate.py post_check
 # tags each run `unitares-review:<pr>:<head>`; a run tagged for another PR
-# never decides this one, and a head carrying only other PRs' runs has not
-# reported for this one. The review gate turns `review` green on ONE family when
+# never decides this one. A head carrying only other PRs' runs has not reported
+# for this one: that is no waiver, and the required checks read it as MISSING
+# and wait (the rollup replacement above). The review gate turns `review` green on ONE family when
 # an operator waiver covers the second, and says so in the check's title
 # ("second family waived by the operator", review_gate.py apply_waiver). The
 # ruling asks for two families, and a waiver of the second review is not a
@@ -714,12 +718,8 @@ review_waived() {
   runs=$(jq -c --arg id "unitares-review:$1:$2" \
            '.check_runs as $all
             | .check_runs = [$all[] | select(.name == "review"
-                                            and ((.external_id // "") as $e | $e == "" or $e == $id))]
-            | .others = ([$all[] | select(.name == "review")] | length) - (.check_runs | length)' <<<"$runs") \
+                                            and ((.external_id // "") as $e | $e == "" or $e == $id))]' <<<"$runs") \
     || { echo "its review check could not be read"; return 0; }
-  if jq -e '(.check_runs | length) == 0 and .others > 0' <<<"$runs" >/dev/null; then
-    echo "its review check has not reported for this PR (this head carries only other PRs' review runs)"; return 0
-  fi
   # The run that decides, chosen as `rollup` chooses it: skipped runs (a
   # workflow that also fires on `labeled` adds one) never count, and the
   # newest of the rest by start time wins. One still running has no verdict

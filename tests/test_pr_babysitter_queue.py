@@ -2334,9 +2334,14 @@ def _tagged_run(pr: int, title: str, day: int, head: str = "aaa", conclusion: st
     # Another open PR on the same head passed later; its run is not this PR's.
     ([_tagged_run(1, WAIVED, 1), _tagged_run(2, "clean (codex, antigravity)", 2)], False,
      "its review passed on an operator waiver, not on two model families", "SUCCESS"),
-    # Only the other PR has reported on this head.
-    ([_tagged_run(2, "clean (codex, antigravity)", 2)], False,
-     "its review check has not reported for this PR", "SUCCESS"),
+    # Only the other PR has reported on this head: this PR's review is MISSING,
+    # and the queue waits for it rather than handing the PR to the operator.
+    ([_tagged_run(2, "clean (codex, antigravity)", 2)], False, "waiting on review=MISSING", "SUCCESS"),
+    # A skipped run from a `labeled` workflow is not this PR's review either.
+    ([_tagged_run(2, "clean (codex, antigravity)", 2),
+      {"name": "review", "status": "completed", "conclusion": "skipped",
+       "started_at": "2026-01-03T00:00:00Z", "completed_at": "2026-01-03T00:00:01Z",
+       "output": {"title": None}}], False, "waiting on review=MISSING", "SUCCESS"),
     # This PR's own two-family pass still lands it, whatever the other PR's run says.
     ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None, "SUCCESS"),
     # This PR's review needs action; a newer pass on the other PR does not hide it.
@@ -2361,6 +2366,19 @@ def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs,
     assert calls == ([_arm(1, "aaa")] if armed else [])
     if why:
         assert why in out
+    if why and "MISSING" in why:
+        assert "the operator merges it by hand" not in out
+
+
+def test_unreadable_review_runs_leave_the_rollup_as_reported(tmp_path: Path) -> None:
+    # Findings on the head stay parked when the per-PR lookup fails; they are
+    # not replaced by a pending entry the default queue does not block on.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", review="ACTION_REQUIRED")])
+    assert calls == []
+    assert "#1 review runs on aaa could not be read" in out
+    assert "ACTION_REQUIRED" in out
 
 
 def test_an_effect_line_removed_since_the_snapshot_stops_the_arm(tmp_path: Path) -> None:
