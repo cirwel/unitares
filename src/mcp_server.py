@@ -490,6 +490,11 @@ async def main():
             if _oauth_issuer_url and _oauth_public_port
             else None
         )
+        # The default harness-onboarding policy follows what was bound here,
+        # not what the environment would have defaulted to.
+        from src.identity.harness_onboarding import record_listen_exposure
+
+        record_listen_exposure(args.host, public_listener=_public_socket is not None)
         _main_ungated = main_listener_ungated(
             public_listener_up=_public_socket is not None, host=args.host
         )
