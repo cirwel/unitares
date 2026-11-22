@@ -56,7 +56,7 @@ Option 2 is cleanest for cross-machine portability. Not applied in this PR becau
 
 ## TEMPLATE GAP (gitignored plists with no in-repo template)
 
-`.gitignore` excludes `scripts/ops/*.plist` because installed copies contain secrets. Tracked templates include `governance-mcp.plist` (sanitized) and `ipv6-loopback-proxy.plist.template`. (The Chronicler template named in the original audit left with that resident.) The four below exist on the operator's disk but **a stranger has nothing to copy from**.
+`.gitignore` excludes `scripts/ops/*.plist` because installed copies contain secrets. Tracked templates include `governance-mcp.plist` (sanitized) and `ipv6-loopback-proxy.plist.template`. (The Chronicler and Vigil templates named in the original audit left with those residents.) The three below exist on the operator's disk but **a stranger has nothing to copy from**.
 
 | LaunchAgent | Status | Notes |
 |------------|--------|-------|
@@ -64,7 +64,6 @@ Option 2 is cleanest for cross-machine portability. Not applied in this PR becau
 | `com.unitares.ipv6-loopback-proxy.plist.template` | ✅ Resolved in this PR | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders applied |
 | `com.unitares.sentinel.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.sentinel-beam.plist.template` | ✅ Added in Wave 1 cutover PR | Sanitized BEAM Sentinel cutover target |
-| `com.unitares.vigil.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.gateway-mcp.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.governance-backup.plist.template` | ✅ Added in this PR | Sanitized template created |
 

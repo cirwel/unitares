@@ -30,7 +30,6 @@ additions merge cleanly. -->
 | `GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION` | `'false'` | — | config/governance_config.py |
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW` | `'true'` | — | config/governance_config.py |
-| `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
 | `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_URL` | varies: `None (no reader fallback)` (src/dialectic_reviewer_config.py); `'http://localhost:8767/mcp/'` (src/gateway/constants.py); `''` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | The governance MCP URL the reviewer connects to | src/dialectic_reviewer_config.py, src/gateway/constants.py (+2 more) |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
@@ -108,12 +107,12 @@ additions merge cleanly. -->
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_DROP_CONTINUITY_E_BLEND` | `'1'` | Return True when ``continuity_E_input`` is dropped from behavioral E | src/behavioral_sensor.py |
 | `UNITARES_DROP_UNIQUE_TOOLS_I_BLEND` | `'1'` | Return True when ``unique_tools_ratio`` is dropped from behavioral I | src/behavioral_sensor.py |
-| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:249, agents/vigil/agent.py) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py, agents/vigil/agent.py |
+| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:249) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
-| `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
-| `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
-| `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89) | True when related-finding expansion should run | src/retrieval.py |
+| `UNITARES_ENABLE_HYBRID` | `False` | True when hybrid RRF retrieval should run | src/retrieval.py |
+| `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py |
+| `UNITARES_ENABLE_RERANKER` | `False` | True when the reranker should run | src/reranker.py |
 | `UNITARES_EXTERNAL_TRUSTED_GITHUB_APPS` | `''` | Comma-separated APP_ID:BOT_ACTOR_ID or BOT_ACTOR_ID allowlist for external PR authors. | src/http_routes/external_events.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py |
@@ -136,7 +135,7 @@ additions merge cleanly. -->
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_AGENT_TOKENS` | `''` | The allowlist, read at call time | src/http_agent_tokens.py |
-| `UNITARES_HTTP_API_TOKEN` | varies: `None (no reader fallback)` (src/http_routes/audit_volume.py, src/http_routes/dashboard.py, src/http_routes/effects.py, src/http_routes/findings.py, src/http_routes/health.py, src/http_routes/lease_identity.py, src/http_routes/lease_plane_telemetry.py, src/http_routes/metrics_api.py, src/http_routes/overview.py, src/http_routes/packs.py, src/http_routes/residents.py, src/http_routes/substrate.py, src/http_routes/telemetry.py, src/http_routes/timeline.py, src/http_routes/tools.py, agents/sdk/src/unitares_sdk/lease_plane/client.py, agents/sentinel/routes.py, agents/vigil/routes.py, scripts/ops/automation_census_route.py); `''` (agents/common/http_client.py) | GET /v1/audit/volume-summary?floor=300  | src/http_routes/audit_volume.py, src/http_routes/dashboard.py (+18 more) |
+| `UNITARES_HTTP_API_TOKEN` | varies: `None (no reader fallback)` (src/http_routes/audit_volume.py, src/http_routes/dashboard.py, src/http_routes/effects.py, src/http_routes/findings.py, src/http_routes/health.py, src/http_routes/lease_identity.py, src/http_routes/lease_plane_telemetry.py, src/http_routes/metrics_api.py, src/http_routes/overview.py, src/http_routes/packs.py, src/http_routes/residents.py, src/http_routes/substrate.py, src/http_routes/telemetry.py, src/http_routes/timeline.py, src/http_routes/tools.py, agents/sdk/src/unitares_sdk/lease_plane/client.py, agents/sentinel/routes.py, scripts/ops/automation_census_route.py); `''` (agents/common/http_client.py) | GET /v1/audit/volume-summary?floor=300  | src/http_routes/audit_volume.py, src/http_routes/dashboard.py (+17 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_HUB_CALLBACK_URL` | `''` | Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404 | src/dashboard_auth.py |
