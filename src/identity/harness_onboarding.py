@@ -119,7 +119,7 @@ def harness_onboarding_declined_payload(tool_name: str) -> dict[str, Any]:
         "policy": "agent_only",
         "hint": (
             "This server accepts identities an agent claims and does not create "
-            "them for a harness. The agent can call start_session() itself. The "
+            "them for a harness. The agent can call start_session(force_new=true) itself. The "
             f"server's operator can accept harness-made identities with "
             f"{HARNESS_ONBOARDING_ENV}=welcome."
         ),

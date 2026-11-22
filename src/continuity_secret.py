@@ -117,6 +117,34 @@ def resolve(environ: Mapping[str, str] | None = None) -> tuple[bytes, str] | Non
     return None
 
 
+def _publish_new_key(path: Path) -> None:
+    """Put a fresh key at ``path`` unless another process got there first.
+
+    The key is written in full to a private temporary file beside ``path`` and
+    then hard-linked into place. The link is atomic and fails when ``path``
+    already exists, so the key path never exists half-written: two servers
+    starting at once both read the winner's complete key. (Creating ``path``
+    with O_EXCL and writing it afterwards left a moment in which the loser read
+    an empty file and refused to start.)
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(secrets.token_hex(32) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass  # another process published its key first; the caller reads theirs
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
 def ensure_generated_secret(environ: Mapping[str, str] | None = None) -> Path | None:
     """Create the generated key if no configured secret is in use.
 
@@ -133,13 +161,7 @@ def ensure_generated_secret(environ: Mapping[str, str] | None = None) -> Path | 
         return path
     if problem is None:  # no file yet
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        except FileExistsError:
-            pass  # another process created it first; read theirs below
-        else:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(secrets.token_hex(32) + "\n")
+        _publish_new_key(path)
         value, problem = _read(path)
     if not value:
         raise OSError(problem or f"continuity token secret file {path} is unusable")
