@@ -1,1 +1,0 @@
-- **PR delivery handoffs:** Define delivery ownership, preserve stuck-queue adoption, and require verified, explicitly scoped operator grants recorded on the PR before successors act.
