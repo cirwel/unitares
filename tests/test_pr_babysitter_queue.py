@@ -2337,6 +2337,12 @@ def _tagged_run(pr: int, title: str, day: int, head: str = "aaa", conclusion: st
     # Only the other PR has reported on this head: this PR's review is MISSING,
     # and the queue waits for it rather than handing the PR to the operator.
     ([_tagged_run(2, "clean (codex, antigravity)", 2)], False, "waiting on review=MISSING", "SUCCESS"),
+    # An untagged pass on a head that also carries tagged runs cannot be
+    # attributed to this PR, so it does not stand in for this PR's review.
+    ([{"name": "review", "status": "completed", "conclusion": "success",
+       "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+       "output": {"title": "clean (codex, antigravity)"}},
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "waiting on review=MISSING", "SUCCESS"),
     # A skipped run from a `labeled` workflow is not this PR's review either.
     ([_tagged_run(2, "clean (codex, antigravity)", 2),
       {"name": "review", "status": "completed", "conclusion": "skipped",

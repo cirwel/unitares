@@ -326,8 +326,10 @@ review_check_runs() {
 # this one's. The gate tags each run `unitares-review:<pr>:<head>`
 # (review_gate.py post_check). For every PR the queue may act on, the rollup's
 # `review` entries are replaced here with that PR's own runs, so every later
-# check (required, failed, pending, parked) reads this PR's review. Untagged
-# runs predate the tag and are kept; a head with no tagged run at all is left
+# check (required, failed, pending, parked) reads this PR's review. Once a
+# head has a tagged run, an untagged one there cannot be attributed to any PR
+# and is dropped, so it never lends one PR's pass to another; a head with no
+# tagged run at all (runs from before the tag, #2352) is left
 # as GitHub reported it. When the runs cannot be read this tick (logged), the
 # rollup's `review` entries, which may be any PR's, collapse to one: the most
 # blocking of them (failing, then parked), else pending. `rollup` alone would
@@ -355,7 +357,7 @@ for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelle
   fi
   mine=$(jq -c --arg id "unitares-review:$n:$head" '
       if any(.check_runs[]; (.external_id // "") != "") | not then null
-      else [.check_runs[] | select((.external_id // "") as $e | $e == "" or $e == $id)
+      else [.check_runs[] | select(.external_id == $id)
             | select((.conclusion // "") != "skipped")
             | {__typename: "CheckRun", name,
                status: ((.status // "completed") | ascii_upcase),
@@ -728,12 +730,12 @@ latest_label_time() {
 review_waived() {
   local runs title
   runs=$(review_check_runs "$2") || { echo "its review check could not be read"; return 0; }
-  # Keep this PR's runs. A run with no tag predates the tag or came from
-  # something other than the gate, and is read as before.
+  # Keep this PR's runs. On a head with no tagged run, every run predates the
+  # tag and is read as before; once one is tagged, only this PR's tag counts.
   runs=$(jq -c --arg id "unitares-review:$1:$2" \
-           '.check_runs as $all
-            | .check_runs = [$all[] | select(.name == "review"
-                                            and ((.external_id // "") as $e | $e == "" or $e == $id))]' <<<"$runs") \
+           '[.check_runs[] | select(.name == "review")] as $all
+            | (any($all[]; (.external_id // "") != "")) as $tagged
+            | .check_runs = [$all[] | select(if $tagged then .external_id == $id else true end)]' <<<"$runs") \
     || { echo "its review check could not be read"; return 0; }
   # The run that decides, chosen as `rollup` chooses it: skipped runs (a
   # workflow that also fires on `labeled` adds one) never count, and the
