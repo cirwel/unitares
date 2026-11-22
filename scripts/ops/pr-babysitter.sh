@@ -328,16 +328,25 @@ review_check_runs() {
 # `review` entries are replaced here with that PR's own runs, so every later
 # check (required, failed, pending, parked) reads this PR's review. Untagged
 # runs predate the tag and are kept; a head with no tagged run at all is left
-# as GitHub reported it, and so is a head whose runs cannot be read this tick
-# (logged), which leaves exactly the reading this replacement refines. Skipped
+# as GitHub reported it. When the runs cannot be read this tick (logged), a
+# failing or parked `review` entry stays, since it blocks whoever owns it, but
+# a passing one may be another PR's and reads as pending: findings are never
+# hidden, and a borrowed pass never satisfies a required review. Skipped
 # runs (a workflow that also fires on `labeled` adds one) never count, so a
 # head carrying only other PRs' runs has no `review` for this PR: MISSING,
 # which the queue waits on.
 for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelled($r))
              | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
   head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
-  runs=$(review_check_runs "$head") \
-    || { log "#$n review runs on ${head:0:8} could not be read; its rollup is read as reported"; continue; }
+  if ! runs=$(review_check_runs "$head"); then
+    log "#$n review runs on ${head:0:8} could not be read; a passing review there reads as pending"
+    prs=$(jq --argjson n "$n" '
+      map(if .number == $n then .statusCheckRollup |= map(
+            if (.name // .context) == "review" and ((.conclusion // .state // "") == "SUCCESS")
+            then (.conclusion = null | .state = null | .status = "PENDING") else . end)
+          else . end)' <<<"$prs") || { log "#$n review runs could not be applied; nothing done"; exit 1; }
+    continue
+  fi
   mine=$(jq -c --arg id "unitares-review:$n:$head" '
       if any(.check_runs[]; (.external_id // "") != "") | not then null
       else [.check_runs[] | select((.external_id // "") as $e | $e == "" or $e == $id)

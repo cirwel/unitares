@@ -2381,6 +2381,16 @@ def test_unreadable_review_runs_leave_the_rollup_as_reported(tmp_path: Path) -> 
     assert "ACTION_REQUIRED" in out
 
 
+def test_unreadable_review_runs_never_lend_another_prs_pass(tmp_path: Path) -> None:
+    # The head's newest pass may be another PR's; where review is required, a
+    # failed lookup makes this PR wait instead of arming on it.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", review="SUCCESS")], PR_QUEUE_REQUIRED_CHECKS="review")
+    assert calls == []
+    assert "review=PENDING" in out
+
+
 def test_an_effect_line_removed_since_the_snapshot_stops_the_arm(tmp_path: Path) -> None:
     pr, timeline = _delegable(tmp_path)
     (tmp_path / "gh").mkdir()
