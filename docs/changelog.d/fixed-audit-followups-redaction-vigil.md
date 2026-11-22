@@ -1,0 +1,2 @@
+- **model endpoints:** credential redaction now also removes a configured password or query value decoded with percent escapes only. A password such as `p+ss%40word` reaches a provider as `p+ss@word`, which form decoding alone never produced, so provider error text could quote it.
+- **vigil:** a stalled draft whose CI rerun is still queued or running is no longer closed as recovered `green`; it stays open until the checks finish. A `Model:` / `UNITARES agent:` signature inside a fenced code block, such as a quoted template, is no longer read as the PR's author.

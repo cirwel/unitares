@@ -1227,6 +1227,15 @@ def test_redact_url_credentials_scrubs_query_secrets_on_request_urls():
     assert "frag" not in redacted
 
 
+def test_redact_url_credentials_scrubs_a_password_with_a_literal_plus():
+    # Userinfo decodes percent escapes only, so "+" stays a plus. Form
+    # decoding alone turned it into a space and missed the real password.
+    base = "https://user:p+ss%40word@models.example/v1"
+    redacted = env.redact_url_credentials("connect failed using password p+ss@word", base)
+    assert "p+ss@word" not in redacted
+    assert "[redacted]" in redacted
+
+
 def test_redact_url_credentials_scrubs_encoded_query_values_and_password():
     base = "http://u:pa%40ssword@gpu:8000/v1?token=a%2Bb%2Fcdef"
     text = "token a+b/cdef and a%2Bb%2Fcdef rejected; password pa@ssword"

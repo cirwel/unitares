@@ -21,6 +21,15 @@ class TestPairSimilarity:
         mean = sum(values) / len(values)
         similarity = _pair_similarity(-0.09, -0.10, mean)
         assert 0.0 <= similarity <= 1.0
+        # The scale is |mean|, so the value is exact, not merely in range.
+        assert similarity == pytest.approx(1.0 - 0.01 / (0.03 + 0.001))
+
+    def test_a_negative_mean_scores_like_its_positive_mirror(self):
+        # Flipping every sign must not change how alike two values are.
+        assert _pair_similarity(-0.50, -0.52, -0.51) == pytest.approx(
+            _pair_similarity(0.50, 0.52, 0.51)
+        )
+        assert _pair_similarity(-0.50, -0.52, -0.51) == pytest.approx(1.0 - 0.02 / 0.511)
 
     def test_mean_at_negative_epsilon_does_not_divide_by_zero(self):
         similarity = _pair_similarity(0.2, -0.202, -0.001)
