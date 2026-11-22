@@ -1,4 +1,4 @@
-"""Integration tests for agents/vigil_hygiene/agent.py sweep against an
+"""Integration tests for scripts/dev/branch_hygiene/agent.py sweep against an
 ephemeral local git repo. Avoids network by stubbing list_open_pr_branches.
 """
 from __future__ import annotations
@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from agents.vigil_hygiene import agent as agent_mod
-from agents.vigil_hygiene.agent import is_keepalive, sweep
-from agents.vigil_hygiene.cherry import CherryVerdict
+from scripts.dev.branch_hygiene import agent as agent_mod
+from scripts.dev.branch_hygiene.agent import is_keepalive, sweep
+from scripts.dev.branch_hygiene.cherry import CherryVerdict
 
 
 @pytest.fixture(autouse=True)

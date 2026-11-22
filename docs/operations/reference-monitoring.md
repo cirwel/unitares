@@ -6,7 +6,7 @@ has no GitHub owner or local client-history path selected.
 
 ## Repository cleanup
 
-`python3 agents/vigil_hygiene/agent.py --repo /path/to/checkout` is a dry run;
+`python3 scripts/dev/branch_hygiene/agent.py --repo /path/to/checkout` is a dry run;
 `--live` enables deletions. PR protection is resolved from that checkout's
 `origin`, regardless of `GH_REPO` or the CLI's default repository. All open PR
 pages are read before the sweep changes anything. Unavailable or malformed PR
@@ -20,8 +20,8 @@ patch-equivalence, age, clean-worktree, and lease safeguards still apply.
 
 Set `GITHUB_SCRAPE_ORG` to opt Chronicler into an owner's non-archived repository
 traffic. With it unset, Chronicler registers no traffic scrapers and makes no
-traffic API calls. Its optional example catalog is
-`agents/chronicler/metrics_catalog.json`.
+traffic API calls. Chronicler and its metric catalog live with the deployment
+that runs it, not in this repository.
 
 The default traffic namespace is `github`: for example,
 `github.traffic.views.14d`. To retain existing stored series, set

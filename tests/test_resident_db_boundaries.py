@@ -1,7 +1,7 @@
 """Boundary ratchet and HTTP contract tests for resident DB/Core decoupling.
 
 Enforces `docs/proposals/active/federation-component-boundaries-v0.md` §2.3 / §6
-across Python client-side residents (`agents/{chronicler,sentinel,vigil,watcher,steward,common}`)
+across Python client-side residents (`agents/{sentinel,vigil,steward,common}`)
 and verifies strict-mode authentication, error isolation, and validation on the
 read-only Core `/v1/*` telemetry routes that replaced direct PostgreSQL reads.
 """
@@ -25,7 +25,6 @@ from starlette.routing import Route
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 CLIENT_RESIDENT_DIRS = (
-    "agents/chronicler",
     "agents/sentinel",
     "agents/vigil",
     "agents/steward",
@@ -672,7 +671,6 @@ class TestBearerFallbackAndUrlNormalization:
     def test_url_normalization_preserves_reverse_proxy_prefix_and_scopes_metrics_url(
         self, monkeypatch
     ):
-        from agents.chronicler import scrapers
         from agents.common.http_client import resolve_governance_base_url
 
         assert resolve_governance_base_url("https://host/unitares") == "https://host/unitares"
@@ -687,40 +685,13 @@ class TestBearerFallbackAndUrlNormalization:
             == "https://host/unitares"
         )
 
-        # UNITARES_METRICS_URL must NOT hijack Sentinel/Vigil's governance base URL...
+        # UNITARES_METRICS_URL must NOT hijack Sentinel/Vigil's governance base URL.
+        # (A metrics scraper honouring it is that scraper's own concern and is
+        # tested with the scraper.)
         monkeypatch.delenv("GOV_REST_URL", raising=False)
         monkeypatch.setenv("UNITARES_METRICS_URL", "https://metrics-host/unitares")
         monkeypatch.setenv("MCP_SERVER_URL", "https://core-host:8767/mcp/")
         assert resolve_governance_base_url() == "https://core-host:8767"
-
-        # ...while Chronicler's snapshot fetcher DOES honor UNITARES_METRICS_URL + prefix!
-        scrapers.clear_snapshot_cache()
-        seen_urls: list[str] = []
-
-        class _FakeClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_exc):
-                return False
-
-            def get(self, url, **_kw):
-                seen_urls.append(url)
-                return httpx.Response(
-                    200,
-                    json={
-                        "success": True,
-                        "metrics": {"agents.active.7d": 3.0},
-                        "finding_counts_7d": {},
-                        "errors": {},
-                    },
-                )
-
-        with patch("agents.chronicler.scrapers.httpx.Client", return_value=_FakeClient()):
-            snap = scrapers._fetch_metrics_snapshot()
-        assert seen_urls == ["https://metrics-host/unitares/v1/metrics/snapshot"]
-        assert snap["metrics"]["agents.active.7d"] == 3.0
-        scrapers.clear_snapshot_cache()
 
 
 class TestSitrepExactWindowAndUrl:
