@@ -88,6 +88,14 @@ def test_decline_is_a_marked_non_error_with_no_identity():
         assert absent not in payload
 
 
+def test_decline_hint_names_a_call_a_strict_server_accepts():
+    # A bare start_session() is refused as lineage_declaration_required on a
+    # strict server, so the hint must name the explicit fresh start.
+    hint = harness_onboarding_declined_payload("onboard")["hint"]
+    assert "start_session(force_new=true)" in hint
+    assert "start_session()" not in hint
+
+
 @pytest.mark.parametrize("anchor", [
     "agent:/thread-1573223283237847113",
     "agent:_thread-1573223283237847113",
