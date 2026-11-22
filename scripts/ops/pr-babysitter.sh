@@ -328,10 +328,11 @@ review_check_runs() {
 # `review` entries are replaced here with that PR's own runs, so every later
 # check (required, failed, pending, parked) reads this PR's review. Untagged
 # runs predate the tag and are kept; a head with no tagged run at all is left
-# as GitHub reported it. When the runs cannot be read this tick (logged), a
-# failing or parked `review` entry stays, since it blocks whoever owns it, but
-# a passing one may be another PR's and reads as pending: findings are never
-# hidden, and a borrowed pass never satisfies a required review. Skipped
+# as GitHub reported it. When the runs cannot be read this tick (logged), the
+# rollup's `review` entries, which may be any PR's, collapse to one: the most
+# blocking of them (failing, then parked), else pending. `rollup` alone would
+# keep only the newest, which can be another PR's pass over this PR's
+# findings. Findings are never hidden, and a pass is never borrowed. Skipped
 # runs (a workflow that also fires on `labeled` adds one) never count, so a
 # head carrying only other PRs' runs has no `review` for this PR: MISSING,
 # which the queue waits on.
@@ -339,11 +340,16 @@ for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelle
              | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
   head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
   if ! runs=$(review_check_runs "$head"); then
-    log "#$n review runs on ${head:0:8} could not be read; a passing review there reads as pending"
+    log "#$n review runs on ${head:0:8} could not be read; its review reads as the most blocking entry there, else pending"
     prs=$(jq --argjson n "$n" '
-      map(if .number == $n then .statusCheckRollup |= map(
-            if (.name // .context) == "review" and ((.conclusion // .state // "") == "SUCCESS")
-            then (.conclusion = null | .state = null | .status = "PENDING") else . end)
+      def bad: ((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
+               or ((.state // "") | test("^(FAILURE|ERROR)$"));
+      map(if .number == $n then
+            ([.statusCheckRollup[] | select((.name // .context) == "review")]) as $r
+            | .statusCheckRollup = ([.statusCheckRollup[] | select((.name // .context) != "review")]
+                + [([$r[] | select(bad)] + [$r[] | select((.conclusion // "") == "ACTION_REQUIRED")]
+                    + [{__typename: "CheckRun", name: "review", status: "PENDING", conclusion: null}])[0]
+                   | del(.startedAt, .completedAt)])
           else . end)' <<<"$prs") || { log "#$n review runs could not be applied; nothing done"; exit 1; }
     continue
   fi

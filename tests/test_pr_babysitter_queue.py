@@ -2381,6 +2381,21 @@ def test_unreadable_review_runs_leave_the_rollup_as_reported(tmp_path: Path) -> 
     assert "ACTION_REQUIRED" in out
 
 
+@pytest.mark.parametrize("required", ["", "review"])
+def test_unreadable_review_runs_keep_older_findings_under_a_newer_pass(tmp_path: Path, required) -> None:
+    # On a shared head the rollup holds this PR's older findings and the other
+    # PR's newer pass; with the lookup failing, the findings still decide.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    checks = [_check("test"), _check("review", "ACTION_REQUIRED", run=900, started_min_ago=60),
+              _check("review", "SUCCESS", run=901, started_min_ago=5)]
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", checks=checks, review=None)],
+                      PR_QUEUE_REQUIRED_CHECKS=required)
+    assert calls == []
+    assert "ACTION_REQUIRED" in out
+    assert "waiting on" not in out
+
+
 def test_unreadable_review_runs_never_lend_another_prs_pass(tmp_path: Path) -> None:
     # The head's newest pass may be another PR's; where review is required, a
     # failed lookup makes this PR wait instead of arming on it.
