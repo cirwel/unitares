@@ -595,6 +595,25 @@ def test_parse_author_takes_the_last_signature():
     assert parse_author(body)["agent_uuid"] == UUID_A
 
 
+def test_parse_author_ignores_a_signature_quoted_in_a_fence():
+    """A template or example inside a code fence is not the PR's authorship."""
+    from agents.vigil.checks.stalled_draft_pr import parse_author
+
+    example = f"Use this footer:\n\n```text\n---\nModel: example-model\nUNITARES agent: {UUID_A}\n```\n"
+    assert parse_author(example) == {"agent_uuid": "", "model": ""}
+    other = "99999999-8888-7777-6666-555555555555"
+    signed_after = example + f"\n---\nModel: real-model\nUNITARES agent: {other}\n"
+    assert parse_author(signed_after) == {"agent_uuid": other, "model": "real-model"}
+    # A tilde fence, and an unclosed fence that runs to the end.
+    assert parse_author(f"~~~\nUNITARES agent: {UUID_A}\n~~~\n")["agent_uuid"] == ""
+    assert parse_author(f"````\nUNITARES agent: {UUID_A}\n")["agent_uuid"] == ""
+    # A fence line that carries an info string opens a block but cannot close
+    # one: inside the outer block it is content, so the example stays hidden.
+    nested = f"```text\n```python\nUNITARES agent: {UUID_A}\n```\n"
+    assert parse_author(nested)["agent_uuid"] == ""
+    assert parse_author(nested + f"UNITARES agent: {other}\n")["agent_uuid"] == other
+
+
 @pytest.mark.parametrize("body", [None, 42, "", "no signature here", "UNITARES agent: not-a-uuid"])
 def test_parse_author_never_guesses(body):
     from agents.vigil.checks.stalled_draft_pr import parse_author
@@ -628,6 +647,17 @@ def test_gather_carries_the_author_on_a_stalled_row(monkeypatch):
         # Still red past the window: not closed.
         ({"state": "OPEN", "isDraft": True,
           "statusCheckRollup": [_run("smoke", "FAILURE", 30.0)]}, None),
+        # A rerun still queued or running has not passed: not closed.
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [{"name": "smoke", "status": "QUEUED", "conclusion": None}]}, None),
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [_run("lint", "SUCCESS", 1.0),
+                                {"name": "smoke", "status": "IN_PROGRESS", "conclusion": None}]}, None),
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [{"context": "ci/legacy", "state": "PENDING"}]}, None),
+        # Finished green, shape as GitHub returns it.
+        ({"state": "OPEN", "isDraft": True,
+          "statusCheckRollup": [{"name": "smoke", "status": "COMPLETED", "conclusion": "SUCCESS"}]}, "green"),
         # Cannot tell: not closed.
         ({"state": "OPEN", "isDraft": True}, None),
         ({"state": "OPEN", "isDraft": True, "statusCheckRollup": "junk"}, None),

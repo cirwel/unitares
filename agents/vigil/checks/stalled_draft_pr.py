@@ -235,6 +235,26 @@ def failing_nodes(rollup: Any) -> List[dict]:
     return out
 
 
+def pending_nodes(rollup: Any) -> List[dict]:
+    """Pure: the entries of a statusCheckRollup payload with no result yet.
+
+    A CheckRun is pending until its ``status`` is COMPLETED; a StatusContext
+    while its ``state`` is PENDING or EXPECTED. A rollup that is not a list
+    yields nothing, as in :func:`failing_nodes`.
+    """
+    if not isinstance(rollup, list):
+        return []
+    out: List[dict] = []
+    for node in rollup:
+        if not isinstance(node, dict):
+            continue
+        status = str(node.get("status") or "").upper()
+        state = str(node.get("state") or "").upper()
+        if (status and status != "COMPLETED") or state in ("PENDING", "EXPECTED"):
+            out.append(node)
+    return out
+
+
 def failing_check_names(rollup: Any) -> List[str]:
     """Pure: names of failing entries in a statusCheckRollup payload."""
     return [n.get("name") or n.get("context") or "?" for n in failing_nodes(rollup)]
@@ -263,6 +283,37 @@ _AUTHOR_UUID_RE = re.compile(rf"^UNITARES agent:[ \t]*({_UUID})[ \t]*\r?$", re.M
 _AUTHOR_MODEL_RE = re.compile(r"^Model:[ \t]*(\S[^\r\n]{0,80}?)[ \t]*\r?$", re.MULTILINE)
 
 
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
+
+def _without_fenced_blocks(body: str) -> str:
+    """Pure: ``body`` with fenced code blocks removed.
+
+    A signature shown inside a fence is an example, such as a template quoted
+    in a PR body, not the PR's own authorship. An unclosed fence runs to the
+    end, as Markdown renders it.
+    """
+    kept: List[str] = []
+    fence = ""
+    for line in body.splitlines(keepends=True):
+        match = _FENCE_RE.match(line)
+        if fence:
+            # A closing fence carries nothing but whitespace after its run.
+            if (
+                match
+                and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= len(fence)
+                and not line[match.end():].strip()
+            ):
+                fence = ""
+            continue
+        if match:
+            fence = match.group(1)
+            continue
+        kept.append(line)
+    return "".join(kept)
+
+
 def parse_author(body: Any) -> dict:
     """Pure: the authorship signature of a PR body, as ``{agent_uuid, model}``.
 
@@ -273,6 +324,7 @@ def parse_author(body: Any) -> dict:
     """
     if not isinstance(body, str):
         return {"agent_uuid": "", "model": ""}
+    body = _without_fenced_blocks(body)
     uuids = _AUTHOR_UUID_RE.findall(body)
     models = _AUTHOR_MODEL_RE.findall(body)
     return {
@@ -319,7 +371,9 @@ def classify_closure(view: Any, *, now: float, stale_hours: float) -> Optional[s
         # A draft whose checks cannot be read is not known to be green.
         return None
     if not failing_nodes(rollup):
-        return "green"
+        # Nothing red, but a check still queued or running has not passed:
+        # the stall stays open until CI has actually finished green.
+        return None if pending_nodes(rollup) else "green"
     since = red_since(rollup)
     if since is None:
         return None
