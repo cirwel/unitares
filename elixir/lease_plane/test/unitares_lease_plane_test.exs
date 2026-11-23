@@ -416,6 +416,93 @@ defmodule UnitaresLeasePlaneTest do
       assert refreshed.substrate_state == nil
       assert refreshed.substrate_state_observed_at == nil
     end
+
+    test "update_substrate_on_idempotent release race preserves verified principal from acquire params" do
+      rand = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+      surface = "resident:/test_elixir_race_principal_#{rand}"
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      holder = random_uuid()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      substrate = %{"sensor" => %{"status" => "healthy"}}
+
+      # Seed an issuerless pre-084 row and release it to simulate a reaper race
+      # occurring between maybe_existing_active and the idempotent UPDATE.
+      assert {:ok, existing, :new} =
+               Repo.acquire(%{
+                 surface_id: surface,
+                 holder_agent_uuid: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "remote_heartbeat",
+                 ttl_s: 60
+               })
+
+      assert existing.holder_issuer == nil
+      assert existing.holder_subject == nil
+      assert :ok = Repo.release(existing.lease_id, "reaped_remote_ttl")
+
+      attested_p = %{
+        surface_id: surface,
+        holder_agent_uuid: holder,
+        holder_issuer: "operator-a",
+        holder_subject: holder,
+        holder_class: "process_instance",
+        holder_kind: "remote_heartbeat",
+        ttl_s: 60,
+        substrate_state: substrate,
+        substrate_state_observed_at: observed_at
+      }
+
+      assert {:ok, {:ok, {:ok, replacement, :new}}} =
+               Postgrex.transaction(UnitaresLeasePlane.DB, fn conn ->
+                 Repo.update_substrate_on_idempotent(
+                   conn,
+                   attested_p,
+                   existing,
+                   substrate,
+                   observed_at
+                 )
+               end)
+
+      assert replacement.lease_id != existing.lease_id
+      assert replacement.holder_issuer == "operator-a"
+      assert replacement.holder_subject == holder
+      assert replacement.substrate_state == substrate
+
+      assert {:ok, persisted} = UnitaresLeasePlane.status(surface)
+      assert persisted.lease_id == replacement.lease_id
+      assert persisted.holder_issuer == "operator-a"
+      assert persisted.holder_subject == holder
+
+      # Converse: if an attested lease is released before an unauthenticated
+      # fallback retry updates substrate, the replacement row stays unattested.
+      assert :ok = Repo.release(replacement.lease_id, "reaped_remote_ttl")
+
+      unattested_p = %{
+        surface_id: surface,
+        holder_agent_uuid: holder,
+        holder_class: "process_instance",
+        holder_kind: "remote_heartbeat",
+        ttl_s: 60,
+        substrate_state: substrate,
+        substrate_state_observed_at: observed_at
+      }
+
+      assert {:ok, {:ok, {:ok, unattested_replacement, :new}}} =
+               Postgrex.transaction(UnitaresLeasePlane.DB, fn conn ->
+                 Repo.update_substrate_on_idempotent(
+                   conn,
+                   unattested_p,
+                   replacement,
+                   substrate,
+                   observed_at
+                 )
+               end)
+
+      assert unattested_replacement.lease_id != replacement.lease_id
+      assert unattested_replacement.holder_issuer == nil
+      assert unattested_replacement.holder_subject == nil
+    end
   end
 
   describe "handoff" do
