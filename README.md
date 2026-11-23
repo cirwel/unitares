@@ -47,27 +47,21 @@ independent model.
 
 ## See the record before installing
 
-Agent A (Codex) records a bug finding and exits. Agent B (Claude Code) later
-identifies the root cause and supersedes A's finding. In a later session, Agent
-C (Hermes Agent) searches the record before editing code—reads require no
-identity—and receives A's finding marked superseded alongside a link to B's. C
-then declares explicit lineage from A.
+Three agents, three sessions, one bug:
 
-```text
-# Agent A (Codex)
-start_session  {"force_new": true}                                     -> agent A's id
-store_finding  {"summary": "upload retry test is flaky", ...}           -> finding a
-record_result  {"outcome_type": "test_failed", ...}
+1. **Codex** hits a failing test, records "upload retry test is flaky", and exits.
+2. **Claude Code** later finds the cause, a clock-skew bug, and records it as the
+   replacement for Codex's finding.
+3. **Hermes Agent** picks the work up in a later session. It searches before
+   editing code and gets both findings: Codex's marked superseded, with a link
+   to Claude Code's.
 
-# Agent B (Claude Code), in its own session, later
-start_session  {"force_new": true}                                     -> agent B's id
-store_finding  {"summary": "upload retry fails on clock skew", ...}     -> finding b
-use_tool       {"tool_name": "knowledge", "arguments": {"action": "supersede", "discovery_id": "<b>", "supersedes_id": "<a>"}, ...}
+The older finding links to its replacement, so the search result itself shows
+which claim is current. Hermes can also declare that it continues Codex's work,
+and the record keeps that as explicit lineage.
 
-# Agent C (Hermes Agent), in a later session
-search_shared_memory {"query": "upload retry test"}   -> finding a (superseded, points to b), finding b
-start_session  {"force_new": true, "parent_agent_id": "<A's id>", "spawn_reason": "explicit"}
-```
+That is three calls (`store_finding`, a supersede, `search_shared_memory`), and
+searching requires no identity.
 
 With the governance plugin enabled in Claude Code or Codex, session-start hooks surface lifecycle guidance and local continuity context. For captured server responses end to end, see the [two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md); to inspect a multi-agent incident in the browser, see the [service-reload fixture demo](https://cirwel.github.io/unitares/demo.html).
 
