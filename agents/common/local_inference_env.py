@@ -14,6 +14,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -45,11 +46,60 @@ _BUILTIN_LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal"})
 _IPV4_MAPPED = ipaddress.ip_network("::ffff:0:0/96")
 _extra_networks_cache: tuple[str, tuple] = ("", ())
 _warned_bad_privacy: set[str] = set()
+_warned_disagreements: set[tuple[str, str, str, str]] = set()
 _ssl_context_cache: tuple[tuple, object] | None = None
+_USERINFO_RE = re.compile(r"^([a-z][a-z0-9+.-]*://)?[^/@\s]*@", re.I)
+
+
+@dataclass(frozen=True)
+class SettingAlias:
+    """An older setting name still read in place of ``new`` until ``removed_in``."""
+
+    old: str
+    new: str
+    removed_in: str
+
+
+# Mirrors src.local_inference_env.SETTING_ALIASES (empty since v3.3.0).
+# Kept in sync by TestClientLocalInferenceEnvParity so any future rename
+# applies identically to agents/local_resident.
+SETTING_ALIASES: tuple[SettingAlias, ...] = ()
 
 
 def _env(name: str) -> str:
     return os.getenv(name, "").strip()
+
+
+def aliases_for(new: str) -> tuple[SettingAlias, ...]:
+    return tuple(a for a in SETTING_ALIASES if a.new == new)
+
+
+def _redact_userinfo(value: str) -> str:
+    return _USERINFO_RE.sub(lambda m: m.group(1) or "", value)
+
+
+def _resolve(new: str, normalize) -> str:
+    """Value of ``new``, else of its aliases in table order; ``""`` when none is set."""
+    names = [new] + [a.old for a in aliases_for(new)]
+    candidates = [(name, normalize(name, _env(name))) for name in names]
+    present = [(name, value) for name, value in candidates if value]
+    if not present:
+        return ""
+    winner_name, winner = present[0]
+    for other_name, other in present[1:]:
+        if other != winner:
+            key = (winner_name, winner, other_name, other)
+            if key not in _warned_disagreements:
+                _warned_disagreements.add(key)
+                logger.warning(
+                    "%s (%s) and %s (%s) disagree; using %s. Set one of them.",
+                    winner_name,
+                    _redact_userinfo(winner),
+                    other_name,
+                    _redact_userinfo(other),
+                    winner_name,
+                )
+    return winner
 
 
 def extra_trusted_networks() -> tuple:
@@ -73,6 +123,29 @@ def extra_trusted_networks() -> tuple:
             )
             continue
         nets.append(net)
+    mapped_v4 = [
+        ipaddress.ip_network((int(n.network_address) & 0xFFFFFFFF, n.prefixlen - 96))
+        for n in nets
+        if n.version == 6 and n.subnet_of(_IPV4_MAPPED)
+    ]
+    for version in (4, 6):
+        listed = [n for n in (*BUILTIN_TRUSTED_NETWORKS, *nets) if n.version == version]
+        if version == 4:
+            listed += mapped_v4
+        for net in ipaddress.collapse_addresses(listed):
+            if net.prefixlen == 0:
+                logger.warning(
+                    "UNITARES_TRUSTED_NETWORKS: %s trusts every caller; local-posture "
+                    "auth is effectively off",
+                    net,
+                )
+            elif version == 6 and _IPV4_MAPPED.subnet_of(net):
+                logger.warning(
+                    "UNITARES_TRUSTED_NETWORKS: %s trusts every caller over IPv4 on a "
+                    "dual-stack bind (::ffff:0:0/96); local-posture auth is "
+                    "effectively off",
+                    net,
+                )
     _extra_networks_cache = (raw, tuple(nets))
     return _extra_networks_cache[1]
 
@@ -102,14 +175,18 @@ def normalize_model_base_url(value: str | None) -> str:
     return url
 
 
+def _normalize_base_setting(_name: str, value: str) -> str:
+    return normalize_model_base_url(value)
+
+
 def model_base_url() -> str:
     """OpenAI-compatible base URL of the local model endpoint, including ``/v1``."""
-    return normalize_model_base_url(_env(MODEL_BASE_URL_ENV)) or DEFAULT_MODEL_BASE_URL
+    return _resolve(MODEL_BASE_URL_ENV, _normalize_base_setting) or DEFAULT_MODEL_BASE_URL
 
 
 def default_local_model() -> str:
     """Configured model id (``UNITARES_MODEL_ID``), or ``""`` when unset."""
-    return _env(MODEL_ENV)
+    return _resolve(MODEL_ENV, lambda _name, v: v.strip())
 
 
 @dataclass(frozen=True)

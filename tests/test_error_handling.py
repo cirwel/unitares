@@ -124,6 +124,74 @@ class TestSanitizeErrorMessage:
         assert out.endswith(".")
         assert "First sentence is short." in out
 
+    @pytest.mark.parametrize(
+        "raw, expected, forbidden",
+        [
+            (
+                "Upstream failed: https://api.example.com/v1/chat?api_key=sk-secret",
+                "Upstream failed: https://api.example.com/v1/chat",
+                ("api_key", "sk-secret"),
+            ),
+            (
+                "Redirect to https://app.example.com/callback#access_token=tok123&state=xyz failed",
+                "Redirect to https://app.example.com/callback failed",
+                ("access_token", "tok123", "state=xyz"),
+            ),
+            (
+                "GET https://api.example.com/v1/chat?api_key=secret#frag failed",
+                "GET https://api.example.com/v1/chat failed",
+                ("api_key", "secret", "#frag"),
+            ),
+            (
+                "DB error on postgres://alice:p@ss@db.internal:5432/gov?password=pw&sslmode=require#sec",
+                "DB error on postgres://db.internal:5432/gov",
+                ("alice", "p@ss", "password", "sslmode", "#sec"),
+            ),
+            (
+                "Request to https://api.example.com?token=abc== failed",
+                "Request to https://api.example.com failed",
+                ("token", "abc=="),
+            ),
+            (
+                "Failed calling (https://api.example.com/v1/chat?jwt=eyJ.abc.def).",
+                "Failed calling (https://api.example.com/v1/chat).",
+                ("jwt", "eyJ", "abc"),
+            ),
+            (
+                "Client error for url 'https://api.example.com/v1/chat?api_key=secret', retrying.",
+                "Client error for url 'https://api.example.com/v1/chat', retrying.",
+                ("api_key", "secret"),
+            ),
+            (
+                'Payload {"url":"https://api.example.com/v1/chat?api_key=secret","status":500}',
+                'Payload {"url":"https://api.example.com/v1/chat","status":500}',
+                ("api_key", "secret"),
+            ),
+            (
+                "See <https://api.example.com/items?ids=1,2&key=secret>; retrying.",
+                "See <https://api.example.com/items>; retrying.",
+                ("ids=", "key=secret"),
+            ),
+        ],
+    )
+    def test_strips_url_query_and_fragment(self, raw, expected, forbidden):
+        out = _sanitize_error_message(raw)
+        assert out == expected
+        for secret in forbidden:
+            assert secret not in out
+
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            "Is it ready? Try again.",
+            "See #1234 for details? Yes.",
+            "Failed calling https://api.example.com/v1/chat. Is it ready? See #42.",
+            "Did it reach https://api.example.com/health? Try again.",
+        ],
+    )
+    def test_preserves_non_url_questions_and_hashes(self, msg):
+        assert _sanitize_error_message(msg) == msg
+
 
 # --------------------------------------------------------------------------- #
 # error_response envelope
@@ -215,3 +283,14 @@ class TestErrorResponse:
                           arguments=None)
         assert "/home/op" not in d["hint"]
         assert "x.py" in d["hint"]
+
+    def test_url_query_and_fragment_sanitized_in_message_and_details(self):
+        d = self._payload(
+            "failed calling https://user:pw@api.example.com/v1/chat?api_key=sk-1#frag",
+            details={"endpoint": "https://api.example.com/v1/models?token=tok-2#top"},
+            arguments=None,
+        )
+        assert d["error"] == "failed calling https://api.example.com/v1/chat"
+        assert d["endpoint"] == "https://api.example.com/v1/models"
+        for secret in ("user:pw", "api_key", "sk-1", "#frag", "token", "tok-2", "#top"):
+            assert secret not in json.dumps(d)

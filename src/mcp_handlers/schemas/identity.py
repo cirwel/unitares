@@ -185,6 +185,33 @@ class OnboardParams(AgentIdentityMixin):
         # and the handler drops a malformed object the same way.
         return value if isinstance(value, dict) else None
 
+    harness_request: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Adapter-only: true when a harness, not the agent, is asking for "
+            "this identity. A server whose operator accepts only agent-claimed "
+            "identities then creates nothing and answers "
+            "harness_onboarding_declined. Resuming an existing identity is "
+            "unaffected."
+        ),
+        json_schema_extra={"brief": "Adapter-only."},
+    )
+    spawned_under: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional adapter-reported {anchor}: the thread anchor of the "
+            "conversation this process was started inside, stored once on a "
+            "fresh identity. Descriptive only, never lineage; a malformed value "
+            "is ignored."
+        ),
+        json_schema_extra={"brief": "Adapter-only: {anchor}."},
+    )
+
+    @field_validator("spawned_under", mode="before")
+    @classmethod
+    def _drop_non_object_spawned_under(cls, value: Any) -> Any:
+        return value if isinstance(value, dict) else None
+
     initial_state: Optional[BootstrapStateParams] = Field(
         default=None,
         description=(

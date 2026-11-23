@@ -187,9 +187,14 @@ def _identity_bound_request(
     whose dialectic row will change. A short-lived Ed25519 attestation binds the
     resolved caller to the exact path and bytes. Calls without a resolved
     request identity (for example a trusted background reconciliation task)
-    still go through BEAM without a proof. Compatibility mode accepts that
-    request; enforcement rejects it authoritatively instead of silently opening
-    a second PostgreSQL writer.
+    still go through BEAM without a proof. Compatibility modes
+    (``UNITARES_LEASE_IDENTITY_BINDING=off|log``) relax only cryptographic
+    ``lat.v1`` ``X-Unitares-Identity-Proof`` header verification: BEAM
+    dialectic session membership (``paused_agent_id`` / ``reviewer_agent_id``)
+    is always enforced server-side, so non-participants receive ``403
+    permission_denied`` or ``409 session_identity_mismatch`` regardless of
+    binding mode. Under enforcement, missing or invalid proofs are rejected
+    authoritatively instead of silently opening a second PostgreSQL writer.
     """
     from src.mcp_handlers.context import (
         get_credential_proof_uuid,

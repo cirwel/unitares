@@ -1338,20 +1338,25 @@ def measured_state_exists_sql(identity_alias: str = "i") -> str:
     )
 
 
-async def fetch_latest_measured_eisv_row(conn, identity_id: int, epoch: int):
-    """Fetch the latest non-synthetic ``core.agent_state`` EISV row for an identity."""
-    return await conn.fetchrow(
-        """
-        SELECT state_json, entropy, integrity, volatility, coherence, regime
-        FROM core.agent_state
-        WHERE identity_id = $1 AND epoch = $2
-          AND synthetic = false
-        ORDER BY recorded_at DESC
+def latest_measured_eisv_by_agent_sql(
+    *,
+    identity_join_sql: str,
+    identity_alias: str = "i",
+    agent_param: str = "$1",
+    epoch_param: str = "$2",
+) -> str:
+    """Return a query selecting the latest non-synthetic ``core.agent_state`` EISV row
+    for an agent joined via ``identity_join_sql``."""
+    return f"""
+        SELECT s.state_json, s.entropy, s.integrity, s.volatility,
+               s.coherence, s.regime
+        FROM core.agent_state s
+        {identity_join_sql}
+        WHERE {identity_alias}.agent_id = {agent_param} AND s.epoch = {epoch_param}
+          AND s.synthetic = false
+        ORDER BY s.recorded_at DESC
         LIMIT 1
-        """,
-        identity_id,
-        epoch,
-    )
+    """
 
 
 def prior_measured_state_lateral_sql(
