@@ -60,8 +60,8 @@ The older finding links to its replacement, so the search result itself shows
 which claim is current. Hermes can also declare that it continues Codex's work,
 and the record keeps that as explicit lineage.
 
-That is three calls (`store_finding`, a supersede, `search_shared_memory`), and
-searching requires no identity.
+The calls behind it are `store_finding`, a supersede, and
+`search_shared_memory`; searching requires no identity.
 
 With the governance plugin enabled in Claude Code or Codex, session-start hooks surface lifecycle guidance and local continuity context. For captured server responses end to end, see the [two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md); to inspect a multi-agent incident in the browser, see the [service-reload fixture demo](https://cirwel.github.io/unitares/demo.html).
 
