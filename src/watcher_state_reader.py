@@ -1,23 +1,20 @@
-"""Reader-side resolution of the Watcher agent's local state.
+"""Reader-side resolution of a Watcher's local state.
 
-The dashboard's watcher panel reads the findings.jsonl that the Watcher agent
-(a reference resident under ``agents/watcher``) writes. The server must not
-import resident example code — ``agents/`` is documented as non-contract
-reference material — so this module owns the reader's copy of the
-state-location contract instead of importing ``agents.watcher._util``:
+Core does not ship a Watcher. A deployment may run one as an ordinary SDK
+client; it writes ``findings.jsonl`` and its neighbours to a shared directory,
+and a deployment-owned route pack reads them through this module. Core must not
+import the writer, so this module owns the reader's copy of the state-location
+contract:
 
 - Shared dir: ``~/.unitares/watcher``, overridable via
-  ``UNITARES_WATCHER_DATA_DIR``. Checkout-independent so the writer (pinned to
-  the dev checkout by the PostToolUse hook) and the reader (whichever checkout
-  serves the live MCP) always agree — see the #595 dashboard-zeroes incident.
+  ``UNITARES_WATCHER_DATA_DIR``. Checkout-independent, so the writer and
+  whichever checkout serves the live MCP always agree (the #595
+  dashboard-zeroes incident).
 - Legacy dir: ``<repo>/data/watcher``, relative to this checkout. Migration
   source only; nothing writes here anymore.
 
-The writer-side counterpart is ``agents.watcher._util``. The two
-implementations are deliberately independent (no shared import in either
-direction); ``tests/test_http_api_watcher_summary.py``
-(``TestFindingsPathMatchesWriter``) imports both and pins that they resolve
-the same shared dir, so drift fails CI instead of silently zeroing the panel.
+A writer keeps its own copy of the same rule. ``tests/test_watcher_state_reader.py``
+pins this side.
 """
 
 from __future__ import annotations

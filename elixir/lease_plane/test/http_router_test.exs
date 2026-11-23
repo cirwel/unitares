@@ -1443,7 +1443,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(response)["ok"] == true
     end
 
-    test "explicit compatibility mode permits a non-participant dialectic actor" do
+    test "explicit compatibility mode skips proof verification for participants but still refuses non-participant dialectic actors" do
       Application.put_env(:lease_plane, :identity_binding_mode, :off)
 
       session_id =
@@ -1456,14 +1456,128 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
-      response =
+      # Non-participant phase advance is refused even with identity binding :off.
+      outsider_phase =
         post_json_without_proof("/v1/dialectic/phase", %{
           session_id: session_id,
           phase: "antithesis",
           actor_agent_id: "background-reconciler"
         })
 
-      assert response.status == 200
+      assert outsider_phase.status == 403
+      assert parsed(outsider_phase)["error"] == "permission_denied"
+
+      # A named participant succeeds without a cryptographic proof in :off mode.
+      participant_phase =
+        post_json_without_proof("/v1/dialectic/phase", %{
+          session_id: session_id,
+          phase: "antithesis",
+          actor_agent_id: "paused"
+        })
+
+      assert participant_phase.status == 200
+
+      # Only the current reviewer may reassign the reviewer slot even in :off mode.
+      paused_reassign =
+        post_json_without_proof("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "paused-choice",
+          actor_agent_id: "paused"
+        })
+
+      assert paused_reassign.status == 403
+
+      outsider_reassign =
+        post_json_without_proof("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "outsider-choice",
+          actor_agent_id: "background-reconciler"
+        })
+
+      assert outsider_reassign.status == 403
+
+      # Non-participant terminal resolution is refused with 409 session_identity_mismatch.
+      outsider_resolve =
+        post_json_without_proof("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          actor_agent_id: "background-reconciler",
+          resolution: %{"reason" => "outsider"}
+        })
+
+      assert outsider_resolve.status == 409
+      assert parsed(outsider_resolve)["error"] == "session_identity_mismatch"
+    end
+
+    test "narrowed bound surface kinds and :log mode still enforce dialectic membership and reviewer claim rules" do
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+      Application.put_env(:lease_plane, :identity_bound_surface_kinds, MapSet.new(["agent"]))
+
+      on_exit(fn ->
+        Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+      end)
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: nil,
+          phase: "synthesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      # Claiming an unassigned reviewer slot for someone else is refused even when
+      # dialectic_beam is excluded from identity_bound_surface_kinds.
+      spoofed_claim =
+        post_json_without_proof("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "reviewer",
+          actor_agent_id: "paused"
+        })
+
+      assert spoofed_claim.status == 403
+
+      # Self-claim succeeds without proof because dialectic_beam is outside bound kinds.
+      valid_claim =
+        post_json_without_proof("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "reviewer",
+          actor_agent_id: "reviewer"
+        })
+
+      assert valid_claim.status == 200
+
+      # In :log mode, non-participant phase advance and resolution are still refused.
+      Application.put_env(:lease_plane, :identity_binding_mode, :log)
+      Application.put_env(:lease_plane, :identity_bound_surface_kinds, :all)
+
+      assert post_json_without_proof("/v1/dialectic/phase", %{
+               session_id: session_id,
+               phase: "synthesis",
+               actor_agent_id: "intruder"
+             }).status == 403
+
+      assert post_json_without_proof("/v1/dialectic/resolve", %{
+               session_id: session_id,
+               paused_agent_id: "paused",
+               reviewer_agent_id: "reviewer",
+               actor_agent_id: "intruder",
+               resolution: %{"reason" => "intruder"}
+             }).status == 409
+
+      # A named participant resolves cleanly without proof in :log mode.
+      valid_resolve =
+        post_json_without_proof("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          actor_agent_id: "reviewer",
+          resolution: %{"reason" => "participant"}
+        })
+
+      assert valid_resolve.status == 200
     end
 
     test "dialectic session creation binds proof to the paused participant" do

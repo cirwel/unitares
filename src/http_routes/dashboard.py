@@ -33,6 +33,43 @@ logger = get_logger(__name__)
 _AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
 _AUTH_HANDLER_PAGES = {"auth/signin.html", "auth/enroll.html", "auth/hub-authorize.html"}
 
+# Baseline browser security headers for all dashboard routes (HTML shells,
+# static assets, and operator extensions). Inline styles/scripts remain allowed
+# because the buildless redesign and extension loader use them, while framing,
+# plugins, base-URI hijacking, and unexpected external origins are blocked.
+_DASHBOARD_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+_DASHBOARD_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": _DASHBOARD_CSP,
+}
+
+
+def _dashboard_json_error(payload: dict, *, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers=dict(_DASHBOARD_SECURITY_HEADERS),
+    )
+
+
+def _with_dashboard_security_headers(response: Response) -> Response:
+    for header, value in _DASHBOARD_SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
+
 
 def _same_file_as_any(target: Path, base: Path, names) -> bool:
     """Whether ``target`` is one of the named files under ``base``, by inode."""
@@ -74,11 +111,12 @@ async def http_phase(request):
             content=html,
             media_type="text/html",
             headers={
+                **_DASHBOARD_SECURITY_HEADERS,
                 "Cache-Control": "no-store",
                 "Vary": "Cookie, Authorization",
             },
         )
-    return JSONResponse({"error": "Phase view not found", "path": str(phase_path)}, status_code=404)
+    return _dashboard_json_error({"error": "Phase view not found", "path": str(phase_path)}, status_code=404)
 
 
 # Dashboard static files. The classic dashboard was retired (see
@@ -89,14 +127,14 @@ async def http_dashboard_static(request):
     """Serve dashboard static files"""
     file_path = request.path_params.get("file", "")
     if not file_path or ".." in file_path:
-        return JSONResponse({"error": "Invalid file path"}, status_code=400)
+        return _dashboard_json_error({"error": "Invalid file path"}, status_code=400)
 
     # Only allow specific files for security
     allowed_files = [
         "phase.js",
     ]
     if file_path not in allowed_files:
-        return JSONResponse({
+        return _dashboard_json_error({
             "error": "File not allowed",
             "requested": file_path,
             "allowed": allowed_files
@@ -114,9 +152,12 @@ async def http_dashboard_static(request):
         return Response(
             content=static_path.read_text(),
             media_type=content_type,
-            headers={"Cache-Control": "no-cache"},
+            headers={
+                **_DASHBOARD_SECURITY_HEADERS,
+                "Cache-Control": "no-cache",
+            },
         )
-    return JSONResponse({
+    return _dashboard_json_error({
         "error": "File not found",
         "path": str(static_path)
     }, status_code=404)
@@ -130,14 +171,14 @@ async def http_dashboard_redesign(request):
     """Serve the buildless dashboard redesign reference at /dashboard/redesign/."""
     rel = request.path_params.get("file", "") or "app.html"
     if ".." in rel or rel.startswith("/"):
-        return JSONResponse({"error": "Invalid file path"}, status_code=400)
+        return _dashboard_json_error({"error": "Invalid file path"}, status_code=400)
     if not rel.endswith((".html", ".css", ".js", ".md")):
-        return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
+        return _dashboard_json_error({"error": "File type not allowed", "requested": rel}, status_code=403)
 
     base = (Path(__file__).resolve().parents[2] / "dashboard" / "redesign").resolve()
     target = (base / rel).resolve()
     if not str(target).startswith(str(base) + os.sep) or not target.is_file():
-        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+        return _dashboard_json_error({"error": "File not found", "requested": rel}, status_code=404)
     # The two rules below compare the resolved FILE, not the requested name:
     # `auth//x.html`, `./x.html` and, on a case-insensitive filesystem,
     # `X.html` all name the same file under a different string.
@@ -147,7 +188,7 @@ async def http_dashboard_redesign(request):
     # approval page in particular must never be served without the handler's
     # anti-framing headers, or another page could frame its Allow button.
     if _same_file_as_any(target, base, _AUTH_HANDLER_PAGES):
-        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+        return _dashboard_json_error({"error": "File not found", "requested": rel}, status_code=404)
     # Not every file under the shell is shell. snapshot.js once bundled a
     # capture of real governance state (it is a synthetic fixture now), the
     # same data class the /v1/eisv/* routes are gated for. app.html loads it
@@ -156,7 +197,7 @@ async def http_dashboard_redesign(request):
     if _same_file_as_any(target, base, _AUTHENTICATED_ONLY_FILES):
         http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
         if not access._check_http_auth(request, http_api_token=http_api_token):
-            return access._http_unauthorized()
+            return _with_dashboard_security_headers(access._http_unauthorized())
 
     media = {
         ".html": "text/html", ".css": "text/css",
@@ -217,7 +258,11 @@ async def http_dashboard_redesign(request):
     return Response(
         content=content,
         media_type=media,
-        headers={"Cache-Control": cache, "Vary": "Cookie, Authorization"},
+        headers={
+            **_DASHBOARD_SECURITY_HEADERS,
+            "Cache-Control": cache,
+            "Vary": "Cookie, Authorization",
+        },
     )
 
 
@@ -242,27 +287,31 @@ async def http_dashboard_ext(request):
     ext_dir = os.getenv("UNITARES_DASHBOARD_EXT_DIR", "").strip()
     rel = request.path_params.get("file", "")
     if not ext_dir:
-        return JSONResponse({"error": "No dashboard extensions configured"}, status_code=404)
+        return _dashboard_json_error({"error": "No dashboard extensions configured"}, status_code=404)
     if not rel or ".." in rel or rel.startswith("/"):
-        return JSONResponse({"error": "Invalid file path"}, status_code=400)
+        return _dashboard_json_error({"error": "Invalid file path"}, status_code=400)
     suffix = Path(rel).suffix
     if suffix not in _EXT_MEDIA:
-        return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
+        return _dashboard_json_error({"error": "File type not allowed", "requested": rel}, status_code=403)
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
+        return _with_dashboard_security_headers(access._http_unauthorized())
     base = Path(ext_dir).expanduser().resolve()
     target = (base / rel).resolve()
     if not str(target).startswith(str(base) + os.sep) or not target.is_file():
-        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+        return _dashboard_json_error({"error": "File not found", "requested": rel}, status_code=404)
     return Response(
         content=target.read_text(),
         media_type=_EXT_MEDIA[suffix],
-        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"},
+        headers={
+            **_DASHBOARD_SECURITY_HEADERS,
+            "Cache-Control": "no-store",
+            "Vary": "Cookie, Authorization",
+        },
     )
 
 
 async def http_dashboard_classic_redirect(request):
     """Classic was retired (PR #1012). Old /dashboard/classic links land on the
     live dashboard instead of a confusing 403 from the static allowlist."""
-    return RedirectResponse("/dashboard", status_code=302)
+    return RedirectResponse("/dashboard", status_code=302, headers=dict(_DASHBOARD_SECURITY_HEADERS))

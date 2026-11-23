@@ -2536,8 +2536,20 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # S13 v2-ontology gate (see _s13_freshness_gate): may refuse the bare
     # call under STRICT_IDENTITY_REQUIRED, or default force_new=true in place.
+    #
+    # A harness asking for an identity is subject to the operator's policy
+    # (src.identity.harness_onboarding). Under agent_only nothing is created
+    # for it, and it is told so on every path that would not resume an
+    # existing identity. The first is here: a harness call the freshness gate
+    # refuses would otherwise be told to retry with force_new=true, which the
+    # policy then declines.
+    harness_request = coerce_bool(arguments.get("harness_request"), default=False)
     _s13_refusal = _s13_freshness_gate(arguments)
     if _s13_refusal is not None:
+        if harness_request:
+            _declined = _harness_onboarding_refusal()
+            if _declined is not None:
+                return _declined
         return _s13_refusal
 
     # Extract optional parameters
@@ -2598,6 +2610,16 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         force_new=force_new,
         resume=resume,
     )
+
+    # Harness policy, second place: the call asks outright for a new identity.
+    # The third is the resolve miss below, where a resume finds nothing to
+    # resume, and the fourth is the fresh-identity branch after it, which
+    # catches any other way the resolver came back with a new identity.
+    # Resuming an existing identity creates nothing and is not declined.
+    if harness_request and (force_new or not resume):
+        _declined = _harness_onboarding_refusal()
+        if _declined is not None:
+            return _declined
 
     # Extract agent UUID from continuity token for direct lookup fallback (PATH 2.8).
     # Token is a cryptographic proof of identity — stronger than name claim.
@@ -2663,6 +2685,10 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 # on the H4/lineage-decl gap, 2026-04-27 post-deploy
                 # canary refuted by 0 dispatch_auto_mint rows in
                 # core.agents). Caller-provided values are preserved.
+                if harness_request:
+                    _declined = _harness_onboarding_refusal()
+                    if _declined is not None:
+                        return _declined
                 if not _spawn_reason:
                     _spawn_reason = (
                         "orchestrated_thread_anchor"
@@ -2801,6 +2827,19 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             # CRITICAL FIX (v2.5.7): Capture the fresh identity to persist it directly
             # instead of calling resolve_session_identity again (which could create a different UUID
             # if Redis caching failed silently)
+            if harness_request:
+                # The resolver came back with a new identity by a route the
+                # checks above do not see (a database error on the lookup
+                # falls through to an in-memory mint; a middleware-resolved
+                # identity can be new too). Nothing is persisted yet. Decline,
+                # and drop the session entry the resolver cached for it, or
+                # the next call under this session would resume it into being.
+                _declined = _harness_onboarding_refusal()
+                if _declined is not None:
+                    await _forget_unpersisted_identity(
+                        existing_identity.get("agent_uuid"), base_session_key
+                    )
+                    return _declined
             created_fresh_identity = True
             agent_uuid = existing_identity.get("agent_uuid")
             agent_id = existing_identity.get("agent_id", agent_uuid)
@@ -3004,6 +3043,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # whatever its mint recorded), and never allowed to fail the onboard.
     if is_new and arguments.get("host_session") is not None:
         await _record_host_session(agent_uuid, arguments.get("host_session"))
+    if is_new and arguments.get("spawned_under") is not None:
+        await _record_spawned_under(agent_uuid, arguments.get("spawned_under"))
 
     # CONCURRENT IDENTITY BINDING (#123): if the client declared a process
     # fingerprint, record the binding and run audit-only collision detection.
@@ -3508,6 +3549,87 @@ async def _create_spawned_edge_bg(
         logger.info(f"[SPAWNED] Created edge {parent_id[:8]}... -> {child_id[:8]}...")
     except Exception as e:
         logger.warning(f"SPAWNED edge creation failed (non-fatal): {e}")
+
+
+def _harness_onboarding_refusal():
+    """The decline for a harness call under ``agent_only``, or None to proceed."""
+    from src.identity.harness_onboarding import (
+        harness_onboarding_declined_payload,
+        harness_onboarding_policy,
+    )
+
+    policy, basis = harness_onboarding_policy()
+    if policy != "agent_only":
+        return None
+    logger.info(
+        "[ONBOARD] harness request declined: this server accepts agent-claimed "
+        "identities only (policy basis=%s)",
+        basis,
+    )
+    return success_response(harness_onboarding_declined_payload("onboard"))
+
+
+async def _forget_unpersisted_identity(agent_uuid: Any, session_key: str) -> None:
+    """Drop the session entries the resolver cached for an identity that is
+    being declined before it was persisted. Only entries that name this
+    identity are removed. Best effort: a failure here is logged, and the
+    decline still stands."""
+    if not isinstance(agent_uuid, str) or not agent_uuid:
+        return
+    from .persistence import _REDIS_WRITE_TIMEOUT
+    from .shared import make_client_session_id, _session_identities
+
+    keys = [key for key in {session_key, make_client_session_id(agent_uuid)} if key]
+    # The in-process entries first, and all of them: this needs no I/O, so a
+    # cache that stalls below cannot leave one behind for the next call to
+    # resume.
+    for key in keys:
+        held = _session_identities.get(key)
+        if isinstance(held, dict) and (
+            held.get("bound_agent_id") or held.get("agent_uuid")
+        ) == agent_uuid:
+            _session_identities.pop(key, None)
+    # Then the shared cache, each key on its own and each await bounded like
+    # every Redis await on this path: a stalled cache must not turn the
+    # decline into a timeout of the whole onboard.
+    for key in keys:
+        try:
+            from src.cache import get_session_cache
+
+            cache = get_session_cache()
+            cached = await asyncio.wait_for(cache.get(key), timeout=_REDIS_WRITE_TIMEOUT)
+            if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
+                await asyncio.wait_for(cache.unbind(key), timeout=_REDIS_WRITE_TIMEOUT)
+        except (Exception, asyncio.TimeoutError) as exc:
+            logger.warning(
+                f"[ONBOARD] could not drop the cached session for declined identity "
+                f"{agent_uuid[:8]}...: {exc}"
+            )
+
+
+async def _record_spawned_under(agent_uuid: str, declared: Any) -> bool:
+    """Store a declared ``spawned_under`` on a freshly minted identity.
+
+    See ``src.identity.harness_onboarding``: descriptive context only, never
+    lineage. A malformed declaration or a failed write is logged and dropped;
+    it never fails the onboard.
+    """
+    from src.identity.harness_onboarding import normalize_spawned_under
+
+    try:
+        record = normalize_spawned_under(declared)
+    except ValueError as exc:
+        logger.warning(f"[ONBOARD] spawned_under ignored for {agent_uuid[:8]}...: {exc}")
+        return False
+    if record is None:
+        return False
+    try:
+        return await get_db().update_identity_metadata(
+            agent_uuid, {"spawned_under": record}, merge=True
+        )
+    except Exception as exc:
+        logger.warning(f"[ONBOARD] spawned_under not recorded for {agent_uuid[:8]}...: {exc}")
+        return False
 
 
 async def _record_host_session(agent_uuid: str, declared: Any) -> bool:

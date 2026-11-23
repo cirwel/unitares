@@ -1,9 +1,11 @@
 """Where the local model lives: one resolver for every local-model reader.
 
 The server (``call_model``/consult, the in-process dialectic reviewer, knowledge
-synthesis, check-in enrichments) and the agent processes (the orchestrated
-dialectic reviewer's ``local`` backend, ``agents/local_resident``) all resolve
-the endpoint and model here, so one setting moves every reader.
+synthesis, check-in enrichments) and the orchestrated dialectic reviewer's
+``local`` backend resolve the endpoint and model here, so one setting moves
+every reader. ``agents/local_resident`` uses the standalone client mirror
+``agents/common/local_inference_env.py`` (component boundary rule B1), kept in
+behavioral parity by ``tests/test_local_resident_scaffold.py``.
 
 Settings (the documented names):
 
@@ -46,7 +48,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import unquote_plus, urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 from src.trusted_networks import is_trusted_address
 
@@ -590,13 +592,18 @@ _MIN_REDACTED_SECRET_LEN = 4
 
 
 def _url_secret_values(parts) -> set[str]:
-    """Query values and the password of a configured URL, raw and decoded."""
+    """Query values and the password of a configured URL, raw and decoded.
+
+    Each is decoded both ways a client may have decoded it: percent escapes
+    only (URL userinfo semantics, where ``+`` is a literal plus) and form
+    encoding (where ``+`` is a space). A password ``p+ss%40word`` reaches the
+    provider as ``p+ss@word``, which form decoding alone never produces."""
     values: set[str] = set()
     for pair in parts.query.split("&"):
         _, _, raw = pair.partition("=")
-        values.update({raw, unquote_plus(raw)})
+        values.update({raw, unquote(raw), unquote_plus(raw)})
     if parts.password:
-        values.update({parts.password, unquote_plus(parts.password)})
+        values.update({parts.password, unquote(parts.password), unquote_plus(parts.password)})
     return {v for v in values if len(v) >= _MIN_REDACTED_SECRET_LEN}
 
 

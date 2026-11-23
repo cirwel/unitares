@@ -61,6 +61,20 @@ def _infer_error_code_and_category(message: str) -> Tuple[Optional[str], Optiona
     return None, None
 
 
+_URL_QUERY_FRAGMENT_RE = re.compile(
+    r'(\b[A-Za-z][A-Za-z0-9+.\-]*://[^\s\'"<>?#]+)([?#][^\s\'"<>]+)'
+)
+
+
+def _strip_url_query_and_fragment(match: re.Match[str]) -> str:
+    """Drop a URL's query/fragment while keeping any trailing prose punctuation."""
+    base, suffix = match.group(1), match.group(2)
+    body = suffix[1:]
+    stripped = body.rstrip(".,;:!?)]}")
+    trailing = body[len(stripped):]
+    return f"{base}{trailing}"
+
+
 def _sanitize_error_message(message: str) -> str:
     """
     Sanitize error messages to prevent internal structure leakage while preserving actionable context.
@@ -71,6 +85,9 @@ def _sanitize_error_message(message: str) -> str:
     # Drop the userinfo of any scheme://user:pass@host URL: a configured
     # endpoint can carry credentials, and provider errors quote it.
     message = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]+@', r'\1', message)
+    # Also drop query strings and fragments from scheme:// URLs so API keys,
+    # signed tokens, or OAuth parameters echoed in upstream errors never leak.
+    message = _URL_QUERY_FRAGMENT_RE.sub(_strip_url_query_and_fragment, message)
 
     # Remove full file paths (but keep filename for context)
     message = re.sub(r'/[^\s]+/([^/\s]+\.py)', r'\1', message)

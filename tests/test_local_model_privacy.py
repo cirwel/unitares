@@ -333,12 +333,14 @@ async def test_orchestrated_reviewer_local_backend_abstains(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_local_resident_runner_refuses(monkeypatch):
+    from agents.common import local_inference_env as client_env
     from agents.local_resident import runner
 
     monkeypatch.setattr(runner, "OLLAMA_BASE_URL", EXTERNAL_BASE)
     with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
-        with pytest.raises(env.EndpointNotLocalError):
+        with pytest.raises(client_env.EndpointNotLocalError) as raised:
             await runner.call_local_model("prompt")
+    assert raised.value.code == env.ENDPOINT_NOT_LOCAL
 
 
 @pytest.mark.asyncio
@@ -361,13 +363,15 @@ async def test_orchestrated_reviewer_abstains_without_a_named_model(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_local_resident_runner_refuses_without_a_named_model(monkeypatch):
+    from agents.common import local_inference_env as client_env
     from agents.local_resident import runner
 
     monkeypatch.setattr(runner, "DEFAULT_MODEL", "")
     monkeypatch.delenv(env.MODEL_ENV, raising=False)
     with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
-        with pytest.raises(env.ModelNotConfiguredError):
+        with pytest.raises(client_env.ModelNotConfiguredError) as raised:
             await runner.call_local_model("prompt")
+    assert raised.value.code == env.MODEL_NOT_CONFIGURED
 
 
 # --- Ollama detection gates the native /api/chat route ---------------------------
@@ -1221,6 +1225,15 @@ def test_redact_url_credentials_scrubs_query_secrets_on_request_urls():
     _assert_no_endpoint_secret(redacted)
     assert "http://10.0.0.5:8000/v1/chat/completions " in redacted
     assert "frag" not in redacted
+
+
+def test_redact_url_credentials_scrubs_a_password_with_a_literal_plus():
+    # Userinfo decodes percent escapes only, so "+" stays a plus. Form
+    # decoding alone turned it into a space and missed the real password.
+    base = "https://user:p+ss%40word@models.example/v1"
+    redacted = env.redact_url_credentials("connect failed using password p+ss@word", base)
+    assert "p+ss@word" not in redacted
+    assert "[redacted]" in redacted
 
 
 def test_redact_url_credentials_scrubs_encoded_query_values_and_password():

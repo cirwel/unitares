@@ -52,3 +52,35 @@ def test_collect_github_actions_prunes_worktrees_security_drafts_and_deps(census
     items = census_mod.collect_github_actions(projects, warnings)
     assert warnings == []
     assert sorted(item.name for item in items) == ["Nested CI", "Real CI"]
+
+
+def test_collect_github_actions_discovers_repos_named_like_build_dirs_and_prunes_non_repos(
+    census_mod, tmp_path,
+):
+    projects = tmp_path / "projects"
+    # Real git repositories whose names happen to match common build directory names
+    # must be discovered because they contain a `.git` entry.
+    for repo_name in ("deps", "build", "dist", "target", "cache", "_build"):
+        _write_workflow(projects / repo_name, "ci.yml", f"{repo_name} CI")
+
+    # Non-repo build/dependency containers (no `.git` on the container itself)
+    # must still be pruned so nested vendored/cloned repos do not pollute the census.
+    for pruned in (
+        projects / "workspace" / "build" / "nested-repo",
+        projects / "workspace" / "deps" / "pkg",
+        projects / "workspace" / "dist" / "artifact-repo",
+        projects / "workspace" / "target" / "sub-repo",
+        projects / "workspace" / "cache" / "cached-repo",
+        projects / "workspace" / "_build" / "elixir-dep",
+    ):
+        _write_workflow(pruned, "noise.yml", "Pruned CI")
+
+    # Always-excluded containers remain pruned even if they have a `.git` directory.
+    _write_workflow(projects / "wt", "noise.yml", "Worktree Root CI")
+
+    warnings: list[str] = []
+    items = census_mod.collect_github_actions(projects, warnings)
+    assert warnings == []
+    assert sorted(item.name for item in items) == sorted(
+        f"{name} CI" for name in ("deps", "build", "dist", "target", "cache", "_build")
+    )
