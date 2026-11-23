@@ -191,18 +191,13 @@ async def _check_effect_binding(body: dict, proposer: str):
     )
     if not v.ok:
         return False, f"binding_{v.reason}"
+    if v.nonce == _PURGE_WATERMARK_KEY:
+        return False, "binding_bad_nonce"
     try:
         from src.db import get_db
         db = get_db()
         async with db.acquire() as conn:
-            result = await conn.execute(
-                """
-                INSERT INTO effects.consumed_nonces (nonce, grant_exp)
-                VALUES ($1, to_timestamp($2))
-                ON CONFLICT (nonce) DO NOTHING
-                """,
-                v.nonce, int(v.exp),
-            )
+            result = await _consume_nonce(conn, v.nonce, v.exp)
     except Exception as e:  # noqa: BLE001 — store failure → fail closed
         logger.warning("effect-binding nonce consume failed: %s", e)
         return False, "binding_store_unavailable"
@@ -227,6 +222,17 @@ async def _check_effect_binding(body: dict, proposer: str):
 # there would turn an allowed effect into a vetoed one that cannot be retried.
 # It runs as one background task at a time, skips rows another transaction has
 # locked, and is bounded by a lock timeout, a statement timeout and a deadline.
+#
+# Deleting a row must not depend on the clock staying where it was. If the
+# verifier's clock is later set back to before a purged grant's exp, that grant
+# verifies again and its row is gone. Each purge therefore records, in the
+# reserved row _PURGE_WATERMARK_KEY, the latest grant_exp it has deleted, and
+# a consume refuses any grant whose exp is not after that watermark. Every
+# deleted row has a grant_exp at or before the watermark and every row after it
+# is kept, so a consumed grant is refused on any clock: by its own row, or by
+# the watermark. A fresh grant minted while the clock is set back that far is
+# refused too, until the clock passes the watermark again.
+_PURGE_WATERMARK_KEY = "purge-watermark:v1"
 _NONCE_PURGE_BATCH = 1000
 _NONCE_PURGE_INTERVAL_SECONDS = 60.0
 _NONCE_PURGE_LOCK_TIMEOUT_MS = 500
@@ -258,16 +264,66 @@ async def _purge_consumed_nonces(conn, now: int | None = None) -> None:
         )
         await conn.execute(
             f"""
-            DELETE FROM effects.consumed_nonces
-            WHERE nonce IN (
-                SELECT nonce FROM effects.consumed_nonces
-                WHERE grant_exp < to_timestamp($1)
-                LIMIT {int(_NONCE_PURGE_BATCH)}
-                FOR UPDATE SKIP LOCKED
+            WITH gone AS (
+                DELETE FROM effects.consumed_nonces
+                WHERE nonce IN (
+                    SELECT nonce FROM effects.consumed_nonces
+                    WHERE grant_exp < to_timestamp($1) AND nonce <> $2
+                    LIMIT {int(_NONCE_PURGE_BATCH)}
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING grant_exp
             )
+            INSERT INTO effects.consumed_nonces (nonce, grant_exp)
+            SELECT $2, max(grant_exp) FROM gone HAVING count(*) > 0
+            ON CONFLICT (nonce) DO UPDATE
+                SET grant_exp = GREATEST(
+                    effects.consumed_nonces.grant_exp, EXCLUDED.grant_exp
+                )
             """,
             cutoff,
+            _PURGE_WATERMARK_KEY,
         )
+
+
+async def _consume_nonce(conn, nonce: str, exp: int) -> str:
+    """Record a grant's nonce as used; return the command tag.
+
+    ``INSERT 0 1`` means first use. ``INSERT 0 0`` means the nonce is already
+    in the ledger, or the grant expired no later than the purge watermark, so
+    a purged earlier use cannot be ruled out.
+
+    The insert and its watermark check are one statement, but that is not
+    enough against a purge in flight. A purge that has deleted this nonce and
+    not yet committed leaves the insert waiting on the deleted row; once the
+    purge commits, the insert goes through, judged against the watermark the
+    statement read before the purge. So a successful insert is checked again
+    in a new statement, which reads the committed watermark: a purge that
+    freed this nonce has committed by then, since the insert waited for it.
+    """
+    result = await conn.execute(
+        """
+        INSERT INTO effects.consumed_nonces (nonce, grant_exp)
+        SELECT $1, to_timestamp($2)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM effects.consumed_nonces
+            WHERE nonce = $3 AND grant_exp >= to_timestamp($2)
+        )
+        ON CONFLICT (nonce) DO NOTHING
+        """,
+        nonce, int(exp), _PURGE_WATERMARK_KEY,
+    )
+    if str(result).split()[-1] == "1" and await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM effects.consumed_nonces
+            WHERE nonce = $1 AND grant_exp >= to_timestamp($2)
+        )
+        """,
+        _PURGE_WATERMARK_KEY, int(exp),
+    ):
+        return "INSERT 0 0"
+    return result
 
 
 async def _run_nonce_purge(db) -> None:

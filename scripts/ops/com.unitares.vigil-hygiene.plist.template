@@ -19,7 +19,7 @@
     tail -f __HOME__/Library/Logs/unitares-vigil-hygiene.out.log
 
   Manual test (dry-run, anytime):
-    python3 __UNITARES_ROOT__/agents/vigil_hygiene/agent.py --repo __UNITARES_ROOT__
+    python3 __UNITARES_ROOT__/scripts/dev/branch_hygiene/agent.py --repo __UNITARES_ROOT__
 
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -32,7 +32,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>__PYTHON3__</string>
-        <string>__UNITARES_ROOT__/agents/vigil_hygiene/agent.py</string>
+        <string>__UNITARES_ROOT__/scripts/dev/branch_hygiene/agent.py</string>
         <!-- Phase 1: dry-run only. Phase 2 will add "--live" here. -->
     </array>
 

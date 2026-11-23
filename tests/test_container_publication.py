@@ -284,6 +284,59 @@ def test_database_image_builds_pgvector_from_a_verified_commit():
         assert mover not in after, mover
 
 
+@pytest.mark.parametrize(
+    "var_prefix, repo_url, subdir",
+    [
+        ("AGE", "https://github.com/apache/age.git", "age"),
+        ("PGVECTOR", "https://github.com/pgvector/pgvector.git", "vector"),
+    ],
+)
+def test_glama_install_builds_extensions_from_verified_commits(var_prefix, repo_url, subdir):
+    """docker/glama/install.sh verifies each cloned extension tag against a
+    full 40-hex commit pin before running make, with no HEAD-moving git
+    commands in between."""
+    script = (ROOT / "docker/glama/install.sh").read_text()
+    version_pin = re.search(rf'^{var_prefix}_VERSION="([^"]+)"$', script, re.M)
+    commit_pin = re.search(rf'^{var_prefix}_COMMIT="([0-9a-f]{{40}})"$', script, re.M)
+    assert version_pin, f"{var_prefix}_VERSION must be defined in docker/glama/install.sh"
+    assert commit_pin, f"{var_prefix}_COMMIT must be pinned to a full 40-hex commit"
+
+    clone_line = f'git clone --depth 1 --branch "${var_prefix}_VERSION" {repo_url} "$build_dir/{subdir}"'
+    check_line = f'test "$(git -C "$build_dir/{subdir}" rev-parse HEAD)" = "${var_prefix}_COMMIT"'
+    make_prefix = f'make -C "$build_dir/{subdir}" '
+    install_line = f'make -C "$build_dir/{subdir}" install'
+
+    assert clone_line in script
+    start = script.index(clone_line)
+    end = script.index(install_line, start)
+    block = script[start:end]
+
+    assert check_line in block
+    check_pos = block.index(check_line)
+    make_pos = block.index(make_prefix, check_pos)
+
+    between = block[:check_pos]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert f"git {mover}" not in between and f" {mover} " not in between, mover
+
+    after = block[check_pos:make_pos]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert mover not in after, mover
+
+
+def test_glama_pgvector_pin_matches_database_dockerfile():
+    """Keep the Glama and Postgres pgvector commit pins aligned when on the same tag."""
+    dockerfile = (ROOT / "db/postgres/Dockerfile.age-vector").read_text()
+    script = (ROOT / "docker/glama/install.sh").read_text()
+    df_ver = re.search(r"^ARG PGVECTOR_VERSION=(\S+)$", dockerfile, re.M)
+    df_sha = re.search(r"^ARG PGVECTOR_COMMIT=([0-9a-f]{40})$", dockerfile, re.M)
+    gl_ver = re.search(r'^PGVECTOR_VERSION="([^"]+)"$', script, re.M)
+    gl_sha = re.search(r'^PGVECTOR_COMMIT="([0-9a-f]{40})"$', script, re.M)
+    assert df_ver and df_sha and gl_ver and gl_sha
+    if df_ver.group(1) == gl_ver.group(1):
+        assert gl_sha.group(1) == df_sha.group(1)
+
+
 def test_dependabot_bumps_every_published_base_image():
     """Digest pins only stay current if Dependabot proposes their bumps."""
     config = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text())

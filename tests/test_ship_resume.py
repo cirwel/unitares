@@ -108,7 +108,7 @@ def test_resume_joins_evidence_then_queues_without_commit_push_or_full_tests(del
     ("isCrossRepository", True, "same-repository"),
     ("baseRefName", "parent-feature", "targeting master"),
     ("labels", [{"name": "governance-sensitive"}], "hold"),
-    ("body", f"Classification: capability\nUNITARES agent: {AGENT}", "operator ruling"),
+    ("body", f"Classification: capability\nUNITARES agent: {AGENT}", "two reviewer families"),
 ])
 def test_resume_preserves_ownership_and_reserved_gates(delivery, field, value, reason):
     pr, calls = delivery

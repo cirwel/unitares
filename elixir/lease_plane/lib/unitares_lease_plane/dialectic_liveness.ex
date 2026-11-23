@@ -65,9 +65,19 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
   @doc "In-memory snapshot of this session's liveness, or :gone if no process."
   def snapshot(session_id) do
     case Registry.lookup(UnitaresLeasePlane.DialecticLivenessRegistry, session_id) do
-      [{pid, _}] -> GenServer.call(pid, :snapshot)
+      [{pid, _}] -> snapshot_pid(pid)
       [] -> :gone
     end
+  end
+
+  @doc false
+  def snapshot_pid(pid) when is_pid(pid) do
+    GenServer.call(pid, :snapshot)
+  catch
+    :exit, {:noproc, _} -> :gone
+    :exit, {:normal, _} -> :gone
+    :exit, {:shutdown, _} -> :gone
+    :exit, {{:shutdown, _}, _} -> :gone
   end
 
   @impl true

@@ -880,7 +880,10 @@ class TestTransportBindingCacheWarmup:
             }),
         }
 
+        seen_matches = []
+
         async def _scan_iter(match=None, count=None):
+            seen_matches.append(match)
             for k in fake_entries:
                 yield k
 
@@ -897,6 +900,7 @@ class TestTransportBindingCacheWarmup:
 
         await bg_tasks.transport_binding_cache_warmup()
 
+        assert seen_matches == ["transport_binding:*"]
         assert "sticky:10.0.0.1:ua-a" in step._transport_identity_cache
         assert "sticky:10.0.0.2:ua-b" in step._transport_identity_cache
         assert step._transport_identity_cache["sticky:10.0.0.1:ua-a"].agent_uuid == "uuid-a"
@@ -935,6 +939,31 @@ class TestTransportBindingCacheWarmup:
 
         assert called["persist"] is False
         assert step._transport_identity_cache["sticky:1.2.3.4:x"].agent_uuid == "uuid-warmed"
+
+    def test_startup_registers_transport_binding_warmup_without_identity_cache_warmup(
+        self, monkeypatch
+    ):
+        """Dead identity_cache_warmup is removed from maintenance and startup (#3323);
+        only transport_binding_cache_warmup is registered at boot."""
+        import src.background_maintenance_tasks as bg_maint
+        import src.background_tasks as bg_tasks
+
+        assert not hasattr(bg_maint, "identity_cache_warmup")
+        assert not hasattr(bg_tasks, "identity_cache_warmup")
+
+        registered_names = []
+
+        def _capture_task(coro, name=None):
+            registered_names.append(name)
+            coro.close()
+            return MagicMock()
+
+        monkeypatch.setattr(bg_tasks, "_supervised_create_task", _capture_task)
+
+        bg_tasks.start_all_background_tasks(set_ready=lambda: None)
+
+        assert "transport_binding_cache_warmup" in registered_names
+        assert "identity_cache_warmup" not in registered_names
 
 
 # ============================================================================

@@ -159,9 +159,98 @@ defmodule UnitaresLeasePlaneTest do
       assert reason == "down_local"
       _ = lease
     end
+
+    test "falls back to Repo.release and returns :not_found when holder exits after handoff",
+         ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      assert {:ok, handoff_id} =
+               UnitaresLeasePlane.handoff_offer(lease.lease_id, random_uuid(), 45)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      # Real handoff closes the old DB row and casts :handoff_released to pid.
+      assert :ok = UnitaresLeasePlane.handoff_accept(handoff_id)
+      task = Task.async(fn -> UnitaresLeasePlane.release(lease.lease_id, "normal") end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert {:error, :not_found} = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    test "falls back to Repo.release when holder exits normally while row is still active", ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      LeaseHolder.handoff_released(pid)
+      task = Task.async(fn -> UnitaresLeasePlane.release(lease.lease_id, "normal") end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert :ok = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+      assert {:ok, nil} = UnitaresLeasePlane.status(ctx.surface)
+    end
   end
 
   describe "renew/1" do
+    test "falls back to Repo.renew and returns :not_found when holder exits after handoff", ctx do
+      params = local_beam_params(ctx.surface, ttl_s: 60)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      assert {:ok, handoff_id} =
+               UnitaresLeasePlane.handoff_offer(lease.lease_id, random_uuid(), 45)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      assert :ok = UnitaresLeasePlane.handoff_accept(handoff_id)
+      task = Task.async(fn -> UnitaresLeasePlane.renew(lease.lease_id) end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert {:error, :not_found} = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    test "falls back to Repo.renew when holder exits normally while row is still active", ctx do
+      params = local_beam_params(ctx.surface, ttl_s: 60)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      LeaseHolder.handoff_released(pid)
+      task = Task.async(fn -> UnitaresLeasePlane.renew(lease.lease_id) end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert :ok = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
     test "extends expires_at by original_ttl_s", ctx do
       params = local_beam_params(ctx.surface, ttl_s: 60)
       assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)

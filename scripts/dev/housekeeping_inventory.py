@@ -440,9 +440,19 @@ def collect_watcher(
 ) -> ProbeResult:
     if skip:
         return ProbeResult(status="skipped", message="disabled by flag")
-    watcher = repo_root / "agents" / "watcher" / "agent.py"
+    # Core ships no Watcher. A deployment that runs one names its agent script
+    # in UNITARES_WATCHER_AGENT; an in-repo copy is still honoured if present.
+    configured = os.environ.get("UNITARES_WATCHER_AGENT", "").strip()
+    watcher = (
+        Path(configured).expanduser()
+        if configured
+        else repo_root / "agents" / "watcher" / "agent.py"
+    )
     if not watcher.exists():
-        return ProbeResult(status="skipped", message="agents/watcher/agent.py not found")
+        return ProbeResult(
+            status="skipped",
+            message="no Watcher agent (set UNITARES_WATCHER_AGENT to its agent.py)",
+        )
 
     result = run_cmd(
         [sys.executable, str(watcher), "--print-unresolved"],

@@ -152,7 +152,10 @@ reach.
 
 ## Classification — the verifier-centric model
 
-`automation-overrides.json` (keyed by census `id`) carries the accountability
+`automation-overrides.json` (keyed by census `id`; see
+[automation-overrides.md](automation-overrides.md) for the schema and
+`claude-hook:<scheduler>[:<namespace>]:<event>:<sha12>` hook ID format plus
+legacy hook ID migration aliases) carries the accountability
 fields the dashboard scores: `owner` (the constant principal), `escalates_to`
 (the machine gate/verifier), and a `gate:<machine|human|ungated|external>` note.
 The *model* is general; the *data* is yours — every operator authors their own,

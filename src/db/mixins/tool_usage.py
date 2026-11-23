@@ -529,16 +529,21 @@ class ToolUsageMixin:
         Per onboard-bootstrap-checkin §4.1.
         """
         from config.governance_config import GovernanceConfig
-        from .identity import fetch_identity_id_by_agent_id
-        from .state import fetch_latest_measured_eisv_row
+        from .identity import identity_join_on_id_sql
+        from .state import latest_measured_eisv_by_agent_sql
 
+        query_sql = latest_measured_eisv_by_agent_sql(
+            identity_join_sql=identity_join_on_id_sql(
+                source_alias="s", identity_alias="i"
+            ),
+            identity_alias="i",
+        )
         async with self.acquire() as conn:
             try:
-                identity_id = await fetch_identity_id_by_agent_id(conn, agent_id)
-                if identity_id is None:
-                    return None
-                row = await fetch_latest_measured_eisv_row(
-                    conn, identity_id, GovernanceConfig.CURRENT_EPOCH
+                row = await conn.fetchrow(
+                    query_sql,
+                    agent_id,
+                    GovernanceConfig.CURRENT_EPOCH,
                 )
                 if not row:
                     return None

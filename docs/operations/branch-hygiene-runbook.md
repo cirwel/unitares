@@ -1,6 +1,6 @@
 # Branch Hygiene Runbook
 
-`agents/vigil_hygiene/agent.py` is the resident branch-hygiene sweep. It is
+`scripts/dev/branch_hygiene/agent.py` is the branch-hygiene sweep. It is
 designed to remove branch clutter without deleting salvageable work.
 
 The same safety contract is available during manual workspace closeout:

@@ -19,10 +19,20 @@ export PATH=/usr/lib/postgresql/18/bin:$PATH
 build_dir=$(mktemp -d)
 trap 'rm -rf "$build_dir"' EXIT
 # Match the existing Compose extensions; version upgrades are a separate change.
-git clone --depth 1 --branch PG18/v1.7.0-rc0 https://github.com/apache/age.git "$build_dir/age"
+# A git tag can be moved, so right after each clone compare the commit the tag
+# resolved to against the pinned commit and refuse to build on a mismatch.
+# Nothing checks out a different commit afterwards, so the verified tree is
+# what gets built. Bump version and commit together.
+AGE_VERSION="PG18/v1.7.0-rc0"
+AGE_COMMIT="806fa2ebdb300b3e76ef30cdba61803babbf2683"
+PGVECTOR_VERSION="v0.8.3"
+PGVECTOR_COMMIT="586e7515bafe6912c425164d186d56550657c349"
+git clone --depth 1 --branch "$AGE_VERSION" https://github.com/apache/age.git "$build_dir/age"
+test "$(git -C "$build_dir/age" rev-parse HEAD)" = "$AGE_COMMIT"
 make -C "$build_dir/age" -j2
 make -C "$build_dir/age" install
-git clone --depth 1 --branch v0.8.3 https://github.com/pgvector/pgvector.git "$build_dir/vector"
+git clone --depth 1 --branch "$PGVECTOR_VERSION" https://github.com/pgvector/pgvector.git "$build_dir/vector"
+test "$(git -C "$build_dir/vector" rev-parse HEAD)" = "$PGVECTOR_COMMIT"
 make -C "$build_dir/vector" -j2 OPTFLAGS=""
 make -C "$build_dir/vector" install
 curl -fsSL https://github.com/elixir-lang/elixir/releases/download/v1.19.5/elixir-otp-27.zip -o "$build_dir/elixir.zip"
