@@ -308,6 +308,69 @@ def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
 
+# <head-sha> -> {"check_runs": [every `review` run on that head]}; fails when
+# they cannot be read. `filter=all`, because GitHub's default returns only the
+# latest run of each name, which on a head shared by two PRs is one PR's.
+review_check_runs() {
+  local pages
+  pages=$(gh api --paginate "repos/$REPO/commits/$1/check-runs?check_name=review&filter=all&per_page=100" 2>/dev/null) \
+    || return 1
+  jq -cs 'if length > 0 and all(.[]; (.check_runs | type) == "array")
+          then {check_runs: [.[].check_runs[] | select(.name == "review")]} else error("unreadable") end' \
+    <<<"$pages" 2>/dev/null
+}
+
+# A check run belongs to a commit, so on a head shared by two PRs each PR's
+# statusCheckRollup carries both PRs' `review` runs, and the newest decides
+# for both: the other PR's pass, findings or pending run would stand in for
+# this one's. The gate tags each run `unitares-review:<pr>:<head>`
+# (review_gate.py post_check). For every PR the queue may act on, the rollup's
+# `review` entries are replaced here with that PR's own runs, so every later
+# check (required, failed, pending, parked) reads this PR's review. Once a
+# head has a tagged run, an untagged one there cannot be attributed to any PR
+# and is dropped, so it never lends one PR's pass to another; a head with no
+# tagged run at all (runs from before the tag, #2352) is left
+# as GitHub reported it. When the runs cannot be read this tick (logged), the
+# rollup's `review` entries, which may be any PR's, collapse to one: the most
+# blocking of them (failing, then parked), else pending. `rollup` alone would
+# keep only the newest, which can be another PR's pass over this PR's
+# findings. Findings are never hidden, and a pass is never borrowed. Skipped
+# runs (a workflow that also fires on `labeled` adds one) never count, so a
+# head carrying only other PRs' runs has no `review` for this PR: MISSING,
+# which the queue waits on.
+for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelled($r))
+             | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
+  head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
+  if ! runs=$(review_check_runs "$head"); then
+    log "#$n review runs on ${head:0:8} could not be read; its review reads as the most blocking entry there, else pending"
+    prs=$(jq --argjson n "$n" '
+      def bad: ((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
+               or ((.state // "") | test("^(FAILURE|ERROR)$"));
+      map(if .number == $n then
+            ([.statusCheckRollup[] | select((.name // .context) == "review")]) as $r
+            | .statusCheckRollup = ([.statusCheckRollup[] | select((.name // .context) != "review")]
+                + [([$r[] | select(bad)] + [$r[] | select((.conclusion // "") == "ACTION_REQUIRED")]
+                    + [{__typename: "CheckRun", name: "review", status: "PENDING", conclusion: null}])[0]
+                   | del(.startedAt, .completedAt)])
+          else . end)' <<<"$prs") || { log "#$n review runs could not be applied; nothing done"; exit 1; }
+    continue
+  fi
+  mine=$(jq -c --arg id "unitares-review:$n:$head" '
+      if any(.check_runs[]; (.external_id // "") != "") | not then null
+      else [.check_runs[] | select(.external_id == $id)
+            | select((.conclusion // "") != "skipped")
+            | {__typename: "CheckRun", name,
+               status: ((.status // "completed") | ascii_upcase),
+               conclusion: ((.conclusion // "") | ascii_upcase | if . == "" then null else . end),
+               startedAt: .started_at, completedAt: .completed_at, detailsUrl: .details_url}]
+      end' <<<"$runs") \
+    || { log "#$n review runs on ${head:0:8} could not be parsed; its rollup is read as reported"; continue; }
+  [ "$mine" = "null" ] && continue
+  prs=$(jq --argjson n "$n" --argjson m "$mine" \
+    'map(if .number == $n then .statusCheckRollup = ([.statusCheckRollup[] | select((.name // .context) != "review")] + $m) else . end)' \
+    <<<"$prs") || { log "#$n review runs could not be applied; nothing done"; exit 1; }
+done
+
 # GitHub labels remain on a merged PR, but they are not part of the landed Git
 # object. Preserve the exact model identifier from the PR's final `Model:` line
 # in the squash subject, where it survives branch deletion and is visible to
@@ -652,17 +715,27 @@ latest_label_time() {
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
 
-# <head-sha> -> why this head's `review` does not show two model families;
-# fails when it does, or when there is no `review` check yet (the required
-# checks report that). The review gate turns `review` green on ONE family when
+# <pr> <head-sha> -> why this PR's `review` on this head does not show two
+# model families; fails when it does, or when the head has no `review` check
+# yet (the required checks report that). A check run lives on a commit, not a
+# PR, so two open PRs on one head share their runs. review_gate.py post_check
+# tags each run `unitares-review:<pr>:<head>`; a run tagged for another PR
+# never decides this one. A head carrying only other PRs' runs has not reported
+# for this one: that is no waiver, and the required checks read it as MISSING
+# and wait (the rollup replacement above). The review gate turns `review` green on ONE family when
 # an operator waiver covers the second, and says so in the check's title
 # ("second family waived by the operator", review_gate.py apply_waiver). The
 # ruling asks for two families, and a waiver of the second review is not a
 # waiver of that, so a waived head is a hand merge. Unreadable: the same.
 review_waived() {
   local runs title
-  runs=$(gh api "repos/$REPO/commits/$1/check-runs?check_name=review&per_page=100" 2>/dev/null) \
-    && jq -e '.check_runs | type == "array"' <<<"$runs" >/dev/null 2>&1 \
+  runs=$(review_check_runs "$2") || { echo "its review check could not be read"; return 0; }
+  # Keep this PR's runs. On a head with no tagged run, every run predates the
+  # tag and is read as before; once one is tagged, only this PR's tag counts.
+  runs=$(jq -c --arg id "unitares-review:$1:$2" \
+           '[.check_runs[] | select(.name == "review")] as $all
+            | (any($all[]; (.external_id // "") != "")) as $tagged
+            | .check_runs = [$all[] | select(if $tagged then .external_id == $id else true end)]' <<<"$runs") \
     || { echo "its review check could not be read"; return 0; }
   # The run that decides, chosen as `rollup` chooses it: skipped runs (a
   # workflow that also fires on `labeled` adds one) never count, and the
@@ -846,7 +919,7 @@ while read -r pr; do
     esac
     continue
   fi
-  if [ "$declared_class" = "capability" ] && waived=$(review_waived "$head"); then
+  if [ "$declared_class" = "capability" ] && waived=$(review_waived "$n" "$head"); then
     log "#$n declared ready as Classification: capability, but $waived; skipped"
     notify "$n" declared-capability-waived "$head" "not promoted: this \`Classification: capability\` draft requires two reviewing model families, and $waived."
     continue
@@ -976,7 +1049,7 @@ armed_sensitive_reason() {
   if blocker=$(delegation_blocker "$2" "$at"); then
     echo "it touches a governance-sensitive surface ($why) and ${blocker#*$'\t'}"; return 0
   fi
-  blocker=$(review_waived "$(jq -r .headRefOid <<<"$2")") || return 1
+  blocker=$(review_waived "$1" "$(jq -r .headRefOid <<<"$2")") || return 1
   echo "it touches a governance-sensitive surface ($why) and $blocker"
 }
 
@@ -1278,7 +1351,7 @@ while read -r labelled_at n head; do
       esac
       continue
     fi
-    if waived=$(review_waived "$head"); then
+    if waived=$(review_waived "$n" "$head"); then
       log "#$n touches a governance-sensitive surface ($why): $waived; the operator merges it by hand; skipped"
       notify "$n" sensitive-waived "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`), and $waived. The queue lands such a PR only on two reviewing families, so the operator merges this one by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."
       continue
@@ -1413,7 +1486,7 @@ while read -r labelled_at n head; do
   # started since. Any arm on the base, or a fresh operator-armed label, and
   # this tick arms nothing.
   live=$(gh pr list -R "$REPO" --state open --limit 500 --base "$BASE" \
-    --json number,autoMergeRequest,labels) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
+    --json number,autoMergeRequest,labels,body) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
   # PRs this tick just disarmed can still read as armed for a moment.
   if other=$(jq -r --arg skip "$disarmed" '[.[] | select(.autoMergeRequest != null)
                  | select(.number as $x | $skip | contains(" \($x) ") | not) | .number] | first // empty' <<<"$live") \
@@ -1431,6 +1504,12 @@ while read -r labelled_at n head; do
   if [ -n "$delegated" ] && ! jq -e --argjson n "$n" --arg l "$LABEL" \
        'any(.[]; .number == $n and any(.labels[]?; .name == $l))' <<<"$live" >/dev/null; then
     log "#$n lost $LABEL since this tick began (a veto); not armed"
+    continue
+  fi
+  # Likewise its stated effect: the gate read the snapshot's body, and an
+  # edit since then that removed the line would otherwise go unseen.
+  if [ -n "$delegated" ] && ! expected_effect "$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$live")" >/dev/null; then
+    log "#$n lost its Expected effect: line since this tick began; not armed"
     continue
   fi
   # And a veto that was undone: removing and re-adding the label inside the

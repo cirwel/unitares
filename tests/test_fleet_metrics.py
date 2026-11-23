@@ -20,7 +20,12 @@ from src.fleet_metrics.catalog import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CHRONICLER_EXTRA_CATALOG = REPO_ROOT / "agents" / "chronicler" / "metrics_catalog.json"
+# A deployment's extra catalog, as a fixture. It is the reference catalog the
+# Chronicler resident shipped with while it lived in this repository; the
+# resident and its own catalog now live with the deployment that runs it.
+CHRONICLER_EXTRA_CATALOG = (
+    REPO_ROOT / "tests" / "fixtures" / "fleet_metrics" / "reference_extra_catalog.json"
+)
 
 # Metrics supplied by the optional reference catalog, never the core layer.
 # Historical deployment namespaces belong in the deployment's own catalog.
@@ -64,25 +69,6 @@ class TestCatalog:
             "governance.pause.7d",
         ):
             assert name in _catalog, f"{name} missing from catalog"
-
-    @pytest.mark.parametrize("owner", ["", "example-owner"])
-    def test_every_scraper_has_a_catalog_entry(self, owner):
-        """Invariant: every name Chronicler scrapes must be catalog-registered
-        once its deployment loads Chronicler's extra catalog.
-
-        The POST endpoint validates against the catalog, so any SCRAPERS name
-        in neither the core layer nor Chronicler's metrics_catalog.json is a
-        silent 404 each daily run. This subset check guards all current and
-        future scrapers at once, rather than relying on per-name lists
-        drifting in step."""
-        from agents.chronicler.scrapers import build_scrapers
-
-        scrapers = build_scrapers(owner, "github")
-        extra = {m["name"] for m in json.loads(CHRONICLER_EXTRA_CATALOG.read_text())["metrics"]}
-        missing = sorted(
-            name for name in scrapers if name not in _catalog and name not in extra
-        )
-        assert not missing, f"scrapers missing catalog entries (will 404): {missing}"
 
     def test_require_known_name_returns_entry(self):
         entry = require("kg.entries.count")

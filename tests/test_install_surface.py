@@ -85,11 +85,9 @@ def test_governance_mcp_install_surfaces_default_to_loopback() -> None:
 PLIST_TEMPLATES = [
     "scripts/ops/com.unitares.sentinel.plist.template",
     "scripts/ops/com.unitares.sentinel-beam.plist.template",
-    "scripts/ops/com.unitares.vigil.plist.template",
     "scripts/ops/com.unitares.gateway-mcp.plist.template",
     "scripts/ops/com.unitares.governance-backup.plist.template",
     "scripts/ops/com.unitares.ipv6-loopback-proxy.plist.template",
-    "scripts/ops/com.unitares.chronicler.plist.template",
 ]
 
 
@@ -115,7 +113,6 @@ def test_plist_template_uses_placeholders(relpath: str) -> None:
 # (a ~/projects/<checkout> render root, a pinned framework interpreter). They
 # must keep rendering through placeholders and caller-supplied values only.
 LAYOUT_NEUTRAL_TEMPLATES = [
-    "scripts/ops/com.unitares.chronicler.plist.template",
     "scripts/ops/com.unitares.dep-sweep.plist.template",
     "scripts/ops/com.unitares.deploy-drift-doctor.plist.template",
     "scripts/ops/com.unitares.gateway-mcp.plist.template",

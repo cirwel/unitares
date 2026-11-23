@@ -253,6 +253,43 @@ defmodule UnitaresLeasePlane.EffectFileOpsTest do
     refute File.exists?(Path.join(real_dir, "out.txt"))
   end
 
+  test "an existing file the service may write but not read is still overwritten", %{
+    tmp_dir: dir
+  } do
+    path = Path.join(dir, "out.txt")
+    File.write!(path, "before\n")
+    File.chmod!(path, 0o200)
+    on_exit(fn -> File.chmod(path, 0o644) end)
+
+    assert {:error, :eacces} = EffectFileOps.read(path)
+    assert :ok = EffectFileOps.write(path, "after\n")
+    File.chmod!(path, 0o644)
+    assert File.read!(path) == "after\n"
+  end
+
+  test "a FIFO with no reader is refused as a non-regular leaf", %{tmp_dir: dir} do
+    fifo = Path.join(dir, "out.txt")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+    on_exit(fn -> File.rm(fifo) end)
+
+    assert {:error, :not_regular_file} = EffectFileOps.write(fifo, "x")
+  end
+
+  test "rm removes only a regular file with a single link", %{tmp_dir: dir} do
+    fifo = Path.join(dir, "fifo.txt")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+    on_exit(fn -> File.rm(fifo) end)
+    other = Path.join(dir, "other.txt")
+    File.write!(other, "keep\n")
+    linked = Path.join(dir, "linked.txt")
+    File.ln!(other, linked)
+
+    assert {:error, :not_regular_file} = EffectFileOps.rm(fifo)
+    assert {:error, :hardlinked_leaf} = EffectFileOps.rm(linked)
+    assert File.exists?(fifo)
+    assert File.read!(linked) == "keep\n"
+  end
+
   test "a nil pre-image is refused and creates nothing", %{tmp_dir: dir} do
     path = Path.join(dir, "out.txt")
 

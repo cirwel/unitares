@@ -2220,6 +2220,318 @@ class TestHandleOnboardV2:
             for call in mock_db.update_identity_metadata.await_args_list
         )
 
+    # --- harness onboarding policy (src.identity.harness_onboarding) ---
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        # The harness backstop asks outright for a new identity.
+        {"force_new": True, "onboard_origin": "harness_backstop"},
+        {"resume": False},
+        # An orchestrated resume that finds nothing to resume.
+        {"client_session_id": "agent:/thread-4242", "orchestrated": True,
+         "onboard_origin": "orchestrated_resume"},
+        {},
+    ])
+    async def test_agent_only_server_creates_nothing_for_a_harness_request(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch, arguments
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "agent_only")
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "harness-declined", **arguments, "harness_request": True,
+        })
+        data = parse_result(result)
+
+        assert data["refused"] is True
+        assert data["status"] == "harness_onboarding_declined"
+        assert "uuid" not in data and "agent_uuid" not in data
+        mock_db.upsert_identity.assert_not_awaited()
+        mock_db.upsert_agent.assert_not_awaited()
+        mock_db.update_identity_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        {"harness_request": True},
+        {"harness_request": True, "resume": False},
+        {"harness_request": True, "onboard_origin": "orchestrated_resume"},
+    ])
+    async def test_strict_server_tells_a_harness_it_is_declined_not_to_force_new(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch, arguments
+    ):
+        """Under strict identity, the shipped default, a bare call is refused
+        with advice to retry with force_new=true. For a harness on an
+        agent_only server that advice leads straight to a decline, so it is
+        told the decline."""
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "agent_only")
+        self._fresh_mint_db(mock_db, mock_redis)
+        data = parse_result(await handle_onboard_v2(dict(arguments)))
+
+        assert data["status"] == "harness_onboarding_declined"
+        mock_db.upsert_identity.assert_not_awaited()
+        mock_db.upsert_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_strict_refusal_is_unchanged_on_a_welcoming_server(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "welcome")
+        self._fresh_mint_db(mock_db, mock_redis)
+        data = parse_result(await handle_onboard_v2({"harness_request": True}))
+        assert data["status"] == "lineage_declaration_required"
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_agent_only_declines_an_identity_the_resolver_minted_on_a_lookup_error(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch
+    ):
+        """A database error on the session lookup makes the resolver return a
+        new in-memory identity without reporting a miss. The decline must
+        still happen, nothing may be persisted, and the session entry the
+        resolver cached for it must go, or the next call would resume it."""
+        from src.mcp_handlers.identity import handlers as identity_handlers
+        from src.mcp_handlers.identity.shared import _session_identities
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "agent_only")
+        minted = str(uuid.uuid4())
+        key = "agent:/thread-lookup-error"
+
+        async def fake_resolve(session_key, **kwargs):
+            _session_identities[session_key] = {"bound_agent_id": minted}
+            return {
+                "agent_uuid": minted, "agent_id": "Claude_20261121",
+                "created": True, "persisted": False, "source": "memory_only",
+            }
+
+        monkeypatch.setattr(identity_handlers, "resolve_session_identity", fake_resolve)
+        try:
+            data = parse_result(await identity_handlers.handle_onboard_v2({
+                "client_session_id": key, "harness_request": True, "orchestrated": True,
+            }))
+            assert data["status"] == "harness_onboarding_declined"
+            assert "uuid" not in data
+            mock_db.upsert_identity.assert_not_awaited()
+            mock_db.upsert_agent.assert_not_awaited()
+            assert not any(
+                isinstance(held, dict) and held.get("bound_agent_id") == minted
+                for held in _session_identities.values()
+            )
+        finally:
+            for stale in [k for k, v in _session_identities.items()
+                          if isinstance(v, dict) and v.get("bound_agent_id") == minted]:
+                _session_identities.pop(stale, None)
+
+    @pytest.mark.asyncio
+    async def test_a_stalled_cache_does_not_cost_the_decline(self, monkeypatch):
+        """Dropping the cached session is best effort. A cache that never
+        answers is given up on, and the caller still gets its decline."""
+        import asyncio as _asyncio
+        from src.mcp_handlers.identity import handlers as identity_handlers
+
+        class _Stalled:
+            async def get(self, key):
+                await _asyncio.sleep(30)
+
+            async def unbind(self, key):
+                await _asyncio.sleep(30)
+
+        from src.mcp_handlers.identity.shared import _session_identities, make_client_session_id
+
+        monkeypatch.setattr("src.mcp_handlers.identity.persistence._REDIS_WRITE_TIMEOUT", 0.05)
+        monkeypatch.setattr("src.cache.get_session_cache", lambda: _Stalled())
+        minted = str(uuid.uuid4())
+        keys = ["agent:/thread-stalled", make_client_session_id(minted)]
+        for key in keys:
+            _session_identities[key] = {"bound_agent_id": minted}
+        try:
+            await _asyncio.wait_for(
+                identity_handlers._forget_unpersisted_identity(minted, keys[0]), timeout=2,
+            )
+            # Both in-process entries are gone whichever key the cache stalled on.
+            assert not any(key in _session_identities for key in keys)
+        finally:
+            for key in keys:
+                _session_identities.pop(key, None)
+
+    @pytest.mark.asyncio
+    async def test_forgetting_a_declined_identity_leaves_other_identities_alone(self, monkeypatch):
+        from src.mcp_handlers.identity import handlers as identity_handlers
+        from src.mcp_handlers.identity.shared import _session_identities
+
+        unbound = []
+
+        class _Cache:
+            async def get(self, key):
+                return {"agent_id": "someone-else"}
+
+            async def unbind(self, key):
+                unbound.append(key)
+
+        monkeypatch.setattr("src.cache.get_session_cache", lambda: _Cache())
+        key = "agent:/thread-shared"
+        _session_identities[key] = {"bound_agent_id": "someone-else"}
+        try:
+            await identity_handlers._forget_unpersisted_identity(str(uuid.uuid4()), key)
+            assert _session_identities[key] == {"bound_agent_id": "someone-else"}
+            assert unbound == []
+        finally:
+            _session_identities.pop(key, None)
+
+    @pytest.mark.asyncio
+    async def test_agent_only_server_still_resumes_an_identity_for_a_harness(
+        self, patch_onboard_deps, mock_db, mock_redis, mock_raw_redis, monkeypatch
+    ):
+        """Resuming creates nothing, so the policy has nothing to decline. A
+        conversation the agent bound itself keeps its identity when a later
+        turn's hook resumes it."""
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "agent_only")
+        existing_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Claude_20260207",
+        }
+        mock_db.get_identity.return_value = SimpleNamespace(
+            identity_id="i1", metadata={"agent_id": "Claude_20260207"},
+        )
+        mock_db.get_agent_label.return_value = "ExistingAgent"
+        mock_db.get_agent_status = AsyncMock(return_value="active")
+        mock_db.create_session = AsyncMock()
+
+        result = await handle_onboard_v2({
+            "client_session_id": "onboard-resume", "harness_request": True,
+            "onboard_origin": "orchestrated_resume",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is False
+        assert data["uuid"] == existing_uuid
+        assert "refused" not in data
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("policy", ["welcome", None])
+    async def test_welcoming_server_creates_the_identity_a_harness_asks_for(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch, policy
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.delenv("UNITARES_MCP_HOST", raising=False)
+        monkeypatch.delenv("UNITARES_BIND_ALL_INTERFACES", raising=False)
+        if policy is None:
+            monkeypatch.delenv("UNITARES_HARNESS_ONBOARDING", raising=False)
+        else:
+            monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", policy)
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "harness-welcome", "force_new": True,
+            "harness_request": True, "onboard_origin": "harness_backstop",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        assert "refused" not in data
+        # The control for the decline test: a mint does reach these writes.
+        mock_db.upsert_agent.assert_awaited()
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        {},
+        {"force_new": True},
+        # The label alone is description. It does not ask for the policy.
+        {"force_new": True, "onboard_origin": "harness_backstop"},
+        {"harness_request": False, "force_new": True},
+    ])
+    async def test_agent_only_server_still_serves_a_call_that_is_not_a_harness_request(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch, arguments
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.setenv("UNITARES_HARNESS_ONBOARDING", "agent_only")
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({"client_session_id": "agent-claims", **arguments})
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        assert "refused" not in data
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_exposed_server_declines_a_harness_request_by_default(
+        self, patch_onboard_deps, mock_db, mock_redis, monkeypatch
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        monkeypatch.delenv("UNITARES_HARNESS_ONBOARDING", raising=False)
+        monkeypatch.setenv("UNITARES_BIND_ALL_INTERFACES", "1")
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "harness-exposed", "force_new": True, "harness_request": True,
+        })
+        assert parse_result(result)["status"] == "harness_onboarding_declined"
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_onboard_records_spawned_under_as_context_and_never_as_a_parent(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "nested-helper", "force_new": True,
+            "harness_request": True, "onboard_origin": "harness_backstop",
+            "spawned_under": {"anchor": "agent:/thread-4242"},
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        writes = [
+            call.args[1]["spawned_under"]
+            for call in mock_db.update_identity_metadata.await_args_list
+            if "spawned_under" in call.args[1]
+        ]
+        assert len(writes) == 1
+        assert writes[0]["anchor"] == "agent:/thread-4242"
+        assert writes[0]["is_lineage"] is False
+        assert writes[0]["source"] == "caller_declared"
+        # Context is not lineage: no parent is recorded or reported for it.
+        assert not data.get("parent_agent_id")
+        for call in mock_db.upsert_agent.await_args_list:
+            assert not call.kwargs.get("parent_agent_id")
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("declared", [
+        {"anchor": "not an anchor"},
+        {"anchor": "agent:/thread-1", "parent_agent_id": "11111111-2222-4333-8444-555555555555"},
+        "agent:/thread-1",
+    ])
+    async def test_onboard_ignores_malformed_spawned_under(
+        self, patch_onboard_deps, mock_db, mock_redis, declared
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "nested-bad", "spawned_under": declared,
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        assert not any(
+            "spawned_under" in call.args[1]
+            for call in mock_db.update_identity_metadata.await_args_list
+        )
+
     @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_stable_bind_passes_the_ownership_check(self, patch_onboard_deps, mock_db, mock_redis):
