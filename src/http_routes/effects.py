@@ -5,7 +5,9 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 
 from starlette.responses import JSONResponse
 
@@ -13,6 +15,11 @@ from starlette.responses import JSONResponse
 from src.logging_utils import get_logger
 
 from src.http_routes import access
+from src.services.http_request_parser import (
+    MAX_HTTP_SMALL_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 logger = get_logger(__name__)
 
@@ -60,7 +67,9 @@ async def http_effect_grant(request):
         )
 
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -94,8 +103,8 @@ async def http_effect_grant(request):
             status_code=403,
         )
 
-    # Optional caller TTL; the primitive clamps to its floor. Default applies if
-    # absent or unparseable.
+    # Optional caller TTL; the primitive clamps it to [floor, ceiling]. Default
+    # applies if absent or unparseable.
     mint_kwargs = {}
     ttl_raw = body.get("ttl_seconds")
     if ttl_raw is not None:
@@ -182,25 +191,168 @@ async def _check_effect_binding(body: dict, proposer: str):
     )
     if not v.ok:
         return False, f"binding_{v.reason}"
+    if v.nonce == _PURGE_WATERMARK_KEY:
+        return False, "binding_bad_nonce"
     try:
         from src.db import get_db
         db = get_db()
         async with db.acquire() as conn:
-            result = await conn.execute(
-                """
-                INSERT INTO effects.consumed_nonces (nonce, grant_exp)
-                VALUES ($1, to_timestamp($2))
-                ON CONFLICT (nonce) DO NOTHING
-                """,
-                v.nonce, int(v.exp),
-            )
+            result = await _consume_nonce(conn, v.nonce, v.exp)
     except Exception as e:  # noqa: BLE001 — store failure → fail closed
         logger.warning("effect-binding nonce consume failed: %s", e)
         return False, "binding_store_unavailable"
     # asyncpg returns a command tag like "INSERT 0 1" (1 row) or "INSERT 0 0".
     if str(result).split()[-1] != "1":
         return False, "binding_replayed"
+    _schedule_nonce_purge(db)
     return True, None
+
+
+# Nonce-ledger retention (migration 054): a row must outlive its grant's exp.
+# A row is purged only once its grant has been expired, on the verifier's own
+# clock (src.effect_grant.grant_clock), for longer than the retention margin:
+# one maximum grant lifetime plus the iat skew tolerance. The cutoff is computed
+# in Python and passed to SQL; the database's now() is never compared, so a
+# database clock ahead of or behind the verifier cannot purge a nonce whose
+# grant still verifies. Rows with a grant_exp in the future are always kept:
+# such a grant can verify again until it expires.
+#
+# The purge never runs on the veto's request path: the lease plane's veto call
+# has a short client timeout, and the nonce is already consumed, so a slow purge
+# there would turn an allowed effect into a vetoed one that cannot be retried.
+# It runs as one background task at a time, skips rows another transaction has
+# locked, and is bounded by a lock timeout, a statement timeout and a deadline.
+#
+# Deleting a row must not depend on the clock staying where it was. If the
+# verifier's clock is later set back to before a purged grant's exp, that grant
+# verifies again and its row is gone. Each purge therefore records, in the
+# reserved row _PURGE_WATERMARK_KEY, the latest grant_exp it has deleted, and
+# a consume refuses any grant whose exp is not after that watermark. Every
+# deleted row has a grant_exp at or before the watermark and every row after it
+# is kept, so a consumed grant is refused on any clock: by its own row, or by
+# the watermark. A fresh grant minted while the clock is set back that far is
+# refused too, until the clock passes the watermark again.
+_PURGE_WATERMARK_KEY = "purge-watermark:v1"
+_NONCE_PURGE_BATCH = 1000
+_NONCE_PURGE_INTERVAL_SECONDS = 60.0
+_NONCE_PURGE_LOCK_TIMEOUT_MS = 500
+_NONCE_PURGE_STATEMENT_TIMEOUT_MS = 2000
+_NONCE_PURGE_DEADLINE_SECONDS = 5.0
+_last_nonce_purge = 0.0
+_nonce_purge_task: asyncio.Task | None = None
+
+
+async def _purge_consumed_nonces(conn, now: int | None = None) -> None:
+    """Delete one bounded batch of nonce rows whose grants can no longer verify.
+
+    ``now`` defaults to the verifier's clock; tests pass it explicitly.
+    """
+    from src.effect_grant import (
+        GRANT_CLOCK_SKEW_SECONDS,
+        MAX_GRANT_TTL_SECONDS,
+        grant_clock,
+    )
+
+    app_now = grant_clock() if now is None else int(now)
+    cutoff = app_now - int(MAX_GRANT_TTL_SECONDS) - int(GRANT_CLOCK_SKEW_SECONDS)
+    async with conn.transaction():
+        await conn.execute(
+            f"SET LOCAL lock_timeout = '{int(_NONCE_PURGE_LOCK_TIMEOUT_MS)}ms'"
+        )
+        await conn.execute(
+            f"SET LOCAL statement_timeout = '{int(_NONCE_PURGE_STATEMENT_TIMEOUT_MS)}ms'"
+        )
+        await conn.execute(
+            f"""
+            WITH gone AS (
+                DELETE FROM effects.consumed_nonces
+                WHERE nonce IN (
+                    SELECT nonce FROM effects.consumed_nonces
+                    WHERE grant_exp < to_timestamp($1) AND nonce <> $2
+                    LIMIT {int(_NONCE_PURGE_BATCH)}
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING grant_exp
+            )
+            INSERT INTO effects.consumed_nonces (nonce, grant_exp)
+            SELECT $2, max(grant_exp) FROM gone HAVING count(*) > 0
+            ON CONFLICT (nonce) DO UPDATE
+                SET grant_exp = GREATEST(
+                    effects.consumed_nonces.grant_exp, EXCLUDED.grant_exp
+                )
+            """,
+            cutoff,
+            _PURGE_WATERMARK_KEY,
+        )
+
+
+async def _consume_nonce(conn, nonce: str, exp: int) -> str:
+    """Record a grant's nonce as used; return the command tag.
+
+    ``INSERT 0 1`` means first use. ``INSERT 0 0`` means the nonce is already
+    in the ledger, or the grant expired no later than the purge watermark, so
+    a purged earlier use cannot be ruled out.
+
+    The insert and its watermark check are one statement, but that is not
+    enough against a purge in flight. A purge that has deleted this nonce and
+    not yet committed leaves the insert waiting on the deleted row; once the
+    purge commits, the insert goes through, judged against the watermark the
+    statement read before the purge. So a successful insert is checked again
+    in a new statement, which reads the committed watermark: a purge that
+    freed this nonce has committed by then, since the insert waited for it.
+    """
+    result = await conn.execute(
+        """
+        INSERT INTO effects.consumed_nonces (nonce, grant_exp)
+        SELECT $1, to_timestamp($2)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM effects.consumed_nonces
+            WHERE nonce = $3 AND grant_exp >= to_timestamp($2)
+        )
+        ON CONFLICT (nonce) DO NOTHING
+        """,
+        nonce, int(exp), _PURGE_WATERMARK_KEY,
+    )
+    if str(result).split()[-1] == "1" and await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM effects.consumed_nonces
+            WHERE nonce = $1 AND grant_exp >= to_timestamp($2)
+        )
+        """,
+        _PURGE_WATERMARK_KEY, int(exp),
+    ):
+        return "INSERT 0 0"
+    return result
+
+
+async def _run_nonce_purge(db) -> None:
+    """One bounded purge pass; failures and timeouts are logged, never raised."""
+    try:
+        async with asyncio.timeout(_NONCE_PURGE_DEADLINE_SECONDS):
+            async with db.acquire() as conn:
+                await _purge_consumed_nonces(conn)
+    except Exception as e:  # noqa: BLE001 — cleanup only; the nonce is already consumed
+        logger.warning("effect-binding nonce purge failed: %s", e)
+
+
+def _schedule_nonce_purge(db) -> None:
+    """Start a rate-limited background purge; return at once, whatever happens.
+
+    At most one purge is in flight. Nothing here awaits the database, so the
+    veto response is never delayed or failed by cleanup.
+    """
+    global _last_nonce_purge, _nonce_purge_task
+    now = time.monotonic()
+    if now - _last_nonce_purge < _NONCE_PURGE_INTERVAL_SECONDS:
+        return
+    if _nonce_purge_task is not None and not _nonce_purge_task.done():
+        return
+    _last_nonce_purge = now
+    try:
+        _nonce_purge_task = asyncio.get_running_loop().create_task(_run_nonce_purge(db))
+    except Exception as e:  # noqa: BLE001 — scheduling cleanup must not fail the veto
+        logger.warning("effect-binding nonce purge not scheduled: %s", e)
 
 
 # Identity lifecycle states that may not commit a governed effect. A pause holds
@@ -253,7 +405,9 @@ async def http_effect_veto(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = {}
     if not isinstance(body, dict):

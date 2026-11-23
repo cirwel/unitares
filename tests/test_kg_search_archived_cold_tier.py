@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers
+from src.mcp_handlers.knowledge import handlers, search_helpers
 from src.mcp_handlers.knowledge.handlers import (
     ARCHIVED_COLD_MIN_RESULTS,
     ARCHIVED_COLD_SCORE_PENALTY,
@@ -52,7 +52,7 @@ def graph():
          patch("src.mcp_handlers.knowledge.handlers.mcp_server", mock_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
                new_callable=AsyncMock, return_value=graph), \
-         patch("src.mcp_handlers.knowledge.handlers.record_recall_event"), \
+         patch("src.mcp_handlers.knowledge.search_helpers.record_recall_event"), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"), \
          patch("src.retrieval.hybrid_enabled", return_value=False), \
          patch("src.reranker.reranker_enabled", return_value=False):
@@ -252,7 +252,8 @@ _RESERVE_S = 0.25
 @pytest.fixture
 def small_budget(monkeypatch):
     monkeypatch.setattr(handlers, "KNOWLEDGE_SEARCH_TIMEOUT_S", _BUDGET_S)
-    monkeypatch.setattr(handlers, "ARCHIVED_COLD_RESPONSE_RESERVE_S", _RESERVE_S)
+    monkeypatch.setattr(search_helpers, "KNOWLEDGE_SEARCH_TIMEOUT_S", _BUDGET_S)
+    monkeypatch.setattr(search_helpers, "ARCHIVED_COLD_RESPONSE_RESERVE_S", _RESERVE_S)
 
 
 async def _search_within_handler_timeout(arguments):
@@ -415,7 +416,7 @@ async def test_synthesis_skipped_when_the_budget_is_spent(graph, small_budget):
         await asyncio.sleep(timeout)
         return None
 
-    with patch("src.mcp_handlers.knowledge.handlers.synthesize_results", side_effect=slow_llm):
+    with patch("src.mcp_handlers.knowledge.search_helpers.synthesize_results", side_effect=slow_llm):
         data = await _search_within_handler_timeout({"query": "dormancy", "synthesize": True})
 
     assert [d["id"] for d in data["discoveries"]][0] == "d-open"
@@ -429,7 +430,7 @@ async def test_synthesis_timeout_fits_the_remaining_budget(graph):
     _one_open_two_cold(graph)
     synth = AsyncMock(return_value={"text": "insight"})
 
-    with patch("src.mcp_handlers.knowledge.handlers.synthesize_results", synth):
+    with patch("src.mcp_handlers.knowledge.search_helpers.synthesize_results", synth):
         data = await _search({"query": "dormancy", "synthesize": True})
 
     assert data["synthesis"] == {"text": "insight"}
@@ -490,7 +491,7 @@ async def test_slow_supersession_lookup_after_the_second_pass_keeps_the_page(
     # Codex review of 0d636d64f [P1]: the second pass may spend the budget down
     # to its reserve, and the replacement-id lookup for a superseded first-page
     # row then ran unbounded into the handler timeout.
-    monkeypatch.setattr(handlers, "SUPERSESSION_LOOKUP_RESERVE_S", 0.1)
+    monkeypatch.setattr(search_helpers, "SUPERSESSION_LOOKUP_RESERVE_S", 0.1)
     cancelled = asyncio.Event()
 
     async def first():

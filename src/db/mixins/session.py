@@ -6,9 +6,12 @@ import json
 from typing import Any, Dict, List, Optional
 
 from ..base import SessionRecord
+from .identity import identity_join_on_id_sql
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+_SESSION_IDENTITY_JOIN_SQL = identity_join_on_id_sql("s", "i")
 
 
 class SessionMixin:
@@ -46,11 +49,11 @@ class SessionMixin:
     async def get_session(self, session_id: str) -> Optional[SessionRecord]:
         async with self.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT s.session_id, s.identity_id, i.agent_id, s.created_at, s.last_active,
                        s.expires_at, s.is_active, s.client_type, s.client_info, s.metadata
                 FROM core.sessions s
-                JOIN core.identities i ON i.identity_id = s.identity_id
+                {_SESSION_IDENTITY_JOIN_SQL}
                 WHERE s.session_id = $1
                 """,
                 session_id,
@@ -93,11 +96,11 @@ class SessionMixin:
     ) -> List[SessionRecord]:
         async with self.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT s.session_id, s.identity_id, i.agent_id, s.created_at, s.last_active,
                        s.expires_at, s.is_active, s.client_type, s.client_info, s.metadata
                 FROM core.sessions s
-                JOIN core.identities i ON i.identity_id = s.identity_id
+                {_SESSION_IDENTITY_JOIN_SQL}
                 WHERE s.identity_id = $1 AND s.is_active = TRUE AND s.expires_at > now()
                 ORDER BY s.last_active DESC
                 """,
@@ -112,11 +115,11 @@ class SessionMixin:
         """Get most recent inactive session for an identity."""
         async with self.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT s.session_id, s.identity_id, i.agent_id, s.created_at, s.last_active,
                        s.expires_at, s.is_active, s.client_type, s.client_info, s.metadata
                 FROM core.sessions s
-                JOIN core.identities i ON i.identity_id = s.identity_id
+                {_SESSION_IDENTITY_JOIN_SQL}
                 WHERE s.identity_id = $1 AND s.is_active = FALSE
                 ORDER BY s.last_active DESC
                 LIMIT 1

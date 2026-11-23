@@ -392,6 +392,121 @@ class TestExchangeAuthorizationCode:
         assert first.access_token not in provider._access_tokens
         assert first.refresh_token not in provider._refresh_tokens
 
+    @pytest.mark.asyncio
+    async def test_evicted_dynamic_client_leaves_no_cached_tokens(self):
+        provider = GovernanceOAuthProvider(max_dynamic_clients=2)
+        issued = {}
+        # Issuing to a client the cache does not hold (as when one reloads
+        # from the store) evicts the oldest approved client at capacity.
+        for client_id in ("client-1", "client-2", "client-3"):
+            client = _client(client_id)
+            entry = await self._issue_code(provider, client)
+            issued[client_id] = await provider.exchange_authorization_code(client, entry)
+
+        assert "client-1" not in provider._clients
+        assert {t.client_id for t in provider._access_tokens.values()} == {
+            "client-2", "client-3",
+        }
+        assert {t.client_id for t in provider._refresh_tokens.values()} == {
+            "client-2", "client-3",
+        }
+        assert issued["client-1"].access_token not in provider._access_tokens
+
+    @pytest.mark.asyncio
+    async def test_expired_dynamic_client_leaves_no_cached_tokens(self):
+        provider = GovernanceOAuthProvider()
+        old = _client("client-old")
+        entry = await self._issue_code(provider, old)
+        await provider.exchange_authorization_code(old, entry)
+        provider._dynamic_client_expires_at["client-old"] = time.time() - 1
+
+        fresh = _client("client-new")
+        entry = await self._issue_code(provider, fresh)
+        await provider.exchange_authorization_code(fresh, entry)
+
+        assert all(t.client_id == "client-new" for t in provider._access_tokens.values())
+        assert all(t.client_id == "client-new" for t in provider._refresh_tokens.values())
+
+    @pytest.mark.asyncio
+    async def test_redeemed_codes_are_capped_across_dynamic_clients(self):
+        provider = GovernanceOAuthProvider(
+            max_auth_codes=2, max_auth_codes_per_client=2
+        )
+        for client_id in ("client-1", "client-2"):
+            client = _client(client_id)
+            entry = await self._issue_code(provider, client)
+            await provider.exchange_authorization_code(client, entry)
+
+        third = _client("client-3")
+        entry = await self._issue_code(provider, third)
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(third, entry)
+
+        assert refused.value.error == "invalid_request"
+        assert len(provider._consumed_auth_codes) == 2
+
+    @pytest.mark.asyncio
+    async def test_global_code_cap_does_not_lock_out_a_static_client(self):
+        static = build_static_client("static-client", "secret", ["https://app.example/cb"])
+        provider = GovernanceOAuthProvider(
+            static_clients=[static], max_auth_codes=1, max_auth_codes_per_client=1
+        )
+        dynamic = _client("client-1")
+        entry = await self._issue_code(provider, dynamic)
+        await provider.exchange_authorization_code(dynamic, entry)
+
+        entry = await self._issue_code(provider, static)
+        token = await provider.exchange_authorization_code(static, entry)
+
+        assert token.access_token.startswith("at_")
+
+    @pytest.mark.asyncio
+    async def test_global_code_cap_does_not_lower_a_static_clients_own_cap(self):
+        static = build_static_client("static-client", "secret", ["https://app.example/cb"])
+        provider = GovernanceOAuthProvider(
+            static_clients=[static], max_auth_codes=1, max_auth_codes_per_client=2
+        )
+        for _ in range(2):
+            entry = await self._issue_code(provider, static)
+            token = await provider.exchange_authorization_code(static, entry)
+            assert token.access_token.startswith("at_")
+
+        entry = await self._issue_code(provider, static)
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(static, entry)
+        assert refused.value.error == "invalid_request"
+
+    @pytest.mark.asyncio
+    async def test_a_registration_expiring_mid_exchange_keeps_the_new_tokens(self):
+        """Issuing renews the client's registration before caching its new
+        tokens, so a registration that expires during the exchange cannot
+        take the just-minted tokens with it."""
+        provider = GovernanceOAuthProvider()
+        client = _client("client-1")
+        entry = await self._issue_code(provider, client)
+        await provider.exchange_authorization_code(client, entry)
+        provider._dynamic_client_expires_at["client-1"] = time.time() + 0.5
+
+        original = provider._cache_access
+        advanced = []
+
+        def cache_then_advance_clock(token):
+            original(token)
+            if not advanced:
+                # Model the clock moving one second on: every registration
+                # is one second nearer its expiry.
+                advanced.append(True)
+                for client_id in provider._dynamic_client_expires_at:
+                    provider._dynamic_client_expires_at[client_id] -= 1.0
+
+        provider._cache_access = cache_then_advance_clock
+        entry = await self._issue_code(provider, client)
+        token = await provider.exchange_authorization_code(client, entry)
+
+        assert advanced
+        assert await provider.load_access_token(token.access_token) is not None
+        assert await provider.load_refresh_token(client, token.refresh_token) is not None
+
 
 # --------------------------------------------------------------------------- #
 # Refresh token rotation
@@ -437,6 +552,50 @@ class TestRefreshFlow:
         assert await provider.load_refresh_token(client, token.refresh_token) is None
         # new refresh token works
         assert await provider.load_refresh_token(client, new_token.refresh_token) is not None
+
+    @pytest.mark.asyncio
+    async def test_consumed_refresh_digests_stay_within_the_per_client_cap(self):
+        provider = GovernanceOAuthProvider(max_consumed_refresh_per_client=3)
+        client = _client()
+        token = await self._full_token(provider, client)
+        refresh = token.refresh_token
+        for _ in range(20):
+            entry = await provider.load_refresh_token(client, refresh)
+            refresh = (await provider.exchange_refresh_token(client, entry, [])).refresh_token
+
+        assert len(provider._consumed_refresh) <= 3
+        # Without a store, a used token is gone once it leaves the cache, so
+        # dropping its digest does not make it redeemable again.
+        assert await provider.load_refresh_token(client, token.refresh_token) is None
+        assert await provider.load_refresh_token(client, refresh) is not None
+
+    @pytest.mark.asyncio
+    async def test_consumed_refresh_digests_stay_within_the_global_cap(self):
+        provider = GovernanceOAuthProvider(max_consumed_refresh=4)
+        for index in range(10):
+            client = _client(f"client-{index}")
+            token = await self._full_token(provider, client)
+            entry = await provider.load_refresh_token(client, token.refresh_token)
+            await provider.exchange_refresh_token(client, entry, [])
+
+        assert len(provider._consumed_refresh) <= 4
+
+    @pytest.mark.asyncio
+    async def test_refresh_succeeds_when_one_eviction_frees_both_caps(self):
+        # The per-client eviction also frees a slot under the global cap, so
+        # the global check must count after it rather than evict again.
+        provider = GovernanceOAuthProvider(
+            max_consumed_refresh_per_client=1, max_consumed_refresh=1,
+        )
+        client = _client()
+        token = await self._full_token(provider, client)
+        refresh = token.refresh_token
+        for _ in range(3):
+            entry = await provider.load_refresh_token(client, refresh)
+            refresh = (await provider.exchange_refresh_token(client, entry, [])).refresh_token
+
+        assert len(provider._consumed_refresh) == 1
+        assert await provider.load_refresh_token(client, refresh) is not None
 
     @pytest.mark.asyncio
     async def test_requested_scopes_override(self, provider):

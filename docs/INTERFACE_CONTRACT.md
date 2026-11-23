@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.4.1`
+**Current contract:** `unitares.interface-contract.v1`, version `2.5.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1373,3 +1373,23 @@ digest change. No capability or parameter is added or removed. Clients should
 supply the summary when storing and the discovery ID when updating, as the
 handlers already required. Hash-pinning clients should refresh those two
 schema pins; schema-aware clients can now detect incomplete calls locally.
+
+## 2.4.2 (2026-11-20)
+
+Imported-memory close-contest `ranking_multiplier` relaxes from `0.55` to `0.85` while `channel_message` stays `0.55`.
+
+- **Affected outputs:** the `authority.ranking_multiplier` field on search outputs (`knowledge(action="search")`, `search_knowledge_graph`, and `search_shared_memory` digests) now reports `0.85` instead of `0.55` for `imported_context` rows, and authority-adjusted search ordering uses `0.85` for `imported_context`. `channel_message` (`0.55`), `native_finding` (`1.0`), and `governed_claim` (`1.15`) are unchanged; queryless listing omission (1.44.0), check-in suggestion filtering, and `source-<provider>-memory` classification (1.46.0) are unchanged. Close relevance contests still favor `native_finding` over `imported_context`, while strong imported-memory matches are no longer buried behind weak native rows (operator decision 2026-11-20, KG `2026-11-20T07:55:29.151367+00:00`, live `bge-m3` ablation KG `2026-11-20T05:44:43.941727+00:00`).
+- **Compatibility:** no tool, action, parameter name, type, default, or requiredness changes. Clients inspecting `authority.ranking_multiplier` or pinning exact close-contest ordering for `imported_context` rows see `0.85` in place of `0.55`.
+- **Schema digests:** none move (`surface_sha256` and all per-tool `input_schema_sha256` values are unchanged); only `version` advances from `2.4.1` to `2.4.2`.
+- **Client action:** none required unless a client asserts the literal `0.55` multiplier on `imported_context` rows.
+
+## 2.5.0 (2026-11-21)
+
+A server's operator decides whether a harness may ask it for an identity, and `onboard` records which conversation a nested process ran under.
+
+- **New inputs:** `onboard` and `start_session` accept two optional adapter-only parameters. `harness_request` (boolean) says a harness, not the agent, is asking for this identity. `spawned_under` (`{anchor}`, a thread anchor of the form `agent:/thread-<id>`) is stored once on a freshly created identity as `metadata.spawned_under`. It is caller-declared context: it is not lineage, is never promoted to `parent_agent_id`, and a malformed value is ignored without failing the call.
+- **New policy:** `UNITARES_HARNESS_ONBOARDING` is `welcome` or `agent_only`. Unset, a server listening on loopback is `welcome`; one listening beyond loopback, or one that brings up its separate public listener, is `agent_only`. The default follows the address the server actually bound, including a `--host` argument. Under `agent_only`, a call with `harness_request=true` that would create an identity creates nothing and returns a success-shaped refusal: `{refused: true, status: "harness_onboarding_declined", policy: "agent_only", hint}` with no `uuid`. A call that resumes an existing identity is unaffected, and so is every call without `harness_request`.
+- **New output:** `GET /health` reports `onboarding: {harness, basis}`, where `basis` is `explicit`, `default_loopback` or `default_exposed`. It describes the policy; the onboard handler enforces it.
+- **Compatibility:** nothing changes for a caller that does not send `harness_request`. `onboard_origin` remains descriptive and is not consulted by the policy. The policy holds an adapter that asks to be held; it is not a boundary against a caller that omits the flag. A server older than 2.5.0 ignores both parameters.
+- **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `onboard` and `start_session` move. No other tool's digest moves.
+- **Client action:** none for agents. An adapter that binds identities on a session's behalf should send `harness_request=true` and treat `harness_onboarding_declined` as "leave this session unbound", not as a failure to retry.

@@ -36,6 +36,9 @@ _READ_ONLY_TOOLS = call_set(
 # Expensive-read loop detection keys: (canonical name, resolved action).
 _EXPENSIVE_READ_CALLS = {("agent", "list")}
 _RESPONSE_CHAIN_UNBOUND_RATE_BUCKET = "response-chain:unbound"
+# knowledge actions that reach the details reader: ``get`` with a
+# discovery_id delegates to it, so both run the traversal.
+_RESPONSE_CHAIN_ACTIONS = frozenset({"details", "get"})
 
 
 def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
@@ -43,7 +46,8 @@ def _is_response_chain_read(name: str, arguments: Dict[str, Any]) -> bool:
     action = arguments.get("action") or arguments.get("op")
     action = str(action).lower() if action else None
     return (
-        (name, action) == ("knowledge", "details")
+        name == "knowledge"
+        and action in _RESPONSE_CHAIN_ACTIONS
         and bool(arguments.get("include_response_chain"))
     )
 

@@ -39,6 +39,19 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
 
+  # Standing orchestrator credentials that may sit in the daemon's OS env.
+  # Never leak them into spawned child processes by inheritance; only an
+  # explicit `spec.env` or profile `secret_env` binding may supply one.
+  @orchestrator_credential_vars [
+    "AGENT_ORCHESTRATOR_LEASE_IDENTITY_PROOF",
+    "UNITARES_LEASE_IDENTITY_PROOF",
+    "LEASE_PLANE_BEARER_TOKEN",
+    "UNITARES_LEASE_PLANE_BEARER_TOKEN",
+    "UNITARES_HTTP_API_TOKEN",
+    "UNITARES_MCP_BEARER_TOKEN",
+    "AGENT_ORCHESTRATOR_BEARER_TOKEN"
+  ]
+
   # Shape check only (8-4-4-4-12 hex) — ancestry truth is the server's call.
   @uuid_re ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
@@ -57,10 +70,13 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
       # Best-effort by default: presence should NOT gate spawning. A caller that
       # genuinely needs a gating lease passes `required: true`.
       required: Map.get(cfg, :required, false),
-      holder_agent_uuid: Map.get(cfg, :holder_agent_uuid) || uuid4(),
+      holder_agent_uuid: Map.get(cfg, :holder_agent_uuid) || configured_holder_uuid() || uuid4(),
       surface_id: Map.get(cfg, :surface_id) || "agent:/" <> execution_id,
       ttl_s:
-        Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300))
+        Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300)),
+      # Hide per-lease identity credentials behind a 0-arity closure so crash
+      # reports and `:sys.get_state/1` never print the raw token.
+      identity_proof_fn: wrap_identity_proof(Map.get(cfg, :identity_proof))
     }
   end
 
@@ -77,7 +93,39 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         lease_cfg: cfg,
         lease_client: client
       }) do
-    case client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s) do
+    acquire_result =
+      case lease_acquire_opts(cfg) do
+        [] ->
+          client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
+
+        opts ->
+          cond do
+            Code.ensure_loaded?(client) and function_exported?(client, :acquire, 5) ->
+              client.acquire(
+                cfg.surface_id,
+                cfg.holder_agent_uuid,
+                "remote_heartbeat",
+                cfg.ttl_s,
+                opts
+              )
+
+            Keyword.has_key?(opts, :identity_proof) and require_lease_identity_proof?() ->
+              {:error, :lease_client_missing_identity_proof_support}
+
+            Keyword.has_key?(opts, :identity_proof) ->
+              Logger.warning(
+                "lease_client #{inspect(client)} does not implement acquire/5; " <>
+                  "dropping per-lease identity_proof and falling back to acquire/4"
+              )
+
+              client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
+
+            true ->
+              client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s)
+          end
+      end
+
+    case acquire_result do
       {:ok, lease_id} ->
         {:ok, lease_id, :registered}
 
@@ -107,8 +155,34 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
   @doc false
   def maybe_release_lease(%{lease_id: nil}, _reason), do: :no_lease
 
-  def maybe_release_lease(%{lease_id: lease_id, lease_client: client}, reason) do
-    case client.release(lease_id, reason) do
+  def maybe_release_lease(%{lease_id: lease_id, lease_client: client} = state, reason) do
+    release_result =
+      case lease_release_opts(Map.get(state, :lease_cfg)) do
+        [] ->
+          client.release(lease_id, reason)
+
+        opts ->
+          cond do
+            Code.ensure_loaded?(client) and function_exported?(client, :release, 3) ->
+              client.release(lease_id, reason, opts)
+
+            Keyword.has_key?(opts, :identity_proof) and require_lease_identity_proof?() ->
+              {:error, :lease_client_missing_identity_proof_support}
+
+            Keyword.has_key?(opts, :identity_proof) ->
+              Logger.warning(
+                "lease_client #{inspect(client)} does not implement release/3; " <>
+                  "dropping per-lease identity_proof and falling back to release/2"
+              )
+
+              client.release(lease_id, reason)
+
+            true ->
+              client.release(lease_id, reason)
+          end
+      end
+
+    case release_result do
       :ok ->
         :ok
 
@@ -116,6 +190,50 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         Logger.warning("agent lease release failed lease=#{lease_id}: #{inspect(r)}")
         err
     end
+  end
+
+  defp configured_holder_uuid do
+    case Application.get_env(:agent_orchestrator, :lease_holder_agent_uuid) do
+      uuid when is_binary(uuid) ->
+        trimmed = String.trim(uuid)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp wrap_identity_proof(fun) when is_function(fun, 0), do: fun
+
+  defp wrap_identity_proof(proof) when is_binary(proof) do
+    trimmed = String.trim(proof)
+    if trimmed == "", do: nil, else: fn -> trimmed end
+  end
+
+  defp wrap_identity_proof(_other), do: nil
+
+  defp lease_acquire_opts(%{identity_proof_fn: fun}) when is_function(fun, 0),
+    do: [identity_proof: fun]
+
+  defp lease_acquire_opts(_cfg), do: []
+
+  defp lease_release_opts(%{} = cfg) do
+    opts =
+      case Map.get(cfg, :holder_agent_uuid) do
+        uuid when is_binary(uuid) and uuid != "" -> [holder_agent_uuid: uuid]
+        _ -> []
+      end
+
+    case Map.get(cfg, :identity_proof_fn) do
+      fun when is_function(fun, 0) -> Keyword.put(opts, :identity_proof, fun)
+      _ -> opts
+    end
+  end
+
+  defp lease_release_opts(_cfg), do: []
+
+  defp require_lease_identity_proof? do
+    Application.get_env(:agent_orchestrator, :require_lease_identity_proof, false) == true
   end
 
   @doc false
@@ -131,8 +249,9 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
         # nullable config) must not crash the merge below — that exception
         # escapes open_port's rescue and orphans the just-acquired lease.
         env = Map.get(spec, :env, []) || []
+        explicit_env = env ++ OutputBuffer.secret_env(spec)
 
-        child_vars = child_env(env ++ OutputBuffer.secret_env(spec), candidates)
+        child_vars = child_env(explicit_env, candidates)
 
         declared_anchor? =
           Enum.any?(candidates, fn {key, _} -> key == @client_session_id_var end) or
@@ -162,6 +281,19 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
                   {@orchestrated_var, false},
                   {@owner_pid_var, false}
                 ]
+
+        # Standing orchestrator credentials stay in the daemon's OS env for
+        # lease/governance calls. Scrub them from inherited Port env unless
+        # explicitly granted via `spec.env` or profile `secret_env`.
+        explicit_keys =
+          for {key, value} <- explicit_env, is_binary(value), into: MapSet.new(), do: key
+
+        scrub_vars =
+          Enum.reject(@orchestrator_credential_vars, &MapSet.member?(explicit_keys, &1))
+
+        child_vars =
+          Enum.reject(child_vars, fn {key, _} -> key in scrub_vars end) ++
+            Enum.map(scrub_vars, fn key -> {key, false} end)
 
         {exec, exec_args} =
           wire_stdin(

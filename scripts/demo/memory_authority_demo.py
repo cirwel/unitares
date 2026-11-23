@@ -50,7 +50,7 @@ def main() -> None:
         },
     )
     raw = [imported, evidence, governed]
-    scores = {"memory-1": 0.82, "evidence-1": 0.55, "claim-1": 0.61}
+    scores = {"memory-1": 0.62, "evidence-1": 0.55, "claim-1": 0.61}
     ranked, _ = rank_by_authority(raw, relevance_scores=scores)
 
     def render(rows: list[DiscoveryNode]) -> list[dict]:

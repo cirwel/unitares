@@ -40,6 +40,7 @@ from .post_update_helpers import (
     _persist_inferred_purpose_async,
     _r2_post_update_hook,
     _rewrap_behavioral_verdict,  # noqa: F401
+    rewrap_behavioral_verdict,  # noqa: F401
     _post_update_health_and_baselines,
     _eisv_instrument_stamp,
     _post_update_record_state,

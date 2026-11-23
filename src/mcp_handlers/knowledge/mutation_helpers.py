@@ -94,24 +94,10 @@ from .validation_helpers import (
     _split_note_text,
     _infer_note_severity,
     _supersede_notes_block_details,
-)
-from .search_helpers import (
-    _bounded_supersession_lookup,
+    _utc_now_iso,
 )
 
 logger = get_logger(__name__)
-
-
-def _utc_now_iso() -> str:
-    """Return current UTC time as an offset-aware ISO 8601 string.
-
-    Bug fix 2026-04-25: write-path timestamps were generated with
-    naive ``datetime.now()`` (server local TZ), causing ``id`` to drift
-    from ``created_at`` (UTC, via PG TIMESTAMPTZ) by the server's offset
-    and breaking lex-sort across multi-tz fleets. All KG write-path
-    timestamps must be UTC-aware.
-    """
-    return datetime.now(timezone.utc).isoformat()
 
 
 _discovery_id_lock = threading.Lock()
@@ -187,52 +173,6 @@ def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     if get_session_proof_origin() == "server_inferred":
         return None
     return get_context_agent_id()
-
-
-async def _annotate_supersession(
-    discovery_list: list, graph, *, deadline: Optional[float] = None,
-) -> None:
-    """Flag superseded rows in a result list so agents don't cite stale notes.
-
-    Agent-facing trust signal (2026-06-21). Default search excludes archived/cold
-    but NOT superseded, so a superseded discovery surfaces in results (only
-    down-ranked). This marks those rows `superseded: True` from the already-loaded
-    `status` (free) and best-effort attaches the replacement id(s) from the AGE
-    SUPERSEDES edge. Mutates `discovery_list` in place; fail-soft (a graph error
-    still leaves the free status-based flag).
-
-    With a ``deadline`` (search's monotonic budget), the replacement-id lookup
-    gets only what is left of it, less SUPERSESSION_LOOKUP_RESERVE_S, and is
-    stopped the way an overrunning archived/cold pass is: the rows keep the free
-    flag and lose only ``superseded_by``.
-    """
-    superseded_ids = [
-        d["id"] for d in discovery_list
-        if d.get("status") == "superseded" and d.get("id")
-    ]
-    if not superseded_ids:
-        return
-    successors: Dict[str, list] = {}
-    if hasattr(graph, "get_superseded_by"):
-        try:
-            if deadline is None:
-                successors = await graph.get_superseded_by(superseded_ids)
-            else:
-                successors = await _bounded_supersession_lookup(graph, superseded_ids, deadline)
-        except Exception as exc:  # noqa: BLE001 — advisory flag, never break search
-            logger.debug(f"[KG_SEARCH] supersession lookup failed (non-fatal): {exc}")
-    for d in discovery_list:
-        if d.get("status") != "superseded":
-            continue
-        d["superseded"] = True
-        newer = successors.get(d.get("id")) or []
-        if newer:
-            d["superseded_by"] = newer
-        d["superseded_warning"] = (
-            "Superseded — a newer discovery replaced this. "
-            + (f"Current version: {newer[0]}. " if newer else "")
-            + "Prefer the newer entry over this one."
-        )
 
 
 async def _record_supersession_edge(graph, *, new_id: str, old_id: str) -> Optional[str]:

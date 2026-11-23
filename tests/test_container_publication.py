@@ -1,5 +1,6 @@
 """Prevent release publication/backfill from moving the default install image."""
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -224,3 +225,123 @@ def test_lease_plane_image_check_rebuilds_on_every_build_input():
             ".dockerignore",
             ".github/workflows/publish-container.yml",
         } <= paths
+
+
+_PUBLISHED_DOCKERFILES = [
+    entry["dockerfile"] for entry in PUBLISH["strategy"]["matrix"]["include"]
+]
+_INDEX_PIN = re.compile(r"^[^@\s]+:[^@\s:/]+@sha256:[0-9a-f]{64}$")
+
+
+def _external_from_refs(dockerfile: str) -> list[str]:
+    """The base-image references of every `FROM` that is not a local stage."""
+    stages: set[str] = set()
+    refs: list[str] = []
+    for raw in (ROOT / dockerfile).read_text().splitlines():
+        parts = raw.strip().split()
+        if not parts or parts[0].upper() != "FROM":
+            continue
+        args = [p for p in parts[1:] if not p.startswith("--")]
+        if args[0] not in stages:
+            refs.append(args[0])
+        if len(args) >= 3 and args[1].upper() == "AS":
+            stages.add(args[2])
+    return refs
+
+
+@pytest.mark.parametrize("dockerfile", _PUBLISHED_DOCKERFILES)
+def test_published_images_build_on_digest_pinned_bases(dockerfile):
+    """A release image is attested; its base must not be whatever a mutable tag
+    names on release day. Each external base carries its tag (for review and
+    Dependabot) and the multi-arch index digest it must resolve to."""
+    refs = _external_from_refs(dockerfile)
+    assert refs, dockerfile
+    for ref in refs:
+        assert _INDEX_PIN.match(ref), f"{dockerfile}: FROM {ref} is not tag@sha256-pinned"
+
+
+def test_database_image_builds_pgvector_from_a_verified_commit():
+    """A git tag can be moved. The build compares the commit the cloned tag
+    resolved to with the pinned commit, and builds that same tree.
+
+    Checking out the pinned commit first and then comparing HEAD would always
+    pass: it never looks at what the tag named."""
+    dockerfile = (ROOT / "db/postgres/Dockerfile.age-vector").read_text()
+    pin = re.search(r"^ARG PGVECTOR_COMMIT=([0-9a-f]{40})$", dockerfile, re.M)
+    assert pin, "pgvector must be pinned to a full 40-hex commit"
+    start = dockerfile.index("git clone")
+    run = dockerfile[start : dockerfile.index("make install", start)]
+    assert '--branch "$PGVECTOR_VERSION"' in run
+    check = 'test "$(git rev-parse HEAD)" = "$PGVECTOR_COMMIT"'
+    assert check in run
+    between = run[: run.index(check)]
+    # Nothing between the clone and the check may move HEAD off the tag.
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert f"git {mover}" not in between and f" {mover} " not in between, mover
+    # Nor may anything after it, up to the build.
+    after = run[run.index(check) : run.index("make OPTFLAGS")]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert mover not in after, mover
+
+
+@pytest.mark.parametrize(
+    "var_prefix, repo_url, subdir",
+    [
+        ("AGE", "https://github.com/apache/age.git", "age"),
+        ("PGVECTOR", "https://github.com/pgvector/pgvector.git", "vector"),
+    ],
+)
+def test_glama_install_builds_extensions_from_verified_commits(var_prefix, repo_url, subdir):
+    """docker/glama/install.sh verifies each cloned extension tag against a
+    full 40-hex commit pin before running make, with no HEAD-moving git
+    commands in between."""
+    script = (ROOT / "docker/glama/install.sh").read_text()
+    version_pin = re.search(rf'^{var_prefix}_VERSION="([^"]+)"$', script, re.M)
+    commit_pin = re.search(rf'^{var_prefix}_COMMIT="([0-9a-f]{{40}})"$', script, re.M)
+    assert version_pin, f"{var_prefix}_VERSION must be defined in docker/glama/install.sh"
+    assert commit_pin, f"{var_prefix}_COMMIT must be pinned to a full 40-hex commit"
+
+    clone_line = f'git clone --depth 1 --branch "${var_prefix}_VERSION" {repo_url} "$build_dir/{subdir}"'
+    check_line = f'test "$(git -C "$build_dir/{subdir}" rev-parse HEAD)" = "${var_prefix}_COMMIT"'
+    make_prefix = f'make -C "$build_dir/{subdir}" '
+    install_line = f'make -C "$build_dir/{subdir}" install'
+
+    assert clone_line in script
+    start = script.index(clone_line)
+    end = script.index(install_line, start)
+    block = script[start:end]
+
+    assert check_line in block
+    check_pos = block.index(check_line)
+    make_pos = block.index(make_prefix, check_pos)
+
+    between = block[:check_pos]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert f"git {mover}" not in between and f" {mover} " not in between, mover
+
+    after = block[check_pos:make_pos]
+    for mover in ("checkout", "switch", "reset", "fetch", "pull"):
+        assert mover not in after, mover
+
+
+def test_glama_pgvector_pin_matches_database_dockerfile():
+    """Keep the Glama and Postgres pgvector commit pins aligned when on the same tag."""
+    dockerfile = (ROOT / "db/postgres/Dockerfile.age-vector").read_text()
+    script = (ROOT / "docker/glama/install.sh").read_text()
+    df_ver = re.search(r"^ARG PGVECTOR_VERSION=(\S+)$", dockerfile, re.M)
+    df_sha = re.search(r"^ARG PGVECTOR_COMMIT=([0-9a-f]{40})$", dockerfile, re.M)
+    gl_ver = re.search(r'^PGVECTOR_VERSION="([^"]+)"$', script, re.M)
+    gl_sha = re.search(r'^PGVECTOR_COMMIT="([0-9a-f]{40})"$', script, re.M)
+    assert df_ver and df_sha and gl_ver and gl_sha
+    if df_ver.group(1) == gl_ver.group(1):
+        assert gl_sha.group(1) == df_sha.group(1)
+
+
+def test_dependabot_bumps_every_published_base_image():
+    """Digest pins only stay current if Dependabot proposes their bumps."""
+    config = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text())
+    docker = next(u for u in config["updates"] if u["package-ecosystem"] == "docker")
+    covered = set(docker.get("directories", [docker.get("directory")]))
+    for dockerfile in _PUBLISHED_DOCKERFILES:
+        directory = "/" + str(Path(dockerfile).parent).lstrip(".").strip("/")
+        assert directory in covered, f"{dockerfile} has no Dependabot docker coverage"

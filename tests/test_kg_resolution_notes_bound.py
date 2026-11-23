@@ -36,7 +36,7 @@ def _fixed_clock():
     """isoformat() drops the fraction when microseconds are zero, which would
     change the block's length between two calls in one test."""
     with patch(
-        "src.mcp_handlers.knowledge.handlers._utc_now_iso",
+        "src.mcp_handlers.knowledge.validation_helpers._utc_now_iso",
         return_value="2026-09-27T00:00:00.000001+00:00",
     ), patch(
         "src.mcp_handlers.knowledge.mutation_helpers._utc_now_iso",

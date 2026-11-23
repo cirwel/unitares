@@ -10,7 +10,6 @@ from mcp.types import TextContent
 from datetime import datetime, timezone
 import json
 import re
-import sys
 
 from ..utils import error_response
 from src.knowledge_graph import (
@@ -41,21 +40,41 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-def _h_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.knowledge.handlers")
-    return getattr(mod, name, default) if mod is not None else default
-
-
 def _utc_now_iso() -> str:
-    fn = _h_attr("_utc_now_iso", None)
-    if fn is not None:
-        return fn()
+    """Return current UTC time as an offset-aware ISO 8601 string.
+
+    Bug fix 2026-04-25: write-path timestamps were generated with
+    naive ``datetime.now()`` (server local TZ), causing ``id`` to drift
+    from ``created_at`` (UTC, via PG TIMESTAMPTZ) by the server's offset
+    and breaking lex-sort across multi-tz fleets. All KG write-path
+    timestamps must be UTC-aware.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 
-def _optional_flag(*args: Any, **kwargs: Any) -> bool:
-    from .search_helpers import _optional_flag as _impl
-    return _impl(*args, **kwargs)
+def _optional_flag(value: Any) -> Optional[bool]:
+    """Tri-state flag: None when the caller said nothing, else a real bool.
+
+    Collapsing "unspecified" and "explicitly false" into `False` is what made
+    `include_details=false` unhonorable — the auto-include heuristic could not
+    tell a caller who wanted summaries from one who had no opinion, so it
+    overrode both.
+
+    MCP admits these as strings, so `"false"` must not become `True` the way a
+    bare `bool("false")` would.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in ("true", "1", "yes"):
+            return True
+        if token in ("false", "0", "no"):
+            return False
+        return None
+    return bool(value)
 
 VALID_DISCOVERY_TYPES = {
     "architectural_decision", "learning", "pattern", "bug_fix",
@@ -1032,7 +1051,7 @@ def _unclassified_closure_note(
     than that it declares nothing: the notes may name the standard, and the
     class records it as a field of its own.
     """
-    if not _h_attr("CLOSURE_CLASS_PERSISTED", CLOSURE_CLASS_PERSISTED):
+    if not CLOSURE_CLASS_PERSISTED:
         # Kept so the notes stay true if storage stops writing the class
         # again: resolution_notes is then the only durable place for it.
         standards = (

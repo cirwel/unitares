@@ -119,6 +119,7 @@ from .validation_helpers import (
     _split_note_text,  # noqa: F401
     _infer_note_severity,  # noqa: F401
     _supersede_notes_block_details,  # noqa: F401
+    _utc_now_iso,  # noqa: F401
 )
 from .search_helpers import (
     _LEAN_DISCOVERY_FIELDS,  # noqa: F401
@@ -160,6 +161,7 @@ from .search_helpers import (
     SUPERSESSION_LOOKUP_RESERVE_S,  # noqa: F401
     _archived_cold_widening,  # noqa: F401
     _bounded_supersession_lookup,  # noqa: F401
+    _annotate_supersession,
     _apply_archived_cold_tier,
     _candidate_matches_semantic_fallback,  # noqa: F401
     _exclude_search_labels,
@@ -215,11 +217,9 @@ def _knowledge_read_response_mode(handler):
 
 
 from .mutation_helpers import (
-    _utc_now_iso,  # noqa: F401
     _new_discovery_id,  # noqa: F401
     _broadcast_knowledge_write,  # noqa: F401
     _resolve_reader_agent_id,
-    _annotate_supersession,
     _record_supersession_edge,  # noqa: F401
     _build_s7_provenance_chain_with_fallback,  # noqa: F401
     _check_display_name_required,  # noqa: F401
@@ -929,7 +929,11 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _apply_semantic_fts_fallback(state)
     if state.fallback_used:
         state.results = _rank_search_documents(state, state.results)[: state.request.limit]
-    await _apply_archived_cold_tier(state, first_pass_s=time.perf_counter() - started_at)
+    await _apply_archived_cold_tier(
+        state,
+        first_pass_s=time.perf_counter() - started_at,
+        run_pass=_run_archived_cold_pass,
+    )
     record_ms(
         f"knowledge.search.{state.search_mode}",
         (time.perf_counter() - started_at) * 1000.0,

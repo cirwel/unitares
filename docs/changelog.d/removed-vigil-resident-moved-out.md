@@ -1,0 +1,1 @@
+- **Vigil resident moved out** — `agents/vigil/`, its tests, and `scripts/ops/com.unitares.vigil.plist.template` leave this repository for the deployment repository that runs Vigil as an SDK client.

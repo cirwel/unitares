@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import asyncio
 import json
-import sys
 import time
 
 from ..identity.stable_session import audit_reference, redact_provenance
@@ -28,47 +27,20 @@ from src.knowledge_authority import (
     channel_lanes,
     is_imported_context,
     is_lane_filter,
-    rank_by_authority as _default_rank_by_authority,
+    rank_by_authority,
 )
 from src.recall_telemetry import (
     LEXICAL_INDEX_MISS,
     LOW_CONFIDENCE,
     ZERO_RESULT,
-    record_recall_event as _default_record_recall_event,
+    record_recall_event,
 )
-from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results as _default_synthesize_results
-from .validation_helpers import _CLOSING_STATUSES
+from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results
+from .mutation_helpers import _resolve_agent_display
+from .validation_helpers import _CLOSING_STATUSES, _optional_flag  # noqa: F401
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
-
-
-def _h_attr(name: str, default: Any = None) -> Any:
-    mod = sys.modules.get("src.mcp_handlers.knowledge.handlers")
-    return getattr(mod, name, default) if mod is not None else default
-
-
-def rank_by_authority(*args: Any, **kwargs: Any) -> Any:
-    return _h_attr("rank_by_authority", _default_rank_by_authority)(*args, **kwargs)
-
-
-async def synthesize_results(*args: Any, **kwargs: Any) -> Any:
-    return await _h_attr("synthesize_results", _default_synthesize_results)(*args, **kwargs)
-
-
-def record_recall_event(*args: Any, **kwargs: Any) -> Any:
-    return _h_attr("record_recall_event", _default_record_recall_event)(*args, **kwargs)
-
-
-def _resolve_agent_display(agent_id: Optional[str]) -> Optional[Dict[str, str]]:
-    fn = _h_attr("_resolve_agent_display", None)
-    return fn(agent_id) if fn is not None else None
-
-
-async def _run_archived_cold_pass(second: Any, limit: int) -> None:
-    fn = _h_attr("_run_archived_cold_pass", None)
-    if fn is not None:
-        await fn(second, limit)
 
 def _compact_identity_assurance(assurance: Any) -> Dict[str, Any]:
     """Return the useful proof summary for a lean read response."""
@@ -382,7 +354,7 @@ def _compute_staleness(discovery) -> Optional[tuple[int, str]]:
                     was_updated = True
         except (ValueError, TypeError):
             pass
-        age_days = (_h_attr("datetime", datetime).now(timezone.utc) - last_write).days
+        age_days = (datetime.now(timezone.utc) - last_write).days
     except (ValueError, TypeError):
         return None
     if age_days <= _STALE_AFTER_DAYS:
@@ -499,31 +471,6 @@ class _KnowledgeSearchState:
     # time.monotonic() at which the handler's timeout fires; None when the
     # search runs outside handle_search_knowledge_graph (no budget to keep).
     deadline: Optional[float] = None
-
-
-def _optional_flag(value: Any) -> Optional[bool]:
-    """Tri-state flag: None when the caller said nothing, else a real bool.
-
-    Collapsing "unspecified" and "explicitly false" into `False` is what made
-    `include_details=false` unhonorable — the auto-include heuristic could not
-    tell a caller who wanted summaries from one who had no opinion, so it
-    overrode both.
-
-    MCP admits these as strings, so `"false"` must not become `True` the way a
-    bare `bool("false")` would.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        token = value.strip().lower()
-        if token in ("true", "1", "yes"):
-            return True
-        if token in ("false", "0", "no"):
-            return False
-        return None
-    return bool(value)
 
 
 AUTO_DETAIL_MAX_RESULTS = 3
@@ -827,7 +774,7 @@ def _recency_weighted(
     nearly flat, so on a hybrid search the weight dominates the order. A
     row whose creation time cannot be read is left unweighted.
     """
-    now = _h_attr("datetime", datetime).now(timezone.utc)
+    now = datetime.now(timezone.utc)
     weighted: dict[str, float] = {}
     for index, document in enumerate(documents):
         document_id = str(getattr(document, "id", ""))
@@ -1216,7 +1163,7 @@ async def _bounded_supersession_lookup(
     task is stopped like an abandoned second pass. Cancelling the request
     cancels the lookup too.
     """
-    budget = deadline - _h_attr("SUPERSESSION_LOOKUP_RESERVE_S", SUPERSESSION_LOOKUP_RESERVE_S) - time.monotonic()
+    budget = deadline - SUPERSESSION_LOOKUP_RESERVE_S - time.monotonic()
     if budget <= 0:
         logger.info("[KG_SEARCH] supersession lookup skipped: search budget spent")
         return {}
@@ -1236,6 +1183,52 @@ async def _bounded_supersession_lookup(
     return task.result()
 
 
+async def _annotate_supersession(
+    discovery_list: list, graph, *, deadline: Optional[float] = None,
+) -> None:
+    """Flag superseded rows in a result list so agents don't cite stale notes.
+
+    Agent-facing trust signal (2026-06-21). Default search excludes archived/cold
+    but NOT superseded, so a superseded discovery surfaces in results (only
+    down-ranked). This marks those rows `superseded: True` from the already-loaded
+    `status` (free) and best-effort attaches the replacement id(s) from the AGE
+    SUPERSEDES edge. Mutates `discovery_list` in place; fail-soft (a graph error
+    still leaves the free status-based flag).
+
+    With a ``deadline`` (search's monotonic budget), the replacement-id lookup
+    gets only what is left of it, less SUPERSESSION_LOOKUP_RESERVE_S, and is
+    stopped the way an overrunning archived/cold pass is: the rows keep the free
+    flag and lose only ``superseded_by``.
+    """
+    superseded_ids = [
+        d["id"] for d in discovery_list
+        if d.get("status") == "superseded" and d.get("id")
+    ]
+    if not superseded_ids:
+        return
+    successors: Dict[str, list] = {}
+    if hasattr(graph, "get_superseded_by"):
+        try:
+            if deadline is None:
+                successors = await graph.get_superseded_by(superseded_ids)
+            else:
+                successors = await _bounded_supersession_lookup(graph, superseded_ids, deadline)
+        except Exception as exc:  # noqa: BLE001 — advisory flag, never break search
+            logger.debug(f"[KG_SEARCH] supersession lookup failed (non-fatal): {exc}")
+    for d in discovery_list:
+        if d.get("status") != "superseded":
+            continue
+        d["superseded"] = True
+        newer = successors.get(d.get("id")) or []
+        if newer:
+            d["superseded_by"] = newer
+        d["superseded_warning"] = (
+            "Superseded — a newer discovery replaced this. "
+            + (f"Current version: {newer[0]}. " if newer else "")
+            + "Prefer the newer entry over this one."
+        )
+
+
 def _abandon_archived_cold_pass(task: asyncio.Task) -> None:
     """Stop a second pass the handler no longer waits for.
 
@@ -1252,6 +1245,7 @@ async def _apply_archived_cold_tier(
     state: _KnowledgeSearchState,
     *,
     first_pass_s: float = 0.0,
+    run_pass: Any = None,
 ) -> None:
     """Fill a short page from archived and cold rows, ranked below every active row.
 
@@ -1277,21 +1271,24 @@ async def _apply_archived_cold_tier(
 
     budget: Optional[float] = None
     if state.deadline is not None:
-        budget = state.deadline - _h_attr("ARCHIVED_COLD_RESPONSE_RESERVE_S", ARCHIVED_COLD_RESPONSE_RESERVE_S) - time.monotonic()
+        budget = state.deadline - ARCHIVED_COLD_RESPONSE_RESERVE_S - time.monotonic()
         if budget <= 0 or budget < first_pass_s:
             state.archived_cold_error = (
                 f"second pass skipped: {max(budget, 0.0):.1f}s of the "
-                f"{_h_attr("KNOWLEDGE_SEARCH_TIMEOUT_S", KNOWLEDGE_SEARCH_TIMEOUT_S):g}s search budget was left after a "
+                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget was left after a "
                 f"{first_pass_s:.1f}s first pass; returning the first page only"
             )
             logger.info("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
             return
 
+    if run_pass is None:
+        from .handlers import _run_archived_cold_pass as run_pass
+
     second = _KnowledgeSearchState(
         request=replace(request, **widening),
         graph=state.graph,
     )
-    task = asyncio.create_task(_run_archived_cold_pass(second, request.limit))
+    task = asyncio.create_task(run_pass(second, request.limit))
     try:
         done, _ = await asyncio.wait({task}, timeout=budget)
     except asyncio.CancelledError:
@@ -1302,7 +1299,7 @@ async def _apply_archived_cold_tier(
         _abandon_archived_cold_pass(task)
         state.archived_cold_error = (
             f"second pass did not finish within the {budget:.1f}s left of the "
-            f"{_h_attr("KNOWLEDGE_SEARCH_TIMEOUT_S", KNOWLEDGE_SEARCH_TIMEOUT_S):g}s search budget; returning the first page only"
+            f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget; returning the first page only"
         )
         logger.warning("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
         return
@@ -1870,7 +1867,7 @@ async def _attach_search_synthesis(
         if llm_timeout < SEARCH_SYNTHESIS_MIN_TIMEOUT_S:
             response["_synthesis_note"] = (
                 "Synthesis skipped: too little of the "
-                f"{_h_attr("KNOWLEDGE_SEARCH_TIMEOUT_S", KNOWLEDGE_SEARCH_TIMEOUT_S):g}s search budget left after retrieval"
+                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget left after retrieval"
             )
             return
     try:

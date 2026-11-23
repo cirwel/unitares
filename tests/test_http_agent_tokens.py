@@ -1,4 +1,4 @@
-"""Per-agent REST tokens admit one agent's check-ins and nothing else.
+"""Per-agent REST tokens authorize only granted scopes for one agent UUID.
 
 See src/http_agent_tokens.py. The token authorizes; it never binds. Every test
 below drives the real /v1/tools/call route with a public source address, so
@@ -22,8 +22,9 @@ TOKEN = "a" * 64
 OTHER_TOKEN = "b" * 64
 
 
-def _entry(agent: str, token: str) -> str:
-    return f"{agent}:sha256:{hashlib.sha256(token.encode()).hexdigest()}"
+def _entry(agent: str, token: str, scopes: str | None = None) -> str:
+    base = f"{agent}:sha256:{hashlib.sha256(token.encode()).hexdigest()}"
+    return f"{base}:{scopes}" if scopes is not None else base
 
 
 @pytest.fixture(autouse=True)
@@ -271,3 +272,238 @@ async def test_shared_token_callers_are_not_scoped(route, monkeypatch):
     route["resolves_to"] = OTHER
     response = await route["call"](_request("identity", dict(CHECKIN), auth="Bearer shared"))
     assert response.status_code == 200
+
+
+# --- per-token scopes and argument allowlists ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw_scopes",
+    ["", "unknown", "checkin+", "+outcome", "checkin+checkin", "admin"],
+)
+def test_malformed_scope_suffix_fails_closed(monkeypatch, raw_scopes):
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        f"{_entry(AGENT, TOKEN)},{_entry(OTHER, OTHER_TOKEN, raw_scopes)}",
+    )
+    assert http_agent_tokens.grant_for_bearer(TOKEN) is None
+    assert http_agent_tokens.grant_for_bearer(OTHER_TOKEN) is None
+
+
+def test_two_tokens_same_agent_have_independent_grants_and_revocation(monkeypatch):
+    second_token = "c" * 64
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        f"{_entry(AGENT, TOKEN)},{_entry(AGENT, second_token, 'checkin+outcome+knowledge_store')}",
+    )
+    grant1 = http_agent_tokens.grant_for_bearer(TOKEN)
+    grant2 = http_agent_tokens.grant_for_bearer(second_token)
+    assert grant1 is not None and grant2 is not None
+    assert grant1.agent_uuid == AGENT and grant2.agent_uuid == AGENT
+    assert grant1.scopes == frozenset({"checkin"})
+    assert grant2.scopes == frozenset({"checkin", "outcome", "knowledge_store"})
+    assert grant1.digest_prefix != grant2.digest_prefix
+
+    # Revoking one leaves the other working with its own grant
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, second_token, "checkin+outcome+knowledge_store"),
+    )
+    assert http_agent_tokens.grant_for_bearer(TOKEN) is None
+    assert http_agent_tokens.grant_for_bearer(second_token) == grant2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["kwargs", "arguments", "params"])
+async def test_wrapper_keys_are_refused(route, monkeypatch, key):
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "checkin+outcome+knowledge_store"),
+    )
+    response = await route["call"](
+        _request("process_agent_update", {**CHECKIN, key: {"complexity": 0.2}})
+    )
+    assert response.status_code == 403
+    assert route["prebinds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_x_agent_id_header_and_missing_csid_are_refused(route):
+    res_hdr = await route["call"](
+        _request(
+            "process_agent_update",
+            dict(CHECKIN),
+            extra_headers=[(b"x-agent-id", AGENT.encode())],
+        )
+    )
+    assert res_hdr.status_code == 403
+    assert route["prebinds"] == 0
+
+    for bad_args in ({}, {"client_session_id": ""}, {"client_session_id": "   "}):
+        res_csid = await route["call"](_request("process_agent_update", bad_args))
+        assert res_csid.status_code == 403
+        assert route["prebinds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_outcome_scope_admits_allowed_fields_and_blocks_session_or_prediction_injection(
+    route, monkeypatch
+):
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "outcome"),
+    )
+    # Checkin fails without checkin scope
+    res_checkin = await route["call"](_request("sync_state", dict(CHECKIN)))
+    assert res_checkin.status_code == 403
+    assert route["prebinds"] == 0
+
+    for tool_name in ("outcome_event", "record_result"):
+        res_ok = await route["call"](
+            _request(
+                tool_name,
+                {
+                    "client_session_id": CHECKIN["client_session_id"],
+                    "outcome_type": "task_completed",
+                    "outcome_score": 0.9,
+                    "detail": {"mark_count": 42},
+                },
+            )
+        )
+        assert res_ok.status_code == 200
+
+    route["execute"].reset_mock()
+    for bad_field in (
+        {"session_id": "other-session"},
+        {"prediction_id": "pred-123"},
+        {"verification_source": "external_signal"},
+        {"_trusted_ingestion": True},
+        {"agent_id": OTHER},
+        {"unexpected": 1},
+    ):
+        prebinds_before = route["prebinds"]
+        res_bad = await route["call"](
+            _request(
+                "outcome_event",
+                {
+                    "client_session_id": CHECKIN["client_session_id"],
+                    "outcome_type": "task_completed",
+                    **bad_field,
+                },
+            )
+        )
+        assert res_bad.status_code == 403
+        assert route["prebinds"] == prebinds_before
+    route["execute"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_store_scope_is_append_only_and_low_medium_severity(
+    route, monkeypatch
+):
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "knowledge_store"),
+    )
+
+    # Canonical explicit action="store" and store_finding alias succeed
+    res_canon = await route["call"](
+        _request(
+            "knowledge",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "action": "store",
+                "summary": "Room warmed rapidly after sunrise",
+                "discovery_type": "insight",
+                "tags": ["embodied", "light"],
+                "severity": "low",
+                "details": "{}",
+            },
+        )
+    )
+    assert res_canon.status_code == 200
+
+    res_alias = await route["call"](
+        _request(
+            "store_finding",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "summary": "Ambient lux correlated with clarity",
+                "discovery_type": "observation",
+                "severity": "medium",
+            },
+        )
+    )
+    assert res_alias.status_code == 200
+
+    route["execute"].reset_mock()
+    bad_calls = [
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "summary": "missing action"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "search", "summary": "x"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "update", "summary": "x"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "cleanup", "summary": "x"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "STORE", "summary": "x"}),
+        ("store_finding", {"client_session_id": CHECKIN["client_session_id"], "action": "delete", "summary": "x"}),
+        ("update_finding", {"client_session_id": CHECKIN["client_session_id"], "summary": "x"}),
+        ("search_shared_memory", {"client_session_id": CHECKIN["client_session_id"], "summary": "x"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "severity": "high"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "severity": "critical"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "severity": "LOW"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "architectural_decision"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "learning"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "pattern"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "root_cause_analysis"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "migration"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_type": "topic_rollup"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discoveries": []}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "response_to": {"discovery_id": "1"}}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "supersedes": "d-1"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "discovery_id": "custom"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "status": "resolved"}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["permanent"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["#permanent"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["permanent!"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["foundational"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["Foundational."]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["architecture"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": [" Decision "]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["-decision-"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["source-claude-memory"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["source_claude_memory"]}),
+        ("knowledge", {"client_session_id": CHECKIN["client_session_id"], "action": "store", "summary": "x", "tags": ["Source Claude Memory"]}),
+    ]
+    for tool_name, args in bad_calls:
+        prebinds_before = route["prebinds"]
+        res_bad = await route["call"](_request(tool_name, args))
+        assert res_bad.status_code == 403, f"expected 403 for {tool_name} {args}"
+        assert route["prebinds"] == prebinds_before
+    route["execute"].assert_not_awaited()
+
+    from src.knowledge_graph_lifecycle import PERMANENT_TAGS, PERMANENT_TYPES
+
+    assert http_agent_tokens._KNOWLEDGE_STORE_ALLOWED_TYPES.isdisjoint(PERMANENT_TYPES)
+    assert {t.lower() for t in PERMANENT_TAGS} <= http_agent_tokens._KNOWLEDGE_STORE_RESERVED_TAGS
+
+
+@pytest.mark.asyncio
+async def test_all_registered_aliases_fail_closed_unless_explicitly_scoped(route, monkeypatch):
+    from src.mcp_handlers.tool_stability import list_all_aliases
+
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "checkin+outcome+knowledge_store"),
+    )
+    allowed_aliases = {"sync_state", "record_result", "store_finding"}
+    for alias_name in list_all_aliases():
+        args = {"client_session_id": CHECKIN["client_session_id"]}
+        if alias_name == "outcome_event" or alias_name == "record_result":
+            args["outcome_type"] = "task_completed"
+        elif alias_name == "store_finding":
+            args["summary"] = "test"
+        prebinds_before = route["prebinds"]
+        res = await route["call"](_request(alias_name, args))
+        if alias_name in allowed_aliases:
+            assert res.status_code == 200, f"expected 200 for {alias_name}"
+        else:
+            assert res.status_code == 403, f"expected 403 for {alias_name}"
+            assert route["prebinds"] == prebinds_before

@@ -290,6 +290,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .tl-mk.knowledge .tl-dot { width: 9px; height: 9px; background: var(--info); transform: rotate(45deg); }
 .tl-mk.lineage .tl-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--eisv-e); background: var(--surface); }
 .tl-mk.lifecycle .tl-dot { width: 3px; height: 18px; background: var(--ink-2); }
+.tl-mk.external .tl-dot { width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--ink-2); background: var(--surface); }
 .tl-band { position: absolute; top: 14px; height: 24px; border-radius: var(--radius-sm); padding: 0; cursor: pointer; z-index: 1; }
 .tl-band.pause { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--danger) 24%, transparent) 0 4px, color-mix(in srgb, var(--danger) 6%, transparent) 4px 8px);
   border: var(--hairline) solid color-mix(in srgb, var(--danger) 50%, transparent); }

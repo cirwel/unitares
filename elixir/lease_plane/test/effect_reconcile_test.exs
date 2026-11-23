@@ -109,6 +109,40 @@ defmodule UnitaresLeasePlane.EffectReconcileTest do
     assert File.read!(path) == competing
   end
 
+  @tag :tmp_dir
+  test "a link planted at the surface -> quarantine, never hashed through", %{tmp_dir: dir} do
+    target = Path.join(dir, "outside.txt")
+    File.write!(target, "the committed content\n")
+    path = Path.join(dir, "note.txt")
+    File.ln_s!(target, path)
+
+    p =
+      payload(path,
+        payload_sha256: sha("the committed content\n"),
+        pre_image_sha256: nil,
+        pre_image_existed: false
+      )
+
+    assert EffectReconcile.reconcile_payload(p, FakeRepo) ==
+             {:quarantined, {:read_error, :symlink_in_path}}
+
+    assert_received {:quarantine, "eff-1"}
+    refute_received {:mark_committed, _}
+  end
+
+  @tag :tmp_dir
+  test "a dangling link at the surface is not read as absent", %{tmp_dir: dir} do
+    path = Path.join(dir, "note.txt")
+    File.ln_s!(Path.join(dir, "outside.txt"), path)
+
+    p = payload(path, payload_sha256: sha("x"), pre_image_sha256: nil, pre_image_existed: false)
+
+    assert EffectReconcile.reconcile_payload(p, FakeRepo) ==
+             {:quarantined, {:read_error, :symlink_in_path}}
+
+    refute_received {:tombstone, _}
+  end
+
   test "unresolvable surface -> quarantine (cannot prove safety)" do
     p = %{
       effect_id: "eff-x",
@@ -204,10 +238,9 @@ defmodule UnitaresLeasePlane.EffectReconcileTest do
   @tag :tmp_dir
   test "file read error does not claim a quarantine whose mark failed", %{tmp_dir: dir} do
     # A directory produces a read error without depending on Unix permissions.
-    {:error, reason} = File.read(dir)
     p = payload(dir, payload_sha256: sha("new\n"), pre_image_sha256: sha("old\n"))
 
-    assert_failed_mark(p, :quarantine, {:quarantined, {:read_error, reason}})
+    assert_failed_mark(p, :quarantine, {:quarantined, {:read_error, :not_regular_file}})
     assert File.dir?(dir)
   end
 
@@ -270,9 +303,11 @@ defmodule UnitaresLeasePlane.EffectReconcileTest do
     assert File.read!(path) == "done\n"
   end
 
-  test "recovery scan drains orphans and tallies outcomes" do
+  # tmp_dir, not System.tmp_dir!(): on macOS the latter sits under the /var
+  # link, and recovery refuses a surface path with a link in it.
+  @tag :tmp_dir
+  test "recovery scan drains orphans and tallies outcomes", %{tmp_dir: dir} do
     # one committed-forward, one tombstone (both via a temp file)
-    dir = System.tmp_dir!()
     committed_path = Path.join(dir, "rec-committed-#{System.unique_integer([:positive])}.txt")
     File.write!(committed_path, "done\n")
 

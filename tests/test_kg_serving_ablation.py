@@ -53,6 +53,33 @@ async def test_changed_labels_are_rejected(frozen_inputs):
 
 
 @pytest.mark.asyncio
+async def test_replay_authority_false_disables_ranking_in_search_helpers(frozen_inputs, monkeypatch):
+    """Authority=False must patch search_helpers.rank_by_authority, not only handlers."""
+    from src.mcp_handlers.knowledge import handlers, search_helpers
+
+    real_rank = search_helpers.rank_by_authority
+    calls = []
+
+    def spy_rank(*args, **kwargs):
+        calls.append(len(args[0]))
+        return real_rank(*args, **kwargs)
+
+    monkeypatch.setattr(handlers, "rank_by_authority", spy_rank)
+    monkeypatch.setattr(search_helpers, "rank_by_authority", spy_rank)
+    monkeypatch.setattr(
+        ablation,
+        "VARIANTS",
+        {
+            "without_authority": {"connectivity": 0.0, "age": False, "status": False, "authority": False},
+            "with_authority": {"connectivity": 0.0, "age": False, "status": False, "authority": True},
+        },
+    )
+    await ablation.replay(frozen_inputs)
+    # Only the authority=True variant may invoke rank_by_authority.
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_archived_target_is_rejected_without_changing_denominator(frozen_inputs):
     with open(frozen_inputs.snapshot) as stream:
         data = json.load(stream)

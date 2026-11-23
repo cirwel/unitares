@@ -236,7 +236,7 @@ classifies a row as `imported_context`. Topic words such as `memory-sync` or
 `imported-memory` do not: a finding about memory sync is not an import.
 Agent-to-agent channel messages (a `channel-<topic>` tag
 together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
-`channel_message` and get the same close-contest down-rank. A tag filter made
+`channel_message` and get a stronger close-contest down-rank. A tag filter made
 only of `source-<provider>-memory` tags reads that lane in its own order. A `channel-*` tag
 filter lifts the down-rank only from channel messages on that lane; every other
 row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.

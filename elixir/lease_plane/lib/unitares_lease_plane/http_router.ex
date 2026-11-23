@@ -663,7 +663,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       ok: true,
       status: "ok",
       identity_binding: %{
-        mode: Application.get_env(:lease_plane, :identity_binding_mode, :off),
+        mode: IdentityBinding.mode(),
+        bound_surface_kinds: IdentityBinding.bound_surface_kinds(),
+        warning: IdentityBinding.posture_warning(),
         proof_format: Application.get_env(:lease_plane, :identity_proof_format, :hybrid),
         metrics: UnitaresLeasePlane.IdentityMetrics.snapshot()
       }
@@ -1103,13 +1105,13 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # Domain dialectic participant/role membership is always enforced regardless
+  # of IdentityBinding rollout mode (`:off` / `:log` / narrowed surface kinds).
+  # IdentityBinding only governs whether the cryptographic
+  # `x-unitares-identity-proof` header must prove `actor_agent_id`.
   defp authorize_dialectic_participant(conn, session_id, actor_agent_id, roles) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
-        authorize_dialectic_participant_membership(session_id, actor_agent_id, roles)
-      else
-        :ok
-      end
+      authorize_dialectic_participant_membership(session_id, actor_agent_id, roles)
     end
   end
 
@@ -1134,11 +1136,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
-        authorize_dialectic_resolution_membership(session_id, actor_agent_id)
-      else
-        :ok
-      end
+      authorize_dialectic_resolution_membership(session_id, actor_agent_id)
     end
   end
 
@@ -1165,16 +1163,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
          claim_if_unassigned
        ) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
-        authorize_dialectic_reviewer_membership(
-          session_id,
-          actor_agent_id,
-          new_reviewer_agent_id,
-          claim_if_unassigned
-        )
-      else
-        :ok
-      end
+      authorize_dialectic_reviewer_membership(
+        session_id,
+        actor_agent_id,
+        new_reviewer_agent_id,
+        claim_if_unassigned
+      )
     end
   end
 

@@ -141,6 +141,19 @@ def test_custom_ttl_is_honored_within_floor():
     assert v.ok is True
 
 
+def test_oversized_ttl_is_clamped_to_ceiling():
+    from src.effect_grant import MAX_GRANT_TTL_SECONDS
+
+    r = _post(_full_body(ttl_seconds=315_360_000))
+    assert r.status_code == 200
+    grant = r.json()["grant"]
+    v = verify_effect_grant(grant, aid=PROPOSER, **_FIELDS)
+    assert v.ok is True
+    import time
+
+    assert v.exp <= int(time.time()) + MAX_GRANT_TTL_SECONDS
+
+
 # ── fail-closed when minting is impossible ───────────────────────────────────
 
 def test_mint_returning_none_is_503():

@@ -130,7 +130,7 @@ register(Metric(
 ))
 register(Metric(
     name="governance.guide.7d",
-    description="`guide` sub-actions in the last 7 days — soft governance corrections (proceed-with-nudge). From core.agent_state.state_json->>'action'.",
+    description="`guide` sub-actions in the last 7 days — soft governance corrections (proceed-with-nudge). Sourced from agent_state state_json->>'action'.",
     unit="verdicts",
 ))
 register(Metric(

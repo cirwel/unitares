@@ -155,6 +155,7 @@
 .tl-mk.knowledge .tl-dot { width: 9px; height: 9px; background: var(--color-info); transform: rotate(45deg); }
 .tl-mk.lineage .tl-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--color-secondary); background: var(--color-base-100); }
 .tl-mk.lifecycle .tl-dot { width: 3px; height: 18px; background: var(--color-base-content); opacity: 0.7; }
+.tl-mk.external .tl-dot { width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--color-base-content); background: var(--color-base-100); opacity: 0.75; }
 .tl-mk.other .tl-dot { width: 7px; height: 7px; background: var(--color-neutral); }
 /* A group of marks closer than one marker's width, drawn at its slot's
    centre, with its count, in its most notable mark's tone. It is held

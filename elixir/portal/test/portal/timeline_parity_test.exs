@@ -66,4 +66,14 @@ defmodule Portal.TimelineParityTest do
       assert actual == expected, c["name"]
     end
   end
+
+  test "every external event type has a fixture frame case" do
+    mapped =
+      load("frames")["cases"]
+      |> Enum.filter(&(&1["result"] == "mark" and get_in(&1, ["mark", "kind"]) == "external"))
+      |> Enum.map(& &1["frame"]["type"])
+      |> MapSet.new()
+
+    assert mapped == MapSet.new(TimelineAdapter.external_types())
+  end
 end

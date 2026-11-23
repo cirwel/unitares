@@ -23,6 +23,11 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.services.http_request_parser import (
+    MAX_HTTP_INGEST_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 logger = get_logger(__name__)
 
@@ -58,7 +63,9 @@ async def http_record_finding(request):
         return access._http_unauthorized()
     try:
         try:
-            payload = await request.json()
+            payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
+        except HttpToolRequestError as exc:
+            return JSONResponse(exc.payload, status_code=exc.status_code)
         except Exception:
             return JSONResponse({"success": False, "error": "Invalid JSON"}, status_code=400)
 

@@ -635,7 +635,8 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
 
   defp mark_class(%{"kind" => "outcome", "is_bad" => true}), do: {"outcome bad", "✕"}
   defp mark_class(%{"kind" => "outcome"}), do: {"outcome", "✓"}
-  defp mark_class(%{"kind" => kind}) when kind in ~w(knowledge lineage lifecycle), do: {kind, ""}
+  defp mark_class(%{"kind" => kind}) when kind in ~w(knowledge lineage lifecycle external),
+    do: {kind, ""}
   defp mark_class(_m), do: {"other", ""}
 
   defp live_verdict(%{"assessment" => %{"verdict" => v}}) when is_binary(v), do: v
@@ -899,7 +900,40 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
   end
 
   def mark_title(%{"kind" => "dialectic"}, _roster), do: "Dialectic review"
+  def mark_title(%{"kind" => "external"} = m, _roster), do: external_title(m)
   def mark_title(m, _roster), do: txt(m["kind"]) || "event"
+
+  defp external_title(m) do
+    pr_num = txt(m["pr"])
+    pr_tag = if pr_num, do: "PR ##{pr_num}", else: "PR"
+
+    case txt(m["event_type"]) do
+      "github.pr_opened" ->
+        "#{pr_tag} opened"
+
+      "github.pr_merged" ->
+        "#{pr_tag} merged"
+
+      "github.pr_closed" ->
+        "#{pr_tag} closed"
+
+      "github.pr_reopened" ->
+        "#{pr_tag} reopened"
+
+      "github.ci_result" ->
+        wf = txt(m["workflow"]) || txt(m["app"]) || "check"
+        concl = txt(m["conclusion"]) || "completed"
+        "CI · #{wf} · #{concl}"
+
+      "github.review_record" ->
+        who = txt(m["reviewer"]) || txt(m["key"]) || "gate"
+        verdict = txt(m["verdict"]) || "recorded"
+        "Review · #{who} · #{verdict}"
+
+      other ->
+        "GitHub · #{other || "event"}"
+    end
+  end
 
   # The check-in verdict is a governance assessment, not part of the core
   # record. A live mark carries it as an EISV decoration; a history row carries
@@ -987,11 +1021,77 @@ defmodule DialecticLiveWeb.TimelineLive.Lanes do
             {"Phase", or_dash.(m["phase"])}
           ]
 
+        "external" ->
+          external_detail_rows(m, or_dash)
+
         _ ->
           []
       end
 
     base ++ kind_rows
+  end
+
+  defp external_detail_rows(m, or_dash) do
+    pr_label =
+      case txt(m["pr"]) do
+        nil -> "—"
+        n -> "#" <> n
+      end
+
+    base = [
+      {"Event", or_dash.(m["event_type"])},
+      {"Repository", or_dash.(m["repo"])},
+      {"PR", pr_label}
+    ]
+
+    specific =
+      case txt(m["event_type"]) do
+        "github.ci_result" ->
+          jobs =
+            case m["failed_jobs"] do
+              list when is_list(list) and list != [] ->
+                list |> Enum.map(&txt/1) |> Enum.reject(&is_nil/1) |> Enum.join(", ")
+
+              _ ->
+                nil
+            end
+
+          [
+            {"Workflow", txt(m["workflow"]) || txt(m["app"]) || "—"},
+            {"Conclusion", or_dash.(m["conclusion"])}
+          ] ++ if(jobs && jobs != "", do: [{"Failed jobs", jobs}], else: [])
+
+        "github.review_record" ->
+          disposed =
+            case m["disposed"] do
+              true -> "yes"
+              false -> "no"
+              _ -> "—"
+            end
+
+          [
+            {"Reviewer", or_dash.(m["reviewer"])},
+            {"Key", or_dash.(m["key"])},
+            {"Verdict", or_dash.(m["verdict"])},
+            {"Findings", or_dash.(m["findings"])},
+            {"Disposed", disposed}
+          ]
+
+        _ ->
+          []
+      end
+
+    head = txt(m["head_sha"]) || txt(m["head_sha_at_observation"]) || txt(m["merge_commit_sha"])
+
+    extra =
+      [
+        if(head, do: {"Head SHA", head}),
+        if(txt(m["fingerprint"]), do: {"Fingerprint", txt(m["fingerprint"])}),
+        if(txt(m["producer"]), do: {"Producer", txt(m["producer"])})
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    base ++ specific ++ extra
   end
 
   def detail_note(m) do

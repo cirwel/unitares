@@ -229,7 +229,7 @@ make the code less honest without making it more portable.
 The guard also prints the couplings that already exist and have not been fixed,
 its `KNOWN_COUPLINGS` <!-- mirrors: scripts/dev/check_fleet_identity_leak.py::KNOWN_COUPLINGS -->
 (currently none: the last one, the resident-specific Vigil route module, moved
-to `agents/vigil/routes.py` on 2026-09-27) on every run, passing or failing —
+out of Core on 2026-09-27 and now lives in the deployment repository) on every run, passing or failing —
 these are reported but do not fail the build. It does not silence them: a guard
 that reported
 "clean" over known coupling would be the same instrument-optimism failure it
@@ -283,8 +283,8 @@ when the governance server's `UNITARES_METRICS_CATALOG_EXTRA` names that file:
 UNITARES_METRICS_CATALOG_EXTRA=/etc/unitares/metrics-catalog.json
 ```
 
-Copy or extend the reference Chronicler's `agents/chronicler/metrics_catalog.json`
-into your deployment configuration. It declares repository-size, test-count,
+Keep your Chronicler's metric catalog in your deployment configuration
+(`tests/fixtures/fleet_metrics/reference_extra_catalog.json` shows the format). It declares repository-size, test-count,
 Sentinel-findings and GitHub-traffic series. Unset (the default) registers
 nothing, so an install that runs no such scraper neither lists those names nor
 accepts writes to them. Each entry is `{"name", "description", "unit"}` under a
@@ -436,7 +436,7 @@ needed; installing is sufficient. Set
 `UNITARES_RESIDENT_PROGRESS_PLUGINS=0` to disable discovery entirely.
 
 This differs from `VIGIL_CHECK_PLUGINS` below, which uses colon-separated module
-paths and lets a bad plugin raise. A scheduled `agents/vigil/agent.py --once` invocation can
+paths and lets a bad plugin raise. A scheduled `--once` resident invocation can
 retry next cycle; the progress probe is a long-lived task that is not
 restartable, so it contains failures and reports them instead.
 
@@ -446,8 +446,8 @@ listing the same residents in each.
 
 ## Vigil health-check targets
 
-Vigil's health checks are pluggable (`VIGIL_CHECK_PLUGINS`, see
-`agents/vigil/checks/registry.py`). The built-in checks are governance health,
+Vigil's health checks are pluggable (`VIGIL_CHECK_PLUGINS`; Vigil now lives in
+the deployment repository that runs it). The built-in checks are governance health,
 resident-tag hygiene, plugin-hook liveness, and stalled draft PRs (`StalledDraftPR`).
 Deployment-specific service checks belong in external plugins and are enabled
 only by the deployment that needs them. Installing the server alone does not
@@ -456,7 +456,7 @@ run Vigil or its checks.
 Any health check a deployment registers — its own `redis`, `gateway`, etc. —
 now gets full per-service bookkeeping (`{svc}_healthy` / `_detail` /
 `_up_cycles` / `_down_streak`) and outage/recovery/sustained-outage change
-notes. `detect_changes` in `agents/vigil/agent.py`
+notes. `detect_changes` in Vigil
 discovers services from the `{svc}_healthy` keys rather than listing them; the
 one service key it names is in its exclusion set `CONDITION_SERVICE_KEYS`
 (`github`, the stalled-draft-PR check's key). That flag records a condition

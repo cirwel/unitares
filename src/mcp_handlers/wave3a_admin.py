@@ -33,6 +33,11 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from src import wave3a_routing
+from src.services.http_request_parser import (
+    MAX_HTTP_SMALL_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +106,11 @@ async def _set_route(request: Request) -> JSONResponse:
     if not _is_operator(request):
         return _denied_response()
     try:
-        body: Dict[str, Any] = await request.json()
+        body: Dict[str, Any] = await read_bounded_json_body(
+            request, MAX_HTTP_SMALL_JSON_BODY
+        )
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         return JSONResponse(
             {"ok": False, "error": "schema_invalid", "reason": "body not JSON"},

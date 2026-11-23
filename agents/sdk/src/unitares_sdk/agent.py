@@ -1,7 +1,7 @@
 """GovernanceAgent — lifecycle base class for long-running UNITARES agents.
 
 First-time resident bootstrap:
-    UNITARES_FIRST_RUN=1 python3 -m agents.vigil  # or sentinel, watcher
+    UNITARES_FIRST_RUN=1 python3 -m my_resident_agent
 This is the ONLY path that mints a new UUID for a resident with
 refuse_fresh_onboard=True. Every other path must resume the stored
 anchor UUID.

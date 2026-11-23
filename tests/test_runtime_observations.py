@@ -78,10 +78,12 @@ class TestAgentReportIsNotVolition:
         """
         import inspect
         import src.runtime_observations as ro
+        from src.db.mixins.state import fetch_runtime_reflection_summary_by_identity
 
         src_text = inspect.getsource(ro)
-        assert "'agent_report'" in src_text
-        assert "'substrate_interpretation'" in src_text
+        sql_src = inspect.getsource(fetch_runtime_reflection_summary_by_identity)
+        assert "'agent_report'" in sql_src
+        assert "'substrate_interpretation'" in sql_src
         assert "agent_report_count" in src_text
         assert "interpretation_count" in src_text
 

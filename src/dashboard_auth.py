@@ -25,6 +25,11 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from src.db import get_db
 from src.logging_utils import get_logger
+from src.services.http_request_parser import (
+    MAX_HTTP_SMALL_JSON_BODY,
+    HttpToolRequestError,
+    read_bounded_json_body,
+)
 
 logger = get_logger(__name__)
 
@@ -514,7 +519,7 @@ async def http_webauthn_verify(request):
     if challenge is None:
         return JSONResponse({"error": "challenge missing, expired, or already used"}, status_code=400)
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
         credential_body = body.get("credential", body) if isinstance(body, dict) else body
         wa = _webauthn_imports()
         parsed = wa["parse_authentication_credential_json"](credential_body)
@@ -581,6 +586,8 @@ async def http_webauthn_verify(request):
             credential_id=_b64url(bytes(row["credential_id"])),
         )
         return response
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception as exc:
         logger.info("passkey assertion rejected: %s", exc)
         return JSONResponse({"error": "passkey verification failed"}, status_code=401)
@@ -641,7 +648,7 @@ async def http_webauthn_register_verify(request):
     if challenge is None:
         return JSONResponse({"error": "challenge missing, expired, or already used"}, status_code=400)
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
         credential_body = body.get("credential", body) if isinstance(body, dict) else body
         nickname = str(body.get("nickname") or "").strip()[:120] or None
         wa = _webauthn_imports()
@@ -701,6 +708,8 @@ async def http_webauthn_register_verify(request):
         response = JSONResponse({"success": True, "credential_id": credential_id})
         _clear_cookie(response, PREAUTH_COOKIE)
         return response
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception as exc:
         logger.info("passkey registration rejected: %s", exc)
         return JSONResponse({"error": "passkey registration failed"}, status_code=400)
@@ -1072,7 +1081,9 @@ async def http_hub_authorize(request):
             status_code=403,
         )
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = None
     if not isinstance(body, dict):
@@ -1148,7 +1159,9 @@ async def _hub_internal_request(request) -> tuple[dict[str, Any] | None, JSONRes
     if denied := _hub_internal_gate(request, config):
         return None, denied
     try:
-        body = await request.json()
+        body = await read_bounded_json_body(request, MAX_HTTP_SMALL_JSON_BODY)
+    except HttpToolRequestError as exc:
+        return None, JSONResponse(exc.payload, status_code=exc.status_code)
     except Exception:
         body = None
     if not isinstance(body, dict):

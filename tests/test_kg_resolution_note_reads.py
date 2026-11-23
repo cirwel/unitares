@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.knowledge_graph import DiscoveryNode
-from src.mcp_handlers.knowledge import handlers
+from src.mcp_handlers.knowledge import handlers, search_helpers
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 from tests.helpers import parse_result
 
@@ -24,7 +24,7 @@ def document(details, **kwargs):
 
 
 def search_payload(monkeypatch, documents):
-    monkeypatch.setattr(handlers, "_resolve_agent_display", lambda _: {"display_name": "writer"})
+    monkeypatch.setattr(search_helpers, "_resolve_agent_display", lambda _: {"display_name": "writer"})
     state = handlers._KnowledgeSearchState(
         request=handlers._parse_knowledge_search_request({"query": "public edit"}),
         graph=None,

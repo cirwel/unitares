@@ -193,12 +193,12 @@ class IdentityMixin:
         """
         # core.identities is aliased ``i`` so the EXISTS subquery can
         # correlate on i.identity_id without column ambiguity.
-        participated_clause = (
-            " AND EXISTS (SELECT 1 FROM core.agent_state s "
-            "WHERE s.identity_id = i.identity_id AND s.synthetic = false)"
-            if participated_only
-            else ""
-        )
+        if participated_only:
+            from .state import measured_state_exists_sql
+
+            participated_clause = f" AND {measured_state_exists_sql('i')}"
+        else:
+            participated_clause = ""
         async with self.acquire() as conn:
             if status:
                 rows = await conn.fetch(
@@ -1600,3 +1600,232 @@ async def fetch_identity_tier_counts(conn) -> list:
         GROUP BY 1
         """
     )
+
+
+async def fetch_succession_ancestors(
+    conn,
+    child_ids: List[str],
+    non_succession_reasons: List[str],
+    depth: int,
+) -> set[str]:
+    """Recursive CTE over `core.identities` for succession-filtered transitive ancestors."""
+    sql = """
+        WITH RECURSIVE ancestors(agent_id, depth) AS (
+            SELECT i.parent_agent_id, 1
+            FROM core.identities i
+            WHERE i.agent_id = ANY($1::text[])
+              AND i.parent_agent_id IS NOT NULL
+              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
+            UNION ALL
+            SELECT i.parent_agent_id, a.depth + 1
+            FROM core.identities i
+            JOIN ancestors a ON i.agent_id = a.agent_id
+            WHERE i.parent_agent_id IS NOT NULL
+              AND (i.spawn_reason IS NULL OR i.spawn_reason <> ALL($2::text[]))
+              AND a.depth < $3
+        )
+        SELECT DISTINCT agent_id FROM ancestors WHERE agent_id IS NOT NULL
+    """
+    rows = await conn.fetch(sql, child_ids, non_succession_reasons, depth)
+    return {r["agent_id"] for r in rows if r["agent_id"]}
+
+
+async def fetch_scope_total_updates(
+    conn,
+    scope_clause: str,
+    scope_args: tuple,
+) -> int:
+    """Return total_updates across the selected agent scope from `core.identities`."""
+    updates_sql = f"""
+        SELECT COALESCE(
+            SUM(COALESCE((i.metadata->>'total_updates')::int, 0)), 0
+        )::bigint AS total_updates
+        FROM core.agents a
+        JOIN core.identities i ON i.agent_id = a.id
+        {scope_clause}
+    """
+    return await conn.fetchval(updates_sql, *scope_args)
+
+
+async def fetch_agent_ids_by_identity_ids(
+    conn,
+    identity_ids: List[int],
+) -> Dict[int, str]:
+    """Map numeric `identity_id` values to `agent_id` strings from `core.identities`."""
+    if not identity_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT identity_id, agent_id
+        FROM core.identities
+        WHERE identity_id = ANY($1::bigint[])
+        """,
+        identity_ids,
+    )
+    return {int(r["identity_id"]): str(r["agent_id"]) for r in rows if r["agent_id"]}
+
+
+async def fetch_agent_identities_for_ids(
+    conn,
+    agent_ids: List[str],
+) -> list:
+    """Return `(agent_id, label, identity_id)` rows for `agent_ids` via LEFT JOIN."""
+    if not agent_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT a.id AS agent_id,
+               a.label,
+               i.identity_id
+        FROM core.agents a
+        LEFT JOIN core.identities i ON i.agent_id = a.id
+        WHERE a.id = ANY($1::text[])
+        """,
+        agent_ids,
+    )
+
+
+IDENTITY_COUNT_SCALAR_SQL = "(SELECT COUNT(*) FROM core.identities)"
+
+
+def identity_from_sql(alias: str = "i") -> str:
+    """Return a ``FROM core.identities <alias>`` clause owned by the identity component."""
+    return f"FROM core.identities {alias}"
+
+
+def identity_join_on_id_sql(source_alias: str = "s", identity_alias: str = "i") -> str:
+    """Return an INNER JOIN against ``core.identities`` keyed on ``identity_id``."""
+    return (
+        f"JOIN core.identities {identity_alias} "
+        f"ON {identity_alias}.identity_id = {source_alias}.identity_id"
+    )
+
+
+_PROMOTION_TOTAL_UPDATES_EXPR = (
+    "COALESCE(NULLIF(metadata->>'total_updates', '')::int, 0)"
+)
+
+
+async def fetch_ephemeral_promotion_candidates(
+    conn,
+    *,
+    threshold: int,
+    source_jsonb: str,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+) -> list:
+    """Return candidate ``core.identities`` rows eligible for ephemeral promotion."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    select_sql = f"""
+        SELECT agent_id,
+               metadata->>'label' AS label,
+               {_PROMOTION_TOTAL_UPDATES_EXPR} AS total_updates
+        FROM core.identities
+        WHERE metadata->'tags' @> $2::jsonb
+          AND {_PROMOTION_TOTAL_UPDATES_EXPR} >= $1
+          {status_clause}
+        ORDER BY {_PROMOTION_TOTAL_UPDATES_EXPR} DESC
+        {limit_clause}
+    """
+    return await conn.fetch(select_sql, threshold, source_jsonb)
+
+
+async def sweep_promote_ephemeral_identities(
+    conn,
+    *,
+    threshold: int,
+    source_jsonb: str,
+    source_tag: str,
+    target_jsonb: str,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+):
+    """Atomically promote eligible ``core.identities`` rows via a single CTE."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    sweep_sql = f"""
+        WITH candidates AS (
+            SELECT agent_id,
+                   metadata->>'label' AS label,
+                   {_PROMOTION_TOTAL_UPDATES_EXPR} AS total_updates
+            FROM core.identities
+            WHERE metadata->'tags' @> $2::jsonb
+              AND {_PROMOTION_TOTAL_UPDATES_EXPR} >= $1
+              {status_clause}
+            ORDER BY {_PROMOTION_TOTAL_UPDATES_EXPR} DESC
+            {limit_clause}
+            FOR UPDATE SKIP LOCKED
+        ),
+        promoted AS (
+            UPDATE core.identities i
+            SET metadata = jsonb_set(
+                    i.metadata,
+                    ARRAY['tags'],
+                    COALESCE((i.metadata->'tags') - $3::text, '[]'::jsonb) || $4::jsonb
+                ),
+                updated_at = NOW()
+            FROM candidates c
+            WHERE i.agent_id = c.agent_id
+              AND i.metadata->'tags' @> $2::jsonb
+            RETURNING i.agent_id
+        )
+        SELECT
+            (SELECT COUNT(*) FROM promoted) AS promoted_count,
+            COALESCE((SELECT array_agg(agent_id) FROM promoted), ARRAY[]::text[]) AS promoted_ids,
+            COALESCE((
+                SELECT json_agg(row_to_json(c))
+                FROM (
+                    SELECT agent_id, label, total_updates
+                    FROM candidates
+                    ORDER BY total_updates DESC
+                    LIMIT 10
+                ) c
+            ), '[]'::json) AS sample
+    """
+    return await conn.fetchrow(
+        sweep_sql,
+        threshold,
+        source_jsonb,
+        source_tag,
+        target_jsonb,
+    )
+
+
+async def fetch_untagged_identities(
+    conn,
+    *,
+    include_archived: bool = False,
+    limit: Optional[int] = None,
+) -> list:
+    """Return ``core.identities`` rows with missing or empty ``metadata->'tags'``."""
+    status_clause = "" if include_archived else "AND status = 'active'"
+    limit_clause = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    select_sql = f"""
+        SELECT agent_id, metadata->>'label' AS label
+        FROM core.identities
+        WHERE (metadata->'tags' IS NULL
+               OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
+          {status_clause}
+        ORDER BY created_at DESC
+        {limit_clause}
+    """
+    return await conn.fetch(select_sql)
+
+
+async def stamp_untagged_identity_batch(
+    conn,
+    *,
+    agent_ids: List[str],
+    tags_jsonb: str,
+) -> None:
+    """Stamp ``tags_jsonb`` onto still-untagged ``core.identities`` rows for ``agent_ids``."""
+    update_sql = """
+        UPDATE core.identities
+        SET metadata = jsonb_set(metadata, ARRAY['tags'], $2::jsonb),
+            updated_at = NOW()
+        WHERE agent_id = ANY($1::text[])
+          AND (metadata->'tags' IS NULL
+               OR jsonb_array_length(COALESCE(metadata->'tags', '[]'::jsonb)) = 0)
+    """
+    await conn.execute(update_sql, agent_ids, tags_jsonb)

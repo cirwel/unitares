@@ -80,6 +80,26 @@ defmodule DialecticLive.TimelineAdapterTest do
       refute TimelineAdapter.matches?(mark, %{"kind" => "knowledge", "discovery_id" => "d-2"})
     end
 
+    test "external matches on fingerprint" do
+      mark = %{
+        "kind" => "external",
+        "fingerprint" => "100#42:ci:700:1",
+        "event_type" => "github.ci_result",
+        "ts" => "2026-11-19T12:15:00Z",
+        "provisional" => true
+      }
+
+      row = %{
+        "kind" => "external",
+        "fingerprint" => "100#42:ci:700:1",
+        "event_type" => "github.ci_result",
+        "ts" => "2026-11-19T12:15:01Z"
+      }
+
+      assert TimelineAdapter.matches?(mark, row)
+      refute TimelineAdapter.matches?(mark, %{row | "fingerprint" => "100#42:ci:700:2"})
+    end
+
     test "lifecycle matches the parsed instant, however the offset is written" do
       mark = %{
         "kind" => "lifecycle",

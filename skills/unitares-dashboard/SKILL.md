@@ -222,7 +222,8 @@ Then expose `retheme()` that rebuilds the chart from cached data (token values
 change on toggle), and call it from the theme handler in `app.html`. Copy the
 option shape from `sections/eisv.js::baseOptions`.
 
-**No date adapter.** `app.html` loads `chart.umd` from CDN **without**
+**No date adapter.** `app.html` loads the vendored `chart.umd`
+(`vendor/chart.js-4.4.0/`, never a CDN) **without**
 `chartjs-adapter-date-fns`, so `type: "time"` scales will not work. Use a
 **category** x-axis with pre-formatted labels (e.g. `MM-DD`) — see
 `sections/risk.js::fmtDay`.

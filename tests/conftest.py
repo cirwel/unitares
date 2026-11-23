@@ -13,32 +13,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-# Redirect Vigil's log file to a temp path BEFORE any test imports the agent
-# module. The agent's LOG_FILE is resolved at module-import time from the
-# VIGIL_LOG_FILE env var, so this must happen before the first
-# `from agents.vigil.agent import …` anywhere in the test suite.
-#
-# Without this, tests that mock client.audit_knowledge to raise
-# (e.g. RuntimeError("boom")) and call _run_stale_opens_sweep through a real
-# VigilAgent log "stale-opens sweep failed (boom); continuing cycle" to the
-# operator's production Vigil log at ~/Library/Logs/unitares-vigil.log —
-# observed in the wild as a steady stream of test-injected noise.
-os.environ.setdefault(
-    "VIGIL_LOG_FILE",
-    str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
-)
-
-# Same leak, Watcher's log. The watcher tests under tests/ (path exclusion,
-# state-dir migration, detector capability) call into agents.watcher, which
-# logs every drop and migration to ~/Library/Logs/unitares-watcher.log. On
-# 2026-09-24 those fixture lines were about 1 in 5 lines of the operator's log,
-# including the model_not_found / timeout lines that read as detector outages.
-os.environ.setdefault(
-    "UNITARES_WATCHER_LOG_FILE",
-    str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
-)
-
-# Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
+# Redirect Python Sentinel's log (#2942) to a temp path BEFORE any test imports
+# the agent module. Even though Python Sentinel is retired,
 # tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
 # to ~/Library/Logs/unitares-sentinel.log unless redirected before import.
 os.environ.setdefault(
@@ -763,6 +739,10 @@ def _continuity_secret_file(tmp_path, monkeypatch):
         "UNITARES_CONTINUITY_TOKEN_SECRET_FILE",
         str(tmp_path / "continuity-secret-unset" / "continuity_token_secret"),
     )
+    # A test that ran server startup must not leave its key held for the next.
+    from src import continuity_secret
+
+    monkeypatch.setattr(continuity_secret, "_held", None)
 
 
 @pytest.fixture(autouse=True)

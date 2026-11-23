@@ -33,7 +33,7 @@ the snapshot rows would look identical. Builtins are therefore never
 overridden; a colliding plugin is rejected with a logged reason.
 
 **Why failures are contained, where Vigil's are not.** ``VIGIL_CHECK_PLUGINS``
-(``agents/vigil/checks/registry.py``) deliberately lets a bad plugin raise —
+(in the deployment's Vigil resident) deliberately lets a bad plugin raise —
 "typos should be loud" — and that is right for Vigil, which runs ``--once``
 on a 30-minute timer: the crash surfaces to launchd and the next cycle
 retries. This probe is a long-lived in-server background task spawned through

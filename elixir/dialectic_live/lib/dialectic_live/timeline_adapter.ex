@@ -40,10 +40,44 @@ defmodule DialecticLive.TimelineAdapter do
   # server process, so the row's recorded_at is at most this far before it.
   @checkin_lag_us 2_000_000
 
-  @live_kinds ~w(checkin lifecycle knowledge)
+  @live_kinds ~w(checkin lifecycle knowledge external)
   @reread_only_kinds ~w(outcome lineage dialectic)
 
+  @external_types ~w(
+    github.pr_opened
+    github.pr_merged
+    github.pr_closed
+    github.pr_reopened
+    github.ci_result
+    github.review_record
+  )
+
+  @external_optional_fields ~w(
+    producer
+    observed_at
+    pr_author
+    head_sha
+    head_sha_at_observation
+    merge_commit_sha
+    source
+    app
+    workflow
+    run_id
+    attempt
+    check_run_id
+    conclusion
+    failed_jobs
+    key
+    verdict
+    findings
+    disposed
+    reviewer
+    raw
+    comment_id
+  )
+
   def lifecycle_types, do: @lifecycle_types
+  def external_types, do: @external_types
   def summary_chars, do: @summary_chars
   def live_kinds, do: @live_kinds
   def reread_only_kinds, do: @reread_only_kinds
@@ -85,12 +119,24 @@ defmodule DialecticLive.TimelineAdapter do
          |> Map.put("discovery_type", frame["discovery_type"])
          |> Map.put("summary", cut_summary(frame["summary"]))}
 
+      type in @external_types ->
+        {:mark, external_mark(frame)}
+
       true ->
         :drop
     end
   end
 
   def map_frame(_frame), do: :drop
+
+  defp external_mark(%{"type" => type} = frame) do
+    base_mark("external", frame)
+    |> Map.put("event_type", type)
+    |> Map.put("fingerprint", frame["fingerprint"])
+    |> Map.put("repo", frame["repo"])
+    |> Map.put("pr", frame["pr"])
+    |> Map.merge(Map.take(frame, @external_optional_fields))
+  end
 
   defp checkin_mark(frame) do
     mark =
@@ -200,6 +246,10 @@ defmodule DialecticLive.TimelineAdapter do
   def key(%{"kind" => "checkin"} = e), do: {"checkin", e["agent_id"], ts_us(e["ts"])}
   def key(%{"kind" => "outcome", "outcome_id" => id}), do: {"outcome", id}
   def key(%{"kind" => "dialectic", "session_id" => id}), do: {"dialectic", id}
+
+  def key(%{"kind" => "external", "fingerprint" => fp}) when is_binary(fp) and fp != "",
+    do: {"external", fp}
+
   def key(%{"kind" => kind, "event_id" => id}) when is_binary(id), do: {kind, id}
   def key(%{} = e), do: {e["kind"], e["agent_id"], e["ts"]}
   def key(other), do: {:unkeyed, other}

@@ -489,10 +489,11 @@ def test_a_pull_request_that_cannot_be_read_does_not_stop_the_others(pr_open):
 # --- the dry run and the client ------------------------------------------
 
 
-def test_the_dry_run_writes_nothing_and_refuses_to_run_live(tmp_path, monkeypatch, capsys):
+def test_the_dry_run_writes_nothing_and_live_mode_requires_operator_token(tmp_path, monkeypatch, capsys):
     state = tmp_path / "emitted.sqlite3"
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     monkeypatch.delenv("GITHUB_OBSERVER_TRUSTED_APPS", raising=False)
+    monkeypatch.delenv("UNITARES_OPERATOR_TOKEN", raising=False)
     monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
 
     args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
@@ -504,7 +505,7 @@ def test_the_dry_run_writes_nothing_and_refuses_to_run_live(tmp_path, monkeypatc
     assert not state.exists()  # a dry run does not create the store
 
     assert obs.main(args) == 2
-    assert "only --dry-run" in capsys.readouterr().err
+    assert "UNITARES_OPERATOR_TOKEN" in capsys.readouterr().err
 
 
 def test_the_dry_run_leaves_out_what_the_store_already_holds(tmp_path, monkeypatch, capsys):
@@ -1275,3 +1276,309 @@ def test_github_resolves_unknown_tags_and_tables_before_the_footer_is_read(body_
 def test_any_element_on_the_footer_line_makes_it_not_plain(line, expected):
     html = f"<p>UNITARES agent: {_UUID_A}</p>\n<p>{line}</p>"
     assert ev.agent_uuid_from_body_html(html) == expected
+
+
+# --- live writer & main() live mode ---------------------------------------
+
+
+def test_unitares_event_writer_posts_with_operator_header_and_no_redirect():
+    import io as _io
+    import urllib.error
+
+    seen_headers: list[dict] = []
+    seen_urls: list[str] = []
+
+    class _CreatedResponse:
+        status = 201
+
+        def __init__(self, body=b'{"success": true, "event_id": "evt-1", "fingerprint": "1#1:opened"}'):
+            self._body = body
+
+        def read(self, n=-1):
+            return self._body if n < 0 else self._body[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def ok_opener(request, timeout=None):
+        seen_urls.append(request.full_url)
+        seen_headers.append(dict(request.header_items()))
+        assert request.get_method() == "POST"
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["producer"] == "github_observer"
+        return _CreatedResponse()
+
+    writer = obs.UnitaresEventWriter("http://127.0.0.1:8767/", "secret-op", opener=ok_opener)
+    event = {"type": "github.pr_opened", "fingerprint": "1#1:opened", "agent_uuid": AGENT}
+    assert writer.write(event) == "written"
+    assert seen_urls == ["http://127.0.0.1:8767/v1/external/events"]
+    lowered = {k.lower(): v for k, v in seen_headers[0].items()}
+    assert lowered["x-unitares-operator"] == "secret-op"
+    assert "authorization" not in lowered
+
+    for code, expected in ((409, "duplicate"), (404, "unknown_agent"), (403, "failed"), (500, "failed")):
+        def err_opener(request, timeout=None, _code=code):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(b"secret"))
+
+        w = obs.UnitaresEventWriter("http://127.0.0.1:8767", "secret-op", opener=err_opener)
+        assert w.write(event) == expected
+
+    def net_err_opener(request, timeout=None):
+        raise TimeoutError("timed out")
+
+    assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "secret-op", opener=net_err_opener).write(event) == "failed"
+
+    # Non-JSON 200 (e.g. HTML proxy fallback) or incomplete ack must fail rather than mark handled.
+    class _FakeHttp200:
+        status = 200
+
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def read(self, n=-1):
+            return self._body if n < 0 else self._body[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    for bad_body in (
+        b"<html>proxy fallback</html>",
+        b'{"success": false, "event_id": "evt-1", "fingerprint": "1#1:opened"}',
+        b'{"success": true, "fingerprint": "1#1:opened"}',
+        b'{"success": true, "event_id": "evt-1", "fingerprint": "wrong-fp"}',
+    ):
+        assert obs.UnitaresEventWriter(
+            "http://127.0.0.1:8767",
+            "secret-op",
+            opener=lambda req, timeout=None, _b=bad_body: _FakeHttp200(_b),
+        ).write(event) == "failed"
+
+    # Real _DEFAULT_OPENER must refuse redirects instead of forwarding X-Unitares-Operator.
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:9/evil")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        real_writer = obs.UnitaresEventWriter(f"http://127.0.0.1:{server.server_port}", "secret-op")
+        assert real_writer.write(event) == "failed"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_run_cycle_counts_duplicate_and_unknown_agent_separately():
+    class MixedWriter:
+        def __init__(self):
+            self.n = 0
+
+        def write(self, event):
+            self.n += 1
+            if self.n == 1:
+                return "duplicate"
+            if self.n == 2:
+                return "unknown_agent"
+            if self.n == 3:
+                return "failed"
+            return "written"
+
+    marked: list[str] = []
+    counts, _ = cycle(
+        FakeReader(),
+        writer=MixedWriter(),
+        mark=lambda fp, t: marked.append(fp),
+    )
+    assert counts["events_known"] == 1
+    assert counts["events_unknown_agent"] == 1
+    assert counts["writes_failed"] == 1
+    assert counts["events_new"] == 9
+    assert len(marked) == 10  # 1 duplicate + 9 written; unknown_agent & failed not marked
+
+
+def test_main_live_mode_persists_fingerprints_and_tracks_failures(tmp_path, monkeypatch, capsys):
+    state = tmp_path / "live.sqlite3"
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKEN", "op-secret")
+    monkeypatch.delenv("UNITARES_URL", raising=False)
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+
+    posted: list[dict] = []
+
+    class FakeWriter:
+        def __init__(self, base_url, token):
+            assert base_url == "http://127.0.0.1:8767"
+            assert token == "op-secret"
+
+        def write(self, event):
+            posted.append(event)
+            return "written"
+
+    monkeypatch.setattr(obs, "UnitaresEventWriter", FakeWriter)
+    args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
+    assert obs.main(args) == 0
+    summary = json.loads(capsys.readouterr().err)
+    assert summary["dry_run"] is False and summary["events_new"] == 12
+    assert len(posted) == 12
+    assert len(read_only_fingerprints(state)) == 12
+
+    # Second run sees all 12 in durable store and writes nothing.
+    posted.clear()
+    assert obs.main(args) == 0
+    summary2 = json.loads(capsys.readouterr().err)
+    assert summary2["events_new"] == 0 and summary2["events_known"] == 12
+    assert posted == []
+
+    # Invalid --unitares-url exits 2; write failure exits 1.
+    with pytest.raises(SystemExit):
+        obs.main([*args, "--unitares-url", "ftp://bad.example"])
+
+    class FailingWriter:
+        def __init__(self, base_url, token):
+            assert base_url == "https://gov.example"
+
+        def write(self, event):
+            return "failed"
+
+    monkeypatch.setattr(obs, "UnitaresEventWriter", FailingWriter)
+    assert obs.main([*args, "--state-path", str(tmp_path / "fail.sqlite3"), "--unitares-url", "https://gov.example"]) == 1
+
+
+def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(tmp_path, monkeypatch, capsys):
+    import io as _io
+    import urllib.error
+
+    event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
+    for code, body_bytes, expected in (
+        (400, b'{"error": "bad payload"}', "rejected"),
+        (413, b'{"error": "too big"}', "rejected"),
+        (422, b'{"error": "observed_at outside accepted retention window"}', "rejected"),
+        (422, b'{"error": "observed_at in the future"}', "future_timestamp"),
+        (403, b'{"error": "untrusted pr_author"}', "untrusted_author"),
+        (403, b'{"error": "operator credential required"}', "failed"),
+        (401, b'{"error": "unauthorized"}', "failed"),
+    ):
+        def opener(request, timeout=None, _code=code, _body=body_bytes):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(_body))
+
+        assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener).write(event) == expected
+
+    class UntrustedAuthorWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "untrusted_author"
+
+    class FutureTimestampWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "future_timestamp"
+
+    class UnknownAgentWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "unknown_agent"
+
+    class RejectingWriter:
+        def __init__(self, base_url, token):
+            pass
+
+        def write(self, event):
+            return "rejected"
+
+    state = tmp_path / "rejected.sqlite3"
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKEN", "op-secret")
+    monkeypatch.setenv("UNITARES_URL", "not-a-valid-url")
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+
+    # --dry-run must ignore invalid UNITARES_URL and return 0.
+    assert obs.main(["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}", "--dry-run"]) == 0
+    _ = capsys.readouterr()
+
+    # 403 untrusted pr_author keeps fingerprints unmarked and exits 1 to surface config mismatch.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", UntrustedAuthorWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 1
+    untrusted_summary = json.loads(capsys.readouterr().err)
+    assert untrusted_summary["events_untrusted_author"] == 12
+    assert untrusted_summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 0
+
+    # Transient future_timestamp (clock skew) keeps fingerprints unmarked and exits 1.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", FutureTimestampWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 1
+    future_summary = json.loads(capsys.readouterr().err)
+    assert future_summary["events_future"] == 12
+    assert future_summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 0
+
+    # Unknown agent_uuid leaves fingerprints unmarked and exits 1 to expose bad subject attribution.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", UnknownAgentWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 1
+    unknown_summary = json.loads(capsys.readouterr().err)
+    assert unknown_summary["events_unknown_agent"] == 12
+    assert unknown_summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 0
+
+    # Permanent 400/413/stale-422 refusals mark fingerprints once and exit 0.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", RejectingWriter)
+    assert obs.main([
+        "--repo", REPO,
+        "--state-path", str(state),
+        "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}",
+        "--unitares-url", "http://127.0.0.1:8767",
+    ]) == 0
+    summary = json.loads(capsys.readouterr().err)
+    assert summary["events_rejected"] == 12
+    assert summary["writes_failed"] == 0
+    assert len(read_only_fingerprints(state)) == 12
+
+
+def test_writer_handles_incomplete_read_in_http_error_body():
+    import urllib.error
+
+    class CutOffBody:
+        def read(self, _amt=None):
+            raise http.client.IncompleteRead(b'{"error":')
+
+        def close(self):
+            pass
+
+    event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
+    for code, expected in ((422, "failed"), (403, "failed")):
+        def opener(request, timeout=None, _code=code):
+            raise urllib.error.HTTPError(request.full_url, _code, "err", {}, CutOffBody())
+
+        assert obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener).write(event) == expected

@@ -115,16 +115,26 @@ def test_get_taxonomy_caches():
 # ---------------------------------------------------------------------------
 
 
-def test_all_watcher_patterns_are_classified():
-    """Every pattern ID in patterns.md must appear in the taxonomy.
+def test_watcher_pattern_ids_are_well_formed_and_classified_once():
+    """Core owns the classes; a deployment's Watcher owns the pattern ids.
 
-    Orphan detection: if someone adds P018 without classifying it, this fails.
+    The check that every id in a Watcher's pattern library is classified, and
+    that the taxonomy names no id the library dropped, runs wherever that
+    Watcher lives: Core must not import one. What Core can hold on its own
+    side is that the ids it lists are well formed, that no id sits in two
+    classes, and that each resolves back to its class.
     """
-    from agents.watcher.agent import load_pattern_severities
+    import re
 
-    sevs = load_pattern_severities()
-    missing = [pid for pid in sevs if class_for_watcher_pattern(pid) is None]
-    assert not missing, f"Watcher patterns not in taxonomy: {missing}"
+    tax = load_taxonomy()
+    seen: dict[str, str] = {}
+    for cls in tax["classes"]:
+        for pid in cls["surfaces"].get("watcher_patterns", []):
+            assert re.fullmatch(r"P\d{3}", pid), f"malformed pattern id {pid!r}"
+            assert pid not in seen, f"{pid} is in both {seen[pid]} and {cls['id']}"
+            seen[pid] = cls["id"]
+            assert class_for_watcher_pattern(pid) is not None
+    assert seen, "taxonomy lists no watcher patterns"
 
 
 def test_all_sentinel_findings_are_classified():
@@ -140,30 +150,9 @@ def test_all_sentinel_findings_are_classified():
     assert not missing, f"Sentinel findings not in taxonomy: {missing}"
 
 
-def test_taxonomy_surfaces_exist_in_codebase():
-    """Surface IDs in the YAML should reference real patterns/findings.
-
-    Catches stale references (e.g. a removed pattern still listed).
-    """
-    from agents.watcher.agent import load_pattern_severities
-
-    tax = load_taxonomy()
-    watcher_patterns = set(load_pattern_severities().keys())
-
-    for cls in tax["classes"]:
-        for pid in cls["surfaces"].get("watcher_patterns", []):
-            assert pid in watcher_patterns, (
-                f"Taxonomy references {pid} in class {cls['id']} "
-                f"but it's not in patterns.md"
-            )
-
-
 def test_coverage_summary(capsys):
     """Print coverage summary for CI output."""
-    from agents.watcher.agent import load_pattern_severities
-
     tax = load_taxonomy()
-    watcher_sevs = load_pattern_severities()
     watcher_mapped = sum(
         len(c["surfaces"].get("watcher_patterns", []))
         for c in tax["classes"]
@@ -177,6 +166,6 @@ def test_coverage_summary(capsys):
         for c in tax["classes"]
     )
 
-    print(f"\nWatcher patterns covered: {watcher_mapped}/{len(watcher_sevs)}")
+    print(f"\nWatcher patterns classified: {watcher_mapped}")
     print(f"Sentinel findings covered: {sentinel_mapped}")
     print(f"Broadcast events covered: {broadcast_mapped}")

@@ -360,6 +360,33 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
       assert {:error, :symlink_loop} = Canonicalize.canonicalize("file://" <> a)
     end
 
+    test "a dangling symlink leaf is refused, not leased under the link's name", ctx do
+      outside = Path.join(ctx.root, "outside/never-created.txt")
+      link = Path.join(ctx.root, "out.txt")
+      File.ln_s!(outside, link)
+
+      assert {:error, :dangling_symlink} = Canonicalize.canonicalize("file://" <> link)
+    end
+
+    test "a dangling symlink leaf named with trailing slashes is refused too", ctx do
+      outside = Path.join(ctx.root, "outside/never-created.txt")
+      link = Path.join(ctx.root, "out.txt")
+      File.ln_s!(outside, link)
+
+      for suffix <- ["/", "//"] do
+        assert {:error, :dangling_symlink} =
+                 Canonicalize.canonicalize("file://" <> link <> suffix)
+      end
+    end
+
+    test "a dangling symlink inside the missing tail is refused", ctx do
+      link_dir = Path.join(ctx.root, "linkdir")
+      File.ln_s!(Path.join(ctx.root, "nowhere"), link_dir)
+
+      assert {:error, :dangling_symlink} =
+               Canonicalize.canonicalize("file://" <> Path.join(link_dir, "out.txt"))
+    end
+
     test "ENOENT → resolves intermediate symlinks, appends missing tail (PR 7.5 BLOCK 2)", ctx do
       # Per PR 7.5 council BLOCK 2: the ENOENT branch must resolve symlinks in
       # existing path prefixes (mirrors Python's non-strict os.path.realpath).

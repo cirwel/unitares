@@ -1419,4 +1419,45 @@ defmodule PortalWeb.TimelineLiveTest do
     view = mount_live(conn, ctx)
     assert has_element?(view, "#live-light[data-state=down]", "Not updating")
   end
+
+  test "external github events render neutrally with detail rows and zero attention flags", %{
+    conn: conn
+  } do
+    events = [
+      %{
+        "kind" => "external",
+        "ts" => iso(-60_000),
+        "agent_id" => @a,
+        "event_id" => "ext-1",
+        "event_type" => "github.ci_result",
+        "fingerprint" => "100#42:ci:700:1",
+        "repo" => "example/repo",
+        "pr" => 42,
+        "workflow" => "CI",
+        "conclusion" => "failure",
+        "failed_jobs" => ["smoke"],
+        "head_sha" => "abc1234",
+        "producer" => "github_observer"
+      }
+    ]
+
+    ctx = feed_with(events, [agent(@a, "worker one")])
+    view = mount_live(conn, ctx)
+
+    assert has_element?(view, "#lane-legend .tl-mk.external")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.external[data-kind=external]")
+    refute has_element?(view, "#agent-#{@a} .tl-mk.external.bad")
+    refute has_element?(view, "#agent-#{@a} .tl-mk.external.pause")
+    assert has_element?(view, "#needs-attention", "Nothing needs your attention")
+
+    [id] =
+      view |> nodes("#agent-#{@a} .tl-mk[data-kind=external]") |> hd() |> LazyHTML.attribute("id")
+
+    view |> element("##{id}") |> render_click()
+    assert has_element?(view, "#mark-detail", "CI · CI · failure")
+    assert has_element?(view, "#mark-detail", "example/repo")
+    assert has_element?(view, "#mark-detail", "#42")
+    assert has_element?(view, "#mark-detail", "100#42:ci:700:1")
+    assert has_element?(view, "#mark-detail", "smoke")
+  end
 end

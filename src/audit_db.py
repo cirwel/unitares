@@ -67,6 +67,32 @@ def tool_usage_window_coverage(
     }
 
 
+async def record_external_event_async(
+    *,
+    fingerprint: str,
+    event_type: str,
+    agent_id: str,
+    ts: datetime,
+    producer: str,
+    payload: Dict[str, Any],
+) -> tuple[bool, Optional[str], datetime]:
+    """Atomically claim `fingerprint` and write an external row to `audit.events`."""
+    from src.db import get_db
+
+    db = get_db()
+    if not hasattr(db, "_pool") or db._pool is None:
+        await db.init()
+
+    return await db.record_external_event(
+        fingerprint=fingerprint,
+        event_type=event_type,
+        agent_id=agent_id,
+        ts=ts,
+        producer=producer,
+        payload=payload,
+    )
+
+
 async def append_audit_event_async(entry: Dict[str, Any], raw_hash: Optional[str] = None) -> bool:
     """Append an audit event to PostgreSQL."""
     from src.db import get_db

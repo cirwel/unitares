@@ -17,13 +17,17 @@ from datetime import datetime, timedelta, timezone
 from starlette.responses import JSONResponse
 
 from src.http_routes import access
+from src.http_routes.external_events import (
+    EXTERNAL_EVENT_OPTIONAL_FIELDS,
+    EXTERNAL_GITHUB_EVENT_TYPES,
+)
 from src.http_routes.telemetry import _LIFECYCLE_EVENT_TYPES
 from src.identity.host_session import host_session_summary
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-TIMELINE_KINDS = ("checkin", "outcome", "lifecycle", "knowledge", "lineage", "dialectic")
+TIMELINE_KINDS = ("checkin", "outcome", "lifecycle", "knowledge", "lineage", "dialectic", "external")
 _SUPPORTED_PARAMS = {
     "hours", "agent_id", "kinds", "limit", "include_substrate", "include_trajectory",
 }
@@ -97,7 +101,7 @@ async def http_timeline(request):
       - agent_id: one agent's UUID; lineage rows naming it as parent and
         dialectic sessions naming it as reviewer are included too
       - kinds: comma list from checkin, outcome, lifecycle, knowledge,
-        lineage, dialectic (default all)
+        lineage, dialectic, external (default all)
       - limit: newest rows kept PER KIND (default 500, max 2000);
         `truncated` names each kind that hit it
       - include_substrate: hook-recorded check-ins as well as the agent's
@@ -227,6 +231,7 @@ async def http_timeline(request):
                 "lifecycle": list(_LIFECYCLE_EVENT_TYPES),
                 "knowledge": ["knowledge_write"],
                 "lineage": ["lineage_declared"],
+                "external": sorted(EXTERNAL_GITHUB_EVENT_TYPES),
             }
             for kind, event_types in audit_kinds.items():
                 if kind not in kinds:
@@ -257,9 +262,17 @@ async def http_timeline(request):
                         event["discovery_id"] = payload.get("discovery_id")
                         event["discovery_type"] = payload.get("discovery_type")
                         event["summary"] = summary
-                    else:
+                    elif kind == "lineage":
                         event["parent_agent_id"] = payload.get("parent_id")
                         event["successor_class"] = payload.get("successor_class")
+                    elif kind == "external":
+                        event["event_type"] = r["event_type"]
+                        event["fingerprint"] = payload.get("fingerprint")
+                        event["repo"] = payload.get("repo")
+                        event["pr"] = payload.get("pr")
+                        for field in EXTERNAL_EVENT_OPTIONAL_FIELDS:
+                            if field in payload and field not in event:
+                                event[field] = payload[field]
                     events.append(event)
 
             if "dialectic" in kinds:

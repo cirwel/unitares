@@ -812,3 +812,184 @@ def test_runtime_passes_the_static_pkce_verifier_to_the_shim(monkeypatch):
     )
     shims = [kw for cls, kw in app.middleware if cls is StaticClientBasicAuthShim]
     assert shims == [{"client_id": "static", "pkce_verifier": "v" * 43}]
+
+
+# --- SDK-buffered bodies are counted before the SDK reads them ---------------
+
+
+def _chunked_receive(chunk: bytes, count: int):
+    """A receive that streams ``count`` chunks and records how many were read."""
+    state = {"read": 0}
+
+    async def receive():
+        state["read"] += 1
+        if state["read"] > count:
+            return {"type": "http.disconnect"}
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": state["read"] < count,
+        }
+
+    return receive, state
+
+
+@pytest.mark.asyncio
+async def test_streamable_asgi_refuses_an_oversize_chunked_post_before_dispatch(
+    monkeypatch,
+):
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    monkeypatch.setattr(
+        "src.services.http_request_parser.MAX_HTTP_TOOL_REQUEST_SIZE", 1024
+    )
+    manager = AsyncMock()
+    receive, state = _chunked_receive(b"x" * 512, 100)
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    app = make_streamable_mcp_asgi(manager, auth_config=McpAuthConfig())
+    await app(_scope(), receive, send)
+
+    manager.handle_request.assert_not_awaited()
+    assert sent[0]["status"] == 413
+    assert b"Request body too large" in sent[1]["body"]
+    # Stopped at the first chunk past the cap, not after draining the stream.
+    assert state["read"] == 3
+
+
+@pytest.mark.asyncio
+async def test_streamable_asgi_refuses_a_declared_oversize_post_without_reading(
+    monkeypatch,
+):
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    monkeypatch.setattr(
+        "src.services.http_request_parser.MAX_HTTP_TOOL_REQUEST_SIZE", 1024
+    )
+    manager = AsyncMock()
+    receive, state = _chunked_receive(b"x", 1)
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    app = make_streamable_mcp_asgi(manager, auth_config=McpAuthConfig())
+    await app(_scope((b"content-length", b"4096")), receive, send)
+
+    manager.handle_request.assert_not_awaited()
+    assert sent[0]["status"] == 413
+    assert state["read"] == 0
+
+
+@pytest.mark.asyncio
+async def test_streamable_asgi_replays_a_body_within_the_cap(monkeypatch):
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    received = []
+
+    class SessionManager:
+        async def handle_request(self, _scope, receive, send):
+            while True:
+                message = await receive()
+                received.append(message)
+                if not message.get("more_body"):
+                    break
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    receive, _state = _chunked_receive(b"ab", 3)
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    app = make_streamable_mcp_asgi(SessionManager(), auth_config=McpAuthConfig())
+    await app(_scope(), receive, send)
+
+    assert sent[0]["status"] == 200
+    assert b"".join(m["body"] for m in received) == b"ababab"
+
+
+@pytest.mark.asyncio
+async def test_registration_body_cap_refuses_oversize_and_passes_others():
+    from src.services.mcp_transport_service import BoundedRegistrationBody
+
+    calls = []
+
+    async def inner(scope, receive, send):
+        body = b""
+        while True:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+        calls.append((scope["path"], body))
+        await send({"type": "http.response.start", "status": 201, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    app = BoundedRegistrationBody(inner, max_bytes=1024)
+
+    def scope(path):
+        return {"type": "http", "method": "POST", "path": path, "headers": []}
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    receive, state = _chunked_receive(b"x" * 512, 100)
+    await app(scope("/register"), receive, send)
+    assert sent[0]["status"] == 413
+    assert calls == []
+    assert state["read"] == 3
+
+    sent.clear()
+    receive, _ = _chunked_receive(b"{}", 1)
+    await app(scope("/register"), receive, send)
+    assert sent[0]["status"] == 201
+    assert calls == [("/register", b"{}")]
+
+    # Other paths are left to their own handlers, unread.
+    sent.clear()
+    receive, state = _chunked_receive(b"x" * 512, 4)
+    await app(scope("/token"), receive, send)
+    assert sent[0]["status"] == 201
+    assert calls[-1] == ("/token", b"x" * 2048)
+
+
+@pytest.mark.parametrize("provider", [object(), None])
+def test_runtime_bounds_registration_bodies_whenever_oauth_is_on(monkeypatch, provider):
+    from src.services.mcp_transport_service import BoundedRegistrationBody
+
+    app = _StubApp()
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager",
+        lambda _server: object(),
+    )
+    for name in ("_log_transport_security", "_configure_middleware", "_register_application_routes"):
+        monkeypatch.setattr(
+            f"src.services.mcp_transport_service.{name}", lambda *_a, **_k: None
+        )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application",
+        lambda _mcp: app,
+    )
+
+    build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(oauth_provider=provider),
+        host="127.0.0.1",
+        port=8767,
+        reload=False,
+        server_ready_fn=lambda: True,
+        set_server_ready=lambda: None,
+        server_start_time=0.0,
+        server_version="test",
+        server_build_sha="test",
+    )
+
+    assert (BoundedRegistrationBody in app.middleware) is (provider is not None)

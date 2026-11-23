@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-from src.local_inference_env import (
+from agents.common.local_inference_env import (
     default_local_model,
     model_base_url,
     no_redirect_http_client,
@@ -30,8 +30,8 @@ from src.local_inference_env import (
 # tool: that carries a 30s timeout, and a small local model routinely needs
 # 40-70s for a real answer. The reviewer learned this the expensive way; a
 # resident that routes its own thinking through call_model will look flaky
-# rather than slow. The endpoint is the server's (src/local_inference_env.py:
-# UNITARES_MODEL_BASE_URL, or an older name from its alias table).
+# rather than slow. The endpoint follows the shared local-model contract
+# (agents/common/local_inference_env.py: UNITARES_MODEL_BASE_URL).
 OLLAMA_BASE_URL = model_base_url()
 DEFAULT_MODEL = default_local_model()
 
@@ -80,7 +80,7 @@ async def call_local_model(
 
     # A resident's prompts are the operator's data: this raises
     # EndpointNotLocalError, before any request, when the endpoint does not
-    # classify local (see src/local_inference_env.classify_endpoint).
+    # classify local (see agents/common/local_inference_env.classify_endpoint).
     require_local_endpoint(OLLAMA_BASE_URL)
     # No default model: raises ModelNotConfiguredError when none is named.
     model = require_local_model(model or DEFAULT_MODEL)

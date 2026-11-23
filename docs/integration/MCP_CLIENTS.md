@@ -159,9 +159,19 @@ tool runs:
      TTLs follow token lifetimes), so a restart does not sign connectors out;
      with Redis unavailable they fall back to per-client-bounded memory and
      reset on restart. One client's token-cache churn cannot evict another
-     client's live tokens. The separate dynamic-client cache is globally
-     bounded; without Redis, churn during an open registration window can
-     evict a cached registration and require that client to register again.
+     client's live tokens until dynamically registered clients' cached
+     tokens reach a global cap well above single-operator use; past it the
+     oldest of those leave memory and reload from Redis on their next use.
+     The separate dynamic-client cache is globally bounded, and evicting a
+     client also drops its cached tokens; without Redis, churn during an open
+     registration window can evict a cached registration and require that
+     client to register again. Used refresh tokens are remembered per client,
+     and dynamically registered clients' ones globally, up to a cap. A used
+     token whose Redis delete failed is kept in that record until it expires,
+     so if failed deletes fill it, further refresh grants are refused with
+     `invalid_request` until entries expire or the server restarts. Static
+     and managed connectors are exempt from every global cap, so open
+     registration cannot sign them out or block their refreshes.
      Authorization codes carry signed, five-minute state rather than occupying
      a server-side pending-code cache.
      The protected MCP resource defaults to
