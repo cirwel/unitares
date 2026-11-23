@@ -8,27 +8,41 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
   in PostgreSQL before the mutation proceeds, making its `jti` single-use.
   """
 
-  alias UnitaresLeasePlane.{OperatorKeyCache, Repo}
+  alias UnitaresLeasePlane.{IdentityBinding, OperatorKeyCache, Repo}
 
   @prefix "lat.v1."
   @clock_skew_seconds 5
   @max_token_bytes 8_192
   @max_jwks_bytes 65_536
+  @max_trusted_issuers 32
 
   @type request_context :: %{method: String.t(), path: String.t(), body_sha256: String.t()}
+  @type principal :: %{issuer: String.t(), subject: String.t()}
 
   @spec verify(String.t(), String.t(), request_context()) ::
           :ok | {:error, :invalid | :replayed | term()}
-  def verify(holder_agent_uuid, token, context)
-      when is_binary(holder_agent_uuid) and is_binary(token) and is_map(context) do
-    with {:ok, audience} <- configured_audience(),
+  def verify(holder_agent_uuid, token, context) do
+    case verify_principal(holder_agent_uuid, token, context, allow_multiple_issuers: false) do
+      {:ok, _principal} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec verify_principal(String.t(), String.t(), request_context(), keyword()) ::
+          {:ok, principal()} | {:error, :invalid | :replayed | term()}
+  def verify_principal(expected_subject, token, context, opts \\ [])
+
+  def verify_principal(expected_subject, token, context, opts)
+      when is_binary(expected_subject) and is_binary(token) and is_map(context) and is_list(opts) do
+    with true <- IdentityBinding.valid_principal_component?(expected_subject),
+         {:ok, audience} <- configured_audience(),
          {:ok, claims, signing_input, signature} <- parse_token(token),
-         {:ok, issuer, kid, jwks_url} <- trusted_key_location(claims),
+         {:ok, issuer, kid, jwks_url} <- trusted_key_location(claims, opts),
          {:ok, public_key} <- resolve_public_key(issuer, kid, jwks_url, audience),
          true <- valid_signature?(signing_input, signature, public_key),
-         :ok <- validate_claims(claims, holder_agent_uuid, context, current_time(), audience),
+         :ok <- validate_claims(claims, expected_subject, context, current_time(), audience),
          :ok <- consume_nonce(issuer, claims["jti"], claims["exp"]) do
-      :ok
+      {:ok, %{issuer: issuer, subject: expected_subject}}
     else
       false -> {:error, :invalid}
       {:error, :replayed} -> {:error, :replayed}
@@ -42,7 +56,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     _kind, _reason -> {:error, :verification_exception}
   end
 
-  def verify(_holder_agent_uuid, _token, _context), do: {:error, :invalid}
+  def verify_principal(_expected_subject, _token, _context, _opts), do: {:error, :invalid}
 
   @doc false
   def parse_token(token) when is_binary(token) and byte_size(token) <= @max_token_bytes do
@@ -103,13 +117,15 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     if valid, do: :ok, else: {:error, :invalid}
   end
 
-  defp trusted_key_location(claims) do
+  defp trusted_key_location(claims, opts) do
     issuer = claims["iss"]
     kid = claims["kid"]
     trusted = Application.get_env(:lease_plane, :trusted_identity_issuers, %{})
+    allow_multiple? = Keyword.get(opts, :allow_multiple_issuers, false) == true
+    expected_issuer = Keyword.get(opts, :expected_issuer)
 
     cond do
-      not is_binary(issuer) or byte_size(issuer) == 0 or byte_size(issuer) > 256 ->
+      not IdentityBinding.valid_principal_component?(issuer) ->
         {:error, :invalid}
 
       not is_binary(kid) or byte_size(kid) == 0 or byte_size(kid) > 128 ->
@@ -118,8 +134,15 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
       not is_map(trusted) or map_size(trusted) == 0 ->
         {:error, :trusted_identity_issuers_unset}
 
-      map_size(trusted) > 1 ->
+      not allow_multiple? and map_size(trusted) > 1 ->
         {:error, :multiple_trusted_identity_issuers_unsupported}
+
+      allow_multiple? and map_size(trusted) > @max_trusted_issuers ->
+        {:error, :too_many_trusted_identity_issuers}
+
+      not is_nil(expected_issuer) and
+          (not is_binary(expected_issuer) or issuer != expected_issuer) ->
+        {:error, :invalid}
 
       not Map.has_key?(trusted, issuer) ->
         {:error, :invalid}
