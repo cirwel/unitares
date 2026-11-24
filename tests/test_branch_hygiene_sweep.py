@@ -334,3 +334,68 @@ def test_ambiguous_default_branch_holds_cleanup(fake_repo, monkeypatch):
     agent_mod.run_git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD", repo=fake_repo, check=False)
     with pytest.raises(agent_mod.ProtectionLookupError, match="cannot establish origin's default branch"):
         agent_mod.default_base(fake_repo)
+
+
+class TestDetachedAndLinkedWorktreeSafety:
+    """Regression coverage for #3360 hazards in --live mode."""
+
+    def test_live_holds_clean_detached_worktree_with_unique_commits(
+        self, fake_repo: Path, monkeypatch
+    ):
+        wt_dir = fake_repo / ".worktrees" / "wt-detached-unique"
+        _git(fake_repo, "worktree", "add", "--detach", str(wt_dir))
+        (wt_dir / "detached_work.txt").write_text("only in detached HEAD\n")
+        _git(wt_dir, "add", "detached_work.txt")
+        _git(wt_dir, "commit", "-m", "detached commit")
+        head_sha = _git(wt_dir, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        assert wt_dir.exists()
+        assert report.worktrees_removed == 0
+        assert any(head_sha[:12] in h for h in report.holds)
+
+    def test_live_removes_clean_detached_worktree_when_commit_is_on_base(
+        self, fake_repo: Path, monkeypatch
+    ):
+        wt_dir = fake_repo / ".worktrees" / "wt-detached-merged"
+        _git(fake_repo, "worktree", "add", "--detach", str(wt_dir))
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        assert not wt_dir.exists()
+        assert report.worktrees_removed == 1
+        assert report.holds == []
+
+    def test_live_protects_deploy_worktree_even_when_detached_at_base(
+        self, fake_repo: Path, monkeypatch
+    ):
+        deploy_dir = fake_repo.parent / "repo-deploy"
+        _git(fake_repo, "worktree", "add", "--detach", str(deploy_dir))
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        assert deploy_dir.exists()
+        assert report.worktrees_removed == 0
+
+    def test_live_skips_linked_worktree_paused_in_rebase(
+        self, fake_repo: Path, monkeypatch
+    ):
+        wt_dir = fake_repo / ".worktrees" / "wt-rebaser"
+        _git(fake_repo, "worktree", "add", "-b", "codex/rebaser", str(wt_dir))
+        _git(wt_dir, "push", "-u", "origin", "codex/rebaser")
+        _git(fake_repo, "push", "origin", "--delete", "codex/rebaser")
+        git_dir = Path(_git(wt_dir, "rev-parse", "--git-dir").stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = (wt_dir / git_dir).resolve()
+        (git_dir / "rebase-merge").mkdir(parents=True)
+        (git_dir / "rebase-merge" / "head-name").write_text("refs/heads/codex/rebaser")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        assert wt_dir.exists()
+        assert report.worktrees_removed == 0

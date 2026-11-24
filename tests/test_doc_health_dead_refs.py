@@ -876,3 +876,30 @@ def test_same_file_anchor_and_github_master_link_checks(
     assert "broken anchor `#wrong`" in gh_warnings[1]
 
 
+def test_non_proposal_archive_docs_checked_for_relative_links_only(
+    tmp_path, monkeypatch, doc_health
+):
+    """Moved docs in operations/ontology/releases archive/ get relative-link checks
+    without entering collect_md_files() prose/count/dead-ref scans."""
+    ops_archive = tmp_path / "docs" / "operations" / "archive"
+    ops_archive.mkdir(parents=True)
+    real_doc = tmp_path / "docs" / "PRODUCT_DEFINITION.md"
+    real_doc.write_text("# Product\n")
+    archived = ops_archive / "audit-2026-09-10.md"
+    archived.write_text(
+        "# Audit\n\n"
+        "Good: [product](../../PRODUCT_DEFINITION.md)\n"
+        "Broken after move: [stale](../PRODUCT_DEFINITION.md)\n"
+        "Historical count kept: 14,000 tests and `src/deleted_old_module.py`.\n"
+    )
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert archived not in doc_health.collect_md_files()
+    archive_files = doc_health.collect_non_proposal_archive_md_files()
+    assert archive_files == [archived]
+    warnings = doc_health.check_relative_links(archive_files)
+    assert len(warnings) == 1
+    assert "audit-2026-09-10.md:4: broken relative link `../PRODUCT_DEFINITION.md`" in warnings[0]
+
+
+
