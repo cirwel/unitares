@@ -85,9 +85,19 @@ def _b64u_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+def b64u_encode(raw: bytes) -> str:
+    """Encode bytes using unpadded URL-safe base64."""
+    return _b64u_encode(raw)
+
+
 def _b64u_decode(text: str) -> bytes:
     pad = "=" * (-len(text) % 4)
     return base64.urlsafe_b64decode(text + pad)
+
+
+def b64u_decode(text: str) -> bytes:
+    """Decode an unpadded URL-safe base64 string into bytes."""
+    return _b64u_decode(text)
 
 
 # ── key management ─────────────────────────────────────────────────────────

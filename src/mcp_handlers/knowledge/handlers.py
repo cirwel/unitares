@@ -288,8 +288,8 @@ from .mutation_helpers import (
 
 
 def _get_store_lineage_fn():
-    from ..identity.shared import _get_lineage
-    return _get_lineage
+    from ..identity.shared import get_lineage
+    return get_lineage
 
 
 #: Upper bound on the query text stored in an audit row. Long enough for the
