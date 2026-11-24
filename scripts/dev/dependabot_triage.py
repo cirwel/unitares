@@ -51,6 +51,8 @@ REQ_RE = re.compile(
 # `bump python from `cea0e60` to `a7fb1e6``
 DIGEST_RE = re.compile(r"bump\s+(?P<pkg>\S+)\s+from\s+`(?P<old>[0-9a-f]+)`\s+to\s+`(?P<new>[0-9a-f]+)`", re.I)
 GROUP_RE = re.compile(r"bump\s+the\s+(?P<group>[\w-]+)\s+group", re.I)
+# Single-package group updates use `bump <pkg> from X to Y ... in the <group> group`.
+IN_GROUP_RE = re.compile(r"\bin\s+the\s+(?P<group>[\w-]+)\s+group\b", re.I)
 UPPER_BOUND_RE = re.compile(r"<\s*(\d+)(?:\.\d+)*")
 
 
@@ -137,11 +139,15 @@ def classify_title(title: str) -> tuple[str, str]:
         if new[0] > old[0]:
             return HOLD, f"major bump {bump.group('old')} -> {bump.group('new')}"
         if len(old) > 1 and len(new) > 1 and new[1] > old[1]:
-            # Minor bumps auto-merge only for dev/test-only deps. A minor bump
-            # on a runtime dependency is a human call — the policy is narrower
-            # here than "anything below major", deliberately.
+            # Minor bumps auto-merge only for dev/test-only deps or CI-only
+            # GitHub Actions group bumps. A minor bump on a runtime dependency
+            # is a human call — the policy is narrower here than "anything below
+            # major", deliberately.
             if title.lower().startswith("chore(deps-dev)"):
                 return MERGE, f"minor bump {bump.group('old')} -> {bump.group('new')} (dev-dep)"
+            in_group = IN_GROUP_RE.search(title)
+            if in_group and in_group.group("group").lower() == "actions":
+                return MERGE, f"minor bump {bump.group('old')} -> {bump.group('new')} (actions group — CI-only surface)"
             return HOLD, (
                 f"minor bump {bump.group('old')} -> {bump.group('new')} on a runtime dep — "
                 "auto-merge covers minors only for dev-deps"
