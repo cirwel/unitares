@@ -459,3 +459,21 @@ class TestStewardshipReceipt:
         assert len(receipt["items"]) == 1
         assert receipt["items"][0]["key"] == "owner/repo#17"
         assert receipt["items"][0]["first_seen_at"] == "2026-10-27T12:00:00Z"
+
+
+class TestClassifyTitle:
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            ("chore(deps): bump actions/create-github-app-token from 3.3.0 to 3.4.0 in the actions group", "WOULD-MERGE"),
+            ("chore(deps): bump actions/checkout from 4.0.0 to 5.0.0 in the actions group", "HELD"),
+            ("chore(deps): bump the actions group with 2 updates", "WOULD-MERGE"),
+            ("chore(deps-dev): bump vitest from 5.1.0 to 5.1.1 in /dashboard in the dashboard-dev group", "WOULD-MERGE"),
+            ("chore(deps-dev): bump vitest from 5.1.0 to 5.2.0 in /dashboard in the dashboard-dev group", "WOULD-MERGE"),
+            ("chore(deps): bump finch from 0.24.0 to 0.25.0 in the hex group", "HELD"),
+            ("chore(deps): bump the hex group across 2 directories with 1 update", "UNCLASSIFIED"),
+        ],
+    )
+    def test_group_and_actions_titles(self, triage, title, expected):
+        verdict, _ = triage.classify_title(title)
+        assert verdict == expected

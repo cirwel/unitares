@@ -1555,7 +1555,7 @@ def test_an_unreviewed_auth_path_pr_is_skipped_by_default(tmp_path: Path) -> Non
     calls, out = _run(tmp_path, [_unreviewed(1, "aaa"), _unreviewed(2, "bbb")],
                       timelines={1: _timeline(12), 2: _timeline(8)},
                       compares={"aaa": AUTH, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == [_arm(2, "bbb")]
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested", _arm(2, "bbb")]
     assert "review=NEUTRAL (required on an auth path: src/identity/deep/tokens.py)" in out
 
 
@@ -1570,7 +1570,7 @@ def test_a_rename_out_of_an_auth_path_still_counts(tmp_path: Path) -> None:
     moved = {"files": [{"filename": "src/elsewhere.py", "previous_filename": "src/identity/a.py",
                         "status": "renamed", "sha": "b3", "patch": "@@ -1 +1 @@\n-a\n+b"}]}
     calls, _ = _run(tmp_path, [_unreviewed(1, "aaa")], compares={"aaa": moved}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == []
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
 
 
 @pytest.mark.parametrize("broken", ["missing", "not-json", "empty-list"])
@@ -2108,9 +2108,12 @@ def test_a_sensitive_pr_is_not_armed_until_review_passes(tmp_path: Path, review:
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
                       PR_QUEUE_REQUIRED_CHECKS="")
     assert not [c for c in calls if "--auto" in c]
-    if review in ("NEUTRAL", None):
+    if review == "NEUTRAL":
+        assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+        assert "review=NEUTRAL" in out
+    elif review is None:
         assert calls == []
-        assert f"review={review or 'MISSING'}" in out
+        assert "review=MISSING" in out
 
 
 def test_a_sensitive_diff_outside_two_family_review_stays_hand_merge(tmp_path: Path) -> None:
@@ -2488,3 +2491,110 @@ def test_the_queue_names_the_same_hand_merge_files_as_the_docs() -> None:
     for path in RESERVED:
         assert (REPO / path).exists(), path
         assert f"`{path}`" in doc, path
+
+
+def test_post_approval_attestation_only_push_keeps_approval_valid(tmp_path: Path) -> None:
+    # First tick pins the approval on head "aaa" while another PR holds the slot.
+    base_diff = _files(("src/a.py", "modified", "b1", "@@ -1 +1 @@\n-old\n+new"))
+    attest_diff = {
+        "files": base_diff["files"] + [{
+            "filename": "skills/.attestations/unitares-dashboard/20261123T000000000000Z-deadbeef.json",
+            "status": "added",
+            "sha": "att1",
+            "patch": "@@ -0,0 +1 @@\n+{\"schema\": \"v1\"}",
+        }]
+    }
+    timeline_initial = _timeline(labelled_min_ago=10, pushed_min_ago=20)
+    calls, _ = _run(
+        tmp_path,
+        [_pr(1, head="aaa"), _pr(2, head="zzz", armed_min_ago=5, labels=("operator-armed",))],
+        timelines={1: timeline_initial},
+        compares={"aaa": base_diff},
+    )
+    assert calls == []
+    # Second tick: a later commit added only a skill attestation file.
+    # The substantive diff fingerprint is unchanged, so approval stays valid.
+    timeline_after = _timeline(labelled_min_ago=10, pushed_min_ago=2)
+    # Keep the exact same label timestamp as the first tick so the pin matches.
+    lbl_ts = next(e["created_at"] for e in timeline_initial if e.get("event") == "labeled")
+    for e in timeline_after:
+        if e.get("event") == "labeled":
+            e["created_at"] = lbl_ts
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, head="bbb")],
+        timelines={1: timeline_after},
+        compares={"bbb": attest_diff},
+    )
+    assert calls == [_arm(1, "bbb")], out
+
+
+def test_post_approval_substantive_push_still_lapses_even_when_pinned(tmp_path: Path) -> None:
+    base_diff = _files(("src/a.py", "modified", "b1", "@@ -1 +1 @@\n-old\n+new"))
+    changed_diff = _files(("src/a.py", "modified", "b2", "@@ -1 +1 @@\n-old\n+newer"))
+    timeline_initial = _timeline(labelled_min_ago=10, pushed_min_ago=20)
+    _run(
+        tmp_path,
+        [_pr(1, head="aaa"), _pr(2, head="zzz", armed_min_ago=5, labels=("operator-armed",))],
+        timelines={1: timeline_initial},
+        compares={"aaa": base_diff},
+    )
+    timeline_after = _timeline(labelled_min_ago=10, pushed_min_ago=2)
+    lbl_ts = next(e["created_at"] for e in timeline_initial if e.get("event") == "labeled")
+    for e in timeline_after:
+        if e.get("event") == "labeled":
+            e["created_at"] = lbl_ts
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, head="bbb")],
+        timelines={1: timeline_after},
+        compares={"bbb": changed_diff},
+    )
+    assert calls == []
+    assert "#1 has a commit from" in out and "remove and re-add approved-to-merge" in out
+
+
+def test_post_declaration_attestation_only_push_keeps_declaration_valid(tmp_path: Path) -> None:
+    base_diff = _files(("src/a.py", "modified", "b1", "@@ -1 +1 @@\n-old\n+new"))
+    attest_diff = {
+        "files": base_diff["files"] + [{
+            "filename": "skills/.attestations/unitares-dashboard/20261123T000000000000Z-deadbeef.json",
+            "status": "added",
+            "sha": "att1",
+            "patch": "@@ -0,0 +1 @@\n+{\"schema\": \"v1\"}",
+        }]
+    }
+    declared_initial = _declaration(declared_min_ago=10, pushed_min_ago=20)
+    calls, _ = _run(
+        tmp_path,
+        [_declared(head="aaa", checks=[_check("test", "", status="IN_PROGRESS")])],
+        timelines={1: declared_initial},
+        compares={"aaa": base_diff},
+    )
+    assert calls == []
+    declared_after = _declaration(declared_min_ago=10, pushed_min_ago=2)
+    lbl_ts = next(e["created_at"] for e in declared_initial if e.get("event") == "labeled")
+    for e in declared_after:
+        if e.get("event") == "labeled":
+            e["created_at"] = lbl_ts
+    calls, out = _run(
+        tmp_path,
+        [_declared(head="bbb")],
+        timelines={1: declared_after},
+        compares={"bbb": attest_diff},
+    )
+    assert calls == PROMOTE, out
+
+
+def test_queued_unreviewed_pr_respects_no_auto_review_and_requests_once(tmp_path: Path) -> None:
+    _review_policy(tmp_path, "src/identity/*")
+    # Already carries review-requested: do not re-add it.
+    pr_req = _unreviewed(1, "aaa")
+    pr_req["labels"].append({"name": "review-requested"})
+    calls, _ = _run(tmp_path, [pr_req], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Carries no-auto-review: never add review-requested.
+    pr_hold = _unreviewed(1, "aaa")
+    pr_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []

@@ -5432,6 +5432,49 @@ def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_follow
     assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
 
 
+def test_followup_survives_deleted_stacked_base_when_diff_key_matches(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    # Simulate a stacked base branch that was squash-merged and deleted so CI
+    # no longer has the old source.base commit object, while diff_key(master,
+    # source.head) still matches source.key.
+    dead_base = '0' * 40
+    source = full_record(fix.from_key, 'CLEAN', 0, False, 'claude',
+                         head=fix.from_head, base=dead_base)
+    assert rg.same_reviewed_diff(source, fix.base) is True
+    # A mismatched key against master still fails closed even with a dead base.
+    bad_source = full_record('f' * 64, 'CLEAN', 0, False, 'claude',
+                             head=fix.from_head, base=dead_base)
+    assert rg.same_reviewed_diff(bad_source, fix.base) is False
+    # When source.base DOES exist locally and disagrees with source.key, fail closed.
+    wrong_live_base = full_record(fix.from_key, 'CLEAN', 0, False, 'claude',
+                                  head=fix.from_head, base=fix.from_head)
+    assert rg.same_reviewed_diff(wrong_live_base, fix.base) is False
+
+
+def test_sensitive_followup_skips_when_chosen_family_lacks_full_anchor(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    # Keep only the OpenAI full review; Anthropic has NO full-review anchor yet.
+    openai_only = comments[:1]
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'gemini/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: openai_only)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    seen_followup = []
+
+    def fake_review(args, pr, key, reviewer):
+        seen_followup.append(getattr(args, 'followup', None))
+        return 0
+
+    monkeypatch.setattr(rg, 'review_with_fallback', fake_review)
+    monkeypatch.setattr(rg, 'completed_review_exit', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    rc = rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude'))
+    assert rc == 0
+    assert seen_followup == [None], "claude must run a full pass rather than a follow-up that cannot credit anthropic"
+
+
 def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):
     comments, fix = reviewed_followup
     fix.scope, fix.verdict = 'full-required', 'FAILED'

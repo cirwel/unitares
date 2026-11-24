@@ -883,10 +883,21 @@ def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] =
 
 
 def same_reviewed_diff(source: Record, base: str) -> bool:
-    """An unrelated advance of the base does not invalidate the source diff."""
+    """An unrelated advance of the base does not invalidate the source diff.
+
+    When ``source.base`` was a stacked PR branch that has since been
+    squash-merged and deleted, CI's clone no longer holds ``source.base``;
+    ``diff_key(base, source.head) == source.key`` still proves the exact
+    reviewed diff against ``base`` by SHA-256. If ``source.base`` is present
+    locally, verify it too so a mismatched ``source.base`` fails closed.
+    """
+    if not source.base:
+        return False
     try:
-        return (bool(source.base) and diff_key(source.base, source.head) == source.key
-                and diff_key(base, source.head) == source.key)
+        if git("rev-parse", "--verify", "--quiet", f"{source.base}^{{commit}}", check=False).strip():
+            if diff_key(source.base, source.head) != source.key:
+                return False
+        return diff_key(base, source.head) == source.key
     except (SystemExit, subprocess.SubprocessError):
         return False
 
@@ -3434,6 +3445,25 @@ def cmd_review(args) -> int:
                 if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
                     snapshot = read_native(repo, pr, key, head, comments)
                     source = followup_candidate(args.base, head, key, comments, snapshot.records)
+                    if source:
+                        # On a sensitive diff, a follow-up only preserves its
+                        # anchor families and never credits a new family. If
+                        # the caller explicitly chose a reviewer whose family
+                        # has no full-review anchor here, skip follow-up so
+                        # the full pass below can actually supply that family.
+                        req_family = provider_family(reviewer)
+                        req_sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
+                        req_authors = pr_authors_or_unknown(repo, pr) if req_sensitive else set()
+                        anchor_families = (
+                            {record_family(r) for r in followup_sources(source, comments, snapshot.records)} - {None}
+                            if req_sensitive else set()
+                        )
+                        if (req_sensitive and req_family
+                                and (not req_authors or req_family not in req_authors)
+                                and req_family not in anchor_families):
+                            print(f"[review] skipping follow-up: {req_family} has no full-review anchor "
+                                  "on this sensitive diff; running full pass")
+                            source = None
                     if source:
                         args.followup = source
                         args.followup_reviews = "\n\n".join(

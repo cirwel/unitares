@@ -1105,3 +1105,127 @@ def test_anchors_resolve_assignments_methods_and_markdown_sections(tmp_path: Pat
     assert mod.fragment_text(md, "Missing") is None
     assert mod.split_anchor("unitares/a.py#x.y") == ("unitares/a.py", "x.y")
     assert mod.split_anchor("unitares/a.py") == ("unitares/a.py", None)
+
+
+def test_merged_with_catches_ci_merge_commit_staleness(tmp_path: Path):
+    repo = tmp_path / "unitares"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "shared.py").write_text("line1 = 1\nline2 = 2\nline3 = 3\nline4 = 4\nline5 = 5\n")
+    skill_dir = repo / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: demo\n"
+        f'last_verified: "{_day(1)}"\n'
+        "freshness_days: 30\n"
+        "source_files:\n"
+        "  - unitares/src/shared.py\n"
+        "---\n"
+        "# Demo\n"
+    )
+    git = lambda *args: subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    )
+    git("init", "-b", "master")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test User")
+    env = {**os.environ, "SKILL_ATTESTATION_VERIFIER": "test-setup"}
+    subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--stamp", "demo"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    git("add", ".")
+    git("commit", "-m", "initial")
+
+    # Feature branch modifies line1 and stamps cleanly.
+    git("checkout", "-b", "feat")
+    (repo / "src" / "shared.py").write_text("line1 = 10\nline2 = 2\nline3 = 3\nline4 = 4\nline5 = 5\n")
+    subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--stamp", "demo"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    git("add", ".")
+    git("commit", "-m", "feat edit")
+
+    # Master modifies line5 (non-conflicting) and stamps cleanly.
+    git("checkout", "master")
+    (repo / "src" / "shared.py").write_text("line1 = 1\nline2 = 2\nline3 = 3\nline4 = 4\nline5 = 50\n")
+    subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--stamp", "demo"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    git("add", ".")
+    git("commit", "-m", "master edit")
+
+    # Back on feat: local check is FRESH, but --merged-with master catches STALE!
+    git("checkout", "feat")
+    local = subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path)],
+        capture_output=True, text=True,
+    )
+    assert local.returncode == 0, local.stdout
+
+    merged = subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--merged-with", "master"],
+        capture_output=True, text=True,
+    )
+    assert merged.returncode == 1
+    assert "STALE" in merged.stdout
+    assert "Merged freshness check against master failed" in merged.stdout
+    # Working tree must remain completely untouched.
+    assert git("status", "--porcelain").stdout.strip() == ""
+
+
+def test_merged_with_passes_when_base_change_is_unrelated(tmp_path: Path):
+    repo = tmp_path / "unitares"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("a = 1\n")
+    (repo / "src" / "b.py").write_text("b = 1\n")
+    skill_dir = repo / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: demo\n"
+        f'last_verified: "{_day(1)}"\n'
+        "freshness_days: 30\n"
+        "source_files:\n"
+        "  - unitares/src/a.py\n"
+        "---\n"
+        "# Demo\n"
+    )
+    git = lambda *args: subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    )
+    git("init", "-b", "master")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test User")
+    env = {**os.environ, "SKILL_ATTESTATION_VERIFIER": "test-setup"}
+    subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--stamp", "demo"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    git("add", ".")
+    git("commit", "-m", "initial")
+
+    git("checkout", "-b", "feat")
+    (repo / "src" / "a.py").write_text("a = 2\n")
+    subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--stamp", "demo"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    git("add", ".")
+    git("commit", "-m", "feat edit")
+
+    git("checkout", "master")
+    (repo / "src" / "b.py").write_text("b = 2\n")
+    git("add", ".")
+    git("commit", "-m", "unrelated master edit")
+
+    git("checkout", "feat")
+    merged = subprocess.run(
+        ["python3", str(CHECKER), str(repo), str(tmp_path), "--merged-with", "master"],
+        capture_output=True, text=True,
+    )
+    assert merged.returncode == 0, merged.stdout + merged.stderr
