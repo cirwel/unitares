@@ -338,10 +338,12 @@ review_check_runs() {
 # runs (a workflow that also fires on `labeled` adds one) never count, so a
 # head carrying only other PRs' runs has no `review` for this PR: MISSING,
 # which the queue waits on.
+review_runs_unreadable=" "
 for n in $(q -r --arg r "$READY_LABEL" '.[] | select((.isDraft | not) or labelled($r))
              | select(any(.statusCheckRollup[]?; (.name // .context) == "review")) | .number' <<<"$prs"); do
   head=$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .headRefOid' <<<"$prs")
   if ! runs=$(review_check_runs "$head"); then
+    review_runs_unreadable="$review_runs_unreadable$n "
     log "#$n review runs on ${head:0:8} could not be read; its review reads as the most blocking entry there, else pending"
     prs=$(jq --argjson n "$n" '
       def bad: ((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
@@ -1388,6 +1390,16 @@ while read -r labelled_at n head; do
   if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
     notify "$n" parked "$head" "skipped: $(q -r 'parked | map(.name // .context) | unique | join(", ")' <<<"$pr") is waiting for approval (ACTION_REQUIRED). A re-run does not clear it; see the check's details."
+    # A missing second model family on a sensitive PR also reports review=ACTION_REQUIRED;
+    # mirror step 0 by requesting shared-host review once unless explicitly held
+    # or the per-PR review runs lookup itself failed this tick.
+    if [[ "$review_runs_unreadable" != *" $n "* ]] \
+       && q -e 'any(parked[]; (.name // .context) == "review")' <<<"$pr" >/dev/null \
+       && ! q -e --arg a "$REVIEW_REQUEST_LABEL" --arg h "$REVIEW_HOLD_LABEL" 'labelled($a) or labelled($h)' <<<"$pr" >/dev/null; then
+      log "#$n queued with review=ACTION_REQUIRED; requesting review via $REVIEW_REQUEST_LABEL"
+      act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \
+        || log "#$n could not be labelled $REVIEW_REQUEST_LABEL; retried next tick"
+    fi
     continue
   fi
 
@@ -1465,13 +1477,13 @@ while read -r labelled_at n head; do
       *)
         log "#$n: $unmet (must pass before arming); skipped"
         notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
-        # Mirror step 0: when a queued PR is held on a missing or incomplete
-        # review (e.g. a base merge reset an auth-path PR to NEUTRAL), ask the
+        # Mirror step 0: when a queued PR is held on an unreviewed `review`
+        # check (e.g. a base merge reset an auth-path PR to NEUTRAL), ask the
         # shared review sweep for it once unless explicitly held. Skip when the
         # policy or diff itself could not be read (transient API error).
         case " $unmet" in
           *"could not be read"*|*"could not be checked"*) ;;
-          *review=NEUTRAL*|*review=ACTION_REQUIRED*)
+          *review=NEUTRAL*)
             if ! q -e --arg a "$REVIEW_REQUEST_LABEL" --arg h "$REVIEW_HOLD_LABEL" 'labelled($a) or labelled($h)' <<<"$pr" >/dev/null; then
               log "#$n queued and waiting on review; requesting review via $REVIEW_REQUEST_LABEL"
               act gh pr edit "$n" -R "$REPO" --add-label "$REVIEW_REQUEST_LABEL" \

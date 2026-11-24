@@ -5481,6 +5481,13 @@ def test_sensitive_followup_kept_when_authors_unknown_or_budget_exhausted(repo, 
     assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
     assert len(seen) == 1 and seen[0] is not None
 
+    # Case 3: operator waiver covers the second family -> keep follow-up instead of burning a cycle.
+    seen.clear()
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    monkeypatch.setattr(rg, 'waiver_reason_for', lambda *a: 'waived by operator')
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert len(seen) == 1 and seen[0] is not None
+
 
 def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):
     comments, fix = reviewed_followup

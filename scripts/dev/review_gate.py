@@ -3453,7 +3453,9 @@ def cmd_review(args) -> int:
                         if (req_sensitive and req_family and req_authors
                                 and req_family not in req_authors
                                 and len(anchor_independent) < 2
-                                and req_family not in anchor_independent):
+                                and req_family not in anchor_independent
+                                and not waiver_reason_for(comments, key, changed, req_sensitive,
+                                                          anchor_families, args.base, head, req_authors)):
                             try:
                                 pre_rounds = review_budget(pr_rounds(repo, pr, key, head, comments), pr, comments)
                             except (ValueError, OSError, subprocess.SubprocessError):

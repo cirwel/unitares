@@ -984,8 +984,11 @@ def check_merged_skills(root: str, projects_root: str, base_ref: str) -> int:
         return rc
 
     if _git_bytes(root, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}") is None:
-        print(f"  [{YELLOW}WARN{NC}] merged freshness check skipped: ref {base_ref!r} is unavailable")
-        return 0
+        print(
+            f"  [{RED}ERROR{NC}] merged freshness check unavailable: ref {base_ref!r} could not be resolved",
+            file=sys.stderr,
+        )
+        return 2
 
     head_tree_bytes = _git_bytes(root, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
     merge_proc = subprocess.run(

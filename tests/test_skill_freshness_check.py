@@ -1246,3 +1246,14 @@ def test_merged_with_fails_closed_when_git_merge_tree_unsupported(tmp_path: Path
     rc = mod.check_merged_skills(str(tmp_path), str(tmp_path), "origin/master")
     assert rc == 2
     assert "needs git 2.38+" in capsys.readouterr().err
+
+
+def test_merged_with_fails_closed_when_ref_unresolvable(tmp_path: Path, monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("_check_freshness", CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "check_skills", lambda *a: 0)
+    monkeypatch.setattr(mod, "_git_bytes", lambda *a: None)
+    rc = mod.check_merged_skills(str(tmp_path), str(tmp_path), "origin/typo-ref")
+    assert rc == 2
+    assert "could not be resolved" in capsys.readouterr().err

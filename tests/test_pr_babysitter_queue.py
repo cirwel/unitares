@@ -2372,7 +2372,10 @@ def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs,
     (tmp_path / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
                       PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == ([_arm(1, "aaa")] if armed else [])
+    expected = [_arm(1, "aaa")] if armed else (
+        ["pr edit 1 -R o/r --add-label review-requested"] if why == "ACTION_REQUIRED" else []
+    )
+    assert calls == expected
     if why:
         assert why in out
     if why and "MISSING" in why:
@@ -2504,4 +2507,17 @@ def test_queued_unreviewed_pr_respects_no_auto_review_and_requests_once(tmp_path
     pr_hold = _unreviewed(1, "aaa")
     pr_hold["labels"].append({"name": "no-auto-review"})
     calls, _ = _run(tmp_path, [pr_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Queued PR with review=ACTION_REQUIRED (e.g. missing second family): requests review once.
+    pr_ar = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_ar], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+    # Respects no-auto-review on review=ACTION_REQUIRED too.
+    pr_ar_hold = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    pr_ar_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_ar_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Non-review ACTION_REQUIRED check must NOT add review-requested.
+    pr_other_ar = _pr(1, head="aaa", checks=[_check("test"), _check("deploy-approval", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_other_ar], compares={"aaa": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
     assert calls == []
