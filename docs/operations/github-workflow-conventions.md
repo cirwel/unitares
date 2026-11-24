@@ -808,12 +808,15 @@ choice to `agy`), including Claude models served by `agy` (such as
 Anthropic-family reviews). Antigravity quota cooldowns and per-diff retry
 counts are tracked per `agy` model rather than locking out all `agy` models
 when one hits its quota. Because of that, a family whose own provider is out
-can still be supplied through `agy`: when a sensitive diff lacks a family and
-no other provider of it can run, the second-family notice offers, and the
-review sweep runs, `agy` with that family's model from `AGY_FAMILY_MODELS` in
-`review_gate.py` (`gpt-oss-120b-medium` for OpenAI while Codex is down). The
-author's families are never offered, and a cooling or exhausted lane model is
-skipped. Shell
+can still be supplied through `agy`: once a sensitive diff has a passing
+review and still lacks a family that no other provider can run, the
+second-family notice offers, and the review sweep runs, `agy` with that
+family's model from `AGY_FAMILY_MODELS` in `review_gate.py`
+(`gpt-oss-120b-medium` for OpenAI while Codex is down). The first review still
+comes from the configured providers. The author's families are never offered,
+a cooling or exhausted lane model is skipped, and a family that the
+full-review cycle budget would refuse is left for an operator grant rather
+than retried on every sweep. Shell
 commands are denied. The dialectic reviewer can use Antigravity too
 (`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the orchestrator's
 environment) through its own backend, which inlines a short self-contained

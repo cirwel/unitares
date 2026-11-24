@@ -3669,6 +3669,18 @@ def agy_family_lanes(branch: str, families: set[str], authors: set[str],
     return lanes
 
 
+def budget_refuses(rounds: CodexRounds | None, family: str | None, key: str, head: str) -> bool:
+    """Whether cmd_review would refuse a required-family pass by ``family``
+    without an operator grant. A family that already took part in an earlier
+    cycle gets no missing-family exemption, so it runs only within the cycle
+    budget. The sweep asks first: a refused pass posts nothing, and would
+    otherwise hold the sweep's one-PR-per-run slot on every run."""
+    if rounds is None or rounds.unknown_history:
+        return True
+    attempted = bool(family) and any(family in cycle.families for cycle in rounds.cycles)
+    return attempted and rounds.exhausted(rounds.can_join(head, key, family), key, head)
+
+
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
                        passed_by: str | None = None, auto: bool = True,
                        passed_family: str | None = None) -> int:
@@ -4493,11 +4505,22 @@ def cmd_sweep(args) -> int:
                                                f"origin/{base}", head, authored_by)
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], independent, comments, key))
+                    rounds = None
+                    if not waived:
+                        try:
+                            rounds = review_budget(pr_rounds(repo, n, key, head, comments), n, comments)
+                        except (ValueError, OSError, subprocess.SubprocessError):
+                            rounds = None
                     selected = next((p for p in choices if p in eligible
-                                     and not _skips_author_family(p, authored_by)), None)
+                                     and not _skips_author_family(p, authored_by)
+                                     and not budget_refuses(rounds, provider_family(p), key, head)), None)
                     lanes = ([] if waived or selected or "antigravity" not in choices else
-                             agy_family_lanes(p["headRefName"], independent, authored_by,
-                                              comments, key))
+                             [m for m in agy_family_lanes(p["headRefName"], independent, authored_by,
+                                                          comments, key)
+                              if not budget_refuses(rounds, model_family(m), key, head)])
+                    held = ([] if waived else
+                            [f for f in eligible_families(authored_by, independent)
+                             if budget_refuses(rounds, f, key, head)])
                     if selected:
                         reviewer = selected
                         required_family = True
@@ -4506,6 +4529,10 @@ def cmd_sweep(args) -> int:
                         required_family = True
                     elif waived:
                         print(f"[sweep] PR #{n}: second family covered by operator waiver")
+                    elif held:
+                        print(f"[sweep] PR #{n}: full-review cycle budget exhausted for "
+                              f"{', '.join(held)}; another cycle needs --authorize-full-review "
+                              "or a cycle grant")
                     else:
                         print(f"[sweep] PR #{n}: configured reviewers cannot supply the required family; "
                               "coverage remains incomplete")
@@ -4552,6 +4579,10 @@ def cmd_sweep(args) -> int:
             command += ["--reviewer", reviewer, "--fresh"]
         if lane_model or getattr(args, "agy_model", None):
             command += ["--agy-model", lane_model or args.agy_model]
+        if lane_model:
+            # A lane the sweep chose is not an explicit retry: a cooldown or
+            # retry exhaustion that lands after selection still stops it.
+            command += ["--respect-provider-cooldown"]
         # The chosen provider is explicit even without a CLI flag. Preserve
         # the optional native route for a first Codex pass; --reviewer pins a
         # local attempt, which the missing-family pass deliberately requests.
