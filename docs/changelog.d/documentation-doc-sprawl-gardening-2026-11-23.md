@@ -1,0 +1,1 @@
+- **docs:** garden documentation sprawl — re-read proposal dispositions (`15` proposals archived out of `active/`, with a compatibility locator kept at `active/open-decisions-packet-v0.md`), archive superseded ontology/operations audits, index unlisted docs and evaluation directories, and archive pre-`3.0.0` changelog history into `docs/releases/archive/CHANGELOG-pre-3.0.md`.

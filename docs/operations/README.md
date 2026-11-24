@@ -17,6 +17,8 @@ or [User Manual](../manual/README.md).
 
 - [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — server, SDK, container, and
   deployment release checklist.
+- [`homebrew-release-sync.md`](homebrew-release-sync.md) — Homebrew tap release
+  surface, verification, and acceptance steps.
 - [`deployment-env-overlay.md`](deployment-env-overlay.md) — external reviewed
   environment configuration required by the managed MCP deploy.
 - [`deployment-inventory.md`](deployment-inventory.md) — the explicit,
@@ -53,6 +55,9 @@ or [User Manual](../manual/README.md).
 - [`agent-orchestrator-idempotency.md`](agent-orchestrator-idempotency.md) —
   durable PostgreSQL spawn idempotency (`Idempotency-Key` on `POST /v1/agents`)
   and recovery for the BEAM agent orchestrator.
+- [`agent-orchestrator-build-lane.md`](agent-orchestrator-build-lane.md) —
+  unattended `build.claude` launch profile and scoped worktree lane for
+  commissioning work via the agent orchestrator.
 - [`effect-custody-recheck.md`](effect-custody-recheck.md) — file-write custody
   admission, revocation, and recovery against lease-plane state.
 - [`dialectic-resolution-effects.md`](dialectic-resolution-effects.md) —
@@ -90,15 +95,9 @@ or [User Manual](../manual/README.md).
   — historical measurement record, superseded for current lift claims.
 - [`self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)
   — dated verdict-provenance worked example with an inline correction.
-- [`public-presentation-audit-2026-09-10.md`](public-presentation-audit-2026-09-10.md)
-  — *point-in-time audit (`d97a958c`, 2026-09-10):* public positioning,
-  package/MCP metadata, and Glama artifacts.
 - [`tool-surface-audit-2026-09-12.md`](tool-surface-audit-2026-09-12.md) —
   *point-in-time audit (`be117c2`, 2026-09-12):* MCP tool registration,
   dispatch, wire catalog, and introspection audit.
-- [`bounded-fix-loop-readiness.md`](bounded-fix-loop-readiness.md) —
-  *point-in-time readiness audit (2026-10-14):* bounded defect-discovery and
-  reviewed-fix loop over existing workflows.
 - [`resident-validation-cohort.md`](resident-validation-cohort.md) — experimental
   resident validation tick contract and its local supervised canary invocation
   (`resident-validation-supervised-invocation.md` is now a locator).
@@ -113,8 +112,9 @@ or [User Manual](../manual/README.md).
   merge-automation plan, the deferred KG lineage dashboard handoff, the
   2026-07-04 consumer UX report, the 2026-04-10 data dictionary (`DATA_NOTES.md`;
   for the current schema read `db/postgres/schema.sql` and
-  [`database_architecture.md`](database_architecture.md)), and the 2026-06-14
-  test-suite triage.
+  [`database_architecture.md`](database_architecture.md)), the 2026-06-14
+  test-suite triage, the 2026-09-10 public-presentation audit, and the
+  2026-10-14 bounded fix-loop readiness audit.
 
 The [top-level documentation index](../README.md) owns audience routing. This
 file owns the inventory of operator-internal documents.

@@ -100,18 +100,6 @@ than a freeze: a change lands once its PR records the instrument-change time
   ([#1606](https://github.com/cirwel/unitares/issues/1606)).
 - Maintain and test the compatibility map for the server, SDK, governance
   plugin, and host adapters.
-- Submit the NeMo Relay integration upstream as a NeMo Agent Toolkit plugin
-  package, once the cohort protocol carries the clarification that submission
-  owes it; run one harness side by side under the Relay path and the existing
-  hook chain against the same server; and answer the execute-plane design read,
-  [`proposals/active/execute-plane-design-read-v0.md`](proposals/active/execute-plane-design-read-v0.md),
-  written 2026-09-17 against conditions pre-registered before its analysis. It
-  decides nothing and asks one question back: whether row 3's three options are
-  still the right three, given that the evidence supports a composition none of
-  them expresses. All three follow from the 2026-09-17 decision in
-  [`proposals/active/relay-substrate-relayering-v0.md`](proposals/active/relay-substrate-relayering-v0.md)
-  and report at its 2026-11-03 renew-or-stop checkpoint. None carries an
-  efficacy claim.
 
 ## Recently shipped (see releases and the changelog for detail)
 
@@ -127,6 +115,16 @@ than a freeze: a change lands once its PR records the instrument-change time
 
 ## Later — only after independent evidence
 
+- **NeMo Relay upstream plugin submission, side-by-side harness run, and
+  execute-plane follow-up: parked** after the 2026-11-03 renew-or-stop
+  checkpoint in
+  [`proposals/archive/relay-substrate-relayering-v0.md`](proposals/archive/relay-substrate-relayering-v0.md)
+  passed untouched (the optional NeMo Relay exporter/gate shipped as an SDK
+  extra; the execute-plane comparative read in
+  [`proposals/archive/execute-plane-design-read-v0.md`](proposals/archive/execute-plane-design-read-v0.md)
+  is complete and carries no implementation authority or efficacy claim). Reopen
+  only with a concrete cohort or external-runtime need.
+
 - **Multi-principal trust, including multi-operator and mutually
   distrustful-governor experiments: not scheduled without external funding or
   an outside principal** (decided 2026-09-25; funding condition added
@@ -141,7 +139,7 @@ than a freeze: a change lands once its PR records the instrument-change time
   the multi-principal testbed is awarded, or an outside principal commits to
   take part in it. On unfunded single-operator time the evidence path would
   be outreach, not engineering; outreach is not scheduled either. See the
-  [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+  [decision record](proposals/archive/federation-trust-decisions-2026-09-25.md)
   (and its 2026-10-19 addendum)
   and [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
 - Broader policy enforcement or efficacy claims.

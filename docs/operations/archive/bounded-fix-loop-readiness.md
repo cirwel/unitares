@@ -82,7 +82,7 @@ grant itself authority, or select a favorable outcome definition.
 
 ## Registered adaptive-versus-fixed evaluation
 
-[`self-improvement-loop-evaluation-v0.md`](../proposals/registered/self-improvement-loop-evaluation-v0.md)
+[`self-improvement-loop-evaluation-v0.md`](../../proposals/registered/self-improvement-loop-evaluation-v0.md)
 registered at the merge of #1806, `c68d699790d765403ee774b95f1cbda0ca12d6b3`,
 on 2026-08-22. Its original DRAFT header is historical. Registration is not
 enrollment; no enrollment is recorded in the registry at this audit.

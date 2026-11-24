@@ -17,7 +17,7 @@ feasibility passes) whose material findings are incorporated and disclosed
 below. **The verdict counts only on
 raw observations recorded after `2026-07-02T18:00:00Z`** — an instant later
 than every piece of data consulted during design, including the review's.
-Companion to `docs/proposals/active/eisv-grounding-next-move-v0.md` (step 4);
+Companion to `docs/proposals/archive/eisv-grounding-next-move-v0.md` (step 4);
 successor to the v1 operationalization in
 `scripts/analysis/eisv_self_predictability.py`.
 

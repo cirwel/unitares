@@ -12,7 +12,7 @@ honest confidence reporting its best strategy, rather than only harmless.
 KG finding `2026-10-01T05:54:28.762573+00:00`; the outcome-binding assurance
 case ([`outcome-binding-v0.md`](../../evaluations/assurance-cases/outcome-binding-v0.md));
 the fixture-conflation decision packet
-([`outcome-fixture-conflation-decision-packet-v0.md`](../archive/outcome-fixture-conflation-decision-packet-v0.md));
+([`outcome-fixture-conflation-decision-packet-v0.md`](outcome-fixture-conflation-decision-packet-v0.md));
 the outcome-grounding stop rule
 ([`eisv-outcome-grounding-stop-rule-v0.md`](../registered/eisv-outcome-grounding-stop-rule-v0.md), #1425).
 
