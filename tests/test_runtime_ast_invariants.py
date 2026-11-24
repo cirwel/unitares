@@ -322,6 +322,84 @@ def test_initial_baseline_passes_base_when_absent_at_ref_and_files_mode_ignores_
         "P001\tsrc/mod.py\t1\n",
     )
     assert guard.main(["--root", str(tmp_path), "--base", "HEAD"]) == 0
+    # --base with an unresolvable git ref must fail rather than skip the ratchet
+    assert guard.main(["--root", str(tmp_path), "--base", "nonexistent-ref-xyz"]) == 1
     # --files mode checks explicit files directly without baseline exemptions
     assert guard.main(["--root", str(tmp_path), "--files", str(f)]) == 1
+
+
+def test_p004_bounded_nested_closure_and_module_scoped_call_resolution(tmp_path: Path) -> None:
+    # Nested closure passed only to asyncio.wait_for bounds its leaf helper
+    _write(
+        tmp_path,
+        "src/mcp_handlers/nested_ok.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
+
+async def _leaf(k: str):
+    r = await get_redis()
+    return await r.get(k) if r else None
+
+async def handler(k: str):
+    async def _run():
+        return await _leaf(k)
+    return await asyncio.wait_for(_run(), timeout=0.5)
+""",
+    )
+    assert guard.scan_paths(tmp_path) == []
+
+    # Same-named helper in a second module with no callers does NOT inherit
+    # boundedness, and passing a helper as an unguarded callback or attribute
+    # call revokes caller-boundedness.
+    _write(
+        tmp_path,
+        "src/mcp_handlers/other_mod.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
+
+async def _leaf(k: str):
+    r = await get_redis()
+    return await r.get(k) if r else None
+
+async def _cb_helper(k: str):
+    r = await get_redis()
+    return await r.get(k) if r else None
+
+def register(fn):
+    return fn
+
+async def caller(k: str):
+    register(_cb_helper)
+    return await asyncio.wait_for(_cb_helper(k), timeout=0.5)
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/mcp_handlers/other_mod.py", "P004", 6),
+        ("src/mcp_handlers/other_mod.py", "P004", 10),
+    ]
+
+
+def test_pragmas_with_comma_spaces_reasonless_anywhere_and_syntax_errors(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/pragma_edge.py",
+        """\
+import asyncio
+
+# invariant-allow: P001
+async def ok(coro):
+    asyncio.create_task(coro())  # invariant-allow: P001, P004 intentional bootstrap fallback
+""",
+    )
+    _write(tmp_path, "src/broken.py", "def broken(:\n    pass\n")
+
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/pragma_edge.py", "ALLOW_NO_REASON", 3),
+        ("src/broken.py", "PARSE_ERROR", 1),
+    ]
+
 

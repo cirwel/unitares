@@ -25,15 +25,19 @@ inference. Enforces three high-signal runtime invariants:
 - **P004 (unguarded raw Redis await in MCP handlers)**: ``await`` / ``async
   for`` / ``async with`` on a raw async Redis client (from
   ``src.cache.redis_client.get_redis``) inside ``src/mcp_handlers/`` that is
-  neither wrapped in ``asyncio.wait_for(...)`` nor confined to a helper whose
-  call sites are all bounded by ``asyncio.wait_for(...)`` or backgrounded via
+  neither wrapped in ``asyncio.wait_for(...)`` nor confined to a non-entrypoint
+  helper whose statically resolved intra-package call/reference sites are all
+  bounded by ``asyncio.wait_for(...)`` or backgrounded via
   ``create_tracked_task`` / ``_supervised_create_task``. (``asyncpg`` uses
   ``ExecutorPool`` and ``SessionCache`` bounds its own calls; raw Redis clients
   do not.)
 
 Inline escape hatch (requires a non-empty reason):
     ``# invariant-allow: P001 reason explaining why this site is safe``
-A reasonless ``# invariant-allow: P001`` is rejected.
+    ``# invariant-allow: P001, P004 reason explaining why this site is safe``
+Any reasonless ``# invariant-allow: ...`` comment anywhere in a scanned file is
+reported as ``ALLOW_NO_REASON``. Unparseable Python files fail with
+``PARSE_ERROR`` rather than being skipped silently.
 
 Ratchet mode (default, matching ``check_component_boundaries.py``):
 - Counts violations per ``(rule, file)`` against
@@ -41,8 +45,8 @@ Ratchet mode (default, matching ``check_component_boundaries.py``):
 - Any new ``(rule, file)`` pair or count increase fails.
 - Any count decrease requires ``--lower`` in the same change so fixed sites
   cannot silently regress.
-- ``--base REF`` verifies the baseline file itself did not add or raise entries
-  relative to ``REF``.
+- ``--base REF`` verifies ``REF`` resolves to a commit and checks that the
+  baseline file did not add or raise entries relative to ``REF``.
 - ``--files PATH ...`` checks specific files directly with zero baseline
   allowance (for targeted/edit-time checks).
 """
@@ -64,9 +68,11 @@ BASELINE_REL = Path("scripts") / "dev" / "runtime_ast_invariants_baseline.txt"
 SRC_REL = Path("src")
 MCP_HANDLERS_PREFIX = "src/mcp_handlers/"
 
-RULES = ("P001", "P003", "P004", "ALLOW_NO_REASON")
+RULES = ("P001", "P003", "P004", "ALLOW_NO_REASON", "PARSE_ERROR")
 
-_ALLOW_RE = re.compile(r"#\s*invariant-allow:\s*([A-Za-z0-9_,-]+)(.*)$")
+_ALLOW_RE = re.compile(
+    r"#\s*invariant-allow:\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)(.*)$"
+)
 
 _TRACKED_TASK_HELPERS = frozenset({
     "create_tracked_task",
@@ -83,27 +89,54 @@ class Violation:
     message: str
 
 
-def _parse_allow_pragmas(source_lines: list[str], start_line: int, end_line: int) -> tuple[set[str], list[int]]:
-    """Return ``(allowed_rules, reasonless_lines)`` across ``[start_line, end_line]`` (1-based)."""
-    allowed: set[str] = set()
-    reasonless: list[int] = []
-    lo = max(1, start_line)
-    hi = min(len(source_lines), max(start_line, end_line))
-    for ln in range(lo, hi + 1):
-        m = _ALLOW_RE.search(source_lines[ln - 1])
-        if not m:
+def _parse_allow_line(line_text: str) -> tuple[set[str], bool] | None:
+    """Parse ``# invariant-allow: ...`` on a single line.
+
+    Returns ``None`` if absent, else ``(allowed_rules, has_non_empty_reason)``.
+    """
+    m = _ALLOW_RE.search(line_text)
+    if not m:
+        return None
+    raw_rules, tail = m.group(1), m.group(2).strip()
+    cleaned_reason = re.sub(r"^(?:[-:—]+|\breason\s*=\s*)", "", tail).strip()
+    if not cleaned_reason:
+        return set(), False
+    allowed = {tok.strip().upper() for tok in raw_rules.split(",") if tok.strip()}
+    return allowed, True
+
+
+def _collect_file_pragmas(
+    rel_path: str, source_lines: list[str]
+) -> tuple[dict[int, set[str]], list[Violation]]:
+    """Scan every line in ``source_lines`` once for ``# invariant-allow:``."""
+    allowed_by_line: dict[int, set[str]] = {}
+    pragma_violations: list[Violation] = []
+    for lineno, line_text in enumerate(source_lines, start=1):
+        parsed = _parse_allow_line(line_text)
+        if parsed is None:
             continue
-        raw_rules, tail = m.group(1), m.group(2).strip()
-        # Strip optional leading punctuation like ":" or "—" or "reason="
-        cleaned_reason = re.sub(r"^(?:[-:—]+|\breason\s*=\s*)", "", tail).strip()
-        if not cleaned_reason:
-            reasonless.append(ln)
-            continue
-        for token in raw_rules.split(","):
-            tok = token.strip().upper()
-            if tok:
-                allowed.add(tok)
-    return allowed, reasonless
+        rules, has_reason = parsed
+        if not has_reason:
+            pragma_violations.append(
+                Violation(
+                    "ALLOW_NO_REASON",
+                    rel_path,
+                    lineno,
+                    "invariant-allow pragma must include a non-empty reason",
+                )
+            )
+        else:
+            allowed_by_line[lineno] = rules
+    return allowed_by_line, pragma_violations
+
+
+def _is_rule_allowed(allowed_by_line: dict[int, set[str]], node: ast.AST, rule: str) -> bool:
+    start = getattr(node, "lineno", 1)
+    end = getattr(node, "end_lineno", start) or start
+    for ln in range(start, max(start, end) + 1):
+        if rule in allowed_by_line.get(ln, ()):
+            return True
+    return False
 
 
 def _call_func_name(call: ast.Call) -> tuple[str | None, str | None]:
@@ -174,10 +207,28 @@ def _has_load_state_false(call: ast.Call) -> bool:
     return False
 
 
+def _resolve_import_rel_path(from_rel_path: str, module: str | None, level: int) -> str | None:
+    """Resolve an ``ImportFrom`` target within ``src/mcp_handlers/`` to ``rel_path``."""
+    if level > 0:
+        parts = from_rel_path.split("/")[:-1]
+        up = level - 1
+        if up > len(parts):
+            return None
+        base_parts = parts[: len(parts) - up]
+        if module:
+            base_parts.extend(module.split("."))
+    else:
+        if not module:
+            return None
+        base_parts = module.split(".")
+    candidate = "/".join(base_parts) + ".py"
+    return candidate if candidate.startswith(MCP_HANDLERS_PREFIX) else None
+
+
 class _ModuleImports:
     """Import alias table for one module."""
 
-    def __init__(self, tree: ast.Module) -> None:
+    def __init__(self, tree: ast.Module, rel_path: str) -> None:
         self.task_spawn_aliases: set[str] = set(_TASK_SPAWN_NAMES)
         self.tracked_task_aliases: set[str] = set(_TRACKED_TASK_HELPERS)
         self.taskgroup_aliases: set[str] = {"TaskGroup"}
@@ -186,10 +237,15 @@ class _ModuleImports:
         self.monitor_modules: set[str] = set()
         self.raw_redis_getters: set[str] = set()
         self.raw_redis_modules: set[str] = set()
+        # local_name -> (target_rel_path, exported_func_name) for handler imports
+        self.handler_func_imports: dict[str, tuple[str, str]] = {}
+        # local_alias -> target_rel_path for handler module imports (`from . import persistence`)
+        self.handler_mod_imports: dict[str, str] = {}
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
+                resolved_mod_rel = _resolve_import_rel_path(rel_path, node.module, node.level)
                 for alias in node.names:
                     local = alias.asname or alias.name
                     if alias.name in _TASK_SPAWN_NAMES:
@@ -202,10 +258,14 @@ class _ModuleImports:
                         self.wait_for_aliases.add(local)
                     if alias.name == "UNITARESMonitor":
                         self.monitor_names.add(local)
-                    if mod.endswith("governance_monitor") and alias.name != "UNITARESMonitor":
-                        pass
                     if mod.endswith("redis_client") and alias.name == "get_redis":
                         self.raw_redis_getters.add(local)
+                    if resolved_mod_rel is not None:
+                        self.handler_func_imports[local] = (resolved_mod_rel, alias.name)
+                    elif node.level > 0 and not node.module:
+                        sub_rel = _resolve_import_rel_path(rel_path, alias.name, node.level)
+                        if sub_rel is not None:
+                            self.handler_mod_imports[local] = sub_rel
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     local = alias.asname or alias.name.split(".")[-1]
@@ -213,35 +273,23 @@ class _ModuleImports:
                         self.monitor_modules.add(local)
                     if alias.name.endswith("redis_client"):
                         self.raw_redis_modules.add(local)
+                    if alias.name.startswith("src.mcp_handlers."):
+                        cand = alias.name.replace(".", "/") + ".py"
+                        self.handler_mod_imports[local] = cand
 
 
 def _check_p001_and_p003(
     tree: ast.Module,
     rel_path: str,
-    lines: list[str],
+    allowed_by_line: dict[int, set[str]],
     imports: _ModuleImports,
 ) -> list[Violation]:
     violations: list[Violation] = []
-    reasonless_reported: set[int] = set()
 
     def record_if_not_allowed(rule: str, node: ast.AST, msg: str) -> None:
-        start = getattr(node, "lineno", 1)
-        end = getattr(node, "end_lineno", start) or start
-        allowed, reasonless = _parse_allow_pragmas(lines, start, end)
-        for ln in reasonless:
-            if ln not in reasonless_reported:
-                reasonless_reported.add(ln)
-                violations.append(
-                    Violation(
-                        "ALLOW_NO_REASON",
-                        rel_path,
-                        ln,
-                        "invariant-allow pragma must include a non-empty reason",
-                    )
-                )
-        if rule in allowed:
+        if _is_rule_allowed(allowed_by_line, node, rule):
             return
-        violations.append(Violation(rule, rel_path, start, msg))
+        violations.append(Violation(rule, rel_path, getattr(node, "lineno", 1), msg))
 
     def is_untracked_spawn_call(call: ast.Call, active_taskgroups: set[str]) -> str | None:
         if _is_tracked_task_call(call, imports.tracked_task_aliases):
@@ -285,7 +333,6 @@ def _check_p001_and_p003(
                     extra_tgs.add(tg)
             active_taskgroups = frozenset(extra_tgs)
 
-        # P001: discarded task return value at statement boundary
         discarded_call: ast.Call | None = None
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             discarded_call = node.value
@@ -314,7 +361,6 @@ def _check_p001_and_p003(
                     f"discarded {spawn_desc}(...) return value; use create_tracked_task or store a strong Task reference",
                 )
 
-        # P003: UNITARESMonitor(...) outside get_or_create_monitor without load_state=False
         if isinstance(node, ast.Call) and is_monitor_ctor(node):
             if not in_monitor_factory and not in_main_guard and not _has_load_state_false(node):
                 record_if_not_allowed(
@@ -355,7 +401,6 @@ def _collect_p004_module_facts(
             async_funcs[node.name] = node
 
     raw_getters = set(imports.raw_redis_getters)
-    # Detect thin local wrappers like `async def _get_redis(): return await get_redis()`
     changed = True
     while changed:
         changed = False
@@ -384,31 +429,85 @@ def _collect_p004_module_facts(
     return async_funcs, raw_getters
 
 
-def _find_guarded_helpers_in_tree(
-    tree: ast.Module,
-    imports: _ModuleImports,
-) -> tuple[set[str], set[str]]:
-    """Return ``(always_guarded_callees, unguarded_callees)`` across ``tree``.
+HandlerKey = tuple[str, str]  # (rel_path, func_name)
 
-    A call ``foo(...)`` is guarded at its call site if it sits inside the first
-    argument of ``asyncio.wait_for(...)`` or ``create_tracked_task(...)`` /
-    ``_supervised_create_task(...)``, or inside a nested ``async def`` whose
-    only invocation in the enclosing function is bounded by ``wait_for``.
+
+def _resolve_callee_targets(
+    rel_path: str,
+    recv: str | None,
+    name: str | None,
+    imports: _ModuleImports,
+    defined_by_module: dict[str, set[str]],
+    all_by_bare_name: dict[str, set[HandlerKey]],
+) -> tuple[set[HandlerKey], bool]:
+    """Resolve a call/reference to ``(target_keys, exact_resolution)``."""
+    if not name:
+        return set(), True
+    if recv is None:
+        if name in defined_by_module.get(rel_path, ()):
+            return {(rel_path, name)}, True
+        if name in imports.handler_func_imports:
+            target = imports.handler_func_imports[name]
+            if target[1] in defined_by_module.get(target[0], ()):
+                return {target}, True
+        return set(), True
+    if recv in imports.handler_mod_imports:
+        t_rel = imports.handler_mod_imports[recv]
+        if name in defined_by_module.get(t_rel, ()):
+            return {(t_rel, name)}, True
+        return set(), True
+    # Dynamic/unknown attribute receiver (e.g. `self._h()` or `obj._h()`):
+    # conservatively mark every matching helper name across handler modules as
+    # potentially called unguarded so an unguarded attribute call cannot slip past.
+    return set(all_by_bare_name.get(name, ())), False
+
+
+def _scan_block_references(
+    stmts: list[ast.stmt],
+    *,
+    rel_path: str,
+    imports: _ModuleImports,
+    defined_by_module: dict[str, set[str]],
+    all_by_bare_name: dict[str, set[HandlerKey]],
+    initial_bounded: bool = False,
+) -> tuple[set[HandlerKey], set[HandlerKey], dict[str, bool]]:
+    """Single top-down pass over ``stmts`` (never double-visiting nested defs).
+
+    Returns ``(guarded_targets, unguarded_targets, nested_async_is_bounded)``:
+    - Calls inside the first arg of ``asyncio.wait_for(...)`` or
+      ``create_tracked_task(...)`` count as guarded (when resolved unambiguously).
+    - Attribute calls on unknown receivers and bare callback references
+      (e.g. ``schedule(_helper)``) count as unguarded references so a helper
+      passed around as a value or invoked via ``obj._helper()`` cannot inherit
+      a false caller-bounded exemption.
+    - Nested ``async def`` closures (e.g. ``async def _run(): return await _leaf()``
+      passed to ``await asyncio.wait_for(_run(), timeout=...)``) inherit
+      boundedness when every call/reference to the closure in its parent scope
+      is bounded.
     """
-    guarded_calls: set[str] = set()
-    unguarded_calls: set[str] = set()
+    guarded: set[HandlerKey] = set()
+    unguarded: set[HandlerKey] = set()
+    local_nested_async: dict[str, ast.AsyncFunctionDef] = {}
+    local_nested_sync: dict[str, ast.FunctionDef] = {}
+    nested_guarded_names: set[str] = set()
+    nested_unguarded_names: set[str] = set()
+
+    for stmt in stmts:
+        if isinstance(stmt, ast.AsyncFunctionDef):
+            local_nested_async[stmt.name] = stmt
+        elif isinstance(stmt, ast.FunctionDef):
+            local_nested_sync[stmt.name] = stmt
+
+    nested_names = set(local_nested_async) | set(local_nested_sync)
 
     def walk_expr(node: ast.AST, *, bounded: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return
+
         if isinstance(node, ast.Call):
-            if _is_wait_for_call(node, imports.wait_for_aliases):
-                if node.args:
-                    walk_expr(node.args[0], bounded=True)
-                for arg in node.args[1:]:
-                    walk_expr(arg, bounded=bounded)
-                for kw in node.keywords:
-                    walk_expr(kw.value, bounded=bounded)
-                return
-            if _is_tracked_task_call(node, imports.tracked_task_aliases):
+            if _is_wait_for_call(node, imports.wait_for_aliases) or _is_tracked_task_call(
+                node, imports.tracked_task_aliases
+            ):
                 if node.args:
                     walk_expr(node.args[0], bounded=True)
                 for arg in node.args[1:]:
@@ -417,56 +516,106 @@ def _find_guarded_helpers_in_tree(
                     walk_expr(kw.value, bounded=bounded)
                 return
 
-            recv, name = _call_func_name(node)
-            if recv is None and name:
+            recv, cname = _call_func_name(node)
+            if recv is None and cname in nested_names:
                 if bounded:
-                    guarded_calls.add(name)
+                    nested_guarded_names.add(cname)
                 else:
-                    unguarded_calls.add(name)
+                    nested_unguarded_names.add(cname)
+            else:
+                targets, exact = _resolve_callee_targets(
+                    rel_path, recv, cname, imports, defined_by_module, all_by_bare_name
+                )
+                if bounded and exact:
+                    guarded.update(targets)
+                else:
+                    unguarded.update(targets)
+
+            # Walk arguments (skipping node.func when it is a bare Name so the
+            # callee identifier itself isn't misread as a callback reference).
+            if not isinstance(node.func, ast.Name):
+                walk_expr(node.func, bounded=bounded)
+            for arg in node.args:
+                walk_expr(arg, bounded=bounded)
+            for kw in node.keywords:
+                walk_expr(kw.value, bounded=bounded)
+            return
+
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in nested_names:
+                nested_unguarded_names.add(node.id)
+            else:
+                targets, _ = _resolve_callee_targets(
+                    rel_path, None, node.id, imports, defined_by_module, all_by_bare_name
+                )
+                unguarded.update(targets)
+            return
+
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            recv = node.value.id if isinstance(node.value, ast.Name) else "<expr>"
+            targets, _ = _resolve_callee_targets(
+                rel_path, recv, node.attr, imports, defined_by_module, all_by_bare_name
+            )
+            unguarded.update(targets)
+            walk_expr(node.value, bounded=bounded)
+            return
 
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
             walk_expr(child, bounded=bounded)
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Check nested closures bounded via wait_for(_inner(), ...)
-            nested_async: dict[str, ast.AsyncFunctionDef] = {}
-            for stmt in getattr(node, "body", []):
-                if isinstance(stmt, ast.AsyncFunctionDef):
-                    nested_async[stmt.name] = stmt
-            for stmt in getattr(node, "body", []):
-                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                walk_expr(stmt, bounded=False)
-            # Propagate boundedness into nested async closures whose calls are all guarded
-            for nname, nfn in nested_async.items():
-                is_n_bounded = (nname in guarded_calls) and (nname not in unguarded_calls)
-                for stmt in nfn.body:
-                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        continue
-                    walk_expr(stmt, bounded=is_n_bounded)
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        walk_expr(stmt, bounded=initial_bounded)
 
-    return guarded_calls, unguarded_calls
+    nested_bounded_map: dict[str, bool] = {}
+    for nname, nfn in local_nested_async.items():
+        is_b = initial_bounded or (
+            nname in nested_guarded_names and nname not in nested_unguarded_names
+        )
+        nested_bounded_map[nname] = is_b
+        cg, cu, _ = _scan_block_references(
+            nfn.body,
+            rel_path=rel_path,
+            imports=imports,
+            defined_by_module=defined_by_module,
+            all_by_bare_name=all_by_bare_name,
+            initial_bounded=is_b,
+        )
+        guarded.update(cg)
+        unguarded.update(cu)
+
+    for _sname, sfn in local_nested_sync.items():
+        cg, cu, _ = _scan_block_references(
+            sfn.body,
+            rel_path=rel_path,
+            imports=imports,
+            defined_by_module=defined_by_module,
+            all_by_bare_name=all_by_bare_name,
+            initial_bounded=False,
+        )
+        guarded.update(cg)
+        unguarded.update(cu)
+
+    return guarded, unguarded, nested_bounded_map
 
 
 def _check_p004_mcp_handlers(
-    handler_trees: list[tuple[str, ast.Module, list[str], _ModuleImports]],
+    handler_trees: list[tuple[str, ast.Module, dict[int, set[str]], _ModuleImports]],
 ) -> list[Violation]:
     """Check P004 across all parsed files under ``src/mcp_handlers/``."""
-    # Cross-file call boundedness across src/mcp_handlers/ so an imported helper
-    # like `lookup_identity_anchor` (bounded internally) vs an `_inner` helper
-    # (bounded by caller) is resolved accurately.
-    all_guarded: set[str] = set()
-    all_unguarded: set[str] = set()
-    for _rel, tree, _lines, imports in handler_trees:
-        g, u = _find_guarded_helpers_in_tree(tree, imports)
-        all_guarded |= g
-        all_unguarded |= u
+    defined_by_module: dict[str, set[str]] = {}
+    all_by_bare_name: dict[str, set[HandlerKey]] = {}
+    for rel_path, tree, _allowed, _imports in handler_trees:
+        funcs = {
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+        }
+        defined_by_module[rel_path] = funcs
+        for fname in funcs:
+            all_by_bare_name.setdefault(fname, set()).add((rel_path, fname))
 
-    # A helper is bounded by callers iff it has >=1 guarded call and 0 unguarded calls,
-    # and is not decorated with @mcp_tool / @mcp.tool (which MCP invokes directly).
     def is_mcp_entrypoint(fn: ast.AsyncFunctionDef) -> bool:
         for dec in fn.decorator_list:
             if isinstance(dec, ast.Call):
@@ -477,57 +626,90 @@ def _check_p004_mcp_handlers(
                 return True
         return False
 
-    caller_bounded_helpers: set[str] = set()
-    # Map each callee name -> set of top-level callers that invoke it outside wait_for/tracked_task
-    unguarded_callers_of: dict[str, set[str]] = {}
-    for _rel, tree, _lines, imports in handler_trees:
+    all_guarded: set[HandlerKey] = set()
+    all_unguarded: set[HandlerKey] = set()
+    unguarded_callers_of: dict[HandlerKey, set[HandlerKey | str]] = {}
+
+    for rel_path, tree, _allowed, imports in handler_trees:
+        mod_stmts: list[ast.stmt] = []
         for top in tree.body:
             if isinstance(top, ast.AsyncFunctionDef):
-                if not is_mcp_entrypoint(top) and top.name in all_guarded and top.name not in all_unguarded:
-                    caller_bounded_helpers.add(top.name)
-                _, top_unguarded = _find_guarded_helpers_in_tree(
-                    ast.Module(body=top.body, type_ignores=[]),
-                    imports,
+                g, u, _ = _scan_block_references(
+                    top.body,
+                    rel_path=rel_path,
+                    imports=imports,
+                    defined_by_module=defined_by_module,
+                    all_by_bare_name=all_by_bare_name,
+                    initial_bounded=False,
                 )
-                for callee in top_unguarded:
-                    unguarded_callers_of.setdefault(callee, set()).add(top.name)
+                all_guarded.update(g)
+                all_unguarded.update(u)
+                caller_key: HandlerKey = (rel_path, top.name)
+                for target in u:
+                    unguarded_callers_of.setdefault(target, set()).add(caller_key)
             elif isinstance(top, ast.FunctionDef):
-                _, top_unguarded = _find_guarded_helpers_in_tree(
-                    ast.Module(body=top.body, type_ignores=[]),
-                    imports,
+                g, u, _ = _scan_block_references(
+                    top.body,
+                    rel_path=rel_path,
+                    imports=imports,
+                    defined_by_module=defined_by_module,
+                    all_by_bare_name=all_by_bare_name,
+                    initial_bounded=False,
                 )
-                for callee in top_unguarded:
-                    unguarded_callers_of.setdefault(callee, set()).add(f"sync:{top.name}")
+                all_guarded.update(g)
+                all_unguarded.update(u)
+                for target in u:
+                    unguarded_callers_of.setdefault(target, set()).add(f"sync:{rel_path}:{top.name}")
             else:
-                _, top_unguarded = _find_guarded_helpers_in_tree(
-                    ast.Module(body=[top], type_ignores=[]),
-                    imports,
-                )
-                for callee in top_unguarded:
-                    unguarded_callers_of.setdefault(callee, set()).add("<module>")
+                mod_stmts.append(top)
+
+        if mod_stmts:
+            g, u, _ = _scan_block_references(
+                mod_stmts,
+                rel_path=rel_path,
+                imports=imports,
+                defined_by_module=defined_by_module,
+                all_by_bare_name=all_by_bare_name,
+                initial_bounded=False,
+            )
+            all_guarded.update(g)
+            all_unguarded.update(u)
+            for target in u:
+                unguarded_callers_of.setdefault(target, set()).add(f"module:{rel_path}")
+
+    caller_bounded_helpers: set[HandlerKey] = set()
+    entrypoints: set[HandlerKey] = set()
+    for rel_path, tree, _allowed, _imports in handler_trees:
+        for top in tree.body:
+            if isinstance(top, ast.AsyncFunctionDef):
+                key = (rel_path, top.name)
+                if is_mcp_entrypoint(top):
+                    entrypoints.add(key)
+                elif key in all_guarded and key not in all_unguarded:
+                    caller_bounded_helpers.add(key)
 
     # Propagate caller-boundedness across multi-hop helper chains in O(E)
     for _ in range(4):
         added = False
-        for _rel, tree, _lines, _imports in handler_trees:
-            for top in tree.body:
-                if not isinstance(top, ast.AsyncFunctionDef) or top.name in caller_bounded_helpers or is_mcp_entrypoint(top):
+        for rel_path, funcs in defined_by_module.items():
+            for fname in funcs:
+                key = (rel_path, fname)
+                if key in caller_bounded_helpers or key in entrypoints:
                     continue
-                callers = unguarded_callers_of.get(top.name, set())
-                has_any_caller = bool(callers) or (top.name in all_guarded)
-                if has_any_caller and callers and callers <= caller_bounded_helpers:
-                    caller_bounded_helpers.add(top.name)
+                callers = unguarded_callers_of.get(key, set())
+                if callers and all(
+                    isinstance(c, tuple) and c in caller_bounded_helpers for c in callers
+                ):
+                    caller_bounded_helpers.add(key)
                     added = True
         if not added:
             break
 
     violations: list[Violation] = []
 
-    for rel_path, tree, lines, imports in handler_trees:
+    for rel_path, tree, allowed_by_line, imports in handler_trees:
         async_funcs, module_raw_getters = _collect_p004_module_facts(tree, imports)
-        reasonless_reported: set[int] = set()
 
-        # Track parameters of local helpers that receive a raw redis client from another local function
         raw_param_map: dict[str, set[int]] = {}
         raw_vars_by_func: dict[str, set[str]] = {}
 
@@ -560,7 +742,6 @@ def _check_p004_mcp_handlers(
                             rvars.add(item.optional_vars.id)
             raw_vars_by_func[fname] = rvars
 
-        # Propagate raw-redis arguments to local helper parameters (e.g. `_helper(redis, ...)`)
         for fname, fn in async_funcs.items():
             rvars = raw_vars_by_func.get(fname, set())
             if not rvars:
@@ -580,34 +761,20 @@ def _check_p004_mcp_handlers(
                     raw_vars_by_func.setdefault(cname, set()).add(target_fn.args.args[idx].arg)
 
         def record_p004(node: ast.AST, msg: str) -> None:
-            start = getattr(node, "lineno", 1)
-            end = getattr(node, "end_lineno", start) or start
-            allowed, reasonless = _parse_allow_pragmas(lines, start, end)
-            for ln in reasonless:
-                if ln not in reasonless_reported:
-                    reasonless_reported.add(ln)
-                    violations.append(
-                        Violation(
-                            "ALLOW_NO_REASON",
-                            rel_path,
-                            ln,
-                            "invariant-allow pragma must include a non-empty reason",
-                        )
-                    )
-            if "P004" in allowed:
+            if _is_rule_allowed(allowed_by_line, node, "P004"):
                 return
-            violations.append(Violation("P004", rel_path, start, msg))
+            violations.append(Violation("P004", rel_path, getattr(node, "lineno", 1), msg))
 
         def scan_func(
             fn: ast.AsyncFunctionDef,
             *,
+            is_top_level: bool,
             inherited_raw_vars: set[str],
             enclosing_bounded: bool,
         ) -> None:
-            if fn.name in caller_bounded_helpers:
+            if is_top_level and (rel_path, fn.name) in caller_bounded_helpers:
                 enclosing_bounded = True
-            # Skip thin getter wrapper itself (`return await get_redis()`)
-            if fn.name in module_raw_getters and fn.name != "get_redis":
+            if is_top_level and fn.name in module_raw_getters and fn.name != "get_redis":
                 return
 
             local_getters = set(module_raw_getters)
@@ -617,26 +784,47 @@ def _check_p004_mcp_handlers(
                         if alias.name == "get_redis":
                             local_getters.add(alias.asname or alias.name)
 
-            rvars = set(inherited_raw_vars) | set(raw_vars_by_func.get(fn.name, set()))
+            rvars = set(inherited_raw_vars) | (
+                set(raw_vars_by_func.get(fn.name, set())) if is_top_level else set()
+            )
+            if not is_top_level:
+                for sub in fn.body:
+                    if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("redis_client"):
+                        for alias in sub.names:
+                            if alias.name == "get_redis":
+                                local_getters.add(alias.asname or alias.name)
+                for sub in ast.walk(fn):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
+                        val = sub.value
+                        if (
+                            isinstance(val, ast.Await)
+                            and isinstance(val.value, ast.Call)
+                            and _is_raw_redis_getter_call(val.value, local_getters, imports.raw_redis_modules)
+                        ):
+                            rvars.add(sub.targets[0].id)
 
-            # Detect nested closures passed to wait_for (e.g. host_availability._bounded -> _run)
-            nested_guarded, nested_unguarded = _find_guarded_helpers_in_tree(
-                ast.Module(body=fn.body, type_ignores=[]),
-                imports,
+            _, _, nested_bounded_map = _scan_block_references(
+                fn.body,
+                rel_path=rel_path,
+                imports=imports,
+                defined_by_module=defined_by_module,
+                all_by_bare_name=all_by_bare_name,
+                initial_bounded=enclosing_bounded,
             )
 
             def walk_node(node: ast.AST, *, in_wait_for: bool) -> None:
                 if isinstance(node, ast.AsyncFunctionDef):
-                    child_bounded = enclosing_bounded or (
-                        node.name in nested_guarded and node.name not in nested_unguarded
+                    child_bounded = enclosing_bounded or nested_bounded_map.get(node.name, False)
+                    scan_func(
+                        node,
+                        is_top_level=False,
+                        inherited_raw_vars=rvars,
+                        enclosing_bounded=child_bounded,
                     )
-                    # Check if closure parameter is called as `op(redis)` where `op` is a callable parameter
-                    scan_func(node, inherited_raw_vars=rvars, enclosing_bounded=child_bounded)
                     return
                 if isinstance(node, ast.FunctionDef):
                     return
 
-                # Track nested `async with redis.pipeline() as pipe:` inside statements
                 if isinstance(node, ast.AsyncWith):
                     for item in node.items:
                         if (
@@ -667,7 +855,6 @@ def _check_p004_mcp_handlers(
 
                 if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
                     call = node.value
-                    # Direct inline `(await get_redis()).get(...)`
                     if (
                         isinstance(call.func, ast.Attribute)
                         and isinstance(call.func.value, ast.Await)
@@ -713,7 +900,7 @@ def _check_p004_mcp_handlers(
 
         for top in tree.body:
             if isinstance(top, ast.AsyncFunctionDef):
-                scan_func(top, inherited_raw_vars=set(), enclosing_bounded=False)
+                scan_func(top, is_top_level=True, inherited_raw_vars=set(), enclosing_bounded=False)
 
     return violations
 
@@ -737,8 +924,6 @@ def scan_paths(root: Path, paths: Iterable[Path] | None = None) -> list[Violatio
             if rel.startswith(MCP_HANDLERS_PREFIX):
                 needs_handler_context = True
         if needs_handler_context and (root / "src" / "mcp_handlers").is_dir():
-            # Include peer handler modules so cross-file wait_for/tracked_task
-            # caller boundedness matches a full-repository scan.
             peer_handlers = [
                 p.resolve()
                 for p in (root / "src" / "mcp_handlers").rglob("*.py")
@@ -749,24 +934,42 @@ def scan_paths(root: Path, paths: Iterable[Path] | None = None) -> list[Violatio
             py_files = explicit
 
     violations: list[Violation] = []
-    handler_trees: list[tuple[str, ast.Module, list[str], _ModuleImports]] = []
+    handler_trees: list[tuple[str, ast.Module, dict[int, set[str]], _ModuleImports]] = []
 
     for path in py_files:
         try:
             rel_path = path.resolve().relative_to(root.resolve()).as_posix()
         except ValueError:
             rel_path = path.as_posix()
+        in_scope = filter_rels is None or rel_path in filter_rels
         try:
             source = path.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=rel_path)
-        except (OSError, SyntaxError):
+        except OSError as exc:
+            if in_scope:
+                violations.append(Violation("PARSE_ERROR", rel_path, 1, f"cannot read file: {exc}"))
             continue
         lines = source.splitlines()
-        imports = _ModuleImports(tree)
-        if filter_rels is None or rel_path in filter_rels:
-            violations.extend(_check_p001_and_p003(tree, rel_path, lines, imports))
+        allowed_by_line, pragma_violations = _collect_file_pragmas(rel_path, lines)
+        if in_scope:
+            violations.extend(pragma_violations)
+        try:
+            tree = ast.parse(source, filename=rel_path)
+        except SyntaxError as exc:
+            if in_scope:
+                violations.append(
+                    Violation(
+                        "PARSE_ERROR",
+                        rel_path,
+                        exc.lineno or 1,
+                        f"cannot parse Python file: {exc.msg}",
+                    )
+                )
+            continue
+        imports = _ModuleImports(tree, rel_path)
+        if in_scope:
+            violations.extend(_check_p001_and_p003(tree, rel_path, allowed_by_line, imports))
         if rel_path.startswith(MCP_HANDLERS_PREFIX):
-            handler_trees.append((rel_path, tree, lines, imports))
+            handler_trees.append((rel_path, tree, allowed_by_line, imports))
 
     if handler_trees:
         p004 = _check_p004_mcp_handlers(handler_trees)
@@ -811,6 +1014,16 @@ def format_baseline(counts: dict[tuple[str, str], int]) -> str:
         if count > 0
     )
     return header + body
+
+
+def _ref_exists(root: Path, ref: str) -> bool:
+    res = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return res.returncode == 0
 
 
 def _git_show(root: Path, ref: str, rel_path: Path) -> str | None:
@@ -871,6 +1084,9 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
 
     if args.base:
+        if not _ref_exists(root, args.base):
+            print(f"FAIL: --base ref {args.base!r} does not resolve to a commit")
+            return 1
         base_text = _git_show(root, args.base, baseline_path.relative_to(root))
         if base_text is not None:
             base_entries = parse_baseline(base_text)
