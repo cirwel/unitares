@@ -1555,7 +1555,7 @@ def test_an_unreviewed_auth_path_pr_is_skipped_by_default(tmp_path: Path) -> Non
     calls, out = _run(tmp_path, [_unreviewed(1, "aaa"), _unreviewed(2, "bbb")],
                       timelines={1: _timeline(12), 2: _timeline(8)},
                       compares={"aaa": AUTH, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == [_arm(2, "bbb")]
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested", _arm(2, "bbb")]
     assert "review=NEUTRAL (required on an auth path: src/identity/deep/tokens.py)" in out
 
 
@@ -1570,7 +1570,7 @@ def test_a_rename_out_of_an_auth_path_still_counts(tmp_path: Path) -> None:
     moved = {"files": [{"filename": "src/elsewhere.py", "previous_filename": "src/identity/a.py",
                         "status": "renamed", "sha": "b3", "patch": "@@ -1 +1 @@\n-a\n+b"}]}
     calls, _ = _run(tmp_path, [_unreviewed(1, "aaa")], compares={"aaa": moved}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == []
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
 
 
 @pytest.mark.parametrize("broken", ["missing", "not-json", "empty-list"])
@@ -2108,9 +2108,12 @@ def test_a_sensitive_pr_is_not_armed_until_review_passes(tmp_path: Path, review:
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
                       PR_QUEUE_REQUIRED_CHECKS="")
     assert not [c for c in calls if "--auto" in c]
-    if review in ("NEUTRAL", None):
+    if review == "NEUTRAL":
+        assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+        assert "review=NEUTRAL" in out
+    elif review is None:
         assert calls == []
-        assert f"review={review or 'MISSING'}" in out
+        assert "review=MISSING" in out
 
 
 def test_a_sensitive_diff_outside_two_family_review_stays_hand_merge(tmp_path: Path) -> None:
@@ -2369,7 +2372,10 @@ def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs,
     (tmp_path / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
                       PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == ([_arm(1, "aaa")] if armed else [])
+    expected = [_arm(1, "aaa")] if armed else (
+        ["pr edit 1 -R o/r --add-label review-requested"] if why == "ACTION_REQUIRED" else []
+    )
+    assert calls == expected
     if why:
         assert why in out
     if why and "MISSING" in why:
@@ -2488,3 +2494,30 @@ def test_the_queue_names_the_same_hand_merge_files_as_the_docs() -> None:
     for path in RESERVED:
         assert (REPO / path).exists(), path
         assert f"`{path}`" in doc, path
+
+
+def test_queued_unreviewed_pr_respects_no_auto_review_and_requests_once(tmp_path: Path) -> None:
+    _review_policy(tmp_path, "src/identity/*")
+    # Already carries review-requested: do not re-add it.
+    pr_req = _unreviewed(1, "aaa")
+    pr_req["labels"].append({"name": "review-requested"})
+    calls, _ = _run(tmp_path, [pr_req], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Carries no-auto-review: never add review-requested.
+    pr_hold = _unreviewed(1, "aaa")
+    pr_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Queued PR with review=ACTION_REQUIRED (e.g. missing second family): requests review once.
+    pr_ar = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_ar], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+    # Respects no-auto-review on review=ACTION_REQUIRED too.
+    pr_ar_hold = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    pr_ar_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_ar_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Non-review ACTION_REQUIRED check must NOT add review-requested.
+    pr_other_ar = _pr(1, head="aaa", checks=[_check("test"), _check("deploy-approval", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_other_ar], compares={"aaa": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
