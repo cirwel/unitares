@@ -1,0 +1,8 @@
+# Runtime AST invariant baseline (scripts/dev/check_runtime_ast_invariants.py).
+# Format: RULE<TAB>PATH<TAB>COUNT
+# Ratchet: entries may only shrink or be removed (--lower); CI --base forbids
+# adding or raising any entry.
+P001	src/calibration.py	1
+P001	src/mcp_handlers/identity/lineage_verification.py	1
+P001	src/mcp_handlers/identity/process_binding.py	1
+P004	src/mcp_handlers/identity/resolution.py	1

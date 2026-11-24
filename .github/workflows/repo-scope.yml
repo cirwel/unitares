@@ -72,6 +72,9 @@ jobs:
       - name: Run component boundary ratchet
         run: python3 scripts/dev/check_component_boundaries.py --base "${{ steps.base.outputs.ref }}"
 
+      - name: Run runtime AST invariant ratchet
+        run: python3 scripts/dev/check_runtime_ast_invariants.py --base "${{ steps.base.outputs.ref }}"
+
       # AGENTS.md and CLAUDE.md are adapter-specific preambles over one shared
       # contract block, and both files (plus docs/dev/DRIFT_LEDGER.md) state
       # that CI enforces byte-parity between them. Until this step existed the
