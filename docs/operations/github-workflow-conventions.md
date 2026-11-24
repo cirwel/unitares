@@ -862,8 +862,12 @@ is unavailable. Without `gh` either, use the next section.
 
 An agent without `gh` (a cloud session with only a GitHub connector) may record
 a **subagent or council review**, as long as the record says which it was. This
-is equally valid when `gh` is installed: omit `--emit` to post directly. It is
-not an outage-only alternative.
+is equally valid when `gh` is installed: omit `--emit` to post directly through
+the agents' App (`unitares-github -- review record ...`). It is not an
+outage-only alternative. A direct post refuses any credential that can read
+`GET /user`, which includes the operator login a hosted session's proxy
+attaches, so a hosted session keeps `--emit` and posts through its connector
+even when it has `gh`.
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
