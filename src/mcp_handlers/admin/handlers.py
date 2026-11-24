@@ -317,11 +317,11 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
             lineage_info = {}
             if hasattr(mcp_server, 'agent_metadata') and agent_id in mcp_server.agent_metadata:
                 meta = mcp_server.agent_metadata[agent_id]
-                from src.mcp_handlers.identity.shared import _get_lineage
+                from src.mcp_handlers.identity.shared import get_lineage
                 lineage_info = {
                     "has_parent": meta.parent_agent_id is not None,
                     "spawn_reason": meta.spawn_reason,
-                    "lineage_depth": len(_get_lineage(agent_id))
+                    "lineage_depth": len(get_lineage(agent_id))
                 }
 
             health_report["checks"]["agent_lineage"] = {
@@ -859,19 +859,21 @@ async def handle_debug_request_context(arguments: Dict[str, Any]) -> Sequence[Te
     uuid_prefix_count = 0
     try:
         from ..identity.session import session_id_reference
-        from ..identity.shared import _session_identities, _uuid_prefix_index
+        from ..identity.shared import get_session_identities, get_uuid_prefix_index
+        session_identities = get_session_identities()
+        uuid_prefix_index = get_uuid_prefix_index()
         # Session keys are bearer credentials and any bound caller can reach
         # this action, so keys are shown as opaque references. The uuid prefix
         # index maps the legacy session id itself, so only its size is shown.
-        for k, v in list(_session_identities.items())[:10]:  # Show first 10
+        for k, v in list(session_identities.items())[:10]:  # Show first 10
             agent_id = v.get("bound_agent_id")
             ref = session_id_reference(k)
             if agent_id:
                 legacy_bindings[ref] = agent_id[:8] + "..."
             else:
                 legacy_bindings[ref] = "None"
-        uuid_prefix_count = len(_uuid_prefix_index)
-        legacy_bindings_count = len(_session_identities)
+        uuid_prefix_count = len(uuid_prefix_index)
+        legacy_bindings_count = len(session_identities)
     except Exception as e:
         import traceback
         legacy_bindings = {"error": str(e), "traceback": traceback.format_exc()}

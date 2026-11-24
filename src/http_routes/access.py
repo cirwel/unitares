@@ -757,6 +757,11 @@ def _looks_like_uuid(value: object) -> bool:
     )
 
 
+def looks_like_uuid(value: object) -> bool:
+    """Public UUID shape check (36 chars, 4 hyphens) — no lookup, no verification."""
+    return _looks_like_uuid(value)
+
+
 async def _bind_explicit_http_agent(arguments: dict) -> str | None:
     explicit_agent_id = arguments.get("agent_id")
     if not _looks_like_uuid(explicit_agent_id):
@@ -1169,12 +1174,12 @@ async def _resolve_http_bound_agent(
     # ``delete``. A wrapper below that depth is never unwrapped, so it must
     # not retarget a valid outer call either.
     from src.mcp_handlers.middleware.params_step import (
-        _EXPLICIT_TARGET_CALLS,
+        EXPLICIT_TARGET_CALLS,
         unwrapped_view,
     )
 
     unnamed_destructive = any(
-        _EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id")
+        EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id")
         for call in (
             unwrapped_view(arguments, depth)
             for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)

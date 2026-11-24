@@ -185,6 +185,11 @@ def _get_continuity_secret() -> Optional[bytes]:
     return resolved[0] if resolved else None
 
 
+def get_continuity_secret() -> Optional[bytes]:
+    """Public accessor for the HMAC secret used for continuity tokens and grants."""
+    return _get_continuity_secret()
+
+
 def create_continuity_token(
     agent_uuid: str,
     client_session_id: str,
@@ -1132,6 +1137,11 @@ def _extract_base_fingerprint(session_key: str) -> Optional[str]:
         len(session_key),
     )
     return session_key
+
+
+def extract_base_fingerprint(session_key: str) -> Optional[str]:
+    """Public accessor extracting a stable base fingerprint from a session key."""
+    return _extract_base_fingerprint(session_key)
 
 
 def ua_hash_from_header(user_agent: str) -> Optional[str]:
