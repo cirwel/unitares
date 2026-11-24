@@ -4237,13 +4237,85 @@ def test_the_notice_follows_the_base_refs_policy(monkeypatch):
 
 
 def test_the_notice_says_when_no_provider_is_eligible(monkeypatch, capsys):
+    # agy not installed, so no family lane through it either.
     _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
-                       authors=("google",))
+                       candidates=("claude",), authors=("google",))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
     assert "no other provider is eligible now" in out.lower() and "record --independent" in out
+
+
+def test_the_notice_offers_agy_running_the_missing_familys_model(monkeypatch, capsys):
+    """Codex out (no openai provider left): agy running GPT-OSS still reads as openai."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"google"},
+                       candidates=("claude", "antigravity"), authors=("anthropic",))
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
+    args = SimpleNamespace(base="origin/master", branch="claude/x", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "--reviewer antigravity --agy-model gpt-oss-120b-medium" in out
+    assert "claude-opus" not in out  # never a lane in the author's own family
+
+
+def test_agy_family_lanes_skip_authors_passed_and_cooling_models(monkeypatch):
+    monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: ["antigravity"])
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    assert rg.agy_family_lanes("b", {"google"}, {"anthropic"}, [], "k") == ["gpt-oss-120b-medium"]
+    assert rg.agy_family_lanes("b", set(), {"openai"}, [], "k") == [
+        rg.AGY_FAMILY_MODELS["anthropic"], rg.AGY_FAMILY_MODELS["google"]]
+    # A family another candidate already supplies needs no lane.
+    assert rg.agy_family_lanes("b", {"google"}, {"anthropic"}, [], "k", {"openai"}) == []
+    # Unknown authorship fails closed, as on the rest of the sensitive path.
+    assert rg.agy_family_lanes("b", {"google"}, set(), [], "k") == []
+    monkeypatch.setattr(rg, "provider_cooldown",
+                        lambda p: "capacity" if rg.agy_model_name() == "gpt-oss-120b-medium" else None)
+    assert rg.agy_family_lanes("b", {"google"}, {"anthropic"}, [], "k") == []
+    monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: ["claude", "codex"])
+    assert rg.agy_family_lanes("b", {"google"}, {"anthropic"}, [], "k") == []
+
+
+def test_agy_family_models_each_count_as_their_family():
+    for family, model in rg.AGY_FAMILY_MODELS.items():
+        assert rg.model_family(model) == family
+
+
+def test_sweep_supplies_a_missing_family_through_agy_when_its_provider_is_out(monkeypatch, tmp_path):
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    pr = _pr(3)
+    pr["headRefName"] = "claude/x"
+    pr["body"] = _signed("claude-opus-5-5")
+    pr["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda *a: [])
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    clean = SimpleNamespace(status=lambda: ("success", "clean (antigravity)"), verdict="CLEAN",
+                            reviewer="antigravity", scope="full", url="u")
+    monkeypatch.setattr(rg, "current_record", lambda *a: clean)
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["scripts/dev/review_gate.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["scripts/dev/review_gate.py"])
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"google"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    # Codex (the only native openai provider) is out; agy's GPT-OSS lane is not.
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: "quota" if p == "codex" else None)
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "native_activity_running", lambda *a: False)
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw)) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == 1
+    cmd, kw = calls[0]
+    assert kw["env"]["UNITARES_REVIEWER"] == "antigravity"
+    assert cmd[-5:] == ["--reviewer", "antigravity", "--fresh", "--agy-model", "gpt-oss-120b-medium"]
 
 
 def test_a_policy_without_the_list_warns(monkeypatch, tmp_path, capsys):
