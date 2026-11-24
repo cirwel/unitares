@@ -307,6 +307,9 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
     protected_worktrees = {repo.resolve()}
     if worktrees:
         protected_worktrees.add(worktrees[0][0].resolve())
+    for wt_path, _ in worktrees:
+        if wt_path.name.endswith("-deploy"):
+            protected_worktrees.add(wt_path.resolve())
 
     # 2. Local [gone] cleanup
     for branch in list_gone_branches(repo):
@@ -404,17 +407,44 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
                     log(f"ERROR push --delete {branch}: {e.stderr}")
                     report.errors.append(f"push --delete {branch}: {e.stderr}")
 
-    # 4. Branchless worktree sweep
+    # 4. Branchless worktree sweep (#3360: verify detached HEAD commits survive on base)
     refreshed = list_worktrees(repo)
     for path, branch in refreshed:
-        if path.resolve() in protected_worktrees or branch is not None:
+        if path.resolve() in protected_worktrees or path.name.endswith("-deploy") or branch is not None:
             continue
         status = _safe_status(path)
         if status is None:
             continue
         check = check_worktree_clean(path, status)
         if not check.is_clean:
+            log(f"SKIP detached worktree {path}: not clean ({check.reason})")
             continue
+        head_proc = run_git("rev-parse", "HEAD", repo=path, check=False)
+        head_sha = head_proc.stdout.strip() if head_proc.returncode == 0 else ""
+        if not head_sha:
+            log(f"SKIP detached worktree {path}: cannot read HEAD")
+            continue
+        is_ancestor = (
+            run_git("merge-base", "--is-ancestor", head_sha, base, repo=repo, check=False).returncode
+            == 0
+        )
+        if not is_ancestor:
+            detached_cherry = cherry_local(repo, head_sha, base=base)
+            if detached_cherry is None:
+                continue
+            detached_verdict = classify_local_gone_cherry(detached_cherry, base=base)
+            if detached_verdict.verdict == CherryVerdict.HOLD:
+                hold_key = f"detached@{head_sha[:12]} ({path})"
+                report.holds.append(hold_key)
+                report.holds_count += 1
+                log(
+                    f"HOLD detached worktree {path} ({head_sha[:12]}): "
+                    f"{detached_verdict.reason}; inspect/salvage before removing"
+                )
+                continue
+            if detached_verdict.verdict == CherryVerdict.SKIP:
+                log(f"SKIP detached worktree {path}: {detached_verdict.reason}")
+                continue
         report.worktrees_removable += 1
         if dry_run:
             log(f"DRY-RUN would worktree-remove {path} (no branch)")
