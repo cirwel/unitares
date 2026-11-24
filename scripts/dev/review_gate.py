@@ -106,6 +106,10 @@ UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 #: A review passed, but a security-sensitive diff still needs a second model
 #: family (review_policy.json). Not an outage: the next step is the author's.
 NEEDS_SECOND_FAMILY = 3
+#: For the review sweep only (--budget-hold-exit): the full-review cycle budget
+#: refused the pass before any reviewer ran or any record was posted. The sweep
+#: moves on to the next PR; a direct run still exits UNREVIEWED.
+BUDGET_HELD = 4
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # GitHub-issued App ID -> bot actor ID. This is review-evidence admission
 # only, configured in the trusted gate checkout, never in a PR's marker.
@@ -3577,7 +3581,7 @@ def cmd_review(args) -> int:
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or pass --authorize-full-review REASON.")
-                    return UNREVIEWED
+                    return BUDGET_HELD if getattr(args, "budget_hold_exit", False) else UNREVIEWED
                 if (rounds.exhausted(joining_cycle, key, head)
                         and not missing_required_family
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
@@ -3586,7 +3590,7 @@ def cmd_review(args) -> int:
                           "pass --authorize-full-review REASON to run another full review cycle, "
                           "or escalate unresolved issues.")
                     print(cycle_grant_instructions(head, key, rounds))
-                    return UNREVIEWED
+                    return BUDGET_HELD if getattr(args, "budget_hold_exit", False) else UNREVIEWED
                 # After an ordinary findings round, verify fixes instead of
                 # automatically commissioning another full pass. A clean last
                 # round followed by new work still needs a fresh full review.
@@ -3667,27 +3671,6 @@ def agy_family_lanes(branch: str, families: set[str], authors: set[str],
                     and failed_runs(comments, key, "antigravity") < SWEEP_MAX_FAILED):
                 lanes.append(model)
     return lanes
-
-
-def budget_refuses(rounds: CodexRounds | None, family: str | None, key: str, head: str,
-                   families: set[str]) -> bool:
-    """Whether cmd_review would refuse a required-family pass by ``family``
-    without an operator grant. The sweep asks first: a refused pass posts
-    nothing, and would otherwise hold the sweep's one-PR-per-run slot on
-    every run.
-
-    Mirrors cmd_review's missing-family exemption for a caller that has
-    already established the rest of it (a sensitive diff, known authors,
-    ``family`` outside them and missing, no waiver): a family that never took
-    part in a cycle is exempt from the cycle budget, but only once some
-    classified family (``families``) has passed. Otherwise the budget decides.
-    """
-    if rounds is None or rounds.unknown_history:
-        return True
-    attempted = bool(family) and any(family in cycle.families for cycle in rounds.cycles)
-    if family and families and not attempted:
-        return False
-    return rounds.exhausted(rounds.can_join(head, key, family), key, head)
 
 
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
@@ -4514,22 +4497,11 @@ def cmd_sweep(args) -> int:
                                                f"origin/{base}", head, authored_by)
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], independent, comments, key))
-                    rounds = None
-                    if not waived:
-                        try:
-                            rounds = review_budget(pr_rounds(repo, n, key, head, comments), n, comments)
-                        except (ValueError, OSError, subprocess.SubprocessError):
-                            rounds = None
                     selected = next((p for p in choices if p in eligible
-                                     and not _skips_author_family(p, authored_by)
-                                     and not budget_refuses(rounds, provider_family(p), key, head, families)), None)
+                                     and not _skips_author_family(p, authored_by)), None)
                     lanes = ([] if waived or selected or "antigravity" not in choices else
-                             [m for m in agy_family_lanes(p["headRefName"], independent, authored_by,
-                                                          comments, key)
-                              if not budget_refuses(rounds, model_family(m), key, head, families)])
-                    held = ([] if waived else
-                            [f for f in eligible_families(authored_by, independent)
-                             if budget_refuses(rounds, f, key, head, families)])
+                             agy_family_lanes(p["headRefName"], independent, authored_by,
+                                              comments, key))
                     if selected:
                         reviewer = selected
                         required_family = True
@@ -4538,10 +4510,6 @@ def cmd_sweep(args) -> int:
                         required_family = True
                     elif waived:
                         print(f"[sweep] PR #{n}: second family covered by operator waiver")
-                    elif held:
-                        print(f"[sweep] PR #{n}: full-review cycle budget exhausted for "
-                              f"{', '.join(held)}; another cycle needs --authorize-full-review "
-                              "or a cycle grant")
                     else:
                         print(f"[sweep] PR #{n}: configured reviewers cannot supply the required family; "
                               "coverage remains incomplete")
@@ -4583,7 +4551,8 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
+        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review",
+                   "--budget-hold-exit"]
         if required_family:
             command += ["--reviewer", reviewer, "--fresh"]
         if lane_model or getattr(args, "agy_model", None):
@@ -4597,6 +4566,12 @@ def cmd_sweep(args) -> int:
         # local attempt, which the missing-family pass deliberately requests.
         rc = subprocess.run(command, cwd=wt,
                             env={**os.environ, "UNITARES_REVIEWER": reviewer}).returncode
+        if rc == BUDGET_HELD:
+            # Refused before any reviewer ran and before any record was posted:
+            # nothing changes on the PR, so stopping here would pick it again
+            # on every run and never reach the PRs after it.
+            print(f"[sweep] PR #{n}: held by the full-review cycle budget; trying the next PR")
+            continue
         if rc == NEEDS_SECOND_FAMILY:
             # Missing coverage is visible on the PR, not a runner crash.
             next_step = "requested from shared host on a later tick" if requested else "needs the author's request"
@@ -4759,6 +4734,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
     r.add_argument("--respect-provider-cooldown", action="store_true",
                    help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
+    r.add_argument("--budget-hold-exit", action="store_true", help=argparse.SUPPRESS)
 
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")

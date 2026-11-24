@@ -814,9 +814,10 @@ second-family notice offers, and the review sweep runs, `agy` with that
 family's model from `AGY_FAMILY_MODELS` in `review_gate.py`
 (`gpt-oss-120b-medium` for OpenAI while Codex is down). The first review still
 comes from the configured providers. The author's families are never offered,
-a cooling or exhausted lane model is skipped, and a family that the
-full-review cycle budget would refuse is left for an operator grant rather
-than retried on every sweep. Shell
+a cooling or exhausted lane model is skipped, and a lane the sweep starts
+honours a cooldown that lands after it was chosen. A pass that the full-review
+cycle budget refuses no longer holds the sweep: the sweep moves on to the
+next PR. Shell
 commands are denied. The dialectic reviewer can use Antigravity too
 (`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the orchestrator's
 environment) through its own backend, which inlines a short self-contained

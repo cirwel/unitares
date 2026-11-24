@@ -2876,6 +2876,14 @@ def test_past_the_cap_without_a_verifier_spends_nothing_and_says_unreviewed(repo
     assert not posted and "budget exhausted" in out and "authorize-full-review" in out
 
 
+def test_past_the_cap_the_sweep_child_says_held_rather_than_unreviewed(repo, monkeypatch, capsys):
+    """The sweep passes --budget-hold-exit so it can move on to the next PR."""
+    posted = _capped(repo, monkeypatch)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False,
+                                         budget_hold_exit=True)) == rg.BUDGET_HELD
+    assert not posted and "budget exhausted" in capsys.readouterr().out
+
+
 def test_past_the_cap_verified_fixes_record_clean_and_name_their_limit(repo, monkeypatch):
     posted = _capped(repo, monkeypatch, "ollama:m", ["ADDRESSED"] * 2)
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
@@ -4320,23 +4328,20 @@ def test_sweep_supplies_a_missing_family_through_agy_when_its_provider_is_out(mo
                         "--respect-provider-cooldown"]
 
 
-@pytest.mark.parametrize("passing, earlier", [
-    # OpenAI already took part in a cycle, so it has no missing-family exemption.
-    ({"google"}, ["openai", "google", "google"]),
-    # A passing record of no classified family grants no exemption either
-    # (GPT-6.2 follow-up on #3384), even for a family never attempted.
-    (set(), ["anthropic", "anthropic", "anthropic"]),
-])
-def test_sweep_skips_a_lane_the_cycle_budget_refuses(monkeypatch, tmp_path, capsys, passing, earlier):
-    """GPT-6.2 on #3384 (P1): a pass cmd_review refuses posts nothing, so the
-    sweep would pick the same PR on every run and never reach the next one."""
+def test_sweep_moves_past_a_pr_the_cycle_budget_holds(monkeypatch, tmp_path, capsys):
+    """GPT-6.2 on #3384 (P1): a pass cmd_review refuses at the cycle budget
+    posts nothing, so stopping there would pick the same PR on every run and
+    never reach the next one. The child says so with BUDGET_HELD instead."""
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
-    pr = _pr(3)
-    pr["headRefName"] = "claude/x"
-    pr["body"] = _signed("claude-opus-5-5")
-    pr["labels"] = [{"name": "review-requested"}]
+    prs = []
+    for n in (3, 4):
+        pr = _pr(n)
+        pr["headRefName"] = f"claude/x{n}"
+        pr["body"] = _signed("claude-opus-5-5")
+        pr["labels"] = [{"name": "review-requested"}]
+        prs.append(pr)
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "open_prs", lambda *a: prs)
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     monkeypatch.setattr(rg, "base_merge_equivalents", lambda *a: [])
@@ -4346,7 +4351,7 @@ def test_sweep_skips_a_lane_the_cycle_budget_refuses(monkeypatch, tmp_path, caps
     monkeypatch.setattr(rg, "current_record", lambda *a: clean)
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["scripts/dev/review_gate.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["scripts/dev/review_gate.py"])
-    monkeypatch.setattr(rg, "passing_families", lambda *a: passing)
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"google"})
     monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
     monkeypatch.setattr(rg, "disabled_providers", lambda: {})
     monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
@@ -4354,35 +4359,15 @@ def test_sweep_skips_a_lane_the_cycle_budget_refuses(monkeypatch, tmp_path, caps
     monkeypatch.setattr(rg, "native_enabled", lambda: False)
     monkeypatch.setattr(rg, "native_activity_running", lambda *a: False)
     monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
-    # Three unproductive cycles on earlier work.
-    spent = rg.CodexRounds(3, cycles=[rg.ReviewCycle(str(i) * 40, f"old{i}", {family})
-                                      for i, family in enumerate(earlier, 1)])
-    monkeypatch.setattr(rg, "pr_rounds", lambda *a: spent)
-    monkeypatch.setattr(rg, "review_budget", lambda rounds, *a: rounds)
+    results = iter([rg.BUDGET_HELD, 0])
     calls = []
     monkeypatch.setattr(rg.subprocess, "run",
-                        lambda cmd, **kw: calls.append((cmd, kw)) or SimpleNamespace(returncode=0))
+                        lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=next(results)))
     assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
                                         dry_run=False, worktree=str(tmp_path / "wt"))) == 0
-    assert calls == []
-    out = capsys.readouterr().out
-    assert "full-review cycle budget exhausted for" in out and "openai" in out
-
-
-def test_budget_refuses_only_a_family_that_already_spent_its_exemption():
-    head, key = "a" * 40, "k"
-    spent = rg.CodexRounds(3, cycles=[rg.ReviewCycle('1' * 40, 'old1', {'openai'}),
-                                      rg.ReviewCycle('2' * 40, 'old2', {'google'}),
-                                      rg.ReviewCycle('3' * 40, 'old3', {'google'})])
-    assert rg.budget_refuses(spent, "openai", key, head, {"google"})
-    # A family never attempted keeps cmd_review's missing-family exemption...
-    assert not rg.budget_refuses(spent, "anthropic", key, head, {"google"})
-    # ...but only once a classified family has passed, as cmd_review requires.
-    assert rg.budget_refuses(spent, "anthropic", key, head, set())
-    assert not rg.budget_refuses(rg.CodexRounds(), "openai", key, head, set())
-    # Unreadable or legacy history fails closed, as cmd_review does.
-    assert rg.budget_refuses(None, "anthropic", key, head, {"google"})
-    assert rg.budget_refuses(rg.CodexRounds(unknown_history=True), "anthropic", key, head, {"google"})
+    assert [cmd[cmd.index("--pr") + 1] for cmd in calls] == ["3", "4"]
+    assert all("--budget-hold-exit" in cmd for cmd in calls)
+    assert "PR #3: held by the full-review cycle budget; trying the next PR" in capsys.readouterr().out
 
 
 def test_a_policy_without_the_list_warns(monkeypatch, tmp_path, capsys):
