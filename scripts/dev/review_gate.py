@@ -1720,8 +1720,10 @@ def agy_model_name(model: str | None = None) -> str:
 #: a sensitive diff and its own provider cannot run (Codex out of quota, say).
 #: agy serves models from several labs, and a record counts by the model it
 #: ran (record_family), so each lane supplies that family's coverage, not
-#: Google's. From `agy models` on 2026-11-24; a model agy stops serving fails
-#: like any other agy run and cools down on its own.
+#: Google's. From `agy models` on 2026-11-24. A model agy stops serving fails
+#: like any other agy run: its failed runs bound retries on each diff, but only
+#: a quota, auth or startup failure starts a cooldown, so a retired model here
+#: needs replacing by hand.
 AGY_FAMILY_MODELS = {
     "openai": "gpt-oss-120b-medium",
     "anthropic": "claude-opus-5-5-high",
