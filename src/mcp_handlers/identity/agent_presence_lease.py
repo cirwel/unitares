@@ -464,23 +464,11 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
     failed read is not evidence that no lease is live."""
     try:
         from src.db import get_db
+        from src.lease_plane.queries import fetch_live_surface_lease
 
         db = get_db()
         async with db.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT lease_id::text AS lease_id, audit_session,
-                       (last_heartbeat_at IS NOT NULL
-                        AND last_heartbeat_at > acquired_at) AS renewed
-                FROM lease_plane.surface_leases
-                WHERE surface_id = $1
-                  AND released_at IS NULL
-                  AND expires_at > NOW()
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                f"agent:/{agent_uuid}",
-            )
+            row = await fetch_live_surface_lease(conn, f"agent:/{agent_uuid}")
         if not row or not row["lease_id"]:
             return None, None
         # A null audit_session was a nameless acquire: its caller cannot be

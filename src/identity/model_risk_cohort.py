@@ -17,49 +17,11 @@ from statistics import mean, median
 from typing import Any, Optional
 
 from src.db import get_db
+from src.db.mixins.state_queries import MODEL_RISK_COHORT_SQL
 from src.model_harness_provenance import (
     exact_model_attribution_status,
     normalize_persisted_runtime_provenance,
 )
-
-
-MODEL_RISK_COHORT_SQL = """
-WITH measured AS (
-    SELECT
-        s.state_id,
-        s.identity_id,
-        i.agent_id AS agent_uuid,
-        s.recorded_at,
-        s.risk_score,
-        s.state_json,
-        row_number() OVER (
-            PARTITION BY s.identity_id ORDER BY s.recorded_at, s.state_id
-        ) AS measured_update_index,
-        min(s.recorded_at) OVER (PARTITION BY s.identity_id) AS session_started_at
-    FROM core.agent_state s
-    JOIN core.identities i ON i.identity_id = s.identity_id
-    WHERE COALESCE(s.synthetic, false) = false
-)
-SELECT
-    state_id::TEXT AS state_id,
-    agent_uuid,
-    recorded_at,
-    risk_score,
-    state_json->'provenance_context'->'runtime_provenance'
-        AS runtime_provenance,
-    state_json#>>'{provenance_context,task_type}' AS task_type,
-    state_json#>>'{eisv_telemetry,measurement,behavioral,updates}'
-        AS behavioral_updates,
-    state_json#>>'{eisv_telemetry,measurement,behavioral,warmup,is_baselined}'
-        AS is_baselined,
-    measured_update_index,
-    EXTRACT(EPOCH FROM (recorded_at - session_started_at)) AS exposure_seconds
-FROM measured
-WHERE recorded_at >= $1
-  AND recorded_at < $2
-ORDER BY recorded_at, state_id
-LIMIT $3
-"""
 
 
 @dataclass(frozen=True)

@@ -11,14 +11,18 @@ src/http_routes/sentinel.py on 2026-09-27; registered in src/http_api.py.)
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from starlette.responses import JSONResponse
 
 
+from src import http_agent_tokens
 from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
@@ -46,6 +50,232 @@ _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_na
 # every later lookup by fingerprint still agree; the original is kept (capped).
 _FINGERPRINT_MAX_CHARS = 256
 _FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
+# Server-owned provenance keys: always stripped from incoming JSON and stamped
+# solely from the authenticated request credential.
+PROVENANCE_SOURCE_FINDINGS_TOKEN = "server_findings_token"
+AUDIT_PROVENANCE_SECRET_ENV = "UNITARES_AUDIT_PROVENANCE_SECRET"
+_SERVER_OWNED_PROVENANCE_FIELDS = (
+    "provenance_verified",
+    "verified_actor_agent_uuid",
+    "provenance_source",
+    "provenance_mac",
+)
+_EPHEMERAL_PROVENANCE_KEY = secrets.token_bytes(32)
+_PROVENANCE_MAC_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _provenance_hmac_key() -> bytes:
+    """Optional HMAC secret persisting server-verified finding provenance across restarts; unset fails closed after restart."""
+    raw = os.getenv(AUDIT_PROVENANCE_SECRET_ENV, "").strip()
+    if raw:
+        return hashlib.sha256(
+            b"unitares-findings-provenance-v1|" + raw.encode("utf-8")
+        ).digest()
+    return _EPHEMERAL_PROVENANCE_KEY
+
+
+def strip_internal_provenance_fields(details: object) -> object:
+    """Return a shallow copy of an audit ``details`` dict without internal ``provenance_mac``."""
+    if isinstance(details, dict) and "provenance_mac" in details:
+        return {k: v for k, v in details.items() if k != "provenance_mac"}
+    return details
+
+
+def normalize_provenance_timestamp(value: object) -> Optional[str]:
+    """Normalize a ``datetime`` or ISO-8601 string to canonical UTC ISO-8601, or None."""
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+    else:
+        return None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError, TypeError):
+        return None
+
+
+def _canonical_provenance_payload(
+    *,
+    provenance_source: str,
+    verified_actor_agent_uuid: str,
+    agent_id: str,
+    event_type: str,
+    severity: str,
+    agent_name: str,
+    message: str,
+    fingerprint: str,
+    timestamp: str,
+) -> bytes:
+    return json.dumps(
+        [
+            provenance_source,
+            verified_actor_agent_uuid.lower(),
+            agent_id,
+            event_type,
+            severity,
+            agent_name,
+            message,
+            fingerprint,
+            timestamp,
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def compute_finding_provenance_mac(
+    *,
+    provenance_source: str,
+    verified_actor_agent_uuid: str,
+    agent_id: str,
+    event_type: str,
+    severity: str,
+    agent_name: str,
+    message: str,
+    fingerprint: str,
+    timestamp: str,
+) -> str:
+    """Compute an HMAC-SHA256 hex tag binding verified finding provenance to all displayed backfill fields."""
+    normalized_ts = normalize_provenance_timestamp(timestamp)
+    if normalized_ts is None:
+        raise ValueError("Invalid timestamp for provenance MAC")
+    canonical = _canonical_provenance_payload(
+        provenance_source=provenance_source,
+        verified_actor_agent_uuid=verified_actor_agent_uuid,
+        agent_id=agent_id,
+        event_type=event_type,
+        severity=severity,
+        agent_name=agent_name,
+        message=message,
+        fingerprint=fingerprint,
+        timestamp=normalized_ts,
+    )
+    return hmac.new(_provenance_hmac_key(), canonical, hashlib.sha256).hexdigest()
+
+
+def verify_finding_provenance_mac(
+    *,
+    mac: object,
+    provenance_source: str,
+    verified_actor_agent_uuid: str,
+    agent_id: str,
+    event_type: str,
+    severity: str,
+    agent_name: str,
+    message: str,
+    fingerprint: str,
+    timestamp: object,
+) -> bool:
+    """Verify a persisted audit-DB provenance MAC in constant time."""
+    if not isinstance(mac, str) or not _PROVENANCE_MAC_RE.fullmatch(mac):
+        return False
+    normalized_ts = normalize_provenance_timestamp(timestamp)
+    if normalized_ts is None:
+        return False
+    expected = compute_finding_provenance_mac(
+        provenance_source=provenance_source,
+        verified_actor_agent_uuid=verified_actor_agent_uuid,
+        agent_id=agent_id,
+        event_type=event_type,
+        severity=severity,
+        agent_name=agent_name,
+        message=message,
+        fingerprint=fingerprint,
+        timestamp=normalized_ts,
+    )
+    return hmac.compare_digest(mac.encode("ascii"), expected.encode("ascii"))
+
+
+def _is_shared_static_bearer(
+    bearer: Optional[str], *, http_api_token: Optional[str]
+) -> bool:
+    """True when ``bearer`` matches a shared static server token.
+
+    A shared static credential (``UNITARES_HTTP_API_TOKEN`` or a member of
+    ``UNITARES_MCP_BEARER_TOKENS``) is not actor-bound and must never be
+    elevated into per-agent verified provenance even if its digest were
+    mistakenly duplicated in ``UNITARES_HTTP_AGENT_TOKENS``.
+    """
+    if not bearer:
+        return False
+    if http_api_token and secrets.compare_digest(bearer, http_api_token):
+        return True
+    if access.mcp_bearer_required() and access.check_mcp_bearer(f"Bearer {bearer}"):
+        return True
+    return False
+
+
+def _authenticate_finding_request(
+    request,
+) -> tuple[Optional[JSONResponse], bool, Optional[str]]:
+    """Authenticate POST /api/findings and return ``(error_response, provenance_verified, verified_actor_agent_uuid)``.
+
+    Auth precedence aligns with ``src/http_routes/tools.py``:
+    - A valid per-agent ``findings``-scoped token (distinct from shared static
+      bearers and without ``X-Unitares-Operator`` / ``X-Agent-Id`` headers)
+      authenticates in both REST postures and on both trusted and untrusted
+      networks, stamping ``provenance_verified=True`` and
+      ``verified_actor_agent_uuid=<agent_uuid>``.
+    - Otherwise, standard ``access._check_http_auth(...)`` applies (trusted-
+      network bypass in local posture, shared static bearer, or dashboard
+      session) with ``provenance_verified=False`` and
+      ``verified_actor_agent_uuid=None`` so trusted-network callers carrying a
+      non-``findings`` token (e.g. a resident's ``checkin`` token) are not
+      broken while never receiving verified provenance.
+    - When ``access._check_http_auth(...)`` denies the request (untrusted IP or
+      ``UNITARES_REST_STRICT=1``), a recognized agent token that failed
+      ``findings_refusal(...)`` returns 403 ``AgentTokenScope``; everything
+      else returns 401.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    bearer = access._bearer_from_header(access._header_value(request, "authorization"))
+
+    agent_grant = None
+    agent_refusal = None
+    if bearer and not _is_shared_static_bearer(bearer, http_api_token=http_api_token):
+        agent_grant = http_agent_tokens.grant_for_bearer(bearer)
+        if agent_grant is not None:
+            agent_refusal = http_agent_tokens.findings_refusal(
+                operator_header=access._header_value(request, "x-unitares-operator") or None,
+                agent_id_header=access._header_value(request, "x-agent-id") or None,
+                scopes=agent_grant.scopes,
+            )
+            if agent_refusal is None:
+                logger.info(
+                    "[HTTP] agent-token route=/api/findings agent=%s token=%s scopes=%s",
+                    agent_grant.agent_uuid[:8],
+                    agent_grant.digest_prefix,
+                    "+".join(sorted(agent_grant.scopes)),
+                )
+                return None, True, agent_grant.agent_uuid
+
+    if access._check_http_auth(request, http_api_token=http_api_token):
+        return None, False, None
+
+    if agent_grant is not None and agent_refusal is not None:
+        return (
+            JSONResponse(
+                {
+                    "success": False,
+                    "error": agent_refusal,
+                    "error_type": "AgentTokenScope",
+                },
+                status_code=403,
+            ),
+            False,
+            None,
+        )
+
+    return access._http_unauthorized(), False, None
 
 
 def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
@@ -58,9 +288,11 @@ def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
 
 async def http_record_finding(request):
     """POST /api/findings — ingest an external finding into the event ring buffer."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
+    auth_error, provenance_verified, verified_actor_agent_uuid = (
+        _authenticate_finding_request(request)
+    )
+    if auth_error is not None:
+        return auth_error
     try:
         try:
             payload = await read_bounded_json_body(request, MAX_HTTP_INGEST_JSON_BODY)
@@ -99,6 +331,37 @@ async def http_record_finding(request):
             # Only this route may set it; never trust a client-supplied one.
             payload.pop("fingerprint_original", None)
 
+        # Server-verified actor provenance: strip any caller-supplied claims
+        # first and compute strictly from the authenticated request credential.
+        # Only a per-agent bearer token with the ``findings`` scope proves an
+        # actor UUID; trusted-network bypass, dashboard sessions, and shared
+        # static bearers always record provenance_verified=False and
+        # verified_actor_agent_uuid=None.
+        for key in _SERVER_OWNED_PROVENANCE_FIELDS:
+            payload.pop(key, None)
+        provenance_mac: Optional[str] = None
+        verified_timestamp: Optional[str] = None
+        if provenance_verified and isinstance(verified_actor_agent_uuid, str):
+            verified_timestamp = datetime.now(timezone.utc).isoformat()
+            payload["timestamp"] = verified_timestamp
+            payload["provenance_verified"] = True
+            payload["verified_actor_agent_uuid"] = verified_actor_agent_uuid
+            payload["provenance_source"] = PROVENANCE_SOURCE_FINDINGS_TOKEN
+            provenance_mac = compute_finding_provenance_mac(
+                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                verified_actor_agent_uuid=verified_actor_agent_uuid,
+                agent_id=str(payload["agent_id"]),
+                event_type=str(payload["type"]),
+                severity=str(payload["severity"]),
+                agent_name=str(payload["agent_name"]),
+                message=str(payload["message"]),
+                fingerprint=str(payload["fingerprint"]),
+                timestamp=verified_timestamp,
+            )
+        else:
+            payload["provenance_verified"] = False
+            payload["verified_actor_agent_uuid"] = None
+
         # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
         # release sentinel findings get their event check attached BEFORE
         # storage, so the durable audit record, the /api/events feed (Discord
@@ -116,11 +379,20 @@ async def http_record_finding(request):
         from src.event_detector import event_detector
         stored = event_detector.record_event(payload)
         if stored is not None:
-            await broadcaster_instance.broadcast_event(
-                event_type=stored["type"],
-                agent_id=stored.get("agent_id"),
-                payload=stored,
-            )
+            if provenance_mac is not None:
+                await broadcaster_instance.broadcast_event(
+                    event_type=stored["type"],
+                    agent_id=stored.get("agent_id"),
+                    payload=stored,
+                    persist_details={"provenance_mac": provenance_mac},
+                    timestamp=verified_timestamp,
+                )
+            else:
+                await broadcaster_instance.broadcast_event(
+                    event_type=stored["type"],
+                    agent_id=stored.get("agent_id"),
+                    payload=stored,
+                )
         return JSONResponse({
             "success": True,
             "deduped": stored is None,

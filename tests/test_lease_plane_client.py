@@ -833,3 +833,17 @@ def test_rpc_latency_recorded_on_held_by_other_outcome():
 
     snap = _pm.snapshot()
     assert "lease_plane.client.v1.lease.acquire.held_by_other" in snap
+
+
+def test_src_lease_plane_queries_accessible_as_attribute_and_import():
+    """Server-local `src.lease_plane.queries` works via both import forms."""
+    import src.lease_plane as lease_plane_pkg
+    import src.lease_plane.queries
+    from src.lease_plane.queries import (
+        fetch_live_surface_lease,
+        has_live_surface_lease,
+    )
+
+    assert src.lease_plane.queries is lease_plane_pkg.queries
+    assert src.lease_plane.queries.fetch_live_surface_lease is fetch_live_surface_lease
+    assert src.lease_plane.queries.has_live_surface_lease is has_live_surface_lease
