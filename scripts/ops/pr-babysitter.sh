@@ -496,18 +496,12 @@ pin() {  # <pr> <sha> <labelled-at> <fingerprint>
 }
 # <head-sha>. GitHub's compare lists at most 300 files; a list that long may
 # be cut short, so it fails, and so does the approval that depends on it.
-# Skill-attestation files (`skills/.attestations/`) are excluded, matching
-# review_gate.py's diff key (operator ruling 2026-11-20), so a post-label
-# attestation restamp does not void an otherwise unchanged approval.
 fingerprint() {
   gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null | jq -er '
     if (.files | length) >= 300 then error("too many files") else . end
-    | [.files[]
-       | select(((.filename | startswith("skills/.attestations/"))
-                 and ((.previous_filename // .filename) | startswith("skills/.attestations/"))) | not)
-       | {f: .filename, s: .status, prev: .previous_filename,
-          p: (if .patch then (.patch | split("\n") | map(select(startswith("+") or startswith("-"))) | join("\n"))
-              else .sha end)}]
+    | [.files[] | {f: .filename, s: .status, prev: .previous_filename,
+                   p: (if .patch then (.patch | split("\n") | map(select(startswith("+") or startswith("-"))) | join("\n"))
+                       else .sha end)}]
     | tojson' 2>/dev/null | shasum -a 256 | cut -c1-64
 }
 
@@ -845,30 +839,14 @@ while read -r pr; do
   declared_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$declared_at" ] || { log "#$n has no readable $READY_LABEL event; skipped"; continue; }
+  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$declared_at" ]]; then
+    log "#$n has a commit from $pushed_at, after its declaration at $declared_at; remove and re-add $READY_LABEL to declare it"
+    notify "$n" declared-stale-push "$head" "not promoted: a commit from $pushed_at came after the \`$READY_LABEL\` label ($declared_at), so the declaration no longer covers this head. To declare this head, remove the label, then add it (AGENTS.md says who may)."
+    continue
+  fi
   pinned_line=$(STATE_FILE="$READY_STATE_FILE" pinned "$n" "$declared_at") \
     || { log "#$n declaration state unreadable ($READY_STATE_FILE); skipped"; continue; }
-  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$declared_at" ]]; then
-    # A commit pushed after the declaration still lapses it unless a prior pin
-    # already recorded what was declared and the substantive diff fingerprint
-    # is unchanged (e.g. a skill-attestation restamp or clean local base merge).
-    if [ -n "$pinned_line" ]; then
-      read -r pinned_sha pinned_fp <<<"$pinned_line"
-      declared_fp="$pinned_fp"
-      if [ "$pinned_sha" != "$head" ]; then
-        fp=$(fingerprint "$head") || { log "#$n diff unreadable; declaration skipped"; continue; }
-        if [ "$fp" != "$pinned_fp" ]; then
-          log "#$n has a commit from $pushed_at, after its declaration at $declared_at; remove and re-add $READY_LABEL to declare it"
-          notify "$n" declared-stale-push "$head" "not promoted: a commit from $pushed_at came after the \`$READY_LABEL\` label ($declared_at), so the declaration no longer covers this head. To declare this head, remove the label, then add it (AGENTS.md says who may)."
-          continue
-        fi
-        STATE_FILE="$READY_STATE_FILE" pin "$n" "$head" "$declared_at" "$fp" || true
-      fi
-    else
-      log "#$n has a commit from $pushed_at, after its declaration at $declared_at; remove and re-add $READY_LABEL to declare it"
-      notify "$n" declared-stale-push "$head" "not promoted: a commit from $pushed_at came after the \`$READY_LABEL\` label ($declared_at), so the declaration no longer covers this head. To declare this head, remove the label, then add it (AGENTS.md says who may)."
-      continue
-    fi
-  elif [ -z "$pinned_line" ]; then
+  if [ -z "$pinned_line" ]; then
     age=$(minutes_since "$declared_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
       log "#$n declaration at $declared_at was never pinned and is ${age}m old; remove and re-add $READY_LABEL"
@@ -1204,29 +1182,14 @@ while read -r pr; do
   labelled_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
+  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
+    notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
+    continue
+  fi
   head=$(jq -r .headRefOid <<<"$pr")
   pinned_line=$(pinned "$n" "$labelled_at") || { log "#$n approval state unreadable ($STATE_FILE); skipped"; continue; }
-  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    # A commit pushed after approval still lapses it unless a prior pin already
-    # recorded what was approved and the substantive diff fingerprint is
-    # unchanged (e.g. a skill-attestation restamp or clean local base merge).
-    if [ -n "$pinned_line" ]; then
-      read -r pinned_sha pinned_fp <<<"$pinned_line"
-      if [ "$pinned_sha" != "$head" ]; then
-        fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
-        if [ "$fp" != "$pinned_fp" ]; then
-          log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
-          notify "$n" stale-push "$head" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
-          continue
-        fi
-        pin "$n" "$head" "$labelled_at" "$fp" || true
-      fi
-    else
-      log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
-      notify "$n" stale-push "$head" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
-      continue
-    fi
-  elif [ -z "$pinned_line" ]; then
+  if [ -z "$pinned_line" ]; then
     # Pin only a label the script sees soon after it went on. An older label
     # with no pin (the script was down, or its state was lost) no longer says
     # what was approved.

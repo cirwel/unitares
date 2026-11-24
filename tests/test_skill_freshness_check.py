@@ -1229,3 +1229,20 @@ def test_merged_with_passes_when_base_change_is_unrelated(tmp_path: Path):
         capture_output=True, text=True,
     )
     assert merged.returncode == 0, merged.stdout + merged.stderr
+
+
+def test_merged_with_fails_closed_when_git_merge_tree_unsupported(tmp_path: Path, monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("_check_freshness", CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "check_skills", lambda *a: 0)
+    monkeypatch.setattr(mod, "_git_bytes", lambda *a: b"deadbeef\n")
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=129, stdout="", stderr="unknown option `write-tree'"),
+    )
+    rc = mod.check_merged_skills(str(tmp_path), str(tmp_path), "origin/master")
+    assert rc == 2
+    assert "needs git 2.38+" in capsys.readouterr().err

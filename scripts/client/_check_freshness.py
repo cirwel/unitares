@@ -993,8 +993,15 @@ def check_merged_skills(root: str, projects_root: str, base_ref: str) -> int:
         capture_output=True, text=True, check=False,
     )
     if merge_proc.returncode != 0:
-        print(f"  [{YELLOW}WARN{NC}] merged freshness check skipped: HEAD conflicts with {base_ref}")
-        return 0
+        if merge_proc.returncode == 1:
+            print(f"  [{YELLOW}WARN{NC}] merged freshness check skipped: HEAD conflicts with {base_ref}")
+            return 0
+        print(
+            f"  [{RED}ERROR{NC}] merged freshness check unavailable "
+            f"(git merge-tree exit {merge_proc.returncode}; needs git 2.38+)",
+            file=sys.stderr,
+        )
+        return 2
     tree_oid = merge_proc.stdout.splitlines()[0].strip() if merge_proc.stdout else ""
     if not tree_oid:
         return 0
