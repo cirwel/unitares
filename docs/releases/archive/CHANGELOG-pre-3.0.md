@@ -1,0 +1,2347 @@
+# Changelog archive (pre-3.0.0)
+
+Historical release entries (`v2.22.1` and earlier) moved verbatim from
+[`../../CHANGELOG.md`](../../CHANGELOG.md) on 2026-11-23. Releases from
+`3.0.0` onward remain in `docs/CHANGELOG.md`.
+
+---
+
+## [2.22.1] - 2026-09-08
+
+This is a maintenance release candidate based on the immutable v2.22.0 tag.
+It backports the release corrections without importing subsequent master
+changes. The five-tool default, 29-tool `lite` surface, registered callable
+names, input schemas, lifecycle envelopes, SDK version, and skills bundle are
+unchanged from v2.22.0. No database migration is introduced.
+
+### Fixed
+
+- **container publication:** publish only the versioned image; keep `latest` unchanged until the verified multi-architecture index digest is explicitly promoted without rebuilding. Remove the publication-time promotion switch. (#2108)
+- **Compose upgrade:** pass `GOVERNANCE_TOOL_MODE` from Compose interpolation into the server environment, so setting `lite` in `.env`, rebuilding/recreating the service, and reconnecting the MCP client restores wider discovery. v2.22.0 needs the explicit override documented in its errata. Backports the fix merged after v2.22.0 was tagged. (#2092)
+- **release metadata:** keep published installation pins separate from the source version, bind plugin parity to the inspected v2.22.0 tag, and prevent source-version updates from rewriting historical bundle evidence. Restore the v2.22.0 changelog to its actual tagged contents and record the post-publication correction separately. (#2092)
+
+### Validation
+
+- **Docker MCP:** exercise minimal discovery and an unadvertised named call, then the 29-tool `.env` lite override on the real Compose stack. The candidate must pass these checks before tagging; the successful #2092 run is prior evidence, not a substitute for candidate validation. (#2092)
+- **maintenance CI:** run the Python, Docker, Elixir, documentation, scope, and release-seam workflows on `release/2.22`, with their existing checks intact.
+
+## [2.22.0] - 2026-09-07
+
+Published contents are recorded below. See [post-publication errata](releases/2.22.0-errata.md) for the Compose upgrade correction.
+
+### Changed
+
+- **tool surface:** the default MCP surface is now `GOVERNANCE_TOOL_MODE=minimal` — the five-tool checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`, `check_working_state`). The previous default, `lite` (29 tools), and `full` remain one flag away. `minimal` no longer carries `list_tools` / `describe_tool`: with five tools the MCP client's native `tools/list` is the discovery surface, and the two introspection tools stay on `lite` and `full`. Nothing is force-included in any mode any more; the mode set is the advertised surface. Deployments that relied on the default and want the wider surface advertised to schema-driven clients (Claude Code, Codex) set `GOVERNANCE_TOOL_MODE=lite`; the operator LaunchAgent template and `.env.example` document the knob, and the template pins `lite`. (#2081)
+- **mcp transport:** a tool mode now filters only `tools/list` on the FastMCP `/mcp/` mount. The registrars register every `register=True` handler and every workflow alias regardless of mode (`src/tool_mode_listing.py`), so a name outside the running mode dispatches on `/mcp/` exactly as it always did on REST and stdio. Until now the mount applied the mode at registration time and answered `Unknown tool` for unadvertised names (verified 2026-08-11), which is what made the surface cut unsafe for the SDK, the governance plugin, and the residents. The onboard `tool_mode` tip, the `list_tools` `not_advertised` block, and `validate_tool_modes.py` (which now asserts `minimal` is exactly the five-tool loop) describe the new shape. (#2081)
+- **ci(quickstart):** the Docker Quickstart workflow's path filter now includes `constraints.txt`, which `Dockerfile` installs alongside `requirements-docker.txt`. A pin moving in `constraints.txt` previously changed the shipped image without the job that validates the image running; surfaced auditing the v2.21.0 release range against the release process. (#2075)
+
+### Fixed
+
+- **README:** the "What is built" table claimed 106 MCP tools. That figure was an AST count of `@mcp_tool` decorator sites (#1907), most of them `register=False` internal delegates that never reach any wire. The runtime registry has 43 registered tools (8 of them consolidated routers over 52 actions) plus 8 workflow aliases and a 70-entry legacy alias table; the row now states those numbers, in the form `update_docs_tool_count.py --check` binds to the live registry. The README also opens with the five tools and a compact quickstart; the wider surface moves to "Beyond the five". (#2081)
+- **tool-edge-index:** the exposure snapshot's per-mode model still mirrored a registration-time filter with workflow aliases registered unconditionally, so it reported five aliases as "advertised but undeclared" under `minimal` and produced three spurious `MODE_UNDECLARED_ADVERTISED` warnings. It now uses the same listing predicate the transports use, and the warnings clear. (#2081)
+
+### Documentation
+
+- **agent contract:** clarify delegated measurement authority in the shared `AGENTS.md` / `CLAUDE.md` block — a deciding standard (threshold, control, noise floor) is a choice stated before it is applied, decided by the operator unless explicitly delegated within a recorded scope; applying an agreed standard needs no renewed approval, and authorship, identity, or persistence alone does not authorize changing it. (#2080)
+- **interface contract, integration manual, tool registration:** state that a mode decides what `tools/list` advertises and never what dispatches, that `minimal` is the server default, and that the checked-in contract artifact remains the `lite` profile by declaration while the live handshake reports the running mode. (#2081)
+
+## [2.21.0] - 2026-09-04
+
+<!-- plugin-bundle-recut: v0.4.17 -->
+
+### Added
+
+- **evaluation:** preregister and run a paired, information-matched, frozen-cohort evaluation of a read-only diagnostic constraint-set renderer against a v1 transport-only correction (`think=false`, protocol/model/scorer/schedule/limits unchanged); publish a no-go result (equal-family effect θ = -0.0333, bootstrap 95% CI [-0.1000, 0.0000], sign-flip p = 1.0) with an explicit note that no runtime, tool-schema, dashboard, or governance integration is authorized by it. Also records and discards a scorer-derivation artifact (three "tripled" family counts that were one nested event counted three times) so the pattern isn't re-mined from the family table later. (#1890)
+- **interface contract:** publish a versioned, transport-neutral public tool contract spanning MCP, REST, and stdio (`docs/interface-contract.v1.json`, `src/interface_contract.py`), with workflow aliases now advertised consistently and workflow-first discovery order preserved; adds a checked-in lite contract artifact, conformance guards, and a client capability matrix (`docs/integration/CLIENT_CAPABILITY_MATRIX.md`), and corrects prior pause-enforcement and continuity-token wording. (#1901)
+- **federation:** expose a versioned federation handshake through `list_tools(lite=true)`, defining the normalized lifecycle success/failure envelope and the lifecycle capabilities a Resident must implement; declares MCP 1.x/2.x support with the newest-in-range CI lane now blocking. Paired with the separate `cirwel/unitares-resident` repo, cross-pinned to contract commit `d044d627`. (#1908)
+- **adjudication:** doctor findings can now be closed automatically. Provisioning the doctor layer's governance identity now unwraps the REST mint envelope correctly, drops the disallowed self-tag-stamping write (`persistent`/`autonomous` are privileged tags only the onboard classifier can grant), and refuses to write an anchor when the roster grant didn't happen; `doctor_check_finding` is admitted to the Sentinel adjudication queue under its own severity gate (`warning`, distinct from Sentinel's own filtered `warning`). Previously all 203 doctor findings in the preceding 30 days wrote the unresolvable slug `doctor-findings` and were rejected 422. (#1914, #1917)
+- **quickstart:** package the Elixir lease plane into the Tier-1 Docker Compose stack and add `make coordination-demo` — an end-to-end acquire / held-by-other refusal / atomic handoff / status verification / release / bounded-cleanup proof runnable against a fresh four-service stack. (#1918)
+- **identity:** a fresh mint that misses the resident roster now reports it in the response itself — `status`, `on_roster`, `granted_tags` vs `required_tags`, and a remedy — instead of silently minting an `ephemeral` identity that reports success and is archived by the orphan sweep days later. The SDK's `GovernanceAgent` raises `ResidentRegistrationRefused` when `persistent=True` was requested but not granted, and stays silent against older servers that don't return the field. (#1919)
+- **lease plane:** lease mutations can now be bound to a caller's governance identity within one operator's trust boundary — a verification endpoint checks proof of the claimed holder, with configurable off/log/enforce modes; acquire binds to the claimed holder, lifecycle mutations to the active holder, and handoff acceptance to the intended recipient. The identity proof was then hardened from a general governance continuity proof to a short-lived Ed25519 `lat.v1` attestation bound to deployment audience, holder UUID, method, path, and exact request-body hash, with operator verification keys published and each `(issuer, jti)` consumed once in Postgres before mutation (60-second nonce-retention margin). v1 accepts a single trusted issuer — multi-issuer federation stays deferred until leases persist `(issuer, subject)` principals. (#1926, #1928)
+- **eisv incremental-value pilot:** preregister a paired 12-arm prospective ablation testing EISV incremental and compression value — v2 episode schema, fail-closed semantic/independence/temporal-split validation with immutable receipts, kept isolated from the existing outcome stop rule — then add the disabled pilot-provisional infrastructure behind it: a create-only manifest bound to the protocol/schema, an atomic private episode store with fail-closed uniqueness/independence/access-receipt checks, a score-free inventory, and a planning-only paired-Brier power estimate. Collection stays disabled: no cohort enrollment, no scheduling, no production outcome read, no policy change. (#1930, #1931)
+- **eisv:** add `eisv_history_structure_read`, a read-only descriptive census of how much EISV history exists per identity and at what cadence — history-length distribution, gap-aware wall-clock 24h autocorrelation, and hour-of-day variance share reported beside its own chance floor — run as a single `REPEATABLE READ` snapshot that reads no outcome labels and feeds no stop rule or gate. (#1932)
+- **kg agent adoption pilot:** add a reversible, fail-closed KG adoption pilot (seven-cell whole-chain trial with an information-matched lexical control arm, an off/shadow-only advisory decision core with typed non-delivery, and an offline versioned KG bundle with hash-validated idempotent restore) with no scored live-model run, live alert surface, or new automation authorized. A separately-authorized production plumbing canary was then run and held at **HOLD** — the pinned live discovery ranked outside the top five for five of six frozen queries — and a follow-up isolated the canary's audit-event readback onto the canonical audit API so captured evidence can't be mistaken for authorization to append further audit rows. (#1934, #1944, #1949)
+- **ci:** three new guards make known silent commit-loss modes loud for every pusher, not just clients with hooks wired: `orphan-push-guard` flags a push landing on a branch whose every PR is merged/closed but which still carries commits beyond what landed, `merge-content-check` catches a merged head missing the branch's newest recorded push, and `automerge-disarm` detects auto-merge silently disabled by a transient check failure. Degraded runs (API errors, event-feed gaps) always emit a visible warning rather than passing silently. (#1935)
+- **cli:** add `unitares status [--json] [--no-release]` — one operator screen combining `/health` (version, build, uptime, db), release currency against the latest GitHub release, agent tier distribution, and the resident roster with liveness/verdict/silence judgment. Read-only (plain GETs, never onboards or checks in); the GitHub lookup is unauthenticated, cached 30 minutes, and can be disabled via `--no-release` or `UNITARES_RELEASE_CHECK=off`. (#1950)
+- **lease-plane:** add exactly one unauthenticated route to the `:8788` REST surface, `GET /health` — a static liveness body (`ok`, `status`, `service`, `protocol_version`) with zero state and no DB touch. `HTTPAuth` previously gated every path including health, so "up and fail-closed" was indistinguishable from "down" to any caller without a bearer token; `/v1/health` (which carries sensitive identity_binding metrics) stays bearer-gated, and every other path still 401s identically. (#1952)
+- **dashboard:** give the risk section a time axis — a new `risk.js` chart renders risk over time, and `/v1/agents/:id/history` now pairs each `risk_score` sample with the governance `action` (approve/guide/cirs_block/risk_pause/reject) and `verdict` tier that produced it, read from the already-persisted `state_json` with no new column or join. Rows written before the action-write landed carry both as null rather than a fabricated 'approve'. (#1947)
+- **lease-plane message transport:** addressed agent-to-agent messaging (`topic:/` surface scheme, `lease_plane.topic_messages`, `POST /v1/msg/{send,inbox}`) replaces cross-harness coordination that had been riding governance-KG notes tagged `channel-<topic>`/`to-<agent>` — measured 49 of 60 KG writes on one day were channel traffic, most left permanently `status='open'`, displacing genuine findings from `scan-actors.sh`'s search window. Transport only: no blocking, waking, spawning, or authorization scope; delivery is at-most-once; no MCP verb or SDK client exists yet. (#1960)
+- **auth:** `UNITARES_REST_STRICT` now decides REST/WebSocket auth posture independently of the `/mcp` bearer gate, which previously moved both together — enabling the bearer used to also lock out every local/LAN caller and the dashboard, since a browser navigation can't set an `Authorization` header. Strict posture additionally admits a DB-validated, revocable dashboard session; left unset, behavior is unchanged. Does not by itself allow closing `/mcp` — several internal callers (Vigil, Sentinel, the gateway, the dialectic dispatcher) still reach the server over `/mcp` rather than REST, and `agents/sdk` has no bearer support at any layer. (#1966)
+- **mcp:** every in-repo MCP client — the SDK async client (TCP and UDS transports), the SDK sync client's REST transport, the gateway proxy, the STDIO→`/mcp` bridge, and the env forwarded into a spawned dialectic reviewer — can now send `Authorization: Bearer` when `UNITARES_MCP_BEARER_TOKEN` is set. The `/mcp` bearer gate has existed since #847 with no client able to satisfy it, so turning it on would have 401'd every internal caller; this is additive only, unset behavior and posture unchanged. (#1972)
+- **eisv:** persist bounded caller-published afferents in the append-only EISV telemetry envelope, accepting a canonical generic afferents shape while retaining `body_anima`/`anima` compatibility, and expose coverage metadata in compact summaries without exposing raw values. Measurement-only — no estimator, ODE, basin, or policy consumer reads this channel. (#1979)
+- **cli:** `unitares agent <id|resident-label> [--json]` drills into a single agent's state, verdict, row composition, history depth, and E/I/S/V sparklines from the terminal. Found while building it: `/v1/eisv/latest` and `/v1/eisv/recent` both accept an `agent_id` query param and silently ignore it, so a filtered call can return another agent's governance data — a real, separate defect this command works around by reading only the path-scoped `/v1/agents/<id>/history` endpoint, not fixed here. (#1980)
+- **claude code:** adopt per-subagent memory (`memory: project` frontmatter) for the `governance-reviewer` agent definition, with a curation boundary — reviewer craft (assessment patterns, false-alarm signatures) lives in memory, durable findings still go to the knowledge graph — and add `scripts/dev/sync-plugin-agents.sh` to mirror canonical agent definitions into the governance plugin's `agents/` directory, which is how Claude Code actually discovers them. (#1996, #2001)
+- **dialectic:** add `emit_write_refused` and wire it into all three of the stuck-session sweeper's guarded-write refusal sites, so a write the database refuses for a terminal-state conflict now reaches `audit.events` and the sweep log instead of only incrementing a counter nothing downstream reads. This is the direct observation the reduced-scope Wave-3 gate needed and previously could not produce: a sweep that refused every write logged nothing at all. (#2011)
+- **governed-effect (Fermata) promotion continuity:** add the UNITARES-profile mapper for Fermata Governed Effect IR intents, persisting non-secret canonical receipts and failing closed on record-only promotions unless predecessor custody, effect type, exact surface, payload SHA-256, and Fermata receipt all verify before lease acquisition or mutation; a corrective follow-up — after council/consultation/dialectic review found the first slice didn't yet prove the recorded shadow, declared surface, and commit-bearing execution were one continuous effect — binds the envelope surface and lease surface before custody, stamps record-only shadows with a server-reverified identity tier, validates the exact Fermata receipt shape, and atomically single-consumes a predecessor via the effects-payload primary key; promotion stays independently opt-in (`UNITARES_GOVERNED_EFFECT_PROMOTION=1`, default off) and narrowed to the reversible `file_write` path. (#2021, #2026)
+- **dialectic:** add `dialectic_write_overlap` and a tri-state (`True`/`False`/`None`) saga probe run immediately after each successful guarded write, closing the third and previously-unobserved dual-writer ordering (early check clean, sweeper write succeeds, a saga starts anyway) named in the wave-3 gate; the probe never reuses `has_inflight_saga`'s fail-open semantics — a probe failure is counted as `overlap_probe_failed_count`, not read as "no overlap." (#2022)
+- **identity:** persist an `onboard_origin` provenance field distinguishing explicit adapter-marked onboarding from default unmarked-call inference, written once at creation time by both identity writers and surfaced in onboard payloads and `start_session`'s state summary; additive, creation-only JSONB with no effect on assurance, authorization, or governance verdicts. (#2028)
+- **ci:** add a Monday 09:07 UTC scheduled sentinel that compares the in-tree SDK version, `sdk-v*` tag, published PyPI artifact, and public compatibility claims, opening or updating a fingerprinted `ci-finding` issue on drift and auto-closing it on convergence; reminder-only, it never tags, publishes, or edits a dependency range itself. (#2037)
+- **governance:** instrument Codex subscription consults with model provenance — selected/effective model, provider, service tier, token usage, and CLI version — routed through a one-shot app-server client, with the existing exec-JSONL lane kept as a compatibility fallback restricted to failures before turn dispatch. (#2046)
+- **behavioral floor observability:** emit a versioned `behavioral.absolute_floor_observation.v1` telemetry record distinguishing live production-eligible absolute-EISV-floor evaluations from simulation and unknown/error cases; `policy_effect` is always `none` — no verdict, threshold, or history is affected. Companion to the docstring correction in #2045; issue #1995's operator calibration question remains open. (#2047)
+- **eval:** add an Ed25519-signed, k-anonymity-enforced federated EISV pilot exchange — one release per stable federation subject across run rollover/key rotation, durable replay/conflict receipts, closed non-scientific schemas. Outputs remain `PILOT_AGGREGATE_ONLY` with `decision_authority: NONE`; collection stays disabled and this does not enroll a cohort, authorize paired score/outcome access, or estimate A2-vs-A3. (#2051)
+- **tools:** record each tool's declaring module (`ToolDefinition.source_module`) so an entry-point plugin (e.g. `unitares-pi-plugin`) registering into the tool table no longer trips the TOOL_ORDER/drift checks meant for the first-party surface. (#2055)
+- **grounding:** add `registered`/`corrected` fixture rules for scraped-confidence outcome rows behind an opt-in `--fixture-rule` switch (decision packet R1/E1/E2 from #2061). `registered` — the shared default — reproduces prior counts exactly; `corrected` treats a row excluded solely for a server-scraped confidence as validation evidence rather than fixture noise, while calibration continues training on exactly what it trained on before. `/v1/harness/outcome` now documents, rather than silently continues, ignoring `prediction_id` (accepting it would let an asserted `agent_uuid` bind any open prediction to an unrelated outcome). No cohort or statistic moves on this deploy under the default. (#2062)
+- **dialectic:** add a deployment-countersigned `drr.v1` resolution receipt, wired but dormant — gated by `UNITARES_DIALECTIC_RESOLUTION_RECEIPTS` plus an Ed25519 attestation key, neither of which is set in production, so this mints nothing yet. A peer holding the deployment's public key can verify a receipt offline via `scripts/client/verify_resolution_receipt.py`, with no server, database, or agent API key involved. Minting happens only at the terminal `resolved` write, never at `finalize_resolution` or on a `failed`/unconfirmed outcome. (#2064)
+- **grounding:** resolve the three follow-up decisions #2062 left open, via a governed dialectic session — the shared fixture-rule default becomes `corrected` for non-protocol instruments (calibration still never trains on scraped-only rows); an immutable `REGISTERED_READ_MANIFEST` pins each registered protocol's fixture rule so a `--read-protocol registered` read can't silently pick up the new default; and the coherence-shadow ablation gets a distinct, receipted `v0.1` prospective read over post-cutoff outcomes rather than retroactively converting the frozen `v0` zero-eligibility result. No registered read, frozen reproduction, or frozen contract moves. (#2065)
+- **governance:** the resident-progress SILENCE probe now files a durable, searchable knowledge-graph finding when an agent reaches the CRITICAL branch, instead of leaving the detection as a log line and a live-only broadcast. Deduped by open tag against the database, so a server restart mid-outage cannot refile the same outage twice; gated on the CRITICAL branch alone, never on a resident name. (#2068)
+
+### Changed
+
+- **CI:** the consultation tool schema is now read through the existing MCP 1.x/2.x compatibility accessor, and its schema contract runs in the advisory `mcp-newest` lane so the same bounded schema assertions are exercised under both supported MCP majors (verified 7/7 and full-module 37/37 passing on both MCP 1.29.0 and 2.1.1). (#1903)
+- **CI:** rebalance the Python suite from five to eight isolated database-backed shards and cancel superseded branch runs, cutting the authoritative critical path from ~7–7.5 minutes to 2m51s–5m23s per shard; defer the heavy `sentence_transformers` import to first model load (6.05s/618MB → 1.00s/140MB on a focused benchmark); recompute the test-cache identity hash after lock waits so a tree that changed during the wait can't be served from a stale cache entry; and fix the PostgreSQL health-probe user. (#1904)
+- **CI:** eliminate the remaining suite-wide deprecation warnings identified by #1904's audit — convert the last class-scoped fixtures to Pytest-10-compatible class methods, declare Starlette's `httpx2` TestClient backend, disable WebSockets on HTTP-only test and UDS transports, and move the public `/ws/eisv` route to Uvicorn's supported `websockets-sansio` backend (encoding a Uvicorn ≥0.35 minimum). Full suite now runs with zero warnings; the kernel-attested UDS path stays HTTP/1.1-only. (#1906)
+- **lifecycle:** `is_agent_protected` no longer grants archival immunity to any agent labeled `"Lumen"`; protection now derives only from the server-granted `pioneer`/`persistent`/`pinned` tags an identity cannot self-assign. The hardcoded branch was unreachable on its own target deployment (already covered by tags) and left any other deployment's `Lumen`-named agent silently immune regardless of its actual tags. (#1923)
+- **eisv:** move EISV formatting/types and response validation behind `src.eisv.formatting`/`src.eisv.validation`, keeping `src.eisv_format`/`src.eisv_validator` as true module aliases (shared exported identities and mutable state) so legacy and canonical imports stay interchangeable; no change to public imports, validation semantics, or runtime response behavior. Completes the two implementation seams scoped by #1606 (Seam 1 landed in #1816). (#2033)
+- **ci:** run `elixir/wave3a_handlers`'s 83-test suite in `elixir-tests.yml` — it had zero CI coverage since landing in #1887 despite being deployed with a Python-side proxy on the request path. (#2043)
+- **ci:** make the Elixir suites requirable without the "path-filtered check waits forever" trap (#2040) — an always-run `elixir-changes` detector job classifies each push as relevant/skippable (an undeterminable diff, e.g. a force-push, is always treated as relevant), and a new `elixir-gate` job passes only when every app job actually ran and succeeded, or was skipped because a successful detector said nothing relevant changed. Does not itself change branch protection; making `elixir-gate` a required check is a separate follow-up repository-settings change. (#2056)
+- **ci:** add a Python 3.14 leg to the test matrix and hold four surfaces (Dockerfile base image, `scripts/ops` LaunchAgent templates, and the matrix's own `setup-python` step) to one declared production interpreter in `constraints.txt`, since production has run 3.14 while CI tested only 3.12. A per-leg check against the Actions API stops a selectively re-run shard from hiding another shard's failure behind a green collapsed result. (#2060)
+- **dependencies:** routine bumps — Dockerfile's `python` base image digest, `eslint` 10.8.1→10.9.1 in the dashboard-dev group, and `mcp` 1.29.0→2.1.1 (a major-version jump: unhandled tool/resource/prompt exceptions now log server-side and reach the client only as a generic message unless raised via `ToolError`/`ResourceError`, and content-block-annotated tools stop advertising `outputSchema` unless `structured_output=True`). (#2048, #2049, #2050)
+
+### Fixed
+
+- **dialectic:** `is_agent_in_active_session` now requires both `status` and `phase` to be non-terminal (previously `status` alone), closing a lockout of up to ~3.4 hours: the synthesis-timeout path calls `update_session_phase('failed')`, which by design leaves `status='active'` (BEAM alone may write terminal `status`), and the duplicate-session guard read that row as active — refusing a new session for an agent whose session had already ended, with neither `self_recovery` nor `reopen_session` able to release it. (#1892)
+- **dialectic:** the auto-resolve sweeper's ANTITHESIS "no replacement reviewer found" branch now *persists* the facilitation request (new guarded `mark_awaiting_facilitation`, deliberately not touching `updated_at`) instead of only narrating it into the transcript — previously the flag stayed `false` and the request re-fired every 10-minute sweep (duplicate messages, over-counted `facilitation_count`) until the session was reaped as an ordinary, non-revivable failure. The write is mirrored into the in-process `ACTIVE_SESSIONS` cache read by the reassignment/resume paths, cleared when the sweeper reassigns a reviewer itself, and now emits `dialectic_facilitation_needed`. (#1893)
+- **inference:** `codex:host-adapter` is reachable from `delegate_inference` again — `accepts_host_id_from`/`implementation_status` in the registry and the `DelegateInferenceParams.host_id` enum (previously `Literal["claude:host-adapter"]` only) were left stale after #1713 added the host-agnostic caller in 2026-08-17; also fixes a requested `model` being silently dropped from the Codex CLI invocation (now passed as `-m`, verified against the CLI's own clap definitions) and recovery text that named the Claude CLI regardless of which host actually failed. Claude remains the default host; the separate dialectic-reviewer Codex lane and `consult`'s Claude-only policy are unaffected. (#1894)
+- **dialectic:** a self-reviewed session (`reviewer_mode="self"`) can no longer resume its own paused agent — guarded both at the transition owner (`execute_resolution`, via new `agent_pause_is_live`) and at the earlier handler check, closing the self-certification gap where a self-reviewer's own first agreeing synthesis lifted its own pause. A refusal is nonterminal (persists `awaiting_facilitation`, resolves nothing, emits no `dialectic_resolved`), and reassignment now rewinds the session to ANTITHESIS so the incoming independent reviewer actually gets a turn. Scoped to a *live* pause only, so reflection by an already-active agent on its own reasoning is untouched. Reviewed and approved by an independent governed reviewer session. (#1895)
+- **inference:** `call_model(provider='hf')` (and other non-default providers) no longer silently routed to Ollama. `privacy` now defaults to `None` instead of the literal `"local"`, so an unstated default is distinguishable from a caller's explicit choice; an explicit `privacy='local'` remains a hard floor and now raises `PROVIDER_PRIVACY_CONFLICT` against a contradicting explicit provider instead of being silently overridden. Also adds the `HF_TOKEN` and `UNITARES_HOST_ADAPTER_ENABLED` keys to the plist template, without which only `ollama:local` is reachable with no indication why. (#1896)
+- **host-adapter:** the orchestrator's launchd spawn environment omitted `USER`, which the Claude CLI's credential lookup keys on — so `delegate_inference(host_id="claude:host-adapter")` failed with a "Not logged in · Please run /login" error under the service manager even with valid credentials on disk, while the same command worked from an interactive shell. Now sets `USER` explicitly (via `getpass.getuser()`, falling back to empty rather than raising). The Codex lane was unaffected since it resolves credentials from `HOME` alone. (#1897)
+- **agents:** stop fabricating epistemic claims via silent defaults. An absent `epistemic_class` was coerced server-side to `agent_report` (a positive claim of agent authorship) even though every resident actually composes its check-in text mechanically (f-strings / `join`); `CycleResult.confidence` and `checkin(confidence=)` defaulted to `0.7`, minting a scored calibration prediction — one that feeds `calibration_error` → `_compute_I` with real verdict authority — even from a heartbeat path with no model in it. `GovernanceAgent.epistemic_class` now defaults to `substrate_interpretation` (overridable per-cycle), `confidence` defaults to `None` and is omitted from the payload when unset, and residents (vigil, watcher, sentinel, chronicler, dialectic_reviewer) now state their class explicitly. The server-side `agent_report` default in `phases.py` is deliberately left as-is for now, to avoid silently reclassifying the ~80% of existing rows that already carry it. (#1898)
+- **flag_catalog:** the AST scanner only recognized literal-string `os.getenv`/`os.environ.get` calls, so flags read through helper wrappers (`env_truthy()`, `split_csv_env()` in `mcp_listen_config.py` — which turned out to be the entire network-listen surface: `UNITARES_BIND_ALL_INTERFACES`, `UNITARES_MCP_ALLOWED_HOSTS`, `UNITARES_MCP_ALLOWED_ORIGINS`, `UNITARES_MCP_ALLOW_NULL_ORIGIN`, `UNITARES_HTTP_CORS_EXTRA_ORIGINS`) and module-level name constants (e.g. `operator.py`'s `_OPERATOR_TOKENS_ENV`) went undocumented. Catalog now covers 131 → 147 flags; flags live in production but missing from the doc drop from 8 to 2. (#1909)
+- **host-adapter:** blank `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` in the orchestrator's spawn spec. An unused, no-credit key inherited at bootstrap from the interactive shell's dotfile was silently outranking subscription auth in the CLI's auth precedence, producing a bare `exit 1` indistinguishable from the earlier USER/login bug (#1897) it was hiding behind. (#1910)
+- **residents:** a rename-on-collision could shadow the real resident behind a ghost holding the clean label, since both resident surfaces resolve by exact label; resolution now prefers a row with the required tags over one with the exact label, so a genuine resident renamed to `{label}_{uuid8}` still wins. `set_agent_label` also now reports the label actually applied (or `None`) instead of a bare bool, so mint/onboard responses stop claiming success on a name the identity didn't get — the same silent-shadowing failure this class produces. Measured: 2 of 201 suffixed resident-prefixed labels were the real resident wearing the suffix, one case for roughly two months. (#1920, #1921)
+- **flags:** the flag catalog generator now retains every distinct reader fallback instead of collapsing conflicting reader contracts into one representative value, and picks up several previously-missed statically resolvable runtime reads (continuation-poll, resident-plugin, server marker, external-key, per-effect binding). Generated catalog grows from 147 to 154 flags. Follow-up to #1909. (#1922)
+- **dialectic:** an independent reviewer claiming an open review slot now clears `awaiting_facilitation`, which previously stayed set for the rest of the session even once a reviewer was actively working it — measured as the cause of 43 of the 44 non-probe flagged sessions that in fact had a reviewer assigned. A self-review claim still leaves the flag set, since that case genuinely still needs a human. (#1924)
+- **sdk:** the published `unitares-sdk` package (PyPI) could not complete onboarding at all when followed exactly as documented. A bare `onboard()` call needed `force_new=True` to declare a fresh bootstrap, and the server's guidance response (returned with `success: true` even when it declines to act) was being validated as a normal onboard result and threw a `client_session_id` field-required error instead of surfacing the server's own hint/next-step/safe-options. Both are now handled; the README's undefined `self.do_scan` example is also fixed. Follow-up to #1919. (#1925)
+- **deploy:** `deploy-mcp.sh` now reloads (bootout + bootstrap, with a wait for launchd teardown) rather than kickstarts a LaunchAgent when its plist's content hash changed since the last deploy-driven restart — `launchctl kickstart -k` reuses the cached service definition, so `EnvironmentVariables` edits were silently never applied. A missing hash sidecar is treated as the safe case (adopt current hash, kickstart), and a post-reload spot check withholds the sidecar if an env var didn't actually take, so the motivating bug stays detectable rather than getting latched as fixed. (#1933)
+- **merge-loss auditing:** stop three instruments from reporting comfortable false negatives. Dispatch integration tests now assert `TOOL_HANDLERS` registration instead of skipping when the registry is empty — masking exactly the import-time regression they exist to catch; the previously-unmerged `age_parity_audit.py` AGE-removal decision gate lands with its graph-query reader fixed (an unaliased scalar `RETURN count(r) AS n` was silently read as `0` via a dict-only guard, so its recorded "RESPONDS_TO: 0" finding is now flagged untrustworthy); and `stranded_work_audit.py` findings gain a `content_presence` hint (share of a finding's added lines already in master) that never votes on classification. A follow-up tags every finding with a machine-readable `reason` (`post_merge_push`, `merged_head_never_advanced`, `no_pr_route`) so a new `post_merge_push_rate` summary reports how often the stranding mechanism actually fires, not just when it cost something. (#1938, #1941)
+- **orchestrator:** mint an immutable UUID execution ID for every orchestrated run (the logical agent ID is retained only as metadata), keying lifecycle control, leases, and telemetry by it so a reused logical ID can no longer collide; add process-local Idempotency-Key handling for direct `POST /v1/agents` spawns (serialized concurrent retries, replayed execution ID for an identical spec, fail-closed on key reuse with a different spec); then persist those reservations in Postgres before the OS process opens (migration 068) so a restart can't lose them — a retry that finds a reserved-but-not-yet-started row now returns `idempotency_outcome_unknown` with the reserved execution ID instead of risking a duplicate spawn. Only SHA-256 hashes and execution metadata are stored, never raw keys, commands, arguments, or output. (#1939, #1942, #1953)
+- **dashboard:** the landing page's Calibration card now leads with the server's `calibrated` boolean and colors strictly on it, never on the `trajectory_health` number alone — the previous `>= 0.8` gate on trajectory_health would have shown green while the server reported "miscalibrated" (observed live at 0.784, 0.016 short of green); trajectory_health moves to the subtitle. Bundled in the same change: `/v1/eisv/recent?fields=compact` trims each polled event to the fields a trajectory chart actually reads (~6.3KB → ~0.5KB per event, the dashboard was polling every 10s), the research tab's empty state now names the live `research_registry` tool instead of reading as dead plumbing, and CLI-driven sentinel resolutions now stamp `adjudicated_via="cli"` to match the dashboard's existing stamp. (#1948)
+- **orchestrator:** log an `exited` line when an agent is reaped (`DELETE /v1/agents/:id`, or app shutdown) while still running — `terminate/2` previously emitted this only via `finalize/2`, which the reap path never reaches, so raw-log `started`/`exited` counts diverged on every reap and read as a process leak though nothing leaked. The new line is tagged `(reaped while running)` and guarded so a natural exit is never double-logged; `/v1/metrics` was already correct (#1549) — this closes the remaining log-only gap. (#1951)
+- **deploy-status.sh verdict accuracy:** the `pi-deploy` row rendered the local Mac checkout's branch@commit — no Pi probe existed anywhere — so the table could assert the Pi's state was current while the Pi ran a different branch entirely; it now SSHes (bounded, cached per run) to read the deployed-ref marker plus a git-HEAD fallback, reporting `PI-CURRENT`, `PI-STALE(Δn)`, `PI-DIRTY`, `PI-UNVERIFIED`, or an explicitly-labeled `(local checkout, not Pi truth)` fallback when unreachable. Separately, the `hot-reload` row (the lease plane) computed no staleness at all — a freshly restarted process and one running hours-old code both rendered plain `HOT-RELOAD` — now compares the plane's published boot-commit sha against the checkout and reports `CURRENT`/`STALE(Δn)`/`HOT-RELOAD(?)` when the sha can't be verified. (#1954, #1968)
+- **observability:** lease-plane presence heartbeats (~913/day, ordinary session onboarding) were forwarded into `audit.tool_usage` as `lease.*` rows and read everywhere as tool/coordination throughput — 4 of the top-10 "most used tools" in `get_tool_usage_stats` were lease substrate, `lease_plane_latency_audit.py` mixed heartbeats with the far rarer `substrate_earned` acquires (156 of 434,762 all-time, ~0.036%), `adoption_kpi.py`'s bounce metric counted a heartbeat as agent activity, and `unitares_doctor.py`'s `failure_label_live` check could clear its floor and WARN on heartbeat volume alone. All four now exclude or split on `holder_class`; the aggregate reports lease volume separately rather than dropping it. (#1955)
+- **anchor/adjudication:** `sentinel_finding` had been an all-positive generator for roughly eight weeks (17 confirmed, 0 dismissed) despite an existing code comment warning against exactly that shape — a new `unitares_doctor` WARN check (`anchor_all_positive_generator`) now watches for it. Operator adjudication gained a genuine abstain path (`status="abstain"`) that writes no `outcome_event`, replacing a forced choice that made "I don't know" resolve to a confirmation because `audit.outcome_events.is_bad` is `NOT NULL`; abstention is a cooldown, not permanent suppression. Also corrects two overclaims in the docs: operator adjudication is 2.4% of the falsifier's evidence, not "the ground-truth feed" (excluding it moves the bad-day count by exactly zero), and a dashboard comment claimed a recurring 10s poll that doesn't exist. The dashboard confirm button now reads "I checked the evidence" instead of "consistent with what I know", with a first-class "Can't determine" option beside it. (#1956)
+- **http:** four read surfaces answered without any credential check — `GET /v1/eisv/latest`/`recent` (the polling equivalents of the already-gated `/ws/eisv`), `GET /api/activity`, `GET /health/deep` (full diagnostic snapshot including internal component URLs and raw exception strings), and the bundled `dashboard/redesign/snapshot.js` capture of live governance state. All four now go through the same auth gate as their siblings, and a new test reads the route table and asserts every GET handler either calls a recognized gate or appears in a commented allowlist, so an ungated route can't be added silently again. (#1957)
+- **lease-plane:** both typed-error arms in the lease-plane HTTP router matched on `Postgrex.Error.postgres.constraint_name`, a key that does not exist (Postgrex exposes `:constraint`) — so every CHECK-constraint violation on `/v1/lease/acquire` and `/v1/lease/renew` fell through to the generic arm and was served as `503 service_unavailable, "internal error"` instead of a named `422` with the constraint in `detail`, meaning a caller would retry a permanent schema error as if it were a transient outage. (#1962)
+- **shared test database drift:** `governance_test` is shared across every worktree and never reset, so an unmerged branch's migration silently becomes part of the schema master's tests read against — migration 069's `topic` catalog seed made a migration-027 test fail on every branch at once, for a reason present in neither the test nor the code beneath it. `test_db_bootstrap_drift.py` now names, at bootstrap, any migration version present in the shared database but absent from the current checkout (reporting only, never mutating); and the migration-027 test itself now asserts its five seeded kinds are present as a subset of the catalog (correcting a docstring that had listed six) plus that every catalogued kind has a matching `surface_id_grammar` prefix, rather than asserting the catalog's entire contents equal a hand-maintained list — an equality that broke every time a later migration extended the catalog exactly as the catalog is designed to allow. (#1964, #1965)
+- **lease-plane:** `IdentityNonceReaper` and `TopicMessageReaper` were registered as `PeriodicWorker`s but exported only `run_once/0`, while `PeriodicWorker.run_worker/2` calls `perform/1` inside a rescue — so both had silently never executed since being wired up, logging "undefined or private" on every tick with nothing failing loudly. Found via `lease_plane.consumed_identity_attestations` holding 621 rows, all already past `expires_at`. Both now export `perform/1` in the shape `run_worker/2` expects, and a new test reads `application.ex`'s registered-worker list and asserts every entry exports it, so a future worker with the wrong arity fails the suite instead of ticking silently forever. (#1971)
+- **ops:** two sibling deploy scripts lacked safety checks `deploy-mcp.sh` already had. `deploy-lease-plane.sh` restarted via `launchctl kickstart -k`, which reuses launchd's cached service definition — so a plist `EnvironmentVariables` edit never reached the running process while the script's own health probe still reported success; it now routes through the same restart helper `deploy-mcp.sh` uses, which escalates to a full reload on a plist-hash mismatch. `deploy-orchestrator.sh` had no migration preflight despite depending on the governance DB schema — observed restarting onto code expecting migration 068's `orchestration.spawn_idempotency` table before it existed — and now runs the same manifest check against the live DB it actually talks to, refusing by default with an opt-in to apply pending migrations. (#1973)
+- **overview dashboard:** the Fleet Coherence card was permanently green (`cls: "up"` was hardcoded — the only one of nine cards not deriving its own state), rendering green live even while its own subtitle read "1 not checking in"; it now defaults to neutral and turns amber when a resident stops checking in. The page also downloaded 369 KB to render 41 KB of it; opt-in projections (`/api/automations?view=summary`, `dialectic(list, fields=compact)`) cut that by 88.9% without changing the default response shape. Separately, the automations "0 ungated" count only matched automations carrying an explicit `gate:ungated` note that nothing writes — 0 of 228 live automations carried it, so the card always rendered the most reassuring possible number in the one slot meant to flag unverified automation; it now classifies ungated + unclassified automations as "ungrounded" and warns on it, matching the Automations tab's own classifier. Telemetry-health's 30-day-cohort endpoint (1.64s on a cache miss) was also dropped off the 10s dashboard reload tick it could never show fresh data for, gaining a manual refresh control in its place. (#1975, #1977)
+- **mcp:** authenticate the scheduled dialectic canary with `UNITARES_MCP_BEARER_TOKEN` and add client-token slots to the governance, gateway, vigil, chronicler, and canary launch templates, so enabling a non-empty `UNITARES_MCP_BEARER_TOKENS` server allowlist won't false-red the canary that predates it. Follow-up to #1972. (#1981)
+- **overview:** stop the nine headline cards from silently failing to render when `snapshot.js` isn't served. Bearer-authenticated operators 401 on the plain `<script src>` fetch (it sends cookies, not the bearer token), and `DATA.stats()` was dereferencing the missing snapshot before its own try/catch, throwing before `renderStats` ran while the resident strip and pulse kept painting. The stats accessor now reads the snapshot lazily like every other accessor and degrades to a dash grid instead of throwing. (#1984)
+- **doctor:** `check_flags_catalog_fresh` and `check_tool_edge_index_fresh` now share a helper that reads a generator's exit code as a freshness verdict only when the generator actually reached one. A generator that crashed before comparing anything (e.g. a `SyntaxError` on pre-3.12 Python) previously read as `FAIL: doc is stale` and fed a false high-severity finding to the issue board; it now reports `UNKNOWN — GENERATOR never reached a verdict`. (#1987)
+- **eisv:** harden the afferent-authority boundary — move submitted afferents into a call-local telemetry sidecar outside policy state, harden numeric/secret-name/whitespace-collision/provenance/truncation handling, bound dialectic pause evidence to the primary and ODE lanes, and drop raw `sensor_data` from WebSocket and ring-buffer events in favor of compact afferent summaries. No EISV equations, coefficients, or risk/basin thresholds changed. (#1988)
+- **dialectic:** fix three synthesis-continuation defects found in live sessions — open one paused-agent response slot per fresh reviewer rejection instead of refusing every reconsideration attempt, keep an orchestrated reviewer alive for reconsideration when its post-verdict governance check-in fails (the verdict is already durable; telemetry is not an authority gate), and normalize/repair PostgreSQL JSON condition arrays that had been getting serialized one character at a time. (#1993)
+- **tools:** repair a broken `direct_resume_if_safe → quick_resume` alias that left the tool dead on the wire (`quick_resume` is unregistered, so every call returned `tool_not_found_error`); retire thirteen dispatch-tool registrations that were shadowed by an identically-named alias key and therefore just as unreachable; wire six core tools that were advertised with a permissive stub schema (`additionalProperties: true`) to their real parameter models; and make `list_tools`' compact view filter on the deployment's actual `TOOL_MODE` instead of a hardcoded lite-mode constant, so orientation matches the dispatchable wire in every mode. (#1994)
+- **delegate_inference:** attach a bounded 2000-character excerpt of the host CLI's own raw output (`adapter_raw_excerpt`, explicitly flagged as unparsed) to failure details whenever `delegate_inference` gets a non-complete terminal-answer envelope, so a "malformed envelope" error is diagnosable instead of silently discarding whatever the model actually returned. The strict fail-closed parse itself is unchanged. (#2002)
+- **tools:** `leave_note` is no longer marked deprecated. It carried `superseded_by="knowledge"` from an earlier consolidation while simultaneously sitting in `LITE_MODE_TOOLS` and being named a first-class tool in the shared CLAUDE.md/AGENTS.md contract; the flag is removed everywhere it was encoded (decorator, deprecation registry, tool relationships, SDK docstring, skill doc), restoring it to default `list_tools` orientation. Follow-up to #1994. (#2006)
+- **tools:** point every recovery hint at a tool the agent can actually call. The `direct_resume_if_safe` deprecation block and every branch of the check-in envelope's `recovery_hint` named `quick_resume()` / `self_recovery_review()`, both unregistered internal delegates that return `tool_not_found_error` — including on the response that fires precisely when an agent is already stuck. Hints now say `self_recovery(action="quick"|"review"|"check")`, preserving the 0.40-vs-0.60 risk-ceiling distinction between the two resume paths rather than collapsing it into one. (#2009)
+- **repo scope guard:** fetch the PR body live via `pulls.get` instead of the frozen webhook payload before stripping the harness attribution footer, and recognize the newer non-italic/non-linked footer shape (credit line + bare trailing session URL) in addition to the original italic-link form; the strip now loops instead of stopping after one pass. Fixes a replay bug where a workflow re-run restored an already-removed session link into the published PR body. (#2014)
+- **dialectic sweeper telemetry:** emit a zero-inclusive `dialectic_sweep_cycle` audit event (trigger source, scan/attempt/refusal counts, saga-inflight skips, outcomes, duration, errors) so an all-zero cycle is distinguishable from a cycle that never ran, and give the resolver a single shared task-local reentrancy flag across periodic, lazy, and direct entry points; a post-merge review of that change found the sweeper still queried the 100 *newest* active sessions (so older, likely-stuck sessions could be starved indefinitely) and could silently zero out already-committed outcome counts when a later session aborted the cycle — the sweeper now orders by least-recently-updated, fetches a 101st overflow sentinel and emits `active_session_batch_truncated` when the batch is capped, and preserves counts recorded before an abort. (#2015, #2019)
+- **delegated inference:** report whether the Codex/Claude host adapter actually located the `codex` marker line before falling back to reading the whole transcript, so a "malformed terminal answer envelope" failure can distinguish "the model answered badly" from "no answer region was ever isolated"; the diagnostic excerpt on truncation now keeps 1500 chars of tail alongside 500 of head instead of head-only, since the answer (or its absence) is always at the end of the transcript. (#2023)
+- **dialectic canary:** keep the scheduled canary red until its independent review reaches a terminal resolved phase with a recorded resolution action and at least one completed persisted dialectic read-back confirming the session ID matches, rather than trusting a response that merely looks resolved; enforce the verdict deadline across cadence, transport, and client cleanup, and ground-truth session/thesis/request_review rows against `audit.tool_usage`. (#2025)
+- **consult:** route thorough-effort consult calls to the reciprocal strong-model host (Claude-family callers get Codex, others get Claude), running Codex as an isolated ephemeral JSONL process and holding completion until both port exit status and EOF arrive so late terminal output isn't dropped; the legacy transcript parser is kept only as a rolling-deployment fallback. (#2027)
+- **CI:** stop the `documentation-validation` PR comment from rendering a dependency-import failure as `Tool Count: 0 tools` under a green checkmark — `count_tools.py` now returns an explicit `unavailable`/`total: null` state instead of a numeric 0 (chosen so a naive stdout capture can't render it as a count), and the comment step reads `--json` and renders an explicit "skipped, not passed" notice. Also found and fixed that `update_docs_tool_count.py --check` shared the same degrade-to-zero path and, in the runner where it was actually invoked, short-circuited to exit 0 before ever comparing counts — the tool-inventory guarantee was enforced nowhere in CI; the real gate now runs in the `smoke` job with `--require-registry`, which fails instead of skipping when the registry can't be read. (#2038)
+- **observability:** surface the already-computed `corroboration_reasons` (e.g. "no independent evidence beyond the claim") in `record_result`/`outcome_event` responses and in `state_summary`, not just in the persisted detail row — previously a `claim_risk: "high"` verdict came back with no explanation of why. (#2039)
+- **tool-edge-index:** stop inlining the four whole-tree provenance digests (audit bundle, dispatch snapshot, audited-source-revision, exposure snapshot) into `docs/dev/TOOL_EDGE_INDEX.md`, since any source edit rolls all four and made unrelated PRs conflict on those lines by construction — reproduced against #2028 and #2033, where the digest block was #2033's entire diff to the file. The digests remain authoritative in the `--json` output that the audit schema governs; nothing in the tree consumed them from the markdown. (#2041)
+- **kg:** search digests no longer report the RRF fusion rank — a pure function of position, 0.0164/0.0161/0.0159 for the top three results on every query regardless of match quality — as `relevance`. `relevance` now comes only from a quality signal (cross-encoder rerank, else cosine similarity) named by a new `relevance_basis`; a lexical-only hit reports no `relevance` at all rather than a substituted rank. The raw fusion value is still returned, renamed `fusion_score`. Presentation only — ranking and retrieval are unchanged. (#2044)
+- **tool-edge-index:** make `--check` reproduce byte-for-byte on every supported interpreter. Neutralizes three environment-dependent sources of drift: entry-point plugin tools are excluded from the generator's own tables; wire/describe schema hashes are computed over a normalized schema (union members sorted, presentation-only `title` dropped) instead of being sensitive to `typing`'s `Optional[...]` cache eviction order; and a stale verdict now prints a capped unified diff plus the running Python/mcp/pydantic versions next to the `constraints.txt` pin. (#2059)
+- **dialectic:** fix two defects that made a genuine v2 bilateral resolution unverifiable once its session left memory — `signature_version` was dropped on reload, so 58 of 114 stored v2 resolutions decoded as legacy v1 and failed verification by construction, and padded conditions were signed as received but verified against the whitespace-stripped/empty-dropped form the read path actually serves (5 affected stored rows). Clean rows sign byte-identical payloads to before. (#2063)
+- **tool-edge-index:** stop committing `file:line` locations in `docs/dev/TOOL_EDGE_INDEX.md` — a line number shifted by an unrelated edit anywhere above a definition (one line prepended to a handlers module rewrote 16 routing-table rows) was failing the freshness gate with no actual dispatch-edge change. The committed document now locates code as `file symbol` only; line numbers remain available via `--json`, which is regenerated on demand and never committed. (#2066)
+
+### Removed
+
+- **research registry:** removed `src/research_registry.py`, its MCP handler/schema, the three `/v1/research/*` routes, the dashboard tab, tests, and ops doc. Its one distinguishing feature — grading exogenous grounding — returned "anchored" for any non-empty free-text `source` field, and its own worked example (`{"source": "harness"}`) was the system grading itself as external evidence; five of its six rigor-checklist entries were plain truthiness checks on operator-supplied fields. Superseded by `scripts/eval/orientation_constraint_set.py`'s cohort runs, which carry verifiable provenance (model digest, quantization, decoding params, file hashes) rather than declared provenance. Zero recorded runs, but removal is argued on the design, not the usage count. (#1958)
+
+### Documentation
+
+- **schema:** add `COMMENT ON` annotations to six database objects that had each returned a clean, confident, wrong answer to a reasonable question in practice — `core.agents`, `core.identities`, `core.identities.metadata`, `audit.events`, `audit.events.raw_hash`, `audit.events.event_type` — so the disambiguating context (e.g. `raw_hash` is a dedup key, not an attestation; `agents`/`identities` is a deliberate split, not legacy staleness) travels with the schema itself, including to a federated peer built from these migrations. Migration only: no DDL or data change. (#1891)
+- **product boundary:** frame UNITARES as an MCP-native, harness-agnostic accountability and coordination layer, and define the boundary between Core, the public interfaces, external userlands, and a future UNITARES Resident — Resident is a separate public-API consumer with no privileged scoring or database access — aligned across the README, product definition, component map, manual, repo-scope doc, and reference-resident docs. (#1899)
+- **public site:** add a subhead ("The missing middle between pre-deployment evaluation and post-incident forensics") so the headline's "runtime governance" reads in its intended before/after-incident sense rather than the enterprise control-plane sense (intercept and enforce every call) the phrase has since acquired elsewhere; headline noun and body copy otherwise unchanged. (#1900)
+- **glossary:** mark `metrics.phi` as a high-risk homonym — it ships on the wire with no prior entry, so a federated peer with no other context would fall back to IIT's unrelated "integrated information" sense of Φ. Our Φ is a scalar distance-from-setpoint loss (`E→1, I→1, S→0, V→0`); the entry records that it is telemetry-only (`UNITARES_PHI_TELEMETRY_ONLY=1`, no longer a verdict floor except as the `phi_cold_start` fallback prior) and expressive-but-unvalidated (widest dynamic range of any field, no demonstrated predictive lift) — safe for visualization/regime reads, not for citing as validated discrimination. Docs only, no wire or behavior change. (#1902)
+- **README:** rewrite the opening to lead with what is actually measured — "Self-state telemetry for long-lived AI-agent fleets" — instead of "runtime governance," a phrase that acquired a fixed enterprise meaning (policy enforcement at the moment of action) this system does not perform. Reframes around the identity/legibility question the README answers versus evals, guardrails, and traces; moves "Where it fits" earlier; describes EISV as "self-state estimation"; and updates the UNITARES Resident row to reflect the now-existing repository. Every number, limit, and caveat in the evidence section is preserved verbatim — no evidence claims changed. (#1905)
+- **README:** replace the `hero-v2.png` hero image, which read "Catch an AI agent going off the rails, before anything breaks" — a prevention claim the README's own claim-status table classifies as Untested — and carried a stale "3.7M+ governance events" figure, with `hero-v3` stating the question the system answers rather than a promise it can't keep; the source is now committed as SVG alongside the PNG so future wording corrections are a text edit and re-render, not a design round trip. Also adds a "what is built" table of AST-derived structural counts (106 MCP tools, 12,619 test functions across 720 files, 64 migrations, 509 modules, 208 docs, 7 companion repos), explicitly labeled as evidence of existence and exercise, not correctness, benefit, or generality. Follow-up to #1905. (#1907)
+- **readme / threat model:** state the attestation half of the federation trust boundary — resolution attestations are HMAC-keyed on each agent's `api_key`, which is symmetric, so a third party able to verify a signature could also forge one; a resolution record is therefore not independently verifiable today by an operator who doesn't already trust its issuer. Also names the non-self-clearing property (a paused agent can't clear its own session over a standing reviewer objection) as a federation seam. (#1912, #1915)
+- **readme:** split "review binds on the reviewed agent" (exercised: 33 non-canary sessions carry a submission recorded after a reviewer's rejection) from "review and coordination measurably improves outcomes" (still untested) — one claim-status row previously conflated both. Both rows and their carve-outs are pinned by `tests/test_readme_evidence_contract.py`. (#1916)
+- **readme:** trim repeated "what this is not" caveat tails restated after nearly every section (negations 41 → 29, 423 → 376 lines) by consolidating them into the existing *Evidence and limits* section; merges *Where it fits* and *Product boundary*, and narrows the claim that UNITARES Resident "receives no privileged scoring or database path" to what its test actually establishes — that a raw HTTP call to an admin route is import-clean, a static property, not a runtime-verified one. (#1927)
+- **workflow conventions:** split "marking a PR ready" from "merging" — marking ready is now the working agent's own declaration that validation actually passed (CI green, review round joined, no collision); draft means "still working, hands off" even when the diff looks finished, and no agent marks another agent's PR ready on its behalf. Merging remains the operator's deliberate act; known ordering constraints go in the PR body. Updates the shared CLAUDE.md/AGENTS.md contract and `docs/operations/github-workflow-conventions.md`. (#1936)
+- New design-only RFC (`docs/proposals/active/beam-verbs-as-contract-capabilities-v0.md`) proposing which lease-plane (BEAM) operations should become agent-facing capabilities in `unitares.interface-contract.v1` — exposing `msg` and conditionally `lease`, formalizing the dialectic phase/resolve client, and keeping `/v1/lease/force-release`, the supervision tree, and the `agent:/` presence heartbeat internal. No code change; names its own biggest risk (whether reachability rather than capability has been driving which substrate agents use) as the disconfirmer that would refute the document. (#1967)
+- Corrects the README's "Benefit from review and coordination" claim-status row. It previously read "No comparison has shown an outcome improved by review", which reads as a search that was performed and came back empty; it now says no such comparison has been run at all, and adds that a low review-record count cannot separate a review mechanism that was never surfaced, never reachable, or never recorded from one that was recorded and genuinely unused. The status word itself (**Untested**) is unchanged. A first version of this fix also rewrote the status word to "Coordination observed; benefit untested" and cited commit-volume figures; that broke a CI contract test and rested on numbers that don't support the claim (98.4% of the cited commits carry one human identity, since the repo strips harness attribution trailers by policy), and was reverted before merge. (#1974)
+- Documents `reviewer_provenance` in the `dialectic-reasoning` skill so a review performed outside the MCP server — a Codex consult, a subagent council, any non-MCP reviewer — gets filed as a governed record instead of leaving no trace. Measured against live governance data: the `external_consult` reviewer_kind has 0 rows ever, so the README's "Benefit from review and coordination: Untested" row (#1974) structurally cannot move regardless of how much outside review actually happens. Also documents that a misspelled `reviewer_kind` silently files as `agent_submitted` (self-review) rather than erroring, and that a failed/errored/timed-out consult must be marked `degraded: true` rather than filed as clean. (#1976)
+- **eisv:** correct `EISV_COMPUTATION.md` where it had drifted from the running code: it showed the retired v1 double-smoothed V formula instead of the live single-smoothed v2 (`V_FORMULA_VERSION = 2`), claimed per-coordinate `*_source` provenance tags are unconditional when they're actually attached only by the opt-in, default-off grounding stage, attributed `calibration_error` solely to the drift-blended monitor fallback instead of also naming the live handler's strategic mean-bin-error producer, and pointed the Reviewer Guide link at a heading that no longer exists while instructing a live-matrix re-run the current stop-rule posture forbids. Also records the absolute-floor verdict geometry (a single breached floor caps below the caution threshold) as issue #1995 rather than silently changing it. (#1992)
+- **proposals:** record the 2026-08-29 operator decisions on the BEAM-verbs capability RFC: tool-usage accounting goes with candidate (c) — keep `audit.tool_usage` meaning "an agent called a tool" — scope proceeds as `msg` now with `lease` deferred (not cancelled), and the attestation issuance-scope model is ratified, without that ratification authorizing the `validate_path` widening it depends on. (#1997)
+- **wave-3:** publish the §11-style reduced-scope gate document required before any further Wave-3 BEAM build authorization, and record four operator rulings on it (2026-08-29): instrument the dual-writer hazard before deciding on the port, give reassignment writes their own serialization design rather than inheriting one, keep criterion 6 as telemetry with its halt authority removed, and defer the disputed scope question instead of resolving it. Its central finding — that the sweeper's guarded-write refusals were entirely unobservable in production, with no emitter on any refusal path — is the prerequisite #2011 then instruments. (#2008)
+- **wave-3 write-guard RFC:** correct `beam-wave-3-handler-dispatch.md`'s write table, which still named reserve-first as the adopted fix for the dialectic reassignment writes after the 2026-08-29 operator ruling gave those writes their own serialization design; add two `tests/test_dialectic_db.py` checks (mutation-tested) that make the "`TERMINAL_WRITE_GUARD` governs the guarded `UPDATE`s" claim actually load-bearing in CI, since none of the five guarded statements interpolated the constant. (#2018)
+- **SDK compatibility docs:** move the public compatibility map and install badge from unitares-sdk 0.2.2 to the published 0.3.0 release, recording the behavioral changes relevant to `GovernanceAgent` subclasses. (#2024)
+- **wave-3 gate:** refresh disconfirmer (C)'s `anubis-mcp`/`hermes_mcp` version evidence (now two major versions ahead of the recorded re-pin target), correct the claim that a `docs/handoffs/` artifact "existing on no ref" proves a red-team review never happened (that path is gitignored by policy, so its absence there is guaranteed rather than informative), and correct criterion 7's stated blocker from "no Elixir toolchain" / "network policy" to what it actually is — a CI spike on a lane that already runs `mix test` against hex.pm in five other Elixir apps; record the operator's §6.3 ruling that the standalone >25% named-item slip halt governs (the elapsed×3 cap is a reporting signal, not an independent halt) and the §6.7 ruling that #2022's post-write telemetry is useful but a bounded zero still can't fire disconfirmer (b1) on its own, then reconcile the gate's stale §6.5–§7 wording to match. (#2031, #2035)
+- **beam-verbs-as-contract-capabilities RFC:** fix four unsupported claims in §8 surfaced by independent dialectic review — the "retries are routine" premise had no supporting adapter (the one existing caller explicitly refuses to retry), §8b and §9 contradicted each other on whether claim/ack/redelivery had been adopted, "permanently consumes mail" overstated a reachability loss as data loss, and a citation didn't support its claim — and record the review's own ratified conditions in a new §8f so they aren't lost from an abbreviated resubmission. (#2032)
+- **tools:** `start_session`'s description now names the common call (`force_new=true` alone) inline in the schema, instead of requiring a caller to already know CLAUDE.md's identity-ontology guidance. (#2042)
+- **behavioral_assessment:** correct the absolute-safety-floor docstrings, which overclaimed that a floor breach catches a "genuinely dangerous" state regardless of operating point — the arithmetic only bounds each floor's own component contribution to composite risk, not the verdict, and E/I are coupled through V so a sustained one-sided collapse in either typically breaches the V ceiling too rather than staying a single-component "safe" breach. Zero behavior change (docstrings/comments/tests only). Issue #1995's operator calibration question remains open; see the companion telemetry in #2047. (#2045)
+- **operations:** add a cloud-deploy runbook for running the governance stack on a cloud host when the primary physical machine is offline — host selection, hardening the Compose dev-default secrets, tunnel-only exposure, off-site backups, restore drills, and single-canonical-instance cutover discipline (concurrently-writing instances cannot later be merged: Postgres is reconcilable at cost, interleaved Redis identity/session state effectively is not). (#2054)
+- **constraints:** reconcile `constraints.txt`'s own checklist and prose with the `mcp` 2.1.1 pin that landed in #2050 — the production-interpreter line had stayed unticked and a trailing sentence still claimed the pin was 1.29.0. (#2058)
+- **proposals:** publish a decision packet on the scraped-confidence/fixture-marker conflation in outcome rows — `calibration_excluded` doubles as both "must not train calibration" and "drop as fixture traffic" for the discrimination instruments, which zeroes out two pre-registered reads' visible evidence. States the fork (run the 2026-12-01 read as registered with a disclosed sensitivity cohort, vs. re-register) and recommends the former; implemented in #2062 and #2065. (#2061)
+- **agent contract:** compress the shared `AGENTS.md` / `CLAUDE.md` block to rules and pointers rather than restated prose, and move the displaced architectural detail into `docs/UNIFIED_ARCHITECTURE.md` where it is discoverable on its own. (#2069)
+- **agent contract:** state the execution-cost policy in the shared block, so the cost expectation an agent is held to is written where the contract is read. (#2072)
+- **ontology:** re-verify `harness-substrate-plurality.md` against the tree (every implementation claim it makes still resolves) and correct its header, which still announced itself as a draft awaiting review after `docs/ontology/plan.md` had recorded S22 as resolved on 2026-05-06. (#2074)
+
+<!-- changelog-coverage-exempt: #1911 no-user-effect -->
+<!-- changelog-coverage-exempt: #1913 no-user-effect -->
+<!-- changelog-coverage-exempt: #1929 no-user-effect -->
+<!-- changelog-coverage-exempt: #1937 no-user-effect -->
+<!-- changelog-coverage-exempt: #1982 no-user-effect -->
+<!-- changelog-coverage-exempt: #1991 no-user-effect -->
+<!-- changelog-coverage-exempt: #2005 no-user-effect -->
+<!-- changelog-coverage-exempt: #2007 no-user-effect -->
+<!-- changelog-coverage-exempt: #2070 no-user-effect -->
+<!-- changelog-coverage-exempt: #2071 no-user-effect -->
+
+---
+
+## [2.20.0] - 2026-08-24
+
+<!-- plugin-bundle-recut: v0.4.16 -->
+
+### Added
+- **beam/sdk:** `UnitaresSdk.LeasePlaneEnvelope` and `UnitaresSdk.OrchestratorEnvelope` — shared reply classifiers for the lease-plane (`:8788`) and agent-orchestrator (`:8789`) envelopes, consumed by the in-tree clients (`agent_orchestrator`'s `LeasePlaneClient`, `lease_plane`'s `OrchestratorClient`); dispatch_beam adopts via its SDK ref bump. Includes the 504 `await_timeout` control signal and the nested-`result` reading. (#1814)
+- **sdk:** publish `unitares_sdk` 0.2.0 to PyPI — `delegate_inference`, `DelegatedInferenceResult`, and the wider `InferenceProvenance`/`InferenceHostsResult.invocation` fields added in #1713 finally reach `pip install`; purely additive, `0.1.0` callers unaffected. (#1795)
+- **tests:** direct coverage for `/v1/enforcement/divergence` (bearer gate, day clamping, response contract, null last-delivered case, 500 path, plus a live-Postgres integration test) and a verdict-path basin guard against the decision self-loop (ledger row 45 + conjunct-binding read) — both previously untested paths. (#1801, #1807)
+- **ops:** `unitares-automations` census now self-checks that its own PATH install stays a symlink to the `unitares-ops` checkout, so a regression to a hand-installed copy (found 2026-08-22 three commits / 89 lines drifted, with no prior symptom) surfaces as a census warning instead of drifting unnoticed again (#1823)
+- **doctor:** a detection-only canary for non-authored cold-start pauses — counts `phi_cold_start` pauses against a denominator of `phi_cold_start` decisions over 7 days, SKIPs rather than PASSes on an empty denominator so a zero never gets read as "no evidence either way." Wired-canary run at write time correctly caught 3 true-positive pauses from a commit that fixed but hadn't yet deployed the guard. Reports and stops; no re-check, no outcome write (#1824)
+- **measurement:** persist model and harness provenance on recorded state, with an indexed cohort guide for reading it (#1825)
+- **governance responses:** action-first envelope for check-ins — normalized action, one-line reason, risk score, verdict confidence, and evidence basis surfaced at the top of the response, with legacy ODE-derived coherence separated into an explicit non-behavioral diagnostic block; knowledge-search summaries became a bounded digest with lifecycle metadata and details previews. (#1858)
+- **tool surface audit:** first observation-only slice of a content-addressed dispatch/production-wire exposure snapshot — deterministic graph checks, a strict JSON Schema, and regenerated operator docs; does not change registration, exposure, alias, dialectic, orchestrator, or inference behavior. The generated report already surfaces one real defect (a dangling alias `direct_resume_if_safe -> quick_resume`), eleven mode/schema-width warnings, and fifteen orientation gaps. (#1883)
+- **inference:** `consult` — a canonical advisory model-inference facade with explicit purpose, effort, privacy, degradation, and response-mode contracts, typed outcomes, cancellation/fallback phases, resolver-bound identity attribution, and REST parity. `request_review` remains the distinct governed peer-review verb; discovery/catalog guidance is clarified so the two are not confused. (#1887)
+
+### Changed
+- **beam/orchestrator:** `LeasePlaneClient` error reasons are now SDK-canonical terms (`held_by_other` carries the full 409 payload with `retry_after_hint_ms`). (#1814)
+- **ci/deps:** pin `mcp` to the deployed `1.29.0` at every blocking install site and in the Docker image so CI tests what production runs, add a mock-free dependency canary (real connect, real tool call, an import-surface check that catches the httpx2 swallow-the-stream failure mcp 2.x introduces), and run that canary against the newest in-range `mcp` on an advisory-only lane. (#1802)
+- **ci/release:** two new gates close the seams that produced the 2.18.0 errata — `changelog_coverage.py` compares the changelog entry against the actual first-parent merge range instead of trusting it, and `release_series_drift.py` blocks a release whose SDK or skills series moved without its own version bump; both stand down on ordinary PRs and only engage on a release tree. (#1803)
+- **ci/dependabot:** distinguish a private-repo triage run that's unreachable-by-policy (still fully reported, exits green) from a real coverage regression (stays red), so the weekly fleet-triage schedule stops training everyone to ignore a guaranteed-red workflow. (#1808)
+- **ci/release:** `release_series_drift.py` no longer reads `agents/sdk/README.md`'s server-tag pin (updated by `version_manager.py` on every server release) as an unbumped SDK change — that made every release trip the SDK-series gate regardless of whether SDK code moved, discovered cutting this release. A genuine SDK-content edit under `agents/sdk/src/` or `pyproject.toml` still blocks. (#1889)
+- **ops/deploy:** bring `openai-gov-proxy` into the unified deploy sweep — register it with `deploy-apply.sh`, migrate it off the mutable host-adapter checkout into its own deploy worktree and venv, and verify it by launchd PID socket ownership instead of trusting a passthrough response. (#1811)
+- **evaluation:** move resident-validation model/runner/invocation implementations into `src.evaluation.resident_validation`, with the three legacy import paths kept as identity-preserving re-export shims and old-path/new-path import-contract tests added. (#1816)
+- **installs:** every human-facing install command (`CONTRIBUTING.md`, the operator playbook, `setup.py`, `start_server.sh`'s remediation hint, and the shared `CLAUDE.md`/`AGENTS.md` Setup contract) now passes `-c constraints.txt` and installs the `full` extra — the previously documented commands could silently resolve `mcp` 2.x instead of the pinned `1.29.0`, which fails suite collection (147 errors) and, on the server, breaks the server-push GET stream silently against httpx 0.x. CI and the Dockerfile were already correct; only the human-facing docs were wrong (#1839, #1843)
+- **knowledge graph:** shared-memory recall is now explicit and pull-based — `sync_state` performs no KG lookup unless `include_memory_suggestions=true`, and `search_shared_memory` defaults to a lean one-line digest; synthesis excludes internal source/maintenance tags from its topic limit without discarding provenance. (#1873)
+- **sdk:** publish `unitares_sdk` 0.2.2 — completes the httpx2 client-injection migration #1813 left version-unbumped; see the SDK's own [PyPI release](https://pypi.org/project/unitares-sdk/0.2.2/) for detail. (#1885)
+- **ci:** split the slow `tests-a-h` shard into `tests-a-d`/`tests-e-h` (was ~7.5min against ~4min for its siblings); update the coverage-contract test for the five-shard layout. (#1886)
+- **dependencies:** routine Dependabot bumps — `fakeredis` (VSIM/ZPOPMIN RESP3/stream-group fixes), `docker/setup-buildx-action` 4.2.0→4.3.0, `sentence-transformers` constraint widened to allow 6.x/7.x, and the dashboard-dev `vite`/`vitest` group. (#1863, #1864, #1865, #1866)
+
+### Fixed
+- **dialectic reviewer lifecycle:** do not request human facilitation before a
+  thesis gives the configured reviewer a chance to spawn; record successful
+  reviewer dispatch explicitly; keep a rejecting reviewer alive through the
+  protocol's one-hour synthesis window; and preserve that longer runtime cap
+  through governed-effect dispatch instead of silently falling back to the
+  orchestrator's thirty-minute default. (#1877)
+- **confidence:** the per-agent offset is now reproducible across processes. `derive_confidence`'s comment said "deterministic per-agent offset" over `hash(agent_id)`, which Python salts per interpreter (`PYTHONHASHSEED`) — so the offset was constant only *within* one process and the same agent received a different ±0.01 nudge after every server restart. Now derived from `blake2b`, same 1000-bucket / ±0.01 band. **One-time discontinuity at rollout:** every existing agent's offset moves once, to a new stable value. Confidence metadata now carries `agent_offset_scheme` (currently `blake2b-v1`) so a later calibration analysis can distinguish that formula migration from a change in agent state; bump the string on any future change to the scheme. This fixes reproducibility only — it does not validate injecting agent-ID-derived jitter into a confidence estimate, which stays an un-validated term and a prospective ablation candidate (see `src/confidence.py`'s module docstring). Also removed the test that asserted two specific agent_ids produce different confidence: with 1000 buckets any given pair collides with probability ~1/1000, making it a per-run lottery that CI eventually lost. (#1853)
+- **eisv inference:** separate scientific refutation from benchmark failures, implementation/formula/provenance/documentation mismatches, path bounds, reconciled events, deployment snapshots, non-detections, and unidentified designs across all 45 tested-claim rows. The frozen outcome read has unknown read-specific power after its first synthetic characterisation was withdrawn for corrupted pairing; recurring live discrimination jobs are paused; reviewer and dogfood paths now use frozen artifacts or synthetic contract tests; and the December decision retains its operational stop rule with the interim-access and read-specific-power disclosures required. (#1836)
+- **knowledge:** `tags` is an exact filter in hybrid search too. Phase 4 (#62) made it a rank boost on the hybrid path while the schema kept saying "Filter by exact tags", so the default `auto` mode returned untagged results for a tag nobody used. The predicate now rides inside both backend queries (`tags && $n` on the FTS arm; a join with `hnsw.iterative_scan` on the pgvector arm) so a tagged row that ranks below the first-stage limit is still retrieved, and the post-filter stays as a backstop; candidates it removes are disclosed as `tag_filter_dropped`. A supplied tag that normalizes to nothing is now rejected instead of silently disabling the filter. The schema and tool description state the contract: any of the given tags, normalized, in every mode; the description previously claimed AND semantics (dogfood finding `bdb18ee4e52ee7d6`) (#1810)
+- **observability:** make `calibration_excluded` attrition visible at write time and in inventory, not only after the fact. (#1793)
+- **quickstart:** operator wiring is reachable from `.env`, and port/SHA self-reporting is honest instead of assumed. (#1794)
+- **doctor:** stop telling operators not to widen the adjudication queue for a reason (`http_sentinel_adjudicate` mis-attribution) that was already fixed weeks earlier — found by an audit of 70 stale invariants across 343 examined. (#1797)
+- **knowledge:** #1759's relevance-carry fix never actually reached production — a five-month-old `rank` pop one layer below where it read the value silently zeroed every result below the floor. The pop is removed, rank now flows through deliberately with a warning if it ever goes missing again, and non-positive search limits are rejected instead of one silently becoming the default and the other reaching Postgres as a malformed `LIMIT`. (#1798)
+- **mcp compat:** unpack the `mcp` 2.x streamable-HTTP client's yield by index instead of fixed 3-tuple arity, across all five call sites (SDK, stdio proxy, canary, calibration harness), and port every HTTP-client injection site onto a resolver that reads the transport's own import surface — closing the separate httpx2 failure where mcp 2.x silently drops the server-push stream when an httpx 0.x client is injected. Production stays pinned to `mcp<2.0.0`; this clears two of the four gate conditions for that future move without changing today's behavior. (#1800, #1813)
+- **dialectic:** guard terminal-state writes on `core.dialectic_sessions` (`resolved`/`failed` now block further status/reviewer/phase writes) and repair the reviewer-revival path a naive first cut of that guard would have broken — a live dual-writer race between the BEAM saga and the Python sweeper was clobbering resolved sessions back to `failed`. (#1804)
+- **dashboard:** a missing residents row now reads `unknown`, never `healthy` — the same false-reassurance class #1753 removed, reproduced live during this review; Watcher/Sentinel/Vigil no longer show a green pip when `/v1/residents` degrades. (#1805)
+- **ops/plugin census:** the automation census's hook-path parser only understood a bare quoted path, so #122's rollover-survival shell wrapper false-flagged every wrapped hook as unresolvable and spiked the attention count from 2 real items to 34; separately, the census only ever walked the dev checkout's hook layout and never actually looked inside an installed plugin-cache copy three directories deep, so a genuine cache rollover still regressed to the pre-#122 failure it was supposed to survive. Both fixed. (#1818, #1821)
+- **governance:** a `pause/cirs_block` route bypassed the non-agent-authored cold-start guard because it recorded only `nearest_edge`, the display explanation left after an early return — not proof that resonance, coherence, void, or an independently low basin hadn't also fired. Recovery now validates a complete, versioned hard-stop provenance record field-by-field before letting a non-authored Phi cold-start pause downgrade to guidance, using a risk-neutral basin counterfactual to tell a risk-created low basin from a structurally low one; any missing, contradictory, or unknown field keeps the pause. Replayed against the 7 live-affected identities: all correctly downgrade when risk is the sole cause, and all correctly re-pause when resonance is injected; of those 7, 3 have since self-healed via a later check-in and 4 remain trapped under the old record until they check in again. (#1819)
+- **release process:** correct the v2.19.0 changelog entry in place — thirteen pull requests merged as merge commits (not squashes) carried no citable subject and were invisible to the coverage check that shipped claiming "131/131"; corrected coverage is 147/147. The gate itself is rebuilt on a first-parent walk that fails closed instead of silently shrinking its own denominator when it can't attribute a commit. (#1809)
+- **dialectic:** `get_stats`'s raw per-status breakdown is removed rather than fixed in place — `status` conflates protocol failure, by-design canary traffic, and a standing unfacilitated objection, so a plain count is not outcome data. It produced a wrong Wave-3 criterion-10 cohort count (11 counted vs. the true 5 through the real classifier) on 2026-08-22; a considered CI lint against raw-status aggregates was built, found to miss the incident's own shape (`WHERE status='failed'` and friends pass clean), and withdrawn (#1827)
+- **dialectic:** close three measurement defects in `dialectic_reviewer_reassigned`, the source for RFC §11's reassignment-rate half — the sweeper never emitted, the request path emitted on a refused write, and (the one that mattered on the live path) BEAM's guarded update returned success on a terminal-row no-op, so Python recorded reassignments that never happened. BEAM now returns `:error, :session_terminal` and the router answers 409 (#1833)
+- **knowledge:** distinguish `store_finding`/`update_finding` responses from a search result in the normalized envelope — every friendly knowledge write was previously routed through the search branch, so a successful store or update returned a false "no prior discoveries matched" `next_action` while the real confirmation and discovery ID were visible only under `raw_governance` (#1828)
+- **knowledge:** memory suggestions are now retrieved from the meaningful check-in text (not generic lifecycle tags), bounded to a 250ms budget, tried exact-then-FTS before OR fallback, and normalized consistently across standard/compact/mirror response envelopes — suggestions were technically produced but frequently empty or dropped before reaching an agent (#1835)
+- **shadow/coherence:** repair the coherence gate's positive control, which could not fail — it injected each tier's excursion in units of that tier's own `k`, so raising `k` raised the injected excursion with it. At the shipped `k`, the top tier was certified reachable at V = 1.10, outside the `[-1, 1]` range `BehavioralEISV.update` can ever produce, and ~97% of eligible live traffic (6,343 of 6,510 rows) sits in a scale regime the control never tier-tested. No threshold, flag, verdict, or weight changed — the gate stays shadow-only (#1838)
+- **eisv/inference:** correct two storefront overclaims pointing in opposite directions. The frozen falsifiability read's statistical power was never measured before being cited as a negative result; measured now via a synthetic-cohort power probe (30 trials): roughly 3% power at the frozen slice's effect size, rising to 80% only at AUC 0.82 — a non-detection, not a demonstrated negative, and the README/product-definition wording is corrected accordingly. Separately, "an accountability instrument with one working circuit breaker" is corrected to "whose circuit breaker demonstrably actuates" with the protection claim marked untested and the 89.4% pause-suppression rate (previously stated only inside a threat-model paragraph) surfaced in the README's limits section (#1831)
+- **eisv/inference:** define a strict inference-status contract and reclassify five historical EISV falsification conclusions that the new contract shows were asserted past what was actually measured — including the outcome/AUC target inference (now `WITHDRAWN`) and the cold-start EMA reconstruction (now `NARROWLY REFUTED` / `UNIDENTIFIED` split) — propagated through evaluation docs, proposals, the ontology ledger, and new regression guards (#1832)
+- **eisv/inference:** as machine-enforced containment following #1832 — matrix-CLI database access now fails closed unless every read declares a protocol and unique read ID, writes a one-use access receipt, and (for exploratory/reproduction reads) records an explicit contamination acknowledgement; the legacy negative-sounding label is replaced with `UNASSESSED`/`NON_DETECTION`/`SIGNAL_CANDIDATE`. Direct library callers (tests, internal composition) are unaffected; the live December 2026-12-01 schedule was inspected, not mutated, and its external wrapper still needs updating with the new flags before that date (#1840)
+- **inference:** raise `call_model`'s 30-second timeout cap above the timeout of the model it calls, so the caller no longer times out before the callee can (#1846)
+- **doctor:** `resident_checkin_stale` now measures actual elapsed duration instead of counting calendar-date boundaries crossed, which could flag a resident stale after a short wait spanning midnight (#1847)
+- **watcher:** tune false-positive adjudication — suppress two specific known-safe patterns (`P001` on the tracked task-supervision wrapper, `P016` inside the post-SDK-validation identity capture) while keeping missing-source-path findings visible and read-only at session start rather than silently dropping them (#1848)
+- **eisv instrument audit:** a review sweep across the EISV report/validation tooling found and fixed a recurring defect shape — a generator or gate reporting a fixed property of its own construction rather than a measurement. `validate_basin_gate.py` printed "PASS" with the #689 basin gate deleted, because every assertion the script made was already true in the gate's absence (#1850); `eisv_label_power.py` asserted its "not validatable" verdict as a hardcoded string for every input, including budgets large enough to make it false, alongside an AUC-domain bug that read a negative variance as `SE=0.0`, plus a related gate-3/closing-paragraph fix in `eisv_latent_label_supply.py` (#1852); `eisv_stage_b_safety_floor.py`'s "regression floor" measured the fraction of a sample above its own 99th percentile — ~1.000% for any input, by definition of a percentile (#1856) — and, across several follow-up review rounds on the same file, a replacement exchangeability-derived centre was itself found to only approximate the correct value at large sample sizes and was replaced again with the exact rank-based conformal threshold, a thin-sample branch that printed a verdict anyway was closed, and unrounded-vs-displayed precision mismatches were fixed (#1862); that rank-based threshold is now qualified as exact only under exchangeability, which is not established for the longitudinal per-agent rows it scores (#1874); the calibration-status reporter's `source: postgres` label read requested config rather than actual outcome, so a failed DB connection with zero bins loaded could still print `VERDICT: GREEN (calibrated)` (#1861); and the synthetic ablation-power producer collapsed distinct clusters onto one shared pairing key and used a fixed intercept that only preserved the requested class prevalence at zero planted effect — the historical power table this produced is withdrawn as corrupted, with the read reported as inconclusive rather than a negative result. (#1851)
+- **stop-rule reachability:** withdraws the `3.4/month` and `≈9.7×` accrual-rate claims introduced in #1842 — a trailing-window eligible-block stock divided by deployment age is not a cohort accrual rate — and makes the default diagnostic fail toward `INSUFFICIENT_LONGITUDINAL_EVIDENCE`. (#1855)
+- **calibration status:** `check_calibration()` now returns an authoritative tri-state (`calibrated` / `miscalibrated` / `unassessed`) instead of a boolean that read a measured failure and a merely-unassessed arm the same way; a measured strategic RED stays `miscalibrated` even when the tactical arm has no eligible bin. (#1875)
+- **dialectic:** review briefs are reused as theses instead of re-authored. (#1870)
+- **governance risk authority:** persist and restore the resolved risk/verdict pair that actually produced each decision, healing legacy snapshots from the latest measured row without replacing current EISV history; Phi-derived current/mean risk is now explicit telemetry, removed from recovery, resume, stuck, and loop-detection authority — a restart could previously replay Phi trend data as the headline risk on a decision that was resolved from a different value. (#1871)
+- **response envelopes:** follow-up to #1858 — preserve normalized action, reason, verdict maturity, and cold-start evidence across every response mode, keep routine compact/lite responses below the small-response boundary, and make the compact search envelope disclose when inline details are actually omitted rather than implying full coverage (#1867); a further dogfood pass then collapsed the mostly-null `harness_context.runtime_provenance` skeleton to a compact `{available: false}` marker when nothing was reported, deduplicated `memory_suggestions` against an already-attached `raw_governance.discoveries`, and labeled `sync_state`'s legacy coherence value inline instead of requiring a cross-reference to a separate block (#1872).
+- **adoption KPI:** `cohort_engaged` was missing the live `search_shared_memory` tool name — it still filtered on the dead `search_knowledge_graph` alias — understating engagement; separately, the scheduled-cohort exclusion list was a hardcoded six-resident literal living outside the fleet-identity guard's scanned paths, silently inflating the measured return rate whenever a resident was renamed or added. Both now derive from the same roster/tool-name sources they have to stay consistent with. (#1868)
+- **tests:** finish the 2026-04-10 `patch_agent_storage()` migration — 7 remaining call sites in `test_lifecycle_recovery.py` and `test_core_metrics.py` still used the old unguarded rebind pattern that leaks live `AsyncMock`s into later-loaded test modules. (#1857)
+- **dashboard:** telemetry-health stat cards that render a bare unitless count now carry that unit instead of sitting next to sibling cards headlined with an explicit percentage. (#1859)
+- **deploy:** `migrate-openai-gov-proxy.sh` raced `launchctl bootout` against `bootstrap` under the same label — `bootout` returns before launchd finishes tearing the job down, so every real invocation raced the teardown, failed, and silently rolled back to the dev-checkout config; the script now polls until the job is actually gone before bootstrapping. (#1860)
+- **census:** the plugin hook inventory now walks exact Claude install paths and Codex personal-plugin roots instead of every cache version and marketplace checkout, and honors host-specific hook manifests declared by either plugin's metadata. (#1876)
+- **identity:** closes the explicit-`agent_id` REST bind hole flagged in the 2026-08-05 trust-anchor audit — a UUID-shaped `agent_id` on `/v1/tools/call` used to bind directly on a shape check alone, letting any caller who knew or guessed a UUID impersonate it. Binding now requires a caller-asserted `client_session_id` or `continuity_token` that verifies and names the same agent; an uncorroborated claim falls through to the next resolution step instead of binding. Four rounds of adversarial review closed further gaps in the same fix: transport-injected session IDs counted as proof, an unverified continuity-token branch, a fingerprint-pin hit misread as caller-asserted, a confused-deputy path where any real session corroborated any claimed `agent_id`, a forgeable canonical session-id form, a resolver refusal read as a match, and a whitespace-normalization gap. (#1878)
+- **recovery:** the recovery gates read a scalar default (0.5) whenever no resolved risk reading existed, and 0.5 clears both the 0.65 self-recovery limit and the 0.60 auto-resume gate — an agent whose decision pair did not survive a restart could be resumed on a risk no verdict was ever made from, including through the unattended stuck sweep, which runs with no human in the loop. Recovery paths now distinguish `unmeasured` (no check-in has ever landed — left ungated, as before, since a paused identity cannot climb out of a risk it never produced) from `lost` (the agent measured and the pair is gone — every gate now refuses and names the cause); operator resume treats a lost reading as a soft limit requiring `force=True` rather than refusing outright. (#1880)
+- **response envelopes:** trim the restated `identity_context.harness_context.runtime_provenance` record from every `agent_signature`, success and error paths alike — a `claude_code` caller's signature drops from 2,651 to 1,580 bytes. The flat `harness_type`/`harness_version`/`model`/`model_provider` fields and the top-level `identity_assurance` stay; `continuity_claim` and a rejected-value's full record are deliberately kept (per-call discontinuity tells and diagnostic detail, respectively), and the plugin's identity-contract auditor still passes against a captured signature. (#1881)
+
+### Documentation
+- **skills:** correct two bundled-skill claims that describe basin/margin behavior v2.19.0 already removed — a boundary basin no longer hardcodes `margin: tight`, and `margin_scope`/`unmeasurable_edges` mean a bare "comfortable" can mean "clear of what we could measure," not "nothing is near." (#1796)
+- **compatibility:** plugin v0.4.14 is now described as aligned, not merely compatible — its skills bundle is a verified byte-identical mirror of this release's `skills/`, closing a compatibility-wording gap open since the 2.18.0 errata. (#1799)
+- **readme/provenance:** close five gaps an adversarial README audit found — no fabricated capability claims, but the decision ladder, the accountable-identity row, and the labeled-window evidence row now match what the code and trust contract actually state, and `refresh_snapshot.py`'s row renderers and self-recovery predicate are brought back in sync with `PRODUCTION_SNAPSHOT.md` so `--check` compares like for like again. (#1812)
+- **architecture:** map the incremental package-extraction seams for #1606 (123 flat top-level src modules, 679 test files) without performing a mass rename. (#1815)
+- **adaptive-loop protocol:** preregister the adaptive-vs-fixed-policy evaluation design (matched intervention budgets, end-to-end causal receipts, externally scored held-out task families) ahead of running it — no experiment or recurring job starts with this PR. (#1806)
+- **wave-3:** amend RFC §11 criterion 9 to drop two named deadlines (HLH, R2 Phase 2) that were never actually date-gated, before the go-decision that reads the criterion is signed; correct three unrelated factual citations found while checking a decision artifact against the RFC. (#1822)
+- **README/storefront honesty pass:** restructure the README's opening ~40 lines to lead with unqualified numbers before caveated ones, fold the audit-event caveat into its first mention instead of 200 lines later, and surface the negative falsifiability result earlier; restate each limit once, in the section a reader looks for it, rather than repeated (and driftable) across three tables; separate evidence-class vocabulary from project sentiment; and convert seven scattered "not X" disclaimer clauses into two positive-form, checkable statements that preserve the identical constraints without removing, softening, or moving any limit (#1829, #1834, #1837, #1841, #1849)
+- **docs:** scope the server's "NOT YET PUBLISHABLE" code comment to the governance-mcp package explicitly, after an external reader took it in isolation to mean UNITARES has no PyPI presence at all — `unitares-sdk` is a separate, already-published distribution (#1830)
+- **wave-3 RFC record-keeping:** sign §11 criterion 9 as GO-WITH-REDUCED-SCOPE against the criterion as amended by #1822 (amendment lands first, deliberately, to avoid retroactive reinterpretation), correcting several prior mis-measurements (wave-1 elapsed span, criterion-10's cohort via the real classifier, scope of the two runtime paths actually in play); disclose before the pre-registered read whether stop-rule condition 3 is reachable; close the criterion-10 resolution-rate denominator dispute by measurement (`escalated` is council-retired and has zero live rows, so the two candidate definitions agree in practice); and record — comment-only, no behavior change — why `TERMINAL_STATUSES` and `TERMINAL_WRITE_GUARD` deliberately differ, after a near-miss where "reconciling" them would have made a stray `escalated` row immortal (#1826, #1842, #1844, #1845)
+- **roadmap:** withdraws the "~1% regression floor" citation supporting roadmap Decision 0 — the figure was the instrument-construction artifact fixed above (#1856, #1862), not a measurement. The withdrawn number overstated regression risk, so removing it removes a conservative figure, not a supporting one; Decision 0 itself is unchanged and rests on the separation figure that was never the defective quantity. (#1869)
+- **public site:** broadens the framing from calibration alone to claims/evidence/behavior drifting apart, adds above-the-fold demo and evaluator actions, and aligns the public outcome-lift wording with #1851 — the frozen read is inconclusive, not a demonstrated negative. (#1854)
+- **auth:** records the council-ratified fleet workload-identity threat model — per-service short-lived capability issuance, exact Lease Plane route scopes, key custody/replay/revocation/security-audit contracts, and numeric promotion gates with a full pilot acceptance matrix. Documentation only; does not authorize live authentication or Orchestrator enforcement changes. (#1879)
+- **auth:** revise the fleet workload-identity threat model to v0.2 after independent security review — non-oracle issuance, canonical proof encoding, consume-before-execute replay handling, two-phase audit events, default-off parity, revocation/cache, availability, break-glass, collector isolation, and bounded-value requirements. Documentation only, a delta on top of #1879. (#1882)
+
+---
+
+## [2.19.0] - 2026-08-21
+
+_Corrected 2026-08-21: thirteen pull requests merged as merge commits were omitted from the published entry — see [2.19.0-errata.md](releases/2.19.0-errata.md). Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **doctor layer:** one shared governance identity across the doctor layer with five preserved outcome types, a `constraint_drift` check that catches enforcement rules missing from the database, and a drained-versus-dead reading of the adjudication queue (#1741, #1772)
+- **deploy sweep:** bring agent-orchestrator, the Discord bridge, Dialectic Live with its own `/health`, both dispatch bots, and the governance plugin into the unified deploy sweep (#1638, #1649, #1658, #1723, #1726, #1729)
+- **dialectic:** operator-configured OpenAI-compatible reviewer host, reviewer and model provenance on verdict records, and external consults filed as governed rows (#1724, #1725, #1782)
+- **knowledge:** lean read envelopes, a recorded standard for how a discovery was closed, and a per-run Chronicler digest naming what moved (#1662, #1704, #1752)
+- **adoption and audit:** in-flow review nudge in the check-in `next_action`, continuation measurement, detection of labels that cannot discriminate what their name promises, and a falsifier that names the label class it scored (#1686, #1735, #1740, #1747)
+- **inference:** reciprocal Claude delegation and one shared local-inference plane behind every route (#1713, #1773)
+- **eisv and integrity:** shadow ablation of `decision_e` to separate a calibration bias from a live self-loop, a soak reader and positive control for the coherence-gate shadow, a re-landed call-gate disclosure on the inference-host discovery reads that #1610 dropped, and a governance-sensitivity inventory with advisory CI (#1627, #1640, #1777, #1780)
+- **calibration:** record how many agents a class constant rests on, not only how many rows (#1736)
+- **census:** opt-in remote-host collector for the always-on Pi (#1697)
+- **dogfood:** link friction findings to the cron episodes that produced them (#1786)
+
+### Changed
+
+- **http surface:** split the `http_api` monolith into `src/http_routes` domain modules, and break the `runtime_queries` to `outcome_events` import cycle (#1641, #1652)
+- **schema:** admit `TRANSITION` into regime, move the coercion sink to `unknown`, and anchor the schema registry to file content (#1635, #1653)
+- **ci:** give CI a real pgvector-backed database and stop the test schema drifting from production, shard the pytest gate, run the dashboard suite, add deterministic glossary and documentation-freshness drift checks, link-check `docs/proposals/`, force decisions for dangling branch work, let dependabot triage use a fleet-scoped token when provided, and auto-remove the harness attribution footer instead of failing the scope check on it (#1625, #1637, #1639, #1683, #1687, #1695, #1703, #1721, #1761)
+- **test surface:** make the edge-index freshness gate pollution-invariant, isolate Watcher model-slot state, demonstrate the calibrated concealment boundary, restore the Elixir-side IR conformance guard, and pin the cross-transport instrumentation contract (#1654, #1677, #1681, #1731, #1764)
+- **governance:** retire legacy coherence as a governance authority (#1626)
+- **policy and config:** a usage count may retire an instrument, never a capability; stop `config_manager` recursing and retire caller counts as evidence; report which thresholds an operator actually set (#1642, #1647, #1727)
+- **residents:** roster order is deployment configuration, not one operator's six names (#1730, #1734)
+- **operations:** retire the dead PR-queue workflow and the Concierge inventory entry, and align the operator setup contract with what install actually does (#1664, #1706, #1720)
+- **scope:** document the session-attribution rule and narrow the allow-register to the register check (#1732)
+- **maintenance:** consolidate duplicate tool-count scripts onto `diagnostics/`, and extract the leaf phases of `handle_onboard_v2` into named helpers (#1657, #1659)
+- **dependencies:** refresh the Python base image and dashboard development dependencies, and unretire `plug` 1.20.3 (#1656, #1693, #1694)
+
+### Fixed
+
+- **response envelopes:** stop the recovery hint, margin, and reflection surfaces from claiming more than they measured — name the condition that actually fired, gate the coherence edge on provenance, quote the gate's own threshold on the void edge, keep the `BOUNDARY` basin from fabricating a tight margin, report a basin fact as a basin fact, populate `memory_suggestions` from work already in the response, surface `prediction_id` and alias metadata with honest trend magnitude, and trim compact and lite response bloat (#1696, #1746, #1760, #1763, #1766, #1770, #1774, #1775, #1776, #1779, #1781)
+- **metrics and risk:** the read path reports the risk the verdict was made from, and a dry run cannot become the agent's authoritative risk (#1646, #1651)
+- **dialectic:** enforce reciprocal reviewer cooldown, persist and complete independent synthesis rounds, make the sweeper's failure reason describe the sweep, make a liveness reap say which stall it ended without acting on the standing verdict, stop reading `status` as a quality signal, and reject non-positive list limits instead of answering a different question (#1629, #1691, #1705, #1733, #1737, #1739, #1755)
+- **doctor layer:** stop the dry-queue warning overstating what a dry queue means, keep `signal_degeneracy` from counting synthetic bootstrap rows, cover the live anchor table rather than only the shadow one, report when a pinned deploy falls behind a version, and exempt event-driven residents from check-in staleness (#1630, #1672, #1742, #1749, #1783)
+- **evidence semantics:** correct outcome-evidence scope and defaults, derive the falsifier's label channels instead of asserting them, and say in the payload that the decision ablation cannot measure loop gain (#1714, #1743, #1784)
+- **knowledge graph:** carry the full-text rank so the relevance floor stops discarding everything, index slash-joined tokens so repository and path identifiers are searchable, key the staleness warning on last write, and reject a blank search query (#1667, #1682, #1754, #1759)
+- **observe and audit:** `audit_events` and `outcome_evidence` aggregates describe the window rather than the page, adjudication books the outcome against the producer instead of Sentinel, lifecycle `agent_id` is clamped to a joinable key or NULL, fleet finding fingerprints key on the subject rather than the emitter, the merged PR head is fetched instead of alarming when it is missing, a Watcher finding outlives the file it was found in, and Watcher findings carry Watcher's UUID so they can be adjudicated (#1631, #1632, #1674, #1708, #1744, #1751, #1757, #1771)
+- **persistence and migrations:** write the transients the load path already restores, stop silently destroying out-of-set regime values, order mixed-type cluster keys instead of crashing on them, register the previously inert migration 063, and repair the partially applied lease-plane sensor `CHECK` (#1633, #1643, #1650, #1665, #1666)
+- **packaging:** ship `config/` in the wheel and deepen the import guard that missed it (#1745)
+- **operations:** hold a shared deploy checkout after a refusal instead of undoing its rollback, report when a pinned deploy falls behind a version, correct what `--force-with-lease` actually guarantees, and fail closed on dogfood pulse contract violations (#1676, #1762, #1767)
+- **wave 3:** correct the RFC status, and make the shadow comparator able to report "broken" (#1678)
+- **census:** read hermes cron outcomes from hermes's own ledger (#1668)
+- **adoption:** scope review-nudge uptake by session (#1698)
+- **dashboard:** residents widgets read live state instead of nulls and literals, with a dogfood pass on mechanical fixes and denominator labeling (#1707, #1753)
+- **identity:** align the read-path and write-path assurance source sets, and point the refusal `ontology_ref` at the public ontology document (#1701, #1769)
+- **ux:** align governance workflow guidance across surfaces (#1715)
+- **triage-scribe:** read the fields `observe` actually returns (#1628)
+
+### Documentation
+
+- **public framing:** lead the README with what the operator gets, state the product in plain language, scope the resident count and pitch-surface vocabulary behind a doc-health guard, and make governance the headline noun on the Pages landing (#1648, #1728, #1758, #1787)
+- **eisv contract:** split the contract by sensory class and validation regime, correct Lumen's V contract to signed E−I rather than inverse presence, frame the v7 empirical section as the observer's undeclared self-loop, and publish the general solution of the reduced three-state core (#1636, #1645, #1655, #1718)
+- **evidence integrity:** withdraw the #1425 citation on the anchor re-fit decision, correct the falsified lineage-constant claim, record that `agent_report` names who composed a check-in rather than who chose it, and record why the outcome provenance filter stays off with a guard on the reason (#1738, #1748, #1756, #1765)
+- **release record:** correct the v2.18.0 release record, including the omitted merged changes, the overstated plugin compatibility wording, and the unverified Docker quickstart (#1663)
+- **wave 3 and proposals:** close out the §11 criteria audit, relink the Wave-3a record now that it lives under `resolved/`, add the criterion-9 go-decision artifact as an unsigned skeleton, draft the criterion-8 scope reduction, and file Cedar delegation authorization v0 as design only (#1680, #1684, #1690, #1717, #1778)
+- **project state:** prune shipped roadmap items, re-verify component maturity, promote the trust contract to Active, resolve the doc-health demotion backlog, name the commit-time surface, record the merge-queue blocker behind PR-queue babysitting, and add the circuit-breaker provenance diagnostic (#1661, #1673, #1679, #1692)
+- **skills:** refresh the bundled UNITARES runtime guidance and document the compact read envelopes (#1712, #1716)
+- **dev:** generate the tool edge index from the live registries (#1634)
+- **evaluation:** pre-register the independent-operator cohort protocol, and retire outside operators as a precondition for efficacy evidence (#1719, #1785)
+
+---
+
+## [2.18.0] - 2026-08-12
+
+_Notable changes merged between 2.17.0 (2026-08-11) and this release — dialectic review hardening, coherence provenance cleanup, evaluator-facing release surfaces, and operational telemetry corrections. `pyproject.toml`/`VERSION` bumped to 2.18.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **dialectic/evaluation:** ground reviewer responses in evidence, label the frozen verdict cohort, and add recovery and reassignment coverage (#1604, #1609, #1611)
+- **governance:** add measurement-only shadowing for legacy coherence dependencies and clarify cold-start actuation provenance (#1614, #1615, #1619)
+- **residents/SDK:** publish the SDK README as package metadata and document the operational federation path (#1613, #1616)
+
+### Changed
+
+- **public surface:** add dedicated knowledge write aliases, correct advertised dialectic actions, and make inference-host reachability explicit (#1610, #1618)
+- **release/operations:** professionalize the public release surface, tighten evaluator claims, and bound persisted risk history (#1603, #1612, #1617)
+- **security/release:** redact caller-controlled identity/session material from logs, pin external actions, and tighten workflow permissions (#1620)
+- **dependencies:** refresh Python, cryptography, and dashboard development dependencies (#1556, #1557, #1558)
+
+### Fixed
+
+- **governance/eisv:** separate legacy control feedback from coherence and preserve causal provenance without changing the advisory policy posture (#1614)
+- **dialectic:** harden evidence handling and reviewer recovery so standing rejections and synthetic reviews cannot be cleared or misrepresented (#1604, #1611)
+- **telemetry:** state explicitly which tool-usage fields the public read surface can support (#1618)
+
+### Documentation
+
+- **project framing:** consolidate public entry points, publish evaluator-facing limitations, and document federation as a research direction rather than a deployed guarantee (#1603, #1612, #1616)
+
+---
+
+## [2.17.0] - 2026-08-11
+
+_Notable changes merged between 2.16.0 (2026-08-08) and this release — identity-bound execution, knowledge-integrity repair, dialectic correctness, and the shared BEAM governance contract. `pyproject.toml`/`VERSION` bumped to 2.17.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **eisv/telemetry:** persist and evaluate provenance telemetry, expose its health on the dashboard, publish cold-start risk maturity, and shadow the coherence gate before it can influence policy (#1547, #1562, #1569, #1589)
+- **beam/orchestrator:** introduce the shared `unitares_sdk` envelope, move Sentinel and Dialectic Live onto it, and make orchestrated nodes reachable with explicit telemetry (#1549, #1561, #1564)
+- **audit/doctor:** record redacted knowledge-query text and tag filters, include originating check names in findings, and warn when findings flow without an adjudication path (#1560, #1594, #1600)
+- **http:** canary the explicit `agent_id` binding path without weakening the caller-proof contract (#1566)
+
+### Changed
+
+- **evidence semantics:** separate host/runtime observations from agent-authored check-ins and document the evidence classes and confidence contract (#1539, #1542)
+- **ci/contracts:** restore session-attribution scope guards, block silent dependency-floor regressions, and version the Dependabot triage policy (#1544, #1555, #1567)
+- **dependencies:** refresh the dashboard lint/runtime toolchain with regenerated lock data (#1502, #1536, #1559)
+
+### Fixed
+
+- **knowledge integrity:** honor audit defaults from SQL, enforce backend-independent write budgets, retain complete medium-detail documents, normalize null pagination/response-chain inputs, repair AGE tag projection, and restore validated severity/status constraints with migration 060 (#1529, #1538, #1552, #1553, #1554, #1595)
+- **identity:** preserve one public handle per field, reject unverified REST identity headers, classify live-parent lineage honestly, preserve UDS peer context, stop dispatch after hard resume refusal, and keep prebinding attached to the caller that supplied it (#1532, #1533, #1540, #1570, #1586, #1590, #1598)
+- **dialectic:** prevent paused agents from clearing reviewer rejection, repair double-encoded JSONB with migration 059, treat synthesis as the verdict rather than replaying antithesis, and keep facilitation requests alive long enough to answer (#1543, #1571, #1576, #1577)
+- **governance/eisv:** score the pause sub-actions actually emitted, restore coherence after the behavioral migration, prevent a pre-authored cold-start deadlock, and refuse metrics reads for unknown identities instead of returning seed vectors (#1550, #1572, #1591, #1592)
+- **residents/ops:** bind Sentinel writes by `client_session_id`, attest them over authenticated UDS, reclaim expired lease rows during acquire, and provision the installed Sentinel plist without exposing bearer material (#1568, #1575, #1578, #1596)
+- **security/dashboard:** gate severity changes on effective severity, distinguish presence from lifecycle/state cadence, and stop the HUD from rendering unknown agents as a plausible default vector (#1535, #1581, #1587, #1592)
+
+### Documentation
+
+- **knowledge/eisv:** require lifecycle-safe tags for recurring snapshots, document retrieval selection effects, derive coherence thresholds, and preregister/gate relational calibration on maturity and validity (#1531, #1563, #1573, #1574, #1580, #1593)
+- **evaluation:** record the parallel-kernel rounds as a candidate evaluation corpus (#1584)
+- **project framing:** lead the README with deployed results and present the quick demo as an installation smoke test with an explicit warmup phase (#1597, #1599)
+
+---
+
+## [2.16.0] - 2026-08-08
+
+_Notable changes merged between 2.15.0 (2026-08-05) and this release — the core-math-audit decision stack. `pyproject.toml`/`VERSION` bumped to 2.16.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **governance:** shadow mode for the verification floor — computes and surfaces the harm-confession signal with zero verdict effect, firings-only, `applied:false`, so live traffic accumulates the false-positive/recall record the enable decision requires (#1527)
+- **observability:** `GET /v1/enforcement/divergence` + dashboard "Enforcement" section — produced pauses vs gap-suppressed vs delivered, side by side under the ratified advisory posture, so verdict counts are never read as enforcement counts (#1528)
+- **governance:** label which source (physical sensor vs behavioral) fed the verdict-authoritative EISV vector, persisted per row (#1519)
+- **vigil:** surface draft PRs that are stale and red (#1514); stalled-draft-PR check hardened after review (#1520)
+
+### Fixed
+
+- **security:** outcome reads honour Invariant 4 — `get_recent_outcomes` gains a provenance filter (default off, `UNITARES_OUTCOME_PROVENANCE_FILTER`); the public `outcome_event` tool server-derives `verification_source` and strips claimable provenance keys from nested detail; Watcher resolution outcomes ride the operator-gated harness endpoint so the exogenous ground-truth channel keeps its tier (#1511)
+- **state:** finish the `stability_index` retirement — write NULL, not a plausible 0.0; migration 058 nulls the post-retirement hardcoded sentinels (date+value double-bounded, real measurements untouched) (#1525)
+- **watcher:** run `main()` on the package module so resolutions actually post (#1523)
+- **lumen-doctor:** reach the Pi over Tailscale and name blindness as blindness (#1524)
+- **ci:** deterministic `flag_catalog` traversal order — the FLAGS.md freshness gate was a per-runner filesystem-order lottery (#1522)
+
+### Documentation
+
+- **eisv:** core-math audit ledger rows 13–44, waves 1 & 2 (#1515); governance self-description relabeled advisory-as-deployed (#1516); grounded-coherence re-derivation proposal v0 + grounding position (#1518); V-reintroduction deferral decision record + deployed-V consumer inventory (#1526)
+
+### Changed
+
+- routine dependency maintenance: websockets (#1501), dashboard dev group (#1500)
+
+---
+
+## [2.15.0] - 2026-08-05
+
+_Notable changes merged between 2.14.0 (2026-06-28) and this release. `pyproject.toml`/`VERSION` bumped to 2.15.0. Note: since #1248, the live `build_sha` (`/health`, metrics) is the authoritative signal for what code is actually running — this bump is a changelog/traceability milestone, not the deploy identity mechanism._
+
+### Added
+
+- **effects:** governed-effect primitives — grant mint/verify (#1237), propose-time mint endpoint (#1240), producer wiring (canonical hash, SDK mint, per-type flags) (#1352), veto-time verification (#1249) — Phase 1 slices, currently INERT; governed file-write SDK consumer (#1236) and watcher demotion floor routed through it (#1242)
+- **dialectic:** one-call `request_review` + `whose_move` guidance (#1385); governed reviewer spawn as a standing `agent_spawn` producer (#1381); opt-in Codex backend for the orchestrated reviewer (#1353); Phoenix LiveView beachhead for the live dialectic surface (#1250); `dialectic_*` lifecycle events via broadcaster (#1251, #1256); one-call canary as a positive control for the kill-gate (#1466)
+- **doctor/ops:** telemetry-liveness checks for silent sensor death (#1380); restart-gap awareness (#1382); `signal_degeneracy` detector (#1409); dead-but-producing-nothing resident detector (#1416, #1418); deploy-drift doctor (#1396) with a governed runner for drift resolutions (#1397) and an `issue_surface` route (#1398); `pr-babysitter` to un-strand armed PRs under strict branch protection (#1476); census session-lifecycle hooks (#1454); event-check evidence at the point of verdict (#1453)
+- **identity:** ephemeral-write gate + token-invalid warning on successful calls (#1360); operator-attested genesis re-baseline, drift alerts on change only (#1371); record identity-bound runtime observations, separated from reflections (#1480, #1482)
+- **eisv:** raw-series persistence / AR(1) null on raw observations — the individuality gate (#1324, #1355, #1358); label-free self-predictability eval (#1289); label-free policy stress-test without outcome labels (#1293); latent bad-label supply instrumentation (#1296); label power/MDE analysis (#1295)
+- **dashboard:** passkey (WebAuthn) sign-in (#1472); per-agent EISV trajectory drill-down (#1283); per-resident EISV fleet heatmap (#1274); adjudication section — daily one-click Sentinel verdicts feeding the EISV falsifier (#1343); historized governance health (#1272); System Health per-check detail (#1254)
+- **sdk:** support `mcp` SDK 2.x alongside 1.x (#1405); lost-response lease recovery + own-orphan reclaim (#1467); pluggable resident-progress sources + a working SDK install path (#1493)
+- **cohort-prior:** shadow read-only warm-start for agent baselines (#1334); per-class aggregation source (#1344); live-apply mode behind an explicit second opt-in (#1346)
+- **gateway:** serve `/health` so deploy tooling has something to gate on (#1477)
+- **inference:** inference-host registry (#1304)
+
+### Changed
+
+- **refactor:** agent display resolution, deprecated note adapter, KG batch/update handlers, knowledge search/store handlers, MCP server bootstrap/transport, governance request/lifecycle hotspots, shared canonical call resolver (#1497, #1496, #1483, #1481, #1478, #1474, #1307)
+- **deploy:** extract shared deploy blocks into `deploy-lib.sh` (#1495)
+- **ci:** required checks now run on `merge_group` (#1469); PR-queue auto-update workflow (#1503); consume our own SDK as an installed package, not a source tree (#1498)
+- **watcher:** default detector → `qwen3.6:27b-coding-nvfp4` (#1276)
+- routine dependency maintenance across Python, actions, and dashboard npm groups (#1368, #1384, #1389, #1390, #1391, #1392, #1376, #1377, #1230, #1231)
+
+### Fixed
+
+- **security:** stop self-granted privilege via caller-settable `tags` (`admin`/`embodied`/`persistent`/`autonomous`) and the `total_updates >= 100` route into fleet-global `set_thresholds` (#1512)
+- **identity:** liveness-gate lineage declarations on the `agent:/` presence lease (#1461); make the trust-tier fallthrough visible and non-demoting (#1411); fail safe inside `resolve_trust_tier`, not just at its call site (#1407, #1423); recover the session before minting a phantom UUID (#1388); fail closed when a hijack guard rejects a resume (#1319, #1325); resolve the dialectic caller by uuid, not the public handle (#1414, #1420); keep `identity_required` denials identity-neutral (#1488); enforce Host/Origin validation on the `/mcp` transport (#1413)
+- **sentinel:** reclaim own leases stranded by lost acquire/release responses (#1443, #1459); report own starvation when an immortal lease blocks every tick (#1444)
+- **calibration:** stop training on confidences the server scraped, not the caller's (#1321, #1354, #1445); single-flight PG writer + tactical channel purity (#1378)
+- **kg:** close knowledge param-exposure backlog (#1357); route `KnowledgeGraphPostgres` mutations/stats through `db.acquire()` (#1282, #1350); default null details pagination (#1361, #1379); drop `human_review_required` — a review gate no one can execute is false assurance (#1470)
+- **dialectic:** derive one-call review timeouts from the synthetic budget (#1442, #1464); cap applied conditions at `MAX_DIALECTIC_CONDITIONS=20` (#1336); restore `awaiting_facilitation` on reconstruction and on main-path resolution (#1259, #1253, #1262)
+- **doctor:** stop `immortal_lease` flagging live client-renewed resident leases (#1465); stop `resident_checkin_stale` false positives and flag wrong-branch live checkouts (#1492); stop observer-artifact false alarms from host sleep and recovered producers (#1510); stop a self-graded row entering the exogenous-anchor channel (#1494); don't read a fire-on-failure producer's healthy silence as death (#1417)
+- **watcher:** serialize model calls so queued scans stop burning their budget (#1441); atomic writes for dedup/findings files (#1335); never scan Claude Code session scratchpads (#1463); default back to a locally-pulled model tag (#1403)
+- **dashboard:** absorb `?operator_token=` on load, not only when the adjudication pane asks (#1449); durable EISV fallback (#1266); make `/v1/sentinel/summary` durable across restarts (#1261); AA-safe `--warn` text variant (#1439); stuck-card/liveness-signal/tier rendering (#1435)
+- **http/db:** gate `/ws/eisv` — the one route with no auth check (#1447); normalize audit partition bounds to UTC, closing the month-first hole (#1448)
+- **telemetry:** make `audit.tool_usage` able to answer "who requested a review" (#1387, #1424); read tool-usage stats from `audit.tool_usage`, not the stale JSONL (#1286)
+- **mcp:** advertise config and export schemas (#1436); call advertised aliases, not dropped raw twins, over the wire (#1318)
+- **trajectory:** stop `identity_drift`/`resolved` feed flood — tombstone the emit marker, add resolve hysteresis (#1421)
+- **eisv-integrity:** stop the ablation probe reporting noise as lift (#1422); bound dogfood ablation-guard runtime (#1427); select reviewed dogfood findings, label negative controls honestly, use a trusted prospective denominator (#1428, #1429, #1430)
+- **inference:** stop the blocking Ollama probe from stalling the event loop (#1311); map checkin/get_metrics to live tool names on the ollama-bridge (#1316)
+- **api:** `/api/events` must not silently ignore a filter key (#1399)
+
+### Documentation
+
+- **eisv:** pre-registered individuality-test v2 final read — operational FAIL and kill criterion honored, but later classified `UNTESTED AS DEPLOYED` because the gating instrument had no usable power against the axiom; outcome-grounding stop rule pre-registered (#1400, #1402, #1406, #1408, #1412, #1419, #1425)
+- **readme:** publish the falsifiability result, not just the harness (#1491); federation research-direction section (#1347); competitive analysis vs MI9 and Auton (#1287)
+- **proposals:** bridge→dispatch v0 — operator on-the-loop, not in-the-loop (#1450); uuid-keyed-identity-migration council synthesis (#1310); redis-retirement Phase 1 plan (#1328)
+- **docs-consolidation:** Phase 0 — contested-claims registry + lint, stale-copy sweep (#1348)
+
+### Tests
+
+- privileged-tag escalation regression suite, 14 new tests verified failing pre-fix (#1512); real-DB contract tests for `effects.payloads` (#1245); hermetic findings-emit tests on the right channel (#1410); KG lease-retrieval regressions (#1473)
+
+---
+
+## [2.14.0] - 2026-06-28
+
+_Backfill of notable changes merged between 2.13.0 (2026-05-04) and this release. `pyproject.toml`/`VERSION` bumped to 2.14.0._
+
+### Added
+
+- **orchestrator:** BEAM-native ephemeral-agent orchestrator (Layer A, v0) with lineage + `server_url` provisioning for spawned agents (#581, #648, #650, #589, #588)
+- **lease-plane:** BEAM hot-code-reload via named node (#570); `agent:/` ephemeral-agent presence scheme, self-healing (#588)
+- **wave-3:** §14 prerequisites — shadow DDL, divergence comparator, event types, measurement helpers/lint/lease baseline (starts the 14-day clock) (#597, #599)
+- **floor:** identity-free substrate observation sink for un-onboarded sessions (#669)
+- **governance:** corroboration grading for outcome events (#681); escalate paused residents to the operator (#687)
+- **identity:** lifecycle visibility surface (#683)
+- **governance:** cadence-silence — soft detection of active-then-silent agents (#594)
+- **kg:** fold tag `normalize()` into the write path + lifecycle synonym pass + backfill (#671)
+- **dialectic:** heterogeneous structured-JSON reviewer replaces text-scrape (#563)
+- **lifecycle:** bucket test agents separately in `identity_health` counts (#645)
+- **sdk:** thread `connect_timeout`/`connect_retries` through `GovernanceAgent` (#560); PyPI-ready packaging + tag-driven trusted-publishing workflow (#649)
+- **dashboard:** persist one-time `?operator_token=` handoff into localStorage (#643)
+
+### Changed
+
+- **residents:** roster + progress registry are now deployment config, empty by default (#694)
+- **workflow:** unify Codex/Claude GitHub delivery conventions (#680); route stuck work to draft PRs (#651)
+- **mirror:** reflect, don't advise — strip prescription from mirror mode (#583); novelty-gate complexity line, disclose proxy basis, surface phi (#603)
+- **dashboard:** unify on a neutral color system (color = status) (#561); reduce knowledge polling (#684)
+- **watcher:** demote P008 to experimental (#659)
+- remove the never-consulted `rate_limit_exempt` decorator flag (#660)
+
+### Fixed
+
+- **governance/eisv:** gate self-relative risk by absolute basin health (#689, #696); floor z-score sensitivity for stable agents + anchor quick-resume to target coherence (#686); scale EISV z-floor by EMA alpha (#699); warmup structural grace suppresses cold-ODE false-pauses post-restart (#577); restore behavioral baseline on DB hydrate (#575)
+- **§129:** un-blind the substrate-tax gate (nesting) + stop counting shutdown noise (#576)
+- **identity:** strict gate keys on caller-proven binding, not binding-presence (#674, #675); single-flight + PG adopt-winner for operator-token first-use mint race (#646); stop laundering server-injected fingerprint CSID into the strong assurance tier (#682); anonymous auto-mint must not use the reserved `mcp_` prefix (#598); subagent onboards must not displace the driver's fingerprint pin (#604); lineage successor suppresses parent stuck-flag (#677)
+- **kg:** close write-path bugs — id collisions, naive ts, batch parity (#673); decouple auto-hybrid term cap from OR-recall cap (#672)
+- **kg:** stop cold-storage rows leaking into default search un-down-ranked — search now excludes `cold` unless `include_cold=true` (mirrors archived), and `cold` ranks below `archived` in the blend's status multipliers (#950)
+- **calibration:** correct severe lower-bin underconfidence, not just cap it (#668)
+- **responses:** honest verdict provenance + reconcile position/thread_size (#670); reconcile six API-response honesty inconsistencies (#665)
+- **dashboard:** inner deadline degrades slow fleet read instead of a 15s hang (#666)
+- **dialectic:** real timer for stuck-session auto-resolve (#564); exclude non-reasoning agents from reviewer auto-selection (#664)
+- **watcher:** P002 required-token + bound-cue drops kill the cap-adjacent false-positive class (#602); checkout-independent state dir + proof-rebind on check-in (#595)
+- **anomalies:** label frozen-window anomalies stale instead of presenting them as current (#653)
+- **metrics:** zero-observation responses stop asserting seed-derived assessments (#605)
+- **sdk:** bound + retry the MCP connect handshake (#559); loud anchor-write failures + typed 503 backoff (#647)
+
+### Documentation
+
+- land the UNITARES trust contract (v0.2, grounded)
+- rewrite README for clarity, reduce invented jargon (#695)
+- wave-3 §5.2 boundary-cost audit summary + RFC v0.3.3 fold (#600)
+
+### Tests
+
+- strengthen suite and delivery gates (#693); guard `CHRONICLER_SERIES_NAMES` against scraper drift (#697); isolate the watcher suite from the live server and real log (#658)
+
+---
+
+## [2.13.0] - 2026-05-04
+### Added
+
+- **sdk:** substrate emission in checkin (RFC §7.13 PRs 4-7 bundled) (#330) (69c5806)
+- **governance:** PR 3 — class-aware void threshold (RFC §7.13.6 interim safety net) (#328) (c8a5f73)
+- **r1:** §4.3 public KG emission — closes PR 2's deferred AGE write (R1 v3.3-A + v3.2-D) (#324) (b42134b)
+- **r1:** §4.1 onboard wiring (marks policy) + R1 implementation handoff doc (#321) (452354b)
+- **lease-plane:** PR 1 — migration 034 + Pydantic + Elixir Repo/router substrate_state surface (RFC §7.13) (#322) (37bdf99)
+- **r1:** PR 4a trust-tier provisional gate (R1 v3.3-D consumer) (#320) (fecaadb)
+- **lease-plane:** migrate force-release CLI to HTTP + §9 integration test (PR 2 of 2) (#313) (e407665)
+- **r1:** PR 3 score-side completion — calibration_state + class_tag + verdict degradation + provisional helpers (R1 v3.3 §C,D,G) (#314) (d4740c8)
+- **doctor:** elixir_scheme_grammar_lint — fail on Elixir scheme not in grammar CHECK (#311) (8495e9d)
+- **sentinel:** batched alarm rule for conflict_held_by_other events (#310) (3ff210d)
+- **r1:** PR 2 core primitive — score_trajectory_continuity (R1 v3.3 §A,C,H) (#309) (83e70aa)
+- **r1:** PR 1 foundation — migration 031 + reconstruct_eisv_series + epoch backport (R1 v3.3 §A,D,E,F,I) (#306) (f30d192)
+- **lease-plane:** RFC §7.10 contract-layer force-release authority (#299) (5b8687f)
+- **lease-plane:** align role-holder rejection with RFC §4.4 + §7.3.5 — 200 permission_denied (#297) (17258a4)
+- **audit:** §9 reconciliation — alias annotation support + 4 gap-fills (21/1/6) (#295) (cde59af)
+- **lease-plane:** audit_rfc_section_9_gates.py — mechanical §9 reconciliation baseline (#291) (006b394)
+- **lease-plane:** add R7 in-memory OTP spike (c0f892f)
+- **r6:** add episode fork kind to process update context (#287) (bd9fc86)
+- **doctor:** add elixir_deprecated_scheme_lint check (Phase B prep, RFC §7.11.8) (#286) (54a789f)
+- **lease-plane:** R1 — deprecate-and-finalize super-command (RFC §7.11.2 atomicity) (#285) (91f4290)
+- **lease-plane:** Phase A PR 7.5 — Elixir file:// canonicalization (#281) (3d843ff)
+- **lease-plane:** Phase A PR 7 — Elixir router server-side canonicalization + transition_handoff INSERT fix (#280) (c34e1f7)
+- **lease-plane:** Phase A PR 4 — acquire_with_retry + _urllib_transport HTTP-error coverage (#271) (246ee7a)
+- **lease-plane:** Phase A PR 3b — Sentinel forced-release alarm + race-window integration test (#270) (2d59ce9)
+- **lease-plane:** Phase A PR 3a — deprecation CLI + migration 028 trigger fix (#269) (a4af34c)
+- **lease-plane:** Phase A PR 2.5 — production surface_id migration + AcquireRequest field_validator (#267) (a778539)
+- **lease-plane:** Phase A PR 2 — canonicalize.py + AcquireRequest surface_kind drop (#266) (5ad11d1)
+- **lease-plane:** Phase A PR 1 — migrations 026/027 + v0.7 model/router drift fixes (#264) (4f50bb5)
+- add BEAM lease-plane workers (#263) (9bce80c)
+- **chronicler:** Phase A advisory-mode lease-plane wiring on run_cycle (#261) (c31d80c)
+- **sentinel:** Phase A advisory-mode lease-plane wiring on run_cycle (#260) (79fbeba)
+- **vigil:** Phase A advisory-mode lease-plane wiring on run_cycle (#259) (462612c)
+- **ship-sh:** Phase A advisory-mode lease around ship operation (#258) (55ef2af)
+- **watcher:** Phase A advisory-mode lease-plane wiring on scan_commits (#256) (108862b)
+- **lease-plane:** HTTP endpoint (Plug + Bandit on 127.0.0.1:8788) (#253) (e49703b)
+- **lease-plane:** Elixir/OTP coordination kernel scaffold (no HTTP yet) (#251) (7d7d131)
+- **s8a:** Phase-2 engaged_ephemeral promotion + Phase-1 stamp-gap fix (#252) (741b088)
+- **lease-plane:** capture parallel-session implementation skeleton (7ad5644)
+- **watcher:** --scan-commits closes the commit→finding loop (#243) (6519e16)
+- **identity:** S1-a continuity_token deprecation wiring + clock-skew tolerance (#240) (7193b31)
+- **watcher:** self-calibration loop — per-(pattern × file_class) precision floor with ε-greedy probe (#225) (2c33fea)
+- **db:** ExecutorPool — asyncpg loop-isolation wrapper for anyio (P2 full) (#218) (0de7c7f)
+- resident progress detection (phase 1 telemetry) — rebased (#206) (4ca6394)
+- **vigil-hygiene:** Phase 1 dry-run branch sweep (#197) (d090eb0)
+- restore Docker quickstart for one-command server bring-up (#193) (f5c2240)
+- **identity:** X-Unitares-Operator header + is_operator_caller helper (#187) (16b6793)
+- phase 5 — bootstrap-only observability query path + REST endpoint (#188) (abc81bc)
+- phase 4 — SessionStart hook attaches initial_state for bootstrap check-in (#183) (a3c0cfc)
+- phase 3b — get_agent_state_history exclude_synthetic + hydration filter (#178) (e4fc865)
+- phase 2 — onboard.initial_state writes bootstrap check-in row (#171) (20a558e)
+- phase 1 — synthetic column on agent_state for bootstrap check-ins (#168) (65c22ff)
+- **identity:** auto-label embeds UUID[:8] suffix for operator disambiguation (fed5f7f)
+- **setup:** CLI entrypoint with --apply/--json/--non-interactive/--proxy-url (b8e4303)
+- **setup:** five-phase pipeline orchestration with idempotent apply (a54f865)
+- **setup:** stdio MCP snippet generation for claude_code, codex, gemini, copilot (d998024)
+- **setup:** MCP client detection from home directory (5755a6a)
+- **setup:** anchor-dir and secrets-file scaffolding (--apply only, idempotent) (7919aef)
+- **setup:** remediation generator for doctor fail/warn results (9fd7dfc)
+- **setup:** doctor subprocess wrapper with strict JSON parsing (29f17f0)
+- **setup:** module skeleton + bootstrap MCP-SDK import check (0a3a9cb)
+- **s13:** identity() v2 fresh-instance gate + concurrent_session_binding_observed audit event (#156) (2781684)
+- **watcher:** scope SessionStart findings to current worktree, demote others to footer (#152) (be7ff74)
+- **identity:** same-host ppid consistency check (#128) (#151) (d5849bd)
+- split doctor's HTTP check into TCP-listening + HTTP-responsiveness, bump timeout to 5s (7bad140)
+- add unitares_doctor.py — diagnostic checklist for local + operator installs (b699c44)
+- **identity:** S13 v2-ontology gate for arg-less onboard() (#148) (1c5b9e5)
+- **llm_delegation:** pass reasoning.effort=none for qwen3.x (#137) (80a3180)
+- **dashboard:** expose parent_agent_id + spawn_reason in list_agents, render lineage badges (#134) (abd7357)
+- **identity:** S8a Phase-1 default-stamp class tags at onboard (#121) (d1804da)
+- **dashboard:** Watcher panel — findings pipeline + pattern dismiss-rate (#116) (e5e5dbc)
+- **chronicler:** DB-backed scrapers + dashboard clarity (#114) (6d108d0)
+- **identity:** S6 follow-up — wire seed_genesis_from_parent into onboard (#112) (a8bf5d7)
+- **identity:** S6 Option B — substrate-earned tier routing + lineage-seeded genesis (#109) (15a3559)
+- **chronicler:** give Chronicler a governance identity + EISV check-ins (#108) (4424bc0)
+- **identity:** S6 Option B — substrate-earned tier routing + lineage-seeded genesis (#107) (5304a9f)
+- **identity:** invert resident_fork_detected semantics (S5) (#106) (ba69c63)
+- **identity:** R4.1 — verify_substrate_earned operational check (#96) (0a1a560)
+- **vigil:** resident tag-hygiene check + /v1/residents/tag_audit endpoint (#94) (06002d1)
+- **grounding:** ecosystem fixes for silent class-baseline fallback (db1ed47)
+- **identity:** PATH 2 IP:UA pin cross-check — Phase A (observation) (#92) (b14dba7)
+- **metrics:** compact chart + second metric (tests.unitares.count) (#85) (71a5bb7)
+- **call_model:** drop Gemini provider — router exposes only ollama + hf. GOOGLE_AI_API_KEY was never wired in plist/env, so the gemini branch only returned MISSING_CONFIG at runtime. Schema enum is now Literal['auto','hf','ollama']. Custom endpoints (provider='openai' etc) must pass an explicit model — no gemini-flash default. Closes #66. (#80) (26f182d)
+- **identity:** PATH 1 fingerprint cross-check — Phase A (observation) (#83) (2b01218)
+- **identity:** emit identity_hijack_suspected event from PATH 0 Part C gate (#78) (b7a31e1)
+
+### Changed
+
+- **lifecycle:** share resume persistence helper (#235) (093df20)
+- **watcher:** split findings.py + _util.py out of agent.py (#119) (384aca6)
+- **tests:** consolidate agent metadata + lifecycle tests (0f4ff59)
+
+### Fixed
+
+- **test:** lease-plane force-release contract test reads LEASE_PLANE_BEARER_TOKEN, not unset GOVERNANCE_TOKEN (#337) (5733f53)
+- **sdk:** capture resident_name on identity() resume + GovernanceAgent passes name explicitly (#335) (770f9d9)
+- **governance:** _resolve_agent_class consults agent_metadata cache for UUID-keyed residents (#332) (33010b3)
+- **lease-plane:** route renew/3 with substrate through Repo, not LeaseHolder fast-path (#331) (2311d31)
+- **error-handling:** order TIMEOUT before auth patterns so tool names containing 'session' don't miscategorize (#316) (0b71a96)
+- **watcher:** suppress P005 on same-name resource-factory pass-through wrappers (#315) (7f1e6ab)
+- **sentinel:** wrap forced-release alarm poll in run_in_executor + asyncio.wait_for (anyio mitigation) (#290) (9af40fa)
+- **docs:** ignore vendored Elixir docs in health check (e302e06)
+- **ship:** cap PR title at first line so long commit bodies don't break gh pr create (faa4810)
+- **watcher:** P005 — drop false positives on acquire-then-try idiom (#288) (9a3679d)
+- **lease-plane:** SAVEPOINT race-recovery in acquire_step + concurrent test (#283) (7d5efd9)
+- **resident-progress:** exempt event-driven residents from candidate-rate smoke (a8773a3)
+- **lease-plane:** Phase A PR 6 — emit lease.deprecation_marked + _migrated events (#277) (ec119b0)
+- **lease-plane:** Phase A PR 5 — council BLOCK fixes from PR 1-4 stack review (#273) (70ed903)
+- **silence:** suppress duplicate resident row alerts (3a3f871)
+- **lease-plane:** polish — URL decode, IPv6 doc, plug 1.18 pin (#257) (cd50cb1)
+- **updates:** preserve fresh api_key when PG insert succeeds but meta setup raises (#255) (2bdedfa)
+- **grounding:** persist tags before in-memory mutation in stamp_default_class_tags (#254) (8ef19b1)
+- **analysis:** guard stale sqlite reads (37ceee9)
+- **lease-plane:** close council-found gaps before Elixir build (#250) (af1df76)
+- **resident-progress:** per-resident heartbeat cadence (#248) (5190418)
+- **db:** register legacy migration slots (7f03568)
+- **dialectic:** accept conditions alias + early-fail on agrees+empty (#247) (38a1713)
+- **identity:** S21-b items 5+6 — consolidate dual resolve_session_identity calls + core_agent_row_status auth gate (#245) (e14544c)
+- **tests:** point test_db_utils at renumbered migration slots (#244) (e6852cd)
+- **governance:** infer missing tool result kind (a7a07b8)
+- **watcher:** tighten pin timeout verifier (c05a0cf)
+- **watcher:** tune hook cadence and P004 guard (2f66fea)
+- **lifecycle:** suppress cache hydration created events (0689008)
+- **identity:** stabilize trust tier drift (fcc25e6)
+- harden knowledge graph cleanup write path (c2f3790)
+- **identity:** harden S21-b session resolution (92241e0)
+- **knowledge:** preserve identity through KG writes (dd5a597)
+- **identity:** stabilize diagnostic session binding (7d984dc)
+- **sdk:** keep UDS resident anchors uuid-only (14c123d)
+- **identity:** reject substrate token resumes before session lookup (7b1fbd4)
+- **dashboard:** align resident check-in timestamps (2ba70b2)
+- **event-detector:** order seed by last_activity_at so substrate-anchored agents survive ephemeral session flood (#233) (2be2eb6)
+- **kg:** AGE backend get_discovery/update_discovery SQL fallback for SQL-only orphans (#223) (6976ffc)
+- **db:** close council-found cancellation gaps in pool wedge fix (#230) (a2dfac4)
+- **db:** null-before-close + ExecutorPool idempotency for wedged-pool recovery (#229) (7e324ea)
+- **db:** move pool-recovery destroy log inside lock + add identity re-check (#228) (7b9e552)
+- **monitor:** persist last_update across restarts; clamp NTP step-back; log DT_MAX saturation (#224) (9c37ce4)
+- **migrations:** seed epoch 3 in core.epochs (021) (#227) (f9648d2)
+- **ci:** restore README Status line for check_doc_drift (#222) (a12a72f)
+- drop hardcoded home-path default in vigil_hygiene --repo (#216) (1aa6e72)
+- **tests:** opt-in coverage + align CI with make test and README (#214) (19c6402)
+- **self_recovery:** persist paused_at + lifecycle_event in quick_resume and operator_resume (#208) (6742322)
+- **observe:** decision_history hydration + verdict_distribution + redundant-hydrate cleanup (#205) (1d7e420)
+- persist runtime state in direct_resume + honest export envelope (#202) (30997dd)
+- heal cold monitors fleet-wide via flag-and-drain hydration (#200) (f13c39d)
+- **identity:** PATH 1 sync-path fingerprint cross-check (#192) (8c7e069)
+- **kg:** UTC-normalize timestamps and pin writer label at write time (#179) (e3d9d05)
+- **vigil:** align _SENTINEL_AUDIT_TRIGGERS with Sentinel's actual emit names (#186) (ef781ce)
+- **kg:** semantic routing transparency, FTS AND default, scope clarity, provenance.source (#165) (#182) (81c4d09)
+- **health-probe:** bounded parallel scan for redis_cache.keys (#180) (89f58bd)
+- **identity:** drop display_name fallback from quick_reference.for_knowledge_graph (784aa86)
+- **setup:** tighten dry-run exit_code, always emit 'applied' in JSON (final review feedback) (963769e)
+- **setup:** escape backslashes and quotes in TOML snippet (review feedback) (9031542)
+- **setup:** detect_clients uses is_dir(), not exists() — guards against ~/.claude being a regular file (b258d36)
+- **identity:** drop fingerprint-only sticky cache for MCP transport (Vigil-siphoning regression) (#160) (f61ada0)
+- **calibration:** stop aliasing accuracy=trajectory_health; surface real outcome-match accuracy or null (#159) (1932bd1)
+- **health_check:** surface circuit_breakers in response (regression of resident CB visibility) (#158) (7246c90)
+- **s8c:** persist spawn_reason on upsert_identity + ON CONFLICT propagation (#155) (13a5ff4)
+- **sentinel:** stop double-writing findings to KG (#154) (cc2d9d8)
+- **vigil:** preserve groundskeeper counts across non-audit cycles (#153) (4b33dce)
+- **runtime_config:** remove dead risk_reject_threshold branches (587e5a5)
+- **test:** anchor vigil-summary tests on real clock so cycles_24h/writes_24h stay stable in CI (#144) (7ddd7aa)
+- **identity:** wrap onboard-pin redis ops in wait_for + fix stale resident timeout tests (#143) (526d6ff)
+- **watcher:** truthful dashboard + audit-trail for resolutions (#145) (815687e)
+- **test:** anchor vigil-summary tests on real clock so cycles_24h/writes_24h stay stable in CI (#142) (86de4f3)
+- **audit:** track Postgres background write to prevent silent GC (c8d583d)
+- heal 'uninitialized' monitor via DB hydration + atomic save (#138) (#141) (04c9218)
+- **alerts:** silence 6h timezone-induced silent_critical flood and dedup lifecycle_paused emission (#122) (3ef1f2b)
+- **watcher:** import PROJECT_ROOT onto sys.path before first `agents.*` import (#120) (d2276ad)
+- **identity:** disambiguate Claude clients in UA detection (#115) (a8ac4c7)
+- **identity:** REST path must honor token ownership to prevent session-key hijack (#110) (#111) (8652f58)
+- **dashboard:** add EISV history backfill so chart populates on proxy polling path (#99) (273e67d)
+- **identity:** retire IP:UA fingerprint pin as implicit resume path (#98) (4c27b36)
+- **identity:** persist declared lineage on onboard(force_new=true) (#97) (9a58270)
+- **residents:** stamp persistent+autonomous on onboard, not just persistent (#93) (e0b37d1)
+- **identity:** PATH 1 fingerprint cross-check (Phase A) + anyio-asyncio guard (#84) (7218e33)
+- **dashboard:** align breakpoints + responsive main gutter (#91) (25126d5)
+- **dashboard:** Activity fills available panel height + mobile rules (#90) (5a52b76)
+- **dashboard:** cap Fleet Metrics panel at 1400px to match Activity (#89) (e34434e)
+- **dashboard:** cap Chart.js ResizeObserver grow-loop on Fleet Metrics (#88) (82ad89b)
+- **dashboard:** apply dashboard theme to Fleet Metrics chart (#87) (82cb3b5)
+- **anomaly:** fan out anomaly_detected audit entries per-agent (#86) (9135d6f)
+- **epochs:** backfill core.epochs row for epoch 2 + regression guard (5fcafdc)
+- **http:** allow /dashboard/fleet-metrics.js (was 404) + regression guard (#82) (2850a0d)
+- **identity:** middleware PATH 0 gate also emits identity_hijack_suspected (#81) (5eda4e1)
+- **dashboard:** polish Fleet Metrics panel + surface Chronicler scrape status (#79) (602bb23)
+
+### Documentation
+
+- **proposals:** BEAM footprint roadmap v0 — Read A (control plane → BEAM, intelligence plane stays Python) (#333) (dbceb5e)
+- **watcher:** record P016 FP sweep 2026-05-04 — SDK envelope parsing (#329) (c69e94d)
+- **r1:** bookkeeping — mark §4.1 shipped (#321), §4.3 in flight (#324) (#325) (20efb92)
+- **lease-plane:** §7.13 v0.11 TENTATIVE — resident heartbeat surface + substrate-state separation from monitor_decision (3 review passes) (#319) (db07cbb)
+- **lease-plane:** §7.2.8 + §7.2.9 RESOLVED v0.10 — payload-shape spec pinned by test, scheme grammar lint already shipped (#318) (ebac3ef)
+- **lease-plane:** §7.5 RESOLVED v0.9 — Pi remote_heartbeat TTL 180s→1000s from measured Steward audit data (#317) (8574d7c)
+- **plexus-scope:** add lease-plane source + migration rows to surface-ID table (2402877)
+- **coherence:** correct C1 default and bounds in C(V) docstring (b5d3b7e)
+- **lease-plane:** mark Phase A complete — Sentinel asyncpg CONCERN closed by PR #290 + production verification, §9 reconciliation closed by PR #304 (28/0/0) (#305) (f8c5229)
+- **council-fixes:** wrong skill file + wildcard surface_id rows + missing proposals preflight (#303) (ab8f2cb)
+- **proposals:** land plexus-scope.md + bidirectional reference from lease-plane RFC (#302) (5277fe2)
+- **preflight:** expand single-writer surfaces — identity code + plan.md ledger (#301) (25dd741)
+- **ontology:** R1 v3.3 amendment — council confirmation pass folds three operator decisions, six forcing items, four impl-row constraints, eight doc-text fixes (d446c1f)
+- **ontology:** R7 BEAM coordination kernel — in-repo placement decision (024c961)
+- **proposals:** RETIRE anima broker BEAM port v0 (operator decision post-v0.4) (#279) (fc0dd5e)
+- **ontology:** add R6 episode-fork response-shape decision doc v2 (aaaff89)
+- **ontology:** add R2 honest memory integration design doc v2 (b7789f2)
+- **proposals:** RFC v0.4 — anima broker BEAM port (S6 spike-result fold-in, ambiguous) (#278) (d411485)
+- **proposals:** RFC v0.3 — anima broker BEAM port (S1 spike-result fold-in) (#275) (63e4466)
+- **ontology:** refresh May 1 status board (877601a)
+- **proposals:** RFC v0.2.1 — anima broker BEAM port (spike scope rescope, pre-experiment) (#272) (fb35386)
+- **proposals:** RFC v0.2 — anima broker BEAM port (Pi-side coordination kernel) (#265) (044b7ac)
+- add machine RAIN recovery protocol (c83d6da)
+- **plan:** S20.1b + S15-c shipped 2026-04-27 (#249) (8d2856f)
+- record episode fork provenance distinction (0a8d5e7)
+- cross-link RFC v0.4 ↔ beam-coordination-kernel ontology plan (03b64f5)
+- **ontology:** clean R6 dogfood pass after lease-plane sync (15bc980)
+- **ontology:** R6 H1-H5 dogfood pass — Mnemos session 2026-04-29 (0ef9ef6)
+- **proposals:** RFC v0.3 — ack-pass complete, council-clean (6bb0d75)
+- **proposals:** RFC v0.2 — surface lease plane (Elixir/OTP coordination kernel) (e4d4156)
+- **ontology:** add candidate provenance envelope (#246) (6e22163)
+- **ontology:** S21-b items 5 + 6 — WIP-PR #245 council-clean, awaiting merge (c22b653)
+- **ontology:** S8a Phase 2 prep — day-6 corpus shape + threshold recommendation + reframed PR scope (d880c98)
+- **ontology:** S21-b audit pass — items 7 + 8 closed, items 5 + 6 carry forward (355b121)
+- add harness substrate plurality ontology plan (#242) (122cd02)
+- name single-writer surfaces and add gh-pr-list check before touching them (#239) (d5f9d21)
+- remove three superseded/abandoned proposals (1eb2e82)
+- remove CASE_STUDY.md (translation-layer that deep-tech evaluators don't need) (4231275)
+- **ontology:** S21 canonical lineage-decl gap metric (PR #226 followup) (3ac1eeb)
+- **ontology:** fix dead session_cache.py path reference (00f0663)
+- **ontology:** S21-a review pass 2 — adversarial review post-merge (684944b)
+- **ontology:** S19 closed in status board + S21-a fix council review (2140440)
+- **ontology:** surface S21 session-resolution bypass + ledger row (03d1a90)
+- drop relocated answer_lumen_questions row from cross-machine-surface (9371cdf)
+- drop internal docs/superpowers/ planning tree; strip dead refs (a807a22)
+- revamp README — runtime-first framing, paper demoted to Related Projects (30a63c9)
+- refined phase-5 evidence contract — spec + council reviews + implementation plan (#207) (ad8569d)
+- close S16 audit write tolerance (#199) (3cd6c4e)
+- close S17 redis pin deadlock row (#198) (4d752ae)
+- **ontology:** mark S20.1a resolved (plugin#23 merged); note concurrent-ship collision (43a2eb0)
+- **health:** clear all warnings — linter robustness + cross-repo prefixes + proposal-stage placeholders (8d3c2dc)
+- **ontology:** S20.1a WIP-PR pointer + council-review summary (b5d77e6)
+- **ontology:** S20 amendment 2026-04-26 — pre-implementation audit + S11-a row corrections (3225ee9)
+- **ontology:** mark S11-a effectively closed (lint test shipped, sibling audit done) (2aa9c20)
+- **ontology:** mark S11-a primary fix shipped (plugin@ad4dfef) (c81954e)
+- **ontology:** S20 amendment — hook layer already shipped via PR #19; S20.0 answered (e8c7fdc)
+- **ontology:** S20 client cache scope narrowing + S11-a skill text drift (7abaaea)
+- **proposals:** PATH 1 sync-path fingerprint check + code review (b69fcd1)
+- **proposals:** compute-meter v1→v2→v2.1 council-review chain (v2.1 status: ready-to-build) (521e429)
+- **coherence:** cross-link legacy thermodynamic and canonical manifold forms (#190) (0a3fa7e)
+- **proposals:** UUID leak audit — redaction-only approach insufficient (febadba)
+- **proposals:** list_agents UUID redaction — proposal + council reviews (b1aca7e)
+- **readme:** add citation block + moat-narrative line (credibility-surface framing) (11a8847)
+- drop governance_core fold-back changelog/IP narrative from public files (6389c0d)
+- **plan:** add S16 (audit-write fire-and-forget) + S17 (Redis-in-handler) tech-debt rows surfaced by S13 Watcher pass (1f8b116)
+- **identity:** align user-facing copy with Part-C ownership-proof posture (#149) (a89ca01)
+- **ontology:** add scheduled-re-reads section for date-gated triggers (a24b511)
+- **ontology:** review pass — S8c+S14 rows, R1 v3.2 amendment, S1 scope correction (62113ef)
+- **ontology:** record operator acceptances for R1, S1, S8a Phase 2 (7f71c02)
+- spec for config hot-reload (option C — admin tools, no watcher) (4caf2e8)
+- **ontology:** add S13 row — server-side complement of S11 (1092aec)
+- **ontology:** v7-fhat spec v4 — narrow re-scope per council (2 classes, 2 targets, observer framing) (a22c075)
+- **ontology:** mark S8a Phase-1 shipped as PR #121 (81ea6f5)
+- **ontology:** v7-fhat spec v3 + paper-positioning retention note (84a07ed)
+- **ontology:** v7 $\hat{F}$ spec v2 — pre-registered parameterization + predictive horse race (80deb5d)
+- **ontology:** v7 $\hat{F}$ spike spec — path (d) for honest FEP grounding (f72f604)
+- **ontology:** WIP-PR convention + handoff pre-flight (pre-dispatch PR-scan checkpoint) (856e28b)
+- **ontology:** S8a tag-discipline audit — findings doc (#113) (56a5577)
+- **readme:** correct requirements-core vs -full split (#104) (aad5b3e)
+- delete CONTRIBUTING.md, inline the load-bearing bits into README (#103) (1502855)
+- **readme:** fix dead #compiled-dependency anchor → #core-engine-dependency (#102) (35c9cb5)
+- hero SVG + CONTRIBUTING fixes (stranded from PR #100) (#101) (c23a22f)
+- **readme:** defer EISV jargon, add try-it snippet, honest denominators (#100) (83a1d5a)
+- **ontology:** refresh recommended-priority snapshot post-session (S11/R3/R4.1 shipped; new top: S5/S6/v7/PR-scan checkpoint) (8640a43)
+- **ontology:** fold R3 worktree depth into appendix (call sites, open questions, unblocking table, re-scope observation) (9042bea)
+- **ontology:** S11 resolved via plugin#17 + dogfood-lesson appendix (parallel-PR pattern recurred at execution) (c1e4554)
+- **ontology:** R3 trust-tier annotation pass appended to plan.md (31d30d9)
+- clear remaining dead refs (R4 landed inline; observability handler refs split for parser; retrieval_eval README repointed to shipped state) (4033205)
+- **ontology:** repoint S11 plan refs (s11-consolidation.md folded into plan.md; plugin scripts disambiguated) (eee2488)
+- clear dead refs — skip .worktrees/ and historical planning dirs in check_doc_health (66fb06d)
+- **readme:** signpost the three AI-CLI bootstrap files at root (907cebb)
+- **ontology:** operational pattern appendix — how to turn plan into action (56842cd)
+- **ontology:** S11 consolidation audit — 5 branches already merged, recommend synthesized PR (3e66766)
+- **ontology:** R4 v1 draft + Q3 resolution (v7 thesis accepted) (9847cd9)
+- **ontology:** S11 reality check — 5 WIP branches exist (9a40b46)
+- **ontology:** S11 — revise default session-start behavior (the teeth) (31a9148)
+- **ontology:** A2+A3 audit findings appended to plan.md (80a3def)
+- **ontology:** paper-positioning note (A1 — answers Q3) (7e5da10)
+- **ontology:** identity taxonomy + resolution plan (e22bae8)
+
+### Tests
+
+- **r6:** close design-doc test plan items 10+11 — thin shape + is_fork invariant across all R6 v2 cases (#308) (b8d06ed)
+- **lease-plane:** close §9 residual — alias + force-release token rejection (28/0/0) (#304) (50df44b)
+- **lease-plane:** close 2 §9 Elixir router rows (held_by_other 409 + surface_kind ignored) (#296) (059d7e0)
+- **lease-plane:** close 2 §9 storage-layer rows (CHECK + generated column) (#294) (f063b94)
+- **lease-plane:** close 3 more §9 named-gate rows for AcquireRequest + canonicalize (#293) (221593a)
+- **lease-plane:** close 4 §9 named-gate rows for AcquireRequest + held_by_other (#292) (061e57c)
+- **lease-plane:** property-based tests for Canonicalize (#282) (b72f9bb)
+- **resident-progress:** include never-seen status in endpoint allow-set (#262) (271a368)
+- **kg:** update AGE get/update_discovery tests for SQL fallback contract (#232) (0bede6e)
+- **s19:** skip read_service_label tests on non-darwin (#191) (15586d2)
+- **substrate:** mock sys.platform=darwin in launchctl test fixture (#185) (6a357a2)
+- **setup:** lock in dry-run exit_code and JSON 'applied' field invariants (deb4151)
+- **identity-v2-redis:** mock time.time instead of sleeping (144d0ad)
+
+### Other
+
+- pin-TTL bleed SQL + report script for PR #203 (#312) (7274386)
+- **lease-plane:** launchd plist template + start.sh wrapper for persistent service (#307) (cfefd10)
+- migration-drift renumbering + apply plan (no DDL run) (#236) (34ab4d7)
+- **residents:** pills click to dedicated panels (Vigil/Sentinel/Watcher/Chronicler), rp-row for Steward/Lumen/etc, agent card as fallback (e348b6b)
+- bump CURRENT_EPOCH 2→3 (broadened tactical truth channel — already applied via bump_epoch.py to live DB) (#220) (e8291ad)
+- backfill fixes — drop epoch filter, COALESCE confidence keys, feed CalibrationChecker, flush postgres write; handler forwards per_channel_* keys (#219) (a9f625f)
+- cap vigil + sentinel panel width at 1400px to match peer panels (#217) (80536d2)
+- broaden tactical truth channel + per-channel surface (epoch 2→3) (#215) (e49d9ea)
+- default chronicler chart to 14-day window (4d09d91)
+- ambient aurora + grain overlay + HUD corner brackets (#212) (04e1629)
+- remove dead unitares/hooks/ directory; salvage session_end_stash to scripts/dev/ (#210) (af8e16a)
+- honest absence when tactical signal is starved (#201) (d70e072)
+- identity resolution observation event for pin-TTL analysis (#203) (b4c5d4b)
+- stop labeling trajectory health as calibration (91ac421)
+- Agents grid reflects lifecycle WS events live (no more 30s tick lag) (7cd0155)
+- surface last_point_ts in /v1/metrics/catalog so Chronicler badge avoids N+1 (1dd956e)
+- branch hygiene automation (Vigil sweep + conditional webhook) (#196) (c6beeb4)
+- filter Chronicler .error twins, surface active failures via panel badge (721e2f6)
+- **ops:** launchd template for com.unitares.dep-sweep — Sunday 09:00 weekly Homebrew + Pi outdated-package report (597d4e3)
+- **dev:** weekly dep-sweep — Homebrew + Pi outdated package report (com.unitares.dep-sweep launchd target) (99b29f4)
+- extend P005 carve-out to <var>=None + try/finally pattern (#174) (e7667f3)
+- aggregate GitHub traffic for CIRWEL org (66dca5e)
+- bootstrap-checkin §3.5 — use core.substrate_claims registry (c98d1d1)
+- resident progress detection (phase 1) implementation (0c6e15b)
+- onboard-bootstrap-checkin v2.1 + council reviews (81442f2)
+- stamp WIP-PR #164 on row (PR1: schema + enroll CLI) (c93e40d)
+- resident progress detection (phase 1) design (3d0784d)
+- ship council review provenance (code-architect + adversary) (44ff654)
+- open resume-time substrate attestation row (Hermes-incident-driven; B-strict preferred) (10c3c97)
+- drop P005 false-positives on context-managed acquire() (759681f)
+- unitares setup wizard — 10-task TDD implementation plan (b83ee09)
+- revise unitares setup — stdio is already implemented (mcp_server_std.py), drop rejection-flag bridge (a33d72c)
+- unitares setup script — guided install wizard, council-reviewed (76dbc54)
+- ratify Option A + mark §6 cure and S15-a shipped (f168e3c)
+- **plist:** default UNITARES_LLM_MODEL to qwen3.6:27b-coding-nvfp4 (d3ebb21)
+- add dedicated Vigil panel + hide its writes from main feed (#140) (f172399)
+- resident-agent template polish (cycle timeout, hooks, docs) (#136) (06eb002)
+- continuity_token retirement plan doc (Track C C1 complete) (9b43cf2)
+- design doc for verify_lineage_claim (824b177)
+- log per-phase latency in process_agent_update workflow (#133) (d3c6da4)
+- concurrent identity binding invariant — audit-only v1 (#123) (#126) (472763b)
+- switch governance-mcp to postgres knowledge backend (4a36953)
+- add one-line UNITARES pitch + bump paper ref to v6.9.1 (2d8feb0)
+- bump paper reference to paper-v6.9 (ea93b43)
+- bump paper reference to paper-v6.8.2 (330fbe5)
+- add IPv6 loopback proxy so cloudflared 2026.3+ WS upgrades reach uvicorn (bba6009)
+- bump paper-v6.8 -> paper-v6.8.1 (2cd921a)
+- bump health-snapshot fixture version to 2.12.0 (917a5a8)
+- consolidate on scripts/ops/version_manager.py; strip dead refs; pyproject triggers VERSION check (cb74860)
+- anchor-resilience series (3 PRs, detector + rotate script + SDK guard) (#77) (40882dd)
+- committed rotate-secrets.sh with surgical anchor strip (#76) (75147c2)
+
+---
+
+## [2.12.0] - 2026-04-20
+
+### Added
+
+- **KG retrieval rebuild — Phase 1 / eval harness** (#56) — retrieval evaluation harness plus a 20-pair seed corpus and baseline pin under `tests/retrieval_eval/`. Locks in V0 metrics so later phases have a reference point. (`scripts/eval/retrieval_eval.py`)
+- **KG retrieval rebuild — Phase 2 / BGE-M3 embedder** (#58) — new embedder selectable via `UNITARES_EMBEDDING_MODEL=bge-m3`. Keeps the previous model as default; flip per-deployment. BGE-M3's 8192-token budget is what motivates the Phase-6 embed-window widening below.
+- **KG retrieval rebuild — Phase 3 / cross-encoder reranker** (#60) — opt-in reranker infrastructure, default off. Scores the filtered pool after fusion when enabled.
+- **KG retrieval rebuild — Phase 4 / hybrid RRF fusion** (#62) — RRF fusion of BM25 + dense retrieval behind `UNITARES_ENABLE_HYBRID`. Adds `full_text_search()` on the AGE store, switches `ts_rank` → `ts_rank_cd`, and treats tags as an RRF boost rather than a hard filter. `rrf_scores` surfaced alongside `similarity_scores` / `rerank_scores`. Compose order when both Phase 3 and Phase 4 are on: hybrid fuses first, then rerank scores the filtered pool.
+- **KG retrieval rebuild — Phase 5 / 1-hop typed-edge graph expansion** (#63) — behind `UNITARES_ENABLE_GRAPH_EXPANSION`. After RRF fuse, pull 1-hop neighbors (`related_to` / `responses_from` / `response_to`) from the top-10 seeds at discounted score, hydrate missing neighbors via `graph.get_discovery` (capped at 30 DB trips). Tag-filter guard extended to all `hybrid_rrf*` modes. Infrastructure only — the 20-pair seed corpus is too sparse to move the needle today; payoff scales with corpus size and response threading.
+- **KG text limits raised** (#73) — write caps 1000/5000 → 4000/20000 chars (summary/details); embed-text window 500 → 6000 chars (closes a quiet retrieval gap where details past char 500 were dead weight for semantic search); read-side preview 100 → 500 chars with `has_more_details` and `details_length` hints so agents can decide whether to round-trip for the full body. Limits consolidated in `src/mcp_handlers/knowledge/limits.py` (previously duplicated inline in three handler call sites). Existing discoveries keep their legacy embeds until edited; backfill is out of scope.
+- **Fleet metrics substrate** (#68) — Postgres-backed catalog-gated time-series store. Single `metrics.series (ts, name, value)` table; dotted names (`tokei.unitares.src.code`); writes gated by an in-code catalog (`src/fleet_metrics/catalog.py`) so a leaked bearer token cannot inject arbitrary series names. Three bearer-authed endpoints: `POST /v1/metrics`, `GET /v1/metrics/series`, `GET /v1/metrics/catalog`.
+- **Chronicler resident** (#71) — daily scraper agent populating fleet metrics via the catalog.
+- **Fleet Metrics dashboard panel** (#75) — catalog-driven time-series line chart (Chart.js 4.4 + `chartjs-adapter-date-fns`, both already loaded). Dropdown auto-populates from the catalog; polling on demand (refresh button + dropdown change); empty-state rendering for series with no points yet. Completes the three-PR track (substrate → Chronicler → dashboard).
+- **Resident-fork detector** (#70) — when onboard detects a label collision with an agent carrying the `persistent` tag, log at WARNING and emit `resident_fork_detected` via the broadcaster. Rename behavior preserved (fork still completes; onboard is not blocked) but the fork now announces itself instead of absorbing silently. Closes the detection-gap blindspot surfaced in the 2026-04-19 anchor-resilience council review. Adds `db.agent_has_tag` on `AgentMixin`. Phase 1 of 3.
+- **SDK `refuse_fresh_onboard` opt-in for residents** (#74) — residents can refuse a fresh onboard, forcing the client to resume an existing identity instead of silently creating a new one.
+- **Dashboard residents precedence** — `/v1/residents` now supports a third fallback: `KNOWN_RESIDENT_LABELS ∩ fleet` when neither `UNITARES_RESIDENT_AGENTS` nor `meta.resident=True` is set. Reuses the canonical list from `grounding/class_indicator.py` so operators don't have to duplicate it in plist env vars. Precedence: env → metadata flag → known-residents ∩ fleet → none. `_resolve_resident_labels` now returns `(labels, source)`.
+
+### Changed
+
+- **`ship.sh` runtime-path branch prefix is now agent-scoped** — `claude/auto/...` when `CLAUDECODE=1`, `codex/auto/...` otherwise (backward-compatible default); override with `UNITARES_SHIP_AGENT=<name>`. Rationale: multiple concurrent agents auto-ship to the repo; self-identifying branch names make the audit trail honest.
+- **README** — paper reference bumped v6.7 → v6.8.
+
+### Fixed
+
+- **Identity Honesty Part C — strict-mode gates** (2026-04-18) — closes the three ghost-creation paths that PR #35 revert called out. One env flag (`UNITARES_IDENTITY_STRICT`) gates all three at their source instead of layering more archive/resurrect guards on top:
+  - **PATH 0 bare-UUID resume** (`identity/handlers.py`, `middleware/identity_step.py`) now requires a `continuity_token` whose signed `aid` claim matches the requested `agent_uuid`. Prior behavior accepted any known UUID as proof of ownership — the mechanism behind "another agent resurrected a dormant agent from yesterday." Invariant #4 violation closed.
+  - **Handler FALLBACK 2 ghost factory** (`support/agent_auth.py:214-221`) — `auto_<ts>_<uuid8>` IDs generated when the caller has no `agent_id` and no session binding. Gated on the same flag.
+  - **Onboard-triggered orphan sweep** (`identity/handlers.py:1340-1349`) — removed. With ghost creation gated upstream, the nightly sweep in `background_tasks.py` is sufficient. This was the driver of "agent archived almost immediately."
+  - **Modes:** `off` (emergency rollback), `log` (warn `[IDENTITY_STRICT]`, do nothing else — **default**), `strict` (reject with recovery guidance). Default `log` surfaces the magnitude of the problem via warnings without breaking any caller; operator flips to `strict` after external-client audit.
+  - **Residents updated:** SDK `GovernanceAgent` and Watcher now load their saved `continuity_token` into the client before the PATH 0 resume call so they keep working in strict mode without anchor-file schema changes.
+  - **Follow-up (out of scope this PR):** audit external clients (Codex plugin, Pi/Anima, Discord bridge, dashboard, raw REST callers); flip default `log → strict`; delete the dead bare-UUID / FALLBACK 2 / onboard-sweep code paths.
+- **`call_model` — empty content fallback to `message.reasoning`** (#72, partial #66) — gemma4 / deepseek-r1 via Ollama's OpenAI-compat adapter split the final answer and thinking trace into separate fields; a truncated reply left `content=""` and hid the whole response. Now falls back to `message.reasoning` when content is empty.
+- **`call_model` — stop silently rewriting `llama-3.1-8b` → `llama3:70b`** (#69, partial #66) — local auto-default now honors `UNITARES_LLM_MODEL` (`gemma4:latest` fallback); recovery hint points at `ollama list` instead of stale model names.
+- **Dialectic reviewer auto-select gated** (#65) — behind `UNITARES_AUTOSELECT_REVIEWER` (default off). The candidate pool is ghost sessions + non-reasoning scripts, so auto-assign was dishonest until a real summonable reasoner is wired in. Callers already handle `None` cleanly (self-review / awaiting-facilitation / `NO_REVIEWER`).
+- **Stuck-recovery self-review fallback closed** (#59) — `_trigger_dialectic_for_stuck_agent` now passes `agent_metadata` + paused tags to `select_reviewer`. Prior behavior called it without metadata, `select_reviewer` returned `None`, and the caller's self-review fallback assigned the paused agent as its own reviewer on every sweep — producing dozens of doomed `reviewer: 9a6681ec...` sessions for Steward. When no peer is eligible, return `None` and let `auto_initiate_dialectic_recovery` own the LLM-assisted fallback for single-agent deployments.
+- **`/api/events` int-cursor replay** (#67, closes #25) — dropped UUID audit rows from `/api/events` when clients pass `?since=N`. They were unreachable via the int-cursor protocol and replayed on every poll. Dashboard (no `since`) still sees them.
+- **Loop-detect Pattern 4 pause branch freshness guard** (#61) — `PAUSE_LOOP_FRESHNESS_SECONDS=3600`. Pattern 4's pause branch counted `pause` entries in the last 10 decisions with no time window; once it fired, every subsequent update was rejected before it could be recorded, so the pause-heavy window never rolled over and the agent was locked out indefinitely on a static history. Seen in production: Steward (`9a6681ec`) flapped for 13+ hours on a frozen meta. Unparseable timestamps fall back to firing so bad metadata can't silently suppress a real loop.
+- **Loop-detect Pattern 4 / Pattern 7 proceed-branch freshness guard** (#57) — `PROCEED_LOOP_FRESHNESS_SECONDS=600`. The 10-proceed window had no floor on how old the newest timestamp could be, so a dormant agent whose last proceed burst happened days ago kept re-firing. Seen in production as a stale 2026-04-17 burst on `2aa0ec9e` re-flagging itself on 2026-04-20.
+- **KG search noise-floor fallback removed** (#55) — removed the 0.2-threshold fallback; surface scores unconditionally.
+
+### Removed
+
+- **Neighbor coupling** (2026-04-17) — deleted `AdaptiveGovernor.apply_neighbor_pressure` / `decay_neighbor_pressure` and the `neighbor_pressure` / `agents_in_resonance` state fields from `unitares-core`. Deleted `cirs.hooks.maybe_apply_neighbor_pressure`, `auto_emit_coherence_reports`, `_lookup_similarity` and all re-exports. The production call site has been disabled since the `phases.py:1005` comment landed; this commit removes the dormant scaffolding so the code reflects actual runtime behavior. Rationale: agent-to-agent threshold coupling undermined independent per-agent judgment and produced correlated EISV drift that confounded fleet anomaly detection. Forward-compatible: persisted `GovernorState` snapshots carrying `neighbor_pressure` keys continue to load (unknown keys ignored).
+
+### Tests
+
+- **`monitor_phi` / `monitor_calibration` unit coverage** (#64) — direct coverage lifted from 63%/60% to 100%. Task-type risk adjustment branches and trajectory/strategic/tactical calibration paths were previously exercised only transitively via `test_governance_monitor*.py`. No production changes.
+
+---
+
+## [2.11.0] - 2026-04-07
+
+### Added
+
+- **Sentinel agent** — continuous independent observer that monitors governance in real-time via WebSocket. Detects fleet-wide anomalies (coordinated degradation, entropy outliers, verdict shifts), correlates incidents across typed events, and generates template-based situation reports from the audit trail. Runs as a launchd-managed persistent service alongside Vigil. (`scripts/ops/sentinel_agent.py`)
+- **Broadcaster event bus** — typed event emission (`lifecycle_*`, `identity_*`, `knowledge_*`, `circuit_breaker_*`) with a queryable in-memory ring buffer (2000 events, ~6h). Foundation for Sentinel and future dashboard consumers.
+- **Behavioral baseline persistence** — Welford stats (mean, variance, count per signal) now persist to PostgreSQL (`core.agent_behavioral_baselines` table) via fire-and-forget async writes. Baselines survive server restarts instead of resetting.
+- **KG confidence cross-check** — discovery confidence is clamped to `agent_coherence + 0.3` on write. Annotates provenance with `confidence_clamped: true` and broadcasts `knowledge_confidence_clamped` event.
+- **Circuit breaker telemetry** — trip timestamp ring buffers on both governance and Redis circuit breakers. Exposed via `get_governance_metrics()` as `circuit_breakers` section with `trips_1h`, `trips_24h`, `last_trip`.
+- **Trajectory drift alerts** — emits `trajectory_drift` audit event and `identity_drift` broadcast when lineage similarity drops below 0.6. Also broadcasts `identity_assurance_change` on trust tier transitions.
+- **Agent silence detection** — background task (every 10 min) monitors persistent agents (Vigil, Lumen, Sentinel) for missed check-ins. Alerts at 2x expected interval, critical alert at 5x. Deduplicates alerts, clears on recovery.
+
+### Fixed
+
+- **CI doc drift check** — removed stale reference to deleted `docs/guides/NGROK_DEPLOYMENT.md` that caused `FileNotFoundError` in CI.
+
+---
+
+## [2.10.0] - 2026-04-04
+
+### Breaking
+
+- **Docker removed** — Docker Compose and `postgres-age` container retired. All services now run via Homebrew PostgreSQL@17 on port 5432 with AGE 1.7.0. Migration scripts and Docker-era docs cleaned up.
+
+### Added
+
+- **Process marker self-healing** — the HTTP server now recreates missing `data/.mcp_server.pid` and `.mcp_server.lock` markers while running, reducing false-negative local health checks after interrupted stop/start sequences.
+- **Direct HTTP identity resolution** — the HTTP request layer now resolves bound identity from `client_session_id` or `continuity_token` before direct tools run, so request-scoped tools can reuse the same session continuity path as MCP callers.
+- **Pydantic schemas** for `outcome_correlation` and `reassign_reviewer` tools.
+- **Doc health checker** added to pre-push pipeline.
+- **Grounded outcome study utilities** — added exogenous-vs-endogenous outcome classification, data-quality reporting, grouped regression helpers, and an analysis script for outcome-correlation validation.
+
+### Changed
+
+- **Behavioral EISV promoted to primary** — ODE dynamics demoted to diagnostic. Pattern analysis now uses behavioral EISV histories for trend detection.
+- **Operator-facing state views** — dashboard, metrics, and persisted state now expose explicit `primary_eisv`, `behavioral_eisv`, `ode_eisv`, `ode_diagnostics`, and shared state semantics instead of overloading one flat EISV view.
+- **Self-relative behavioral baselines** — per-agent Welford mean/std after ~30 updates; assessment uses z-score deviation from agent's own operating point instead of fixed thresholds. Absolute safety floors (E<0.30, I<0.30, S>0.70, |V|>0.50) always apply regardless of baseline.
+- **Behavioral coherence for outcomes** — outcome events now feed behavioral EISV directly, closing the loop between governance verdicts and observable results.
+- Renamed internal "DNA/genotyping" terminology to standard ML terms (behavioral baseline, warmup, self-relative scoring). Persistence backward-compatible with old `dna_stats` key.
+- **HTTP boundary cleanup** — core read tools (`health_check`, `get_governance_metrics`) now use transport-neutral service/data helpers, and direct HTTP responses preserve multi-block/non-text MCP content instead of collapsing everything to the first text block.
+- **Identity response shaping** — `identity()` and `onboard()` now consistently expose compact operator diagnostics (`session_resolution_source`, `continuity_token_supported`, `identity_status`, `bound_identity`) across the main and early-return paths.
+- **Process update orchestration** — `process_agent_update` response assembly and workflow sequencing now live in dedicated service modules, reducing handler/transport coupling.
+- **Ops scripts** — `start_unitares.sh` and `stop_unitares.sh` now wait for processes to exit and avoid unlinking marker files from a freshly restarted server.
+- **Tool surface reduction** — `TOOL_MODE` enforced at FastMCP registration, reducing exposed tools from 40 to 20.
+- **Trajectory identity aligned** with paper's six-component signature.
+- **KG search** — default multi-term queries use OR; redundant FTS per-term fallback removed.
+
+### Security
+
+- **MCP listen defaults** — Default bind address is `127.0.0.1`. Opt in to `0.0.0.0` with `UNITARES_BIND_ALL_INTERFACES=1` or `UNITARES_MCP_HOST`. LAN/ngrok `Host` / Origin allowlists are no longer hard-coded in source: use `UNITARES_MCP_ALLOWED_HOSTS` and `UNITARES_MCP_ALLOWED_ORIGINS` (comma-separated). See `src/mcp_listen_config.py` and `CLAUDE.md`. LaunchAgent and `start_unitares.sh` set the previous bind-all + example allowlists for existing deployments.
+- **Secrets removed from git** — Docker services bound to localhost.
+
+### Fixed
+
+- **Resident-agent resume safety** — strong continuity-token resume is now required for Vigil-style resident agents, and rejected identity-claim paths return structured errors instead of falling through into accidental forks.
+- **Timezone mismatch in auto-archive** — `_auto_archive_ephemeral_agents` used `datetime.now(timezone.utc)` for cutoff but timestamps were stored as naive local time, causing agents in non-UTC timezones to appear hours older than reality and get instantly archived.
+- **Content→details param mapping** — `content` parameter passed to `store_knowledge_graph` was not persisting to the `details` field due to Pydantic `model_dump()` populating all Optional fields as `None`, which defeated `dst_key not in arguments` guards in `action_router`.
+- **Search NoneType crash** — `limit=None` from Pydantic caused `NoneType * int` error in search handler.
+- **Identity continuity precedence** — explicit stable session continuity now wins over name-claim recovery, preventing `identity(client_session_id=..., name=...)` from silently jumping to an older named identity.
+- **Durable stable session binding** — `onboard()` now persists the returned stable `client_session_id` through the normal session-bind path, so a Redis miss no longer causes a fresh UUID to be created on later resume.
+- **HTTP work logging continuity** — `process_agent_update(client_session_id=...)` and `process_agent_update(continuity_token=...)` now resolve the correct bound identity on fresh HTTP requests instead of requiring the caller to pass the raw UUID manually.
+- **HTTP metrics continuity** — `get_governance_metrics(client_session_id=...)` now resolves the real bound agent instead of materializing an unrelated auto-generated identity on the HTTP path.
+- **AGE discovery durability** and drift checks hardened.
+- **Tags preserved** on knowledge updates when omitted.
+- **High-severity KG updates** and anonymous note writes tightened.
+- **Dialectic reviewer selection**, Vigil signals, and convergence guidance fixes.
+- **Lock timeouts** classified as system errors.
+- **Missing agent rows** repaired during lazy persistence.
+- **Pre-existing test failures** resolved (circular import in `_generate_contextual_reflection`, identity adapter name claim path).
+- **Doc health drift** — stale file references, stale counts, and false-positive doc-health warnings cleaned up.
+
+### Removed
+
+- Docker Compose and `postgres-age` container setup.
+- Completed migration scripts archived.
+- Unused exceptions module.
+
+---
+
+## [2.9.0] - 2026-03-29
+
+### Breaking — Epoch Bump (1 → 2)
+
+- **DB epoch bumped to 2** — Behavioral EISV replaces ODE dynamics. Existing state data computed under the old model is incompatible. Old data (epoch 1) remains in the database but is excluded from active queries. All agents start fresh in epoch 2 on next check-in.
+
+### Added — Identity & Session Management
+
+- **`bind_session` tool** — bridges the identity gap between REST hooks (which onboard via curl) and MCP Streamable HTTP (which uses a different session key). One call at session start syncs both namespaces to the same agent.
+- **Thread-based identity** with honest forking — agents acknowledge fresh sessions instead of falsely claiming continuity. Epistemic context feeds into EISV dynamics.
+
+### Added — Behavioral EISV (Non-Embodied Agents)
+
+- **Behavioral sensor EISV** — non-embodied agents (Claude, Cursor) get synthetic EISV seeds derived from behavioral signals (response latency, error rates, task complexity patterns) instead of physical sensors.
+- **Behavioral trajectory identity** — trajectory fingerprinting for non-embodied agents using behavioral patterns rather than sensor readings.
+- **Coherence differentiation** — reduced V damping, wired behavioral signals into coherence calculation, adaptive delta for basin edge detection.
+
+### Added — Sensor EISV & Spring Coupling (Lumen)
+
+- **Sensor spring coupling** in EISV ODE — Lumen's physical sensor readings (temperature, humidity, light) now couple into the ODE as spring terms, grounding dynamics in physical state.
+- **Normalized spring coupling** by dimension range width for consistent cross-dimension influence.
+- Hardened sensor EISV: clip to physical bounds, removed dead code.
+
+### Changed — Soft Barrier Dynamics (governance-core)
+
+- **Soft barrier replaces hard clamping** in EISV ODE — cubic barrier potential in `_derivatives()` smoothly repels state away from bounds (C² continuous, zero in interior). Hard `clip()` in integrators demoted to safety net. Preserves Jacobian continuity for contraction/Lyapunov analysis.
+- **Barrier parameters** added to `DynamicsParams`: `barrier_strength=2.0`, `barrier_margin=0.05`. Margins scaled proportionally for S (×2.0) and V (×4.0) ranges.
+- **Analytical Jacobian** updated with barrier diagonal terms in `stability.py`.
+- **Removed redundant V bounds clip** in `governance_monitor.py` post-ODE block — barrier handles it; S floor and coherence recalc retained.
+
+### Added — EISV Dynamics & Governance
+
+- **State velocity feedback** — rate-of-change of EISV dimensions feeds back into dynamics, enabling faster response to rapid drift.
+- **Adaptive lambda2** via `theta.eta2` — coherence damping on entropy is now state-dependent.
+- **Coherence reports** auto-emitted for neighbor pressure detection in multi-agent scenarios.
+- **Dialectic condition enforcement** at tier-1 with genesis reseed fix.
+- **Closed feedback loops** — calibration deviation, ethical drift, and behavioral patterns now feed back into governance decisions via CIRS oscillation detection.
+- **Persistent AdaptiveGovernor state** — governor parameters survive server restarts.
+- Tuned thresholds for coding agents (beta_default 0.60 → 0.70), fixed recovery loop spiral.
+
+### Added — Knowledge Graph
+
+- **System version in discoveries** — `system_version` auto-populated in provenance at store time. Surfaced as top-level field in search results. Pre-v2.8.0 entries show `null`.
+- **Staleness warnings** — KG search flags open entries >60 days old or 2+ minor versions behind current with `staleness_warning` per discovery.
+- **Concept extraction** — background task automatically extracts concepts from agent check-ins and creates knowledge graph entries with spawned edges linking related discoveries.
+- **Spawned edges** — knowledge graph entries can now track provenance via `SPAWNED_BY` edges and tag-based queries.
+- **Pool guard improvements** — connection pool health checks prevent stale connections from corrupting KG operations.
+
+### Added — Infrastructure
+
+- **Database hygiene** — automated retention policy, batch queries, and periodic maintenance tasks.
+- **Docker Compose** — top-level `docker-compose.yml` for one-liner setup of PostgreSQL+AGE and Redis.
+- **Gateway MCP server** — simplified 6-tool proxy on port 8768 for weak external clients (Cursor, etc.).
+- **LLM-assisted dialectic recovery** when no peers are available for review.
+- **Agent baselines** persisted to PostgreSQL for cross-session calibration tracking.
+
+### Added — EISV Analysis Tools
+
+- **Monte Carlo basin estimation** (`scripts/basin_estimation.py`) — maps safe operating region by sampling 10K random perturbations and integrating forward via `compute_dynamics()`. Confirmed global attractivity under linear I-dynamics mode (100% convergence across full state space).
+- **Contraction analysis verifier** (`scripts/contraction_analysis.py`) — numerically computes the EISV Jacobian (analytical + numerical cross-validation to 5×10⁻¹⁰), verifies all eigenvalues negative, optimizes diagonal contraction metric. Bare rate: 0.046, optimized rate: 0.113. All Theta values contracting (400-point sweep).
+- **Compositionality metrics** (`scripts/compositionality_metrics.py`) — measures topographic similarity and region consistency of Lumen's primitive language. Supports real data from Pi SQLite DB or synthetic data mode for development.
+- **Analysis test suite** (`tests/test_analysis_tools.py`) — 36 tests covering all three tools.
+- `analysis` optional dependency group in pyproject.toml (scipy, matplotlib, editdistance).
+
+### Changed — Major Refactoring (5-Phase Module Split)
+
+Decomposed monolithic files into focused modules for maintainability:
+
+1. **Phase 1**: Extracted `tool_descriptions` to JSON
+2. **Phase 2**: Split `utils.py` into 5 focused modules
+3. **Phase 3**: Split `agent_state.py` into 7 focused modules
+4. **Phase 4**: Split `identity_v2.py` into 3 focused modules
+5. **Phase 5**: Split `cirs_protocol.py` into 9 focused modules
+
+Additional refactors:
+- Extracted `mcp_server.py` and `governance_monitor.py` into focused modules
+- Extracted background tasks, flattened `lifecycle_stuck`, renamed `response_formatting`
+- **LazyMCPServer singleton** — deduplicated `_LazyMCPServer` into `shared.lazy_mcp_server`, Pydantic runtime validation, `ConnectionTracker` extraction
+- Deleted dead code, organized scripts, decoupled transport, split `admin.py`
+
+### Changed — First Check-in Guidance
+
+- **Convergence guidance suppressed for early check-ins** — When `update_count ≤ 3`, EISV-derived guidance replaced with honest "Not enough data yet" message. Prevents misleading advice based on initialization defaults.
+- **Restorative block suppressed for early check-ins** — Same threshold, prevents false complexity divergence alerts on new agents.
+
+### Changed — Agent-Facing Response Trimming
+
+- **`health_check` lite mode** (default `lite=true`) — returns only component status without nested info/stats blocks, reducing context window usage. Use `lite=false` for full diagnostic detail.
+- **KG `health_check()` lightweight** — runs 3 COUNT queries instead of full `get_stats()` census. Eliminates per-agent/per-tag breakdowns from every health check. `get_stats()` unchanged for admin use.
+- **Uninitialized agent verdict** — agents with zero check-ins now get `verdict: 'uninitialized'` with `guidance: 'Call process_agent_update to activate governance'` instead of a generic `caution` verdict.
+
+### Fixed
+
+- **Health check CI timeout flake** — mocked Pi connectivity in all health_check tests to prevent real network calls timing out in GitHub Actions.
+- **`compute_equilibrium()` linear mode bug** — was using logistic quadratic formula regardless of I-dynamics mode, returning I*=1.0 instead of correct I*=A/γ_I≈0.85. Now checks `get_i_dynamics_mode()` and uses correct formula. Also includes `beta_complexity * complexity` term in S* and computes E* = αI*/(α + βₑS*) instead of E* ≈ I*.
+- **Inverted `is_bad` default** and unguarded NaN in outcome scores
+- **Coherence margin always "tight"** — str/float coercion and recovery tau noise fixes
+- **Behavioral sensor E saturation** and adaptive margin baseline drift
+- **Silent binding to archived agents** — prevented, with KG search degradation surfaced
+- **Metadata loaded before orphan cleanup** on startup
+- Inline validation for `discovery_type`, `severity`, and `response_to` in KG single-store and leave_note paths
+- Preserved schema metadata (descriptions, enums) in MCP tool aliases
+- Missing `sanitize_agent_name` function in validators
+- `anyOf` JSON schema handling in wrapper generator
+
+### Docs
+
+- Discord summoner design and implementation plan
+- README rewrite with production validation data, architecture diagrams, and figures
+- CLAUDE.md project instructions
+- Archived completed plans, fixed stale doc references
+
+## [2.8.0] - 2026-02-26
+
+### Added — Dashboard Redesign
+
+Major dashboard overhaul — Alpine.js + htmx interactive architecture replacing static HTML.
+
+- **Slide panel component** with agent detail view, EISV trend charts, and quick action buttons
+- **Alpine.js identity store** with "Me mode" — AI agents see themselves highlighted in the dashboard
+- **Hash-based router** for deep-linking to agents, sessions, and discoveries
+- **Scoped search** with agents/all toggle and debounced input
+- **Keyboard shortcuts** (vim-style navigation) with tooltip directive and help store
+- **Loading skeletons** and smart empty states for all data-fetching panels
+- **Error handling wrapper** and connection health checker
+- **Expandable agent cards** with accordion, inline IDs, and hover actions
+- **Bold visual redesign** — accent-tinted cards, colored EISV values, stronger badges, panel identity
+- **help.json** terminology database for contextual tooltips
+- **EISV history + incidents endpoints** for htmx fragment rendering
+- **Event IDs + `?since=` cursor** on `/api/events` for Discord bridge polling
+- **Discovery expand-on-click** with expandable details in list items
+- Removed redundant Activity Timeline panel (duplicated Agents list)
+- Removed Lumen sensor panel from governance dashboard
+
+### Added — Outcome Events Infrastructure
+
+- **Outcome event tracking** for EISV validation — correlate governance state with actual results
+- **Auto-emit outcome events** from check-ins, enabling calibration feedback loops
+- `outcome_event()` tool for manual event recording
+
+### Added — Stuck Agent Improvements
+
+- **Cross-referencing** stuck agents with recent activity across knowledge graph
+- **Unstick action** in dashboard with one-click recovery button
+- **Zombie prevention** — prevent archived agents from resurrecting via auto-resume
+- **Auto-unarchive** on onboard reconnect for legitimately returning agents
+- **Dedup recovery notes** in knowledge graph to reduce noise
+
+### Added — Knowledge Graph Lifecycle
+
+- **Ephemeral notes** with automatic expiration
+- **Periodic cleanup** for stale KG entries
+- **`last_referenced` tracking** for discovery recency
+- **Improved search UX** with better result formatting
+
+### Added — Developer Documentation
+
+- Developer guide for repo protection from agent damage
+- Dashboard redesign design document and implementation plan
+- Unified DB architecture design doc and implementation plan
+
+### Changed — Streamable HTTP Migration
+
+- **Primary transport migrated from SSE to Streamable HTTP** (`/mcp/` endpoint)
+- Removed dead SSE code paths from server and pi_orchestration
+- Network trust bypass for HTTP auth (local network clients)
+- System health metrics added to dashboard
+
+### Changed — Dialectic Protocol Hardening
+
+- **Simplified convergence** — `agrees=True` resolves directly, no fourth phase needed
+- **UUID alignment** via `require_registered_agent` — dialectic sessions use onboard identity
+- **Synthesizer attribution** displayed in session transcripts
+- **Reviewer auto-persist** and AGE tag normalization
+- **Reviewer auto-assign** fix for empty string default
+- **Mediator hijack prevention** (audit round 2)
+- **`finalize_resolution` fallback** to thesis `root_cause` when synthesis missing
+- **Ownership check removed** from archive/delete — dashboard can manage sessions
+- **Agent UUID → label resolution** in dialectic panel
+- Removed dead convergence code, fixed `agrees` coercion
+- 7 correctness bugs found and fixed via protocol audit
+- `DialecticDB` detects closed pool and auto-refreshes from backend
+
+### Changed — Identity Consolidation
+
+- **Unified `derive_session_key()`** — consolidated 6 separate derivation sites
+- Removed deprecated `_derive_session_key` (underscore-prefixed)
+- Fixed `get_bound_agent_id` import (identity_shared, not identity)
+- Clarified agent_id vs UUID terminology in comments and docs
+- Updated AGI-forward spec for identity_v2 current state
+- Fixed identity churn, display dispatch, and tag normalization (audit)
+
+### Changed — Lifecycle Module Refactoring
+
+- **Split `lifecycle.py` monolith** — extracted `lifecycle_resume.py` (142 lines) and `lifecycle_stuck.py` (557 lines) into focused modules
+- Lifecycle handler reduced from ~720 lines to focused orchestration
+
+### Changed — Dashboard Performance & Accessibility
+
+- **CSS containment** for render optimization
+- **`requestAnimationFrame`** for chart updates, EISV chart capped at 60 data points
+- **Debounced search** inputs, removed duplicate listeners
+- **CONFIG object** with timing constants, replaced magic numbers
+- **Semantic color CSS variables** and section headers for CSS navigation
+- **ARIA labels**, modal roles, skip link, focus management, and focus trap
+- Fixed heading hierarchy for perfect a11y score
+- Removed 4 unused component classes
+- JSDoc added to core dashboard functions
+
+### Changed — Database & Backend
+
+- Removed SQLite backend and dual-write entirely (complement to v2.7.0 cleanup)
+- `normalize_tags` for knowledge graph entries
+- Connection pool release and `acquire_compat` safety
+- Cross-event-loop DB corruption fix with system health tracking
+- Batch update counter persistence to prevent DB contention
+- Update count regression prevention on server restart
+
+### Fixed
+
+- **httpx client leak** in `pi_orchestration` — unclosed async client
+- **datetime shadowing bug** broke dashboard agent listing
+- **False-positive stuck agent detection** and dashboard noise eliminated
+- **Leave_note limit** raised from 500 → 6,000 chars, split into summary+details
+- **Reject out-of-range** complexity/confidence, guard `observe(compare)` NoneType
+- **Knowledge `content→details` param_map** for store action (alias fix)
+- **Self-recovery** — allow archived agents to self-restore via `self_recovery(quick)`
+- **UUID validation + auth checks** on dashboard fragment endpoints
+- 7 dogfood friction issues from Sonnet 4.6 Web session
+- 15 audit fixes + 8 audit round 2 fixes
+- 3 CI failures (async calibration tests + observability mock)
+- 2 pre-existing test failures resolved
+- Async metadata loading and handler improvements
+
+### Removed
+
+- SQLite backend and all related test files (final cleanup)
+- Dead SSE transport code
+- Lumen sensor panel from dashboard
+- Activity Timeline panel (redundant)
+- 4 unused dashboard component classes
+- Dead convergence code from dialectic protocol
+
+### Tests
+
+- 5,654 tests collected, 80% coverage target
+- Test updates for async metadata, dialectic phase, KG truncation limits
+
+---
+
+## [2.7.0] - 2026-02-20
+
+### Added — CIRS v2 Resonance Wiring
+- **AdaptiveGovernor** PID controller: phase-aware tau/beta thresholds, oscillation detection (OI + flip counting)
+- **Resonance → CIRS protocol loop**: `maybe_emit_resonance_signal()` emits RESONANCE_ALERT / STABILITY_RESTORED on state transitions
+- **Neighbor pressure**: `maybe_apply_neighbor_pressure()` reads peer resonance alerts, applies defensive threshold tightening via coherence similarity
+- **`was_resonant` tracking**: GovernorState tracks previous cycle for transition detection
+- 13 new tests (3 governor + 4 signal + 5 pressure + 1 integration), 6,407 tests total at 80% coverage
+
+### Changed — I-Channel Dynamics (v5 Paper Alignment)
+- Default I-dynamics mode flipped from logistic to linear (`UNITARES_I_DYNAMICS=linear`)
+- Linear mode prevents boundary saturation (m_sat = -1.23 under logistic), stable equilibrium at I* ≈ 0.80
+- Auto-applies γ_I = 0.169 (V42P tuning) when using linear mode + default profile
+- Dialectic protocol: added `design_review` session type with 7-day/30-day timeouts
+- Dialectic protocol: self-review shortcut (single agrees=True sufficient when paused_agent == reviewer)
+- Condition normalization: fixed to keep 2-char words, handle mixed-case, added "it"/"its" to filler list
+
+### Changed — Database Architecture
+- **Removed SQLite backend** — deleted `sqlite_backend.py` (1,116 lines), `dual_backend.py` (697 lines), and test files (2,299 lines). PostgreSQL is the sole backend.
+- Removed `DB_BACKEND` environment variable — no more sqlite/postgres/dual switching
+- Simplified `db/__init__.py` to always return `PostgresBackend`
+- Removed SQLite paths from `audit_log.py`, `calibration.py`, `mcp_server.py`, `mcp_server_std.py`
+- Total: **4,697 lines deleted**, 79 lines added
+
+### Changed — Version Governance
+- Bumped all version references from 2.6.x to 2.7.0
+
+---
+
+## [2.6.4] - 2026-02-08
+
+### Added — KG Search Bias Fixes
+
+Knowledge graph searches were biased toward old, heavily-linked philosophical entries from Dec 2025.
+New agents would reflect on them, adding more links, creating a positive feedback loop. Four fixes:
+
+- **Temporal decay** — 90-day half-life applied to blended search scores. Old entries still surface
+  if semantically relevant, but don't dominate by default.
+- **Status-aware scoring** — Archived entries scored at 0.3x, resolved at 0.6x, disputed at 0.5x.
+  Open entries unaffected.
+- **Connectivity dampening** — Capped effective connectivity input at 50 (was unbounded). Prevents
+  heavily-linked entries from monopolizing search results.
+- **Default archived filtering** — `semantic_search()` excludes archived entries by default.
+  Callers can opt in with `include_archived=True`.
+- **SUPERSEDES edge type** — New AGE edge for marking entries that replace others. Superseded
+  entries get halved connectivity scores. Available via `knowledge(action='supersede')`.
+
+### Fixed — CI Test Failures (55 tests)
+
+- **test_model_inference.py** (45 failures) — `openai` package not in CI dependencies. Fixed by
+  ensuring `OpenAI` attribute exists on module for patching. Skip `TestCreateModelInferenceClient`
+  when `openai` not installed.
+- **test_auto_ground_truth.py** (10 failures) — Fragile module-reload mocking broke when run
+  alongside other tests. Root cause: `import src.X as Y` resolves via parent package `__dict__`,
+  not just `sys.modules`. Fixed by patching both `sys.modules` AND parent package attributes.
+
+### Tests
+- 6,344 tests passing, 80% coverage
+
+### Files Changed
+- `src/storage/knowledge_graph_age.py` — Temporal decay, status multiplier, connectivity cap, SUPERSEDES edge
+- `src/mcp_handlers/knowledge_graph.py` — Default archived filtering, supersede action
+- `tests/test_model_inference.py` — CI fix for missing openai package
+- `tests/test_auto_ground_truth.py` — CI fix for module import resolution in mocks
+
+---
+
+## [2.6.3] - 2026-02-06
+
+### Changed — Dialectic Audit & Cleanup
+
+- **Fixed 16 misleading `sqlite_*` import aliases** → `pg_*` across 3 dialectic handler files
+  (backend has been PostgreSQL-only since Feb 2026)
+- **Made `llm_assisted_dialectic` reachable** via `request_dialectic_review(reviewer_mode='llm')`
+- **Consolidated `get_dialectic_session` + `list_dialectic_sessions`** into
+  `dialectic(action='get/list')` via action_router — 31 → 30 registered tools
+- **Implemented EISV governance update** from Pi anima sensor sync:
+  `pi(action='sync_eisv', update_governance=true)` now feeds sensor state into governance engine
+- **Removed dead SSE code** — 3 deprecated functions (~80 lines) from mcp_server.py
+- **Fixed stale comments/metadata** across tool_schemas, admin, tool_modes, tool_stability
+
+### Tests
+- 2,602 tests passing, 0 failures, 49% coverage
+
+### Files Changed
+- `src/mcp_handlers/dialectic.py` — pg_ aliases, LLM reviewer, register=False for get/list
+- `src/mcp_handlers/dialectic_session.py` — pg_ aliases
+- `src/mcp_handlers/dialectic_reviewer.py` — pg_ aliases
+- `src/mcp_handlers/consolidated.py` — Added dialectic action_router
+- `src/mcp_handlers/pi_orchestration.py` — EISV sync governance update
+- `src/mcp_handlers/tool_stability.py` — Dialectic aliases, stability tiers
+- `src/tool_schemas.py` — Dialectic consolidated schema, LLM enum, stale refs
+- `src/tool_modes.py` — Dialectic categorization update
+- `src/mcp_server.py` — Removed dead SSE code
+
+---
+
+## [2.6.2] - 2026-02-06
+
+### Changed — Architecture Refactoring (4 Refactors)
+
+Four internal refactors to reduce boilerplate, improve clarity, and make the tool system
+more maintainable. No breaking changes — all 30 tools, aliases, and behaviors preserved.
+
+#### Refactor 1: Unified ToolDefinition Registry
+- **Replaced 4 separate dicts** (`_TOOL_REGISTRY`, `_TOOL_TIMEOUTS`, `_TOOL_DESCRIPTIONS`,
+  `_TOOL_METADATA`) with a single `ToolDefinition` dataclass + `_TOOL_DEFINITIONS` registry
+- Backward-compatible accessor functions preserved (`get_tool_registry()`, etc.)
+- **File:** `src/mcp_handlers/decorators.py`
+
+#### Refactor 2: Declarative Action Router
+- **New `action_router()`** function creates consolidated tools from `actions: Dict[str, Callable]`
+- Supports `default_action`, `param_maps` (per-action parameter remapping), and `examples`
+- Rewrote all 7 consolidated handlers (knowledge, agent, calibration, config, export, observe, pi)
+- **`consolidated.py` reduced from 479 → 245 lines** — no more if/elif chains
+- **Files:** `src/mcp_handlers/decorators.py`, `src/mcp_handlers/consolidated.py`
+
+#### Refactor 3: Dispatch Middleware Pipeline
+- **Extracted `dispatch_tool()`** from 440-line monolith into 8 composable middleware steps
+- Each step: `async (name, arguments, ctx) → (name, arguments, ctx) | list[TextContent]`
+- Steps: resolve_identity → verify_trajectory → unwrap_kwargs → resolve_alias →
+  inject_identity → validate_params → check_rate_limit → track_patterns
+- `DispatchContext` dataclass carries state between steps
+- **`dispatch_tool()` reduced from ~440 → ~50 lines**
+- **Files:** `src/mcp_handlers/middleware.py` (NEW), `src/mcp_handlers/__init__.py`
+
+#### Refactor 4: Response Formatter Extraction
+- **Extracted response mode branching** (auto/minimal/compact/standard/full) from `core.py`
+- `format_response()` function handles all mode filtering and context stripping
+- **~190 lines removed from `core.py`**, replaced with 10-line function call
+- **Files:** `src/mcp_handlers/response_formatter.py` (NEW), `src/mcp_handlers/core.py`
+
+### Added — UX Friction Fixes (v2.6.1 session)
+- **Dashboard overhaul** — live EISV sparklines, dialectic timeline, trust tier badges
+- **Name-based identity resolution** (PATH 2.5) — agents reconnect by name, not session key
+- **Observe tool fix** — `target_agent_id` supports labels, proper schema
+
+### Tests
+- 2,194 tests passing, 0 failures, 43% coverage
+
+### Files Changed
+- `src/mcp_handlers/decorators.py` — ToolDefinition dataclass + action_router
+- `src/mcp_handlers/consolidated.py` — Rewritten with action_router (479→245 lines)
+- `src/mcp_handlers/middleware.py` — NEW: 8-step dispatch pipeline
+- `src/mcp_handlers/__init__.py` — Simplified dispatch_tool (~440→~50 lines)
+- `src/mcp_handlers/response_formatter.py` — NEW: response mode filtering
+- `src/mcp_handlers/core.py` — Response formatting extracted
+
+---
+
+## [2.6.1] - 2026-02-06
+
+### Added — Name-Based Identity Resolution (PATH 2.5)
+
+Every new HTTP session was creating a new agent UUID. 1650+ ghost agents existed because
+session keys rotate per request. PATH 2.5 adds name-based identity claim: before creating
+a new UUID, the server checks if the agent is claiming an existing name via label lookup
+in PostgreSQL.
+
+```
+PATH 1: Redis cache by session_key       → found? use it
+PATH 2: PostgreSQL session by session_key → found? use it
+PATH 2.5: PostgreSQL agent by name claim  → found? bind + use it  ← NEW
+PATH 3: Create new UUID                  → last resort
+```
+
+#### Identity Resolution
+- **`resolve_by_name_claim()`** — New function in `identity_v2.py`. Looks up agent by
+  label in PG, optionally verifies trajectory signature (anti-impersonation, rejects if
+  lineage_similarity < 0.6), binds session in Redis + PG.
+- **`resolve_session_identity()`** — New parameters `agent_name` and `trajectory_signature`.
+  PATH 2.5 inserted before PATH 3.
+- **`handle_identity_adapter()`** — Name claim runs before STEP 1 session resolution,
+  preventing dispatch-created ephemerals from polluting the cache.
+- **`handle_onboard_v2()`** — When `name` is provided and `not force_new`, tries
+  `resolve_by_name_claim()` first before session-based lookup.
+- **Dispatch (`__init__.py`)** — Extracts `agent_name` (check-in) or `name` (identity/onboard)
+  and passes to `resolve_session_identity()`.
+- **Schema (`tool_schemas.py`)** — Added `agent_name` parameter to `process_agent_update`.
+
+#### Observe Tool Fix
+- **Schema** — Added proper `inputSchema` for consolidated `observe` tool (was empty
+  `properties: {}`, causing Pydantic typed wrapper to drop all parameters).
+- **`target_agent_id`** — Renamed from `agent_id` to avoid clash with session-bound caller
+  identity. Supports both UUID and label (e.g. `target_agent_id="Lumen"`).
+- **Label resolution** — `handle_observe_agent()` resolves labels to UUIDs via
+  `_find_agent_by_label()`, bypasses `require_agent_id`'s session-override behavior.
+
+### Fixed
+- Ghost agent proliferation: named agents reconnect instead of forking
+- `observe_agent` alias dropping all parameters except `action`
+- Session mismatch error when observing other agents
+- `agent_name` parameter not extracted for identity/onboard tools in dispatch
+
+### Database
+- Added partial index: `idx_agents_label ON core.agents(label) WHERE label IS NOT NULL`
+- Cleaned up test ghost agents (Tessera_* suffixed entries)
+
+### Tests
+- 1,907 tests passing, 0 failures, 41% coverage (at time of release; see v2.6.2 for latest)
+
+### Files Changed
+- `src/mcp_handlers/identity_v2.py` — +162 lines (resolve_by_name_claim + PATH 2.5 wiring)
+- `src/mcp_handlers/__init__.py` — +19 lines (agent_name extraction in dispatch)
+- `src/mcp_handlers/observability.py` — +57 lines (target_agent_id + label resolution)
+- `src/tool_schemas.py` — +70 lines (observe schema + agent_name parameter)
+
+---
+
+## [2.6.0] - 2026-02-05
+
+### Major Cleanup & Consolidation
+
+This release removes ~4,200 lines of dead code, migrates dialectic sessions fully to PostgreSQL,
+and expands test coverage from ~25% to 40% (1,798 tests passing).
+
+### Removed - Dead Code (~4,200 lines)
+- `identity.py` (v1) — Replaced by `identity_v2.py`
+- `oauth_identity.py` — Never imported
+- `governance_db.py` — Old SQLite backend, replaced by `postgres_backend.py`
+- `knowledge_db_postgres.py` — Old PG backend, replaced by AGE graph
+- `agent_id_manager.py`, `api_key_manager.py` — Unused
+- `ai_behavior_analysis.py`, `ai_knowledge_search.py`, `ai_synthesis.py` — Replaced by `call_model`
+- `mcp_server_compat.py`, `monitoring/`, `dual_log/INTEGRATION.py` — Unused
+
+### Changed - Handler Refactoring
+- **Tool surface reduced**: 49 → 29 registered tools (admin/internal tools hidden)
+- **Dialectic backend**: Fully migrated from SQLite to PostgreSQL
+- **Reviewer selection**: Simplified to random selection (user-facilitated model)
+- **Consolidated handlers**: New `export()` and `observe()` unified tools
+- **Deprecation**: `direct_resume_if_safe` → `quick_resume`/`self_recovery`
+- **Tool schemas**: Added `client_session_id` parameter support
+
+### Added - Dashboard & Infrastructure
+- `dashboard/styles.css` — Extracted CSS for dashboard
+- `scripts/migrate_dialectic_to_postgres.py` — Migration script (72 sessions migrated)
+- `skills/unitares-governance/SKILL.md` — Agent onboarding guide
+- System audit documentation
+
+### Tests
+- **43 new test files** covering pure logic, validators, helpers, integrations
+- **1,798 tests passing**, 40% coverage (up from 458 tests, 25%)
+- Cleanup fixture for `test_kwargs_unwrapping` to prevent ghost agent proliferation
+
+### Fixed
+- Dashboard `styles.css` now served (added to static file allowlist)
+- Dialectic session listing uses PostgreSQL instead of stale SQLite
+- Lumen governance check-ins restored (ngrok basic auth support in bridge)
+- `_resolve_dialectic_backend()` now recognizes `postgres` as valid value
+
+---
+
+## [2.5.9] - 2026-02-05
+
+### Added - Agent Circuit Breaker Enforcement
+
+The agent "pause" status now actually blocks operations. Previously, setting `meta.status = "paused"` was purely cosmetic - agents could continue calling tools. Now it's enforced.
+
+#### Enforcement Points
+- **`process_agent_update`** — Paused agents cannot submit work updates
+- **`store_knowledge_graph`** — Paused agents cannot store discoveries
+- **`leave_note`** — Paused agents cannot leave notes
+
+#### New Helper Function
+- **`check_agent_can_operate(agent_uuid)`** — Reusable enforcement function
+  - Returns `None` if agent can operate
+  - Returns error `TextContent` if blocked (paused/archived)
+  - Includes recovery guidance in error response
+
+#### Recovery Path
+- Paused agents receive clear error with recovery instructions
+- Error includes: `self_recovery(action='resume')` or wait for auto-dialectic
+- Error code: `AGENT_PAUSED` or `AGENT_ARCHIVED`
+
+### Tests
+- **9 new tests** for circuit breaker enforcement (`tests/test_circuit_breaker_enforcement.py`)
+- Tests verify enforcement in handlers via source inspection
+- Tests verify `check_agent_can_operate` blocks correctly
+
+### Files Changed
+- `src/mcp_handlers/core.py` — Added enforcement to `handle_process_agent_update`
+- `src/mcp_handlers/knowledge_graph.py` — Added enforcement to `handle_store_knowledge_graph`, `handle_leave_note`
+- `src/mcp_handlers/utils.py` — Added `check_agent_can_operate()` helper
+- `tests/test_circuit_breaker_enforcement.py` — New test file
+
+---
+
+## [2.5.8] - 2026-02-05
+
+### Added - Production-Grade Redis Resilience
+
+#### Circuit Breaker Pattern
+- **Fast failure when Redis is down** — Stops hammering Redis after 5 consecutive failures
+- **Auto-recovery testing** — Transitions to HALF_OPEN after 30s to test if Redis recovered
+- **State machine** — CLOSED → OPEN → HALF_OPEN → CLOSED lifecycle
+
+#### Connection Pooling
+- **Efficient connection management** — Default pool size of 10 connections
+- **Configurable via env** — `REDIS_POOL_SIZE` environment variable
+
+#### Retry with Exponential Backoff
+- **Transient failure handling** — 3 retry attempts with exponential backoff
+- **Configurable delays** — Base delay 0.1s, max delay 2.0s
+- **Connection error detection** — Auto-reconnect on connection failures
+
+#### Periodic Health Check
+- **Reduced overhead** — Background health check every 30s instead of ping-per-call
+- **Proactive failure detection** — Detects Redis failures before operations fail
+
+#### Fallback Metrics
+- **Comprehensive visibility** — Tracks operations, retries, fallbacks, connections
+- **`get_redis_metrics()`** — Export metrics for monitoring dashboards
+- **Success rate tracking** — Know when system is degraded
+
+#### Redis Sentinel Support (HA)
+- **High availability deployments** — Connect via Sentinel for automatic failover
+- **`REDIS_SENTINEL_HOSTS`** — Comma-separated sentinel hosts
+- **`REDIS_SENTINEL_MASTER`** — Master name for Sentinel discovery
+
+### New Classes
+- `CircuitBreaker` — Reusable circuit breaker pattern
+- `RedisConfig` — Configuration dataclass with env var support
+- `RedisMetrics` — Metrics collection and export
+- `ResilientRedisClient` — Main client with all resilience features
+
+### New Functions
+- `get_redis_metrics()` — Get comprehensive health status
+- `get_circuit_breaker()` — Access circuit breaker for monitoring
+- `with_redis_fallback()` — Decorator for operations with fallback
+
+### Environment Variables
+```
+REDIS_URL                      # Connection URL (default: redis://localhost:6379/0)
+REDIS_ENABLED                  # Enable/disable Redis (default: 1)
+REDIS_POOL_SIZE                # Connection pool size (default: 10)
+REDIS_RETRY_ATTEMPTS           # Max retry attempts (default: 3)
+REDIS_CIRCUIT_BREAKER_THRESHOLD # Failures before circuit opens (default: 5)
+REDIS_CIRCUIT_BREAKER_TIMEOUT  # Seconds before retry after open (default: 30)
+REDIS_SENTINEL_HOSTS           # Sentinel hosts (e.g., "host1:26379,host2:26379")
+REDIS_SENTINEL_MASTER          # Sentinel master name (default: "mymaster")
+```
+
+### Tests
+- **27 new tests** for Redis resilience (`tests/test_redis_resilience.py`)
+- **449 tests passing** (up from 416)
+- **31% coverage** maintained
+
+### Files Changed
+- `src/cache/redis_client.py` — Complete rewrite with resilience features (670 lines)
+- `src/cache/__init__.py` — Updated exports for new classes/functions
+- `tests/test_redis_resilience.py` — New comprehensive test suite
+
+---
+
+## [2.5.7] - 2026-02-05
+
+### Changed - Identity Simplification & Code Organization
+
+#### Three-Tier Identity Model
+- **Simplified from four-tier to three-tier**:
+  - `UUID` — Immutable internal identifier (primary key)
+  - `agent_id` — Model+date format (e.g., `Claude_Opus_20251227`) for tracking
+  - `display_name` — User-chosen name (merged with former `label` tier)
+- `label` kept as backward-compat alias pointing to `display_name`
+- Updated docstrings to document v2.5.3 three-tier model
+
+#### Identity Module Refactoring
+- **New `identity_shared.py`** — Shared utilities extracted from identity.py:
+  - Session cache (`_session_identities`, `_uuid_prefix_index`)
+  - Session key functions (`_get_session_key`, `make_client_session_id`)
+  - Identity lookup (`get_bound_agent_id`, `is_session_bound`)
+  - Permissions (`require_write_permission`)
+  - Lineage utilities (`_get_lineage`, `_get_lineage_depth`)
+- **Slimmed `identity.py`** — Now imports shared utilities, contains only async DB functions
+- **Cleaner imports** — All modules now import from `identity_shared.py` for shared state
+
+### Files Changed
+- `src/mcp_handlers/identity_shared.py` — New shared module (280 lines)
+- `src/mcp_handlers/identity_v2.py` — Updated to three-tier, uses identity_shared
+- `src/mcp_handlers/identity.py` — Slimmed down, imports from identity_shared
+- `src/mcp_handlers/__init__.py` — Updated imports
+- `src/mcp_handlers/admin.py`, `lifecycle.py`, `knowledge_graph.py`, `oauth_identity.py` — Updated imports
+
+### Tests
+- **416 tests passing** (all existing tests still pass)
+- **31% coverage** maintained
+
+---
+
+## [2.5.6] - 2026-02-05
+
+### Added - UX Friction Fixes & Consolidated Tools
+
+#### UX Friction Fixes (9 of 12 implemented)
+- **Error code auto-inference** — `error_response()` now auto-infers error codes from message patterns (DATABASE_ERROR, TIMEOUT, NOT_FOUND, etc.)
+- **Tool alias action injection** — Deprecated tool names automatically inject the correct `action` parameter when routing to consolidated tools
+- **Parameter coercion reporting** — `_param_coercions` field shows what type conversions were applied
+- **Lite response mode** — `lite_response=True` reduces output verbosity by excluding agent_signature
+- **Error message sanitization** — Stack traces and internal paths stripped from error messages
+
+#### Consolidated Tools
+- **`config` tool** — Unified get/set thresholds (replaces `get_thresholds`, `set_thresholds`)
+- **38+ tool aliases** — All legacy tool names map to consolidated tools with action injection
+- **Better error guidance** — Unknown actions return `valid_actions` list with examples
+
+#### LLM Delegation
+- **`llm_delegation.py`** — Delegate tasks to smaller local/remote models
+- **Ollama support** — Local model inference for knowledge synthesis
+- **OpenAI fallback** — Remote model support when local unavailable
+
+#### Dashboard Improvements
+- **Modular components** — `components.js` for reusable UI elements
+- **Shared utilities** — `utils.js` for common functions
+- **Better structure** — Dashboard code reorganized for maintainability
+
+#### Migration Cleanup
+- **13 migration scripts archived** — Moved to `scripts/archive/migrations_completed_202602/`
+- **Telemetry data ignored** — `data/telemetry/*.jsonl` added to `.gitignore`
+
+### Changed
+- Test suite expanded to **358 tests** (from 310+)
+- Coverage at **30%** overall (core modules higher)
+- Documentation updated with port configuration guides
+- LICENSE updated with correct repository URL
+
+### Fixed
+- **Tool 'config' not found** — Added missing consolidated config tool
+- **Alias injection not working** — Added `inject_action` field to `ToolAlias` dataclass
+- **Test assertions** — Fixed test messages to match actual error patterns
+
+### Files Changed
+- `src/mcp_handlers/consolidated.py` — Added `config` tool
+- `src/mcp_handlers/tool_stability.py` — Added `inject_action` to ToolAlias
+- `src/mcp_handlers/utils.py` — Added `_infer_error_code_and_category()`, `_sanitize_error_message()`
+- `src/mcp_handlers/validators.py` — Added coercion tracking
+- `tests/test_ux_fixes.py` — 48 new tests for UX fixes
+- `docs/TOOL_AUDIT_2026-02-04.md` — Tool audit documentation
+
+---
+
+## [2.5.5] - 2026-02-04
+
+### Added - Trajectory Identity & Test Coverage
+
+#### Trajectory Identity Framework
+- **Genesis signature (Σ₀)** stored at first onboard, immutable thereafter
+- **Lineage comparison** on each update - similarity to genesis tracked
+- **Anomaly detection** when similarity drops below 0.6
+- New functions: `store_genesis_signature()`, `update_current_signature()`, `verify_trajectory_identity()`, `get_trajectory_status()`
+
+#### Model-Based agent_id Fix
+- `agent_id` now properly uses model type when provided
+- Format: `{Model}_{Version}_{Date}` (e.g., `Claude_Opus_4_5_20260204`)
+- Fixed bug where `handle_onboard_v2` was ignoring properly generated `agent_id`
+
+#### Test Coverage Expansion
+- **93+ tests passing** (up from 25)
+- `governance_monitor.py`: 79% coverage (63 tests)
+- `trajectory_identity.py`: 88% coverage (19 tests)
+- `identity_v2.py`: 11% coverage (11 tests)
+
+#### New Test Classes
+- `TestGainModulation` - HCK v3.0 PI gain modulation
+- `TestEthicalDrift` - ‖Δη‖² computation
+- `TestStatePersistence` - Save/load state
+- `TestVoidFrequency` - Void frequency calculation
+- `TestLambda1Update` - PI controller bounds
+- `TestSimulateUpdate` - Dry-run without mutation
+- `TestTrajectorySignature` - Dataclass serialization
+- `TestGenesisStorage` - Immutable genesis
+- `TestLineageComparison` - Similarity detection
+- `TestVerifyIdentity` - Two-tier verification
+
+### Changed
+- Documentation updated to reflect actual system state
+- "Ethical drift" section now correctly describes implemented functionality
+- Roadmap updated with completed items
+
+### Files Changed
+- `src/mcp_handlers/identity_v2.py` - Fixed agent_id bug at lines 1446-1460
+- `src/anima_mcp/unitares_bridge.py` - Wired trajectory signature to UNITARES
+- `tests/test_governance_monitor_core.py` - 63 new tests
+- `tests/test_trajectory_integration.py` - 19 new tests
+- `tests/test_identity_agent_id.py` - 11 new tests
+- `README.md` - Updated to reflect current state
+
+---
+
+## [2.5.4] - 2025-12-27
+
+### Changed - Meaningful Identity in Knowledge Graph
+
+#### Agent-Centric Identity (v2.5.4)
+Agents find meaningful names more useful than UUID strings. This update shifts KG attribution from technical UUIDs to human-and-agent-readable identifiers.
+
+#### Identity in Knowledge Graph
+- **Before:** KG stored UUID (e.g., `a1b2c3d4-...`) - meaningless to agents and humans
+- **After:** KG stores `agent_id` (e.g., `Claude_Opus_4_20251227`) - meaningful to both
+
+#### Implementation
+- `require_registered_agent()` now returns `agent_id` (model+date) for KG storage
+- UUID kept internal via `_agent_uuid` for session binding only
+- `_resolve_agent_display()` helper resolves agent_id to display info without exposing UUID
+- Display names included in KG query responses for human readability
+
+#### Four-Tier Identity Model (Refined)
+1. **UUID** - Immutable technical identifier (internal only, never in KG)
+2. **agent_id** - Model+date format (e.g., `Claude_Opus_4_20251227`) - stored in KG
+3. **display_name** - User-chosen name ("birth certificate")
+4. **label** - Nickname (can change)
+
+### Files Changed
+- `src/mcp_handlers/utils.py` - `require_registered_agent()` returns agent_id instead of UUID
+- `src/mcp_handlers/knowledge_graph.py` - Added `_resolve_agent_display()` helper
+
+---
+
+## [2.5.1] - 2025-12-26
+
+### Added - Three-Tier Identity Model
+
+#### Identity Architecture
+- **UUID** (immutable) - Technical identifier, never changes
+- **agent_id** (structured) - Auto-generated on creation, stable (format: `{interface}_{date}`)
+- **display_name** (nickname) - User-chosen via `identity(name=...)`, can change
+
+#### New Fields
+- `structured_id` field in `AgentMetadata` class
+- `generate_structured_id()` function in `naming_helpers.py`
+
+#### Response Updates
+- `onboard()` and `identity()` now return all three tiers
+- `compute_agent_signature()` includes `agent_id` in response
+- Legacy fields (`agent_uuid`, `label`) preserved for compatibility
+
+#### Migration Support
+- Pre-v2.5.0 agents get `structured_id` generated on first `identity(name=...)` call
+
+### Fixed - Honest Initialization for New Agents
+
+#### Problem
+New agents showed `coherence=1.0, risk=0.0` before their first check-in, then values "dropped" to ~0.55 after first `process_agent_update()`. This felt jarring - like something broke.
+
+#### Solution
+- Return `null` for computed metrics (`coherence`, `risk_score`) until first governance cycle
+- Show `status: "uninitialized"` with clear messaging
+- Display `⚪ pending (first check-in required)` instead of fake values
+
+#### Before/After
+**Before (misleading):**
+```
+coherence: 1.0  ← fake placeholder
+risk: 0.0       ← fake placeholder
+```
+
+**After (honest):**
+```
+status: ⚪ uninitialized
+coherence: null (pending)
+risk: null (pending)
+next_action: 📝 Call process_agent_update() to start governance tracking
+```
+
+### Files Changed
+- `src/mcp_server_std.py` - Added `structured_id` field to AgentMetadata
+- `src/mcp_handlers/naming_helpers.py` - Added `generate_structured_id()` function
+- `src/mcp_handlers/identity.py` - Three-tier model in responses
+- `src/mcp_handlers/identity_v2.py` - Three-tier model + migration
+- `src/mcp_handlers/utils.py` - Updated `compute_agent_signature()`
+- `src/governance_monitor.py` - Return `null` for metrics when `update_count == 0`
+- `src/mcp_handlers/core.py` - Show "uninitialized" status with helpful messaging
+
+---
+
+## [2.5.0] - 2025-12-26
+
+### Added - HCK/CIRS Stability Monitoring
+
+#### HCK v3.0 - Reflexive Control
+- **Update coherence ρ(t)** - Measures directional alignment between E and I updates
+  - ρ ≈ 1: Coherent updates (E and I moving together)
+  - ρ ≈ 0: Misaligned or unstable
+  - ρ < 0: Adversarial movement (E and I diverging)
+- **Continuity Energy (CE)** - Tracks state change rate ("work required to maintain consistency")
+- **PI Gain Modulation** - When ρ is low, controller gains are reduced to prevent instability
+
+#### CIRS v0.1 - Oscillation Detection & Resonance Damping
+- **New `src/cirs.py`** - Complete CIRS implementation
+- **OscillationDetector** - Tracks threshold crossings via EMA of sign transitions
+  - Oscillation Index (OI) = EMA(sign(Δcoherence)) + EMA(sign(Δrisk))
+  - Flip counting for decision/route changes
+- **ResonanceDamper** - Adjusts thresholds when resonance detected
+- **Response tiers:**
+  - `proceed` - Normal operation
+  - `soft_dampen` - Resonance detected but not critical
+  - `hard_block` - Critical safety pause
+
+#### New State Fields
+- `rho_history`, `CE_history`, `current_rho` - HCK tracking
+- `oi_history`, `resonance_events`, `damping_applied_count` - CIRS tracking
+
+### Fixed
+
+#### Session Identity Bug
+- **Issue:** `onboard` created agent X, but `process_agent_update(client_session_id=...)` used different agent Y
+- **Root cause:** `onboard`/`identity` only registered binding in memory, not Redis; `identity_v2` couldn't find it
+- **Fix:** Added Redis caching in `identity.py` after stable session binding registration
+- **Location:** `mcp_handlers/identity.py:1355-1365` and `mcp_handlers/identity.py:1559-1566`
+
+### Changed
+
+#### Governance Output
+- `process_agent_update` now includes `hck` and `cirs` sections in response
+- `get_metrics` includes HCK/CIRS metrics
+- New response tier field indicates `proceed`/`soft_dampen`/`hard_block`
+
+### Documentation
+- Updated `.agent-guides/DEVELOPER_AGENTS.md` with HCK/CIRS architecture
+- Updated `.agent-guides/FUTURE_CLAUDE_CODE_AGENTS.md` with v2.5.0 reference
+- Updated `.agent-guides/SSE_SERVER_INFO.md` with correct script reference
+
+---
+
+## [2.4.0] - 2025-12-25
+
+### Added - Simplified Identity System (identity_v2)
+
+#### 3-Path Architecture
+- **New `identity_v2.py`** - Replaces complex 15+ code path identity system
+- **Three resolution paths only:**
+  1. Redis cache (fast path, < 1ms)
+  2. PostgreSQL session lookup
+  3. Create new agent
+- **Cleaner separation of concerns:**
+  - `resolve_session_identity()` → "Who am I?" (session → UUID)
+  - `get_agent_metadata()` → "Who is agent X?" (lookup by UUID/label)
+
+#### Database Enhancements
+- **Added `label` column** to `core.agents` table
+- **New PostgresBackend methods:**
+  - `get_agent()` - Full agent record retrieval
+  - `get_agent_label()` - Fast label lookup
+  - `find_agent_by_label()` - Label collision detection
+  - Extended `update_agent_fields()` with `label` parameter
+
+### Changed
+
+#### Identity Tool
+- **`identity()` tool** now uses simplified v2 handler
+- **Label is just metadata** - Not an identity mechanism (reduces confusion)
+- **Consistent UUID** - Same session always returns same UUID (fixes Bug #3)
+
+#### UX Improvements
+- **Auto-semantic search** - Multi-word queries auto-use semantic search when available
+- **Pagination for discoveries** - `get_discovery_details` now supports `offset`/`length`
+- **Search hints** - Helpful suggestions when substring search returns no results
+
+### Fixed
+- **Bug #2:** `get_agent_metadata` UnboundLocalError (`attention_score` → `risk_score`)
+- **Bug #3:** Identity binding inconsistencies causing UUID confusion
+
+### Deprecated
+- **Old identity.py handler** - `@mcp_tool` decorator commented out, kept for reference
+- **`hello()`/`status()` pattern** - Use `identity()` instead (aliases still work)
+
+---
+
+## [2.3.0] - 2025-12-01
+
+### Added - Complete Decorator Migration 🎯
+
+#### 100% Migration to Decorator Pattern
+- **All 43 tools migrated** to `@mcp_tool` decorator pattern
+- **Automatic timeout protection** on all tools
+- **Self-documenting code** - timeout values attached to functions
+- **Enhanced `list_tools`** - Now includes timeout and category metadata
+
+#### Final Migrations
+- `process_agent_update` (60s timeout) - Most complex handler
+- `simulate_update` (30s timeout)
+- `health_check` (10s timeout)
+- `get_workspace_health` (30s timeout)
+- `delete_agent` (15s timeout)
+
+### Changed
+
+#### Timeout Protection
+- **Removed double timeout wrapping** - `dispatch_tool()` no longer wraps with 30s timeout
+- **Decorator timeouts now effective** - Each tool uses its configured timeout
+- **Critical improvement:** `process_agent_update` now uses 60s timeout (was 30s)
+
+#### UX Improvements
+- **Reframed pause messages** - More supportive and collaborative language
+  - "High complexity detected" → "Complexity is building - let's pause and regroup"
+  - "safety pause required" → "safety pause suggested"
+  - Added: "This is a helpful pause, not a judgment"
+
+#### Tool Metadata
+- **Enhanced `list_tools` output** - Now includes timeout values and categories
+- **Better tool discovery** - Agents can see timeout requirements when discovering tools
+
+### Technical Improvements
+- **Consistent pattern** - Single decorator pattern across all 43 tools
+- **Less boilerplate** - Auto-registration reduces manual dict entries
+- **Better error handling** - Standardized timeout error responses
+
+---
+
+## [2.2.0] - 2025-11-28
+
+### Added - Knowledge Graph System 🚀
+
+#### Fast, Indexed Knowledge Storage
+- **Knowledge Graph Engine** (`src/knowledge_graph.py`) - Complete in-memory graph implementation
+  - O(1) inserts with automatic index updates
+  - O(indexes) queries (not O(n)) - scales logarithmically
+  - Tag-based similarity search (no brute force scanning)
+  - Async background persistence (non-blocking)
+  - Claude Desktop compatible (no blocking I/O)
+
+#### New MCP Tools (6 tools)
+- `store_knowledge_graph` - Store discoveries (35,000x faster than file-based)
+- `search_knowledge_graph` - Search by tags, type, agent, severity (indexed queries)
+- `get_knowledge_graph` - Get agent's knowledge (fast index lookup)
+- `list_knowledge_graph` - Get graph statistics (full transparency)
+- `update_discovery_status_graph` - Update discovery status (open/resolved/archived)
+- `find_similar_discoveries_graph` - Find similar by tag overlap (3,500x faster)
+
+#### Migration Tool
+- `scripts/migrate_to_knowledge_graph.py` - One-time migration from file-based to graph
+- Preserves all relationships and metadata
+- Converts existing 252 discoveries automatically
+
+### Changed
+
+#### Performance Improvements
+- **Knowledge operations**: 35,000x faster (`store_knowledge`: 350ms → 0.01ms)
+- **Similarity search**: 3,500x faster (`find_similar`: 350ms → 0.1ms)
+- **Query performance**: O(indexes) instead of O(n) file scans
+- **Claude Desktop compatibility**: All operations non-blocking
+
+#### File Organization
+- **Root directory cleanup** - Moved 7 markdown files to organized locations:
+  - `ARCHITECTURE.md` → `docs/architecture/`
+  - `ONBOARDING.md` → `docs/guides/`
+  - `USAGE_GUIDE.md` → `docs/guides/`
+  - `SYSTEM_SUMMARY.md` → `docs/reference/`
+  - `METRICS_REPORTING.md` → `docs/guides/`
+  - `ARCHIVAL_SUMMARY_20251128.md` → `docs/archive/`
+  - `HARD_REMOVAL_SUMMARY_20251128.md` → `docs/archive/`
+- **Root directory**: Now contains only `README.md`, `CHANGELOG.md`, and `requirements-mcp.txt`
+
+### Fixed
+
+#### Knowledge Layer Issues
+- **Claude Desktop freezing** - Fixed blocking I/O with async graph operations
+- **Context compression** - Indexed queries prevent large response issues
+- **Performance bottlenecks** - Graph-based approach eliminates O(n×m) scans
+
+### Documentation
+
+#### Created
+- `docs/proposals/KNOWLEDGE_GRAPH_DESIGN.md` - Complete design proposal
+- `docs/guides/KNOWLEDGE_GRAPH_USAGE.md` - Usage guide with examples
+- `docs/guides/KNOWLEDGE_GRAPH_INTEGRATION_COMPLETE.md` - Integration summary
+- `docs/analysis/KNOWLEDGE_GRAPH_IMPLEMENTATION_SUMMARY.md` - Implementation details
+- `docs/analysis/KNOWLEDGE_GRAPH_USAGE_VERIFICATION.md` - Verification results
+- `docs/proposals/KNOWLEDGE_GRAPH_TRANSPARENCY.md` - Transparency design
+- `docs/analysis/KNOWLEDGE_GRAPH_FINAL_APPROACH.md` - Final approach documentation
+- `docs/analysis/MODEL_CLIENT_STRATEGY.md` - Model/client strategy analysis
+- `docs/ROOT_FILE_ORGANIZATION.md` - Root file organization guide
+
+#### Updated
+- `docs/DOC_MAP.md` - Updated paths for moved files
+- `docs/README.md` - Updated root file references
+- `docs/DOCUMENTATION_GUIDELINES.md` - Updated onboarding path
+- `src/tool_usage_tracker.py` - Updated archive summary path
+- `scripts/check_small_markdowns.py` - Updated file list
+- `scripts/validate_project_docs.py` - Updated validation paths
+
+### Technical Details
+
+#### Architecture
+- **Graph structure**: Nodes (discoveries) with 5 indexes (agent, tag, type, tag, type, severity, status)
+- **Persistence**: Single JSON file (`data/knowledge_graph.json`) with async background saves
+- **Debouncing**: 100ms delay for rapid writes (efficient batching)
+- **Error handling**: Graceful degradation (starts empty if load fails)
+
+#### Integration
+- **Handler registry**: All 6 tools registered in `src/mcp_handlers/__init__.py`
+- **MCP server**: All tools defined with complete schemas in `src/mcp_server_std.py`
+- **Tool list**: Included in `list_tools()` for runtime introspection
+
+### Performance Metrics
+
+- **Store operation**: ~0.01ms (vs 350ms file-based) - **35,000x faster**
+- **Similarity search**: ~0.1ms (vs 350ms file-based) - **3,500x faster**
+- **Query performance**: O(indexes) not O(n) - **scales logarithmically**
+- **Memory usage**: ~1MB for 252 discoveries, scales to 10,000+ efficiently
+
+---
+
+## [2.1.0] - 2025-11-25
+
+### Added - Auto-Healing Infrastructure 🛡️
+
+#### Enhanced State Locking System
+- **Automatic stale lock detection** - `is_process_alive()` checks for dead processes
+- **Smart lock cleanup** - `_check_and_clean_stale_lock()` removes locks from crashed processes
+- **Exponential backoff retry** - 3 attempts with 0.2s * 2^attempt wait times
+- **Process health checking** - Validates PIDs before lock cleanup
+- **Self-recovering** - No manual intervention needed for lock contention
+
+#### Loop Detection & Prevention
+- **Activity tracking** - New AgentMetadata fields:
+  - `recent_update_timestamps: list[str]` - Track update timing
+  - `recent_decisions: list[str]` - Track decision patterns
+  - `loop_detected_at: str` - Timestamp of loop detection
+  - `loop_cooldown_until: str` - Block updates until this time
+- **Pattern detection** - Identifies infinite update loops
+- **Automatic cooldown** - Enforces waiting period when loops detected
+
+#### Agent Hierarchy & Spawning
+- **Parent/child tracking** - New AgentMetadata fields:
+  - `parent_agent_id: str` - Which agent spawned this one
+  - `spawn_reason: str` - Why agent was spawned (e.g., "new_domain")
+  - `api_key: str` - Unique authentication key per agent
+- **Multi-agent support** - Track lineage and dependencies
+- **Security** - API keys prevent unauthorized agent impersonation
+
+#### Modular Handler Architecture
+- **Handler registry pattern** - Organized 29 handlers into `src/mcp_handlers/`
+- **Category organization**:
+  - `core.py` - Core governance operations
+  - `config.py` - Configuration management
+  - `observability.py` - Monitoring and metrics
+  - `lifecycle.py` - Agent lifecycle management
+  - `export.py` - Data export functionality
+  - `knowledge.py` - Knowledge layer operations
+  - `admin.py` - Administrative tools
+  - `dialectic.py` - Dialectic protocol
+  - `utils.py` - Common utilities
+- **Standardized error handling** - `require_agent_id()`, `success_response()`, `error_response()`
+
+#### New Tools & Scripts
+- `~/scripts/fix_cursor_freeze.sh` - One-command recovery tool for Cursor/IDE freezes
+- `~/scripts/test_enhanced_locking.py` - Comprehensive lock system test suite (4 tests)
+- `~/scripts/test_mcp_json_rpc.py` - MCP protocol verification tool
+- `~/scripts/diagnose_cursor_mcp.sh` - Complete system diagnostic script
+
+### Changed
+
+#### Increased Capacity
+- **MAX_KEEP_PROCESSES** - Increased from 36 to 42
+- **Better concurrency** - Support for Cursor + Claude Desktop + other MCP clients simultaneously
+
+#### Enhanced Reliability
+- **Lock acquisition** - Now includes automatic stale lock cleanup before retry
+- **Error messages** - More detailed, actionable error messages with recovery suggestions
+- **Async support** - Added optional `aiofiles` support with graceful fallback
+
+### Fixed
+
+#### Critical Fixes
+- **Cursor freeze issue** - Auto-healing locks prevent lock contention from duplicate servers
+- **Dialectic protocol bug** - Fixed `'str' object is not a mapping` error (AgentMetadata → dict conversion)
+- **JSON-RPC protocol** - All debug output redirected to stderr (was breaking Claude Desktop)
+- **Lock cleanup** - Automatic cleanup on MCP server startup (5-minute staleness threshold)
+
+#### Previous Session Fixes (Pre-v2.1)
+- **Process cleanup** - Zombie process detection and cleanup on startup
+- **Agent archival** - Auto-archive test agents after 7 days
+- **Metadata locking** - Enhanced file-based locking during reads/writes
+
+### Documentation
+
+#### Updated
+- **README.md** - Added v2.1 feature section
+- **QUICK_REFERENCE.md** - Added troubleshooting section for Cursor freezes and new tools
+- **CHANGELOG.md** - Created comprehensive changelog (this file)
+
+#### Created
+- `~/scripts/cursor_implementations_summary.md` - Complete v2.1 feature documentation
+- `~/scripts/session_final_status.md` - Session summary and status
+
+#### Consolidated
+- Archived 5 redundant session documentation files to `~/scripts/Archive/session_docs_20251125/`
+- Kept 2 comprehensive docs: `cursor_implementations_summary.md` and `session_final_status.md`
+
+### Testing
+
+#### Test Results
+- **Enhanced Locking Tests**: 4/4 passed ✅
+  - Process health check ✅
+  - Lock acquisition ✅
+  - Stale lock cleanup ✅
+  - Retry logic ✅
+- **MCP JSON-RPC Tests**: 2/2 passed ✅
+  - Governance MCP ✅
+  - Date Context MCP ✅
+- **System Health**: All checks pass ✅
+
+### Git Statistics
+- **Commit**: 921bde6
+- **Files changed**: 157
+- **Insertions**: +32,856 lines
+- **Deletions**: -2,969 lines
+- **Net change**: +29,887 lines
+
+---
+
+## [2.0.0] - 2025-11-24
+
+### Added - Complete System Implementation
+
+#### Elegant Handler Architecture
+- Refactored MCP server from 1,700+ line elif chain to clean handler registry (~30 lines)
+- 29 handlers organized by category
+- Zero elif branches - maintainable and testable
+
+#### All 5 Decision Points Implemented
+1. **λ₁ → Sampling Parameters** - Linear transfer function
+2. **Risk Estimator** - Multi-factor risk scoring
+3. **Void Detection Threshold** - Adaptive threshold (mean + 2σ)
+4. **PI Controller** - Concrete gains (K_p=0.5, K_i=0.05)
+5. **Decision Logic** - Risk-based approve/revise/reject
+
+#### UNITARES Framework
+- Complete thermodynamic governance implementation
+- E (Engagement), I (Integrity), S (Safety), V (Void) metrics
+- Coherence tracking and health monitoring
+- State persistence and history
+
+#### CLI Tools
+- `agent_self_log.py` - CLI logging with full state persistence
+- `register_agent.py` - Simple agent registration
+- `claude_code_bridge.py` - Bridge for Claude Code integration
+
+### Changed
+- Project structure reorganized for clarity
+- Documentation consolidated and updated
+- Tests expanded and verified
+
+### Documentation
+- Complete README with architecture overview
+- ONBOARDING.md for new users
+- Multiple guides in docs/ directory
+- README_FOR_FUTURE_CLAUDES.md
+
+---
+
+## [1.0.0] - 2025-11-20
+
+### Initial Release
+- Core UNITARES framework
+- Basic MCP server implementation
+- Agent metadata tracking
+- File-based state persistence
+- Simple decision logic
+
+---
+
+## Upgrade Guide
+
+### From v2.1 to v2.2
+
+**New features automatically available:**
+- Knowledge graph tools ready to use
+- Migration tool available for existing data
+- All operations non-blocking (Claude Desktop compatible)
+
+**Optional - Migrate existing knowledge:**
+```bash
+python3 scripts/migrate_to_knowledge_graph.py
+```
+
+**New tools available:**
+- `store_knowledge_graph` - Fast discovery storage
+- `search_knowledge_graph` - Indexed knowledge queries
+- `get_knowledge_graph` - Get agent knowledge
+- `list_knowledge_graph` - Graph statistics
+- `update_discovery_status_graph` - Update discovery status
+- `find_similar_discoveries_graph` - Find similar discoveries
+
+**No breaking changes.** Old file-based knowledge layer archived but preserved.
+
+### From v2.0 to v2.1
+
+**No breaking changes.** Simply pull the latest code:
+
+```bash
+git pull
+```
+
+**New features automatically enabled:**
+- Auto-healing locks (no configuration needed)
+- Loop detection (automatically tracks agents)
+- Enhanced capacity (MAX_KEEP_PROCESSES already increased)
+
+**Optional - Install new tools:**
+```bash
+chmod +x ~/scripts/fix_cursor_freeze.sh
+chmod +x ~/scripts/diagnose_cursor_mcp.sh
+```
+
+**If experiencing Cursor freezes:**
+```bash
+~/scripts/fix_cursor_freeze.sh
+```
+
+**To test new locking system:**
+```bash
+python3 ~/scripts/test_enhanced_locking.py
+```
+
+---
+
+## Known Issues
+
+### v2.6.2
+- `test_get_governance_metrics` flaky when run with full suite (test ordering issue)
+- Knowledge graph doesn't close loops well — resolve or archive discoveries manually
+
+### Workarounds
+All known issues have fallback behavior and don't block functionality.
+
+---
+
+## Future Roadmap
+
+### In Progress
+- Outcome correlation — does high instability actually predict bad outcomes?
+- Threshold tuning — domain-specific drift thresholds need real-world calibration
+
+### Under Consideration
+- WebSocket dashboard updates (replace polling)
+- CIRS v1.0 — full multi-agent oscillation damping
+- Semantic ethical drift detection (beyond parameter changes)
+- Production hardening and horizontal scaling
+
+---
+
+**Maintained by:** UNITARES Development Team
+**License:** See LICENSE file
+**Repository:** governance-mcp-v1

@@ -261,7 +261,7 @@ Server-side Ed25519 lease attestations exist. Party-level HMAC signature minting
 is retired; new dialectic resolutions are unsigned by design. A separate
 server-countersigned resolution receipt is wired but dormant and has issued no
 receipts as of the 2026-09-25 decision record. The
-[federation trust decisions](proposals/active/federation-trust-decisions-2026-09-25.md)
+[federation trust decisions](proposals/archive/federation-trust-decisions-2026-09-25.md)
 and [receipt proposal](proposals/active/dialectic-resolution-receipt-v0.md)
 preserve the signing history and conditions for further work. The
 multi-principal trust track starts when an outside party with its own

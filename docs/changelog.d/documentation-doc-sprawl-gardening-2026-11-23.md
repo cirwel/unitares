@@ -1,0 +1,1 @@
+- **docs:** garden documentation sprawl — re-read proposal dispositions (`active/` 61 -> 46 files), archive superseded ontology/operations audits, index unlisted docs and evaluation directories, and archive pre-`3.0.0` changelog history into `docs/releases/archive/CHANGELOG-pre-3.0.md`.

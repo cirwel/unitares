@@ -4,7 +4,7 @@
 **Last refined:** November 1, 2026
 **Status:** Living document. Expect churn; the field is inventing terms and so are we.
 **Companion to:** [Product definition](../PRODUCT_DEFINITION.md), [identity](identity.md), [harness and substrate plurality](harness-substrate-plurality.md), [coordination kernel](beam-coordination-kernel.md)
-**Audit trail:** [June 20](glossary-drift-audit-2026-06-20.md) (initial sweep); [September 18](glossary-drift-audit-2026-09-18.md) (ODE coupling, metric homonyms and storage); [November 1](glossary-drift-audit-2026-11-01.md) (policy actuation, identity, evidence boundaries and core vocabulary)
+**Audit trail:** [June 20](archive/glossary-drift-audit-2026-06-20.md) (initial sweep); [September 18](archive/glossary-drift-audit-2026-09-18.md) (ODE coupling, metric homonyms and storage); [November 1](glossary-drift-audit-2026-11-01.md) (policy actuation, identity, evidence boundaries and core vocabulary)
 
 UNITARES is a self-hosted, single-operator federation kernel for agent identity,
 claims and evidence, review, outcomes, and reconstruction. EISV is one
@@ -719,7 +719,7 @@ order or authorize a change to the default observation posture.
 ## Maintenance
 
 When a sweep finds a new collision, add it to the high-risk table here and log
-the sweep as a dated audit alongside `glossary-drift-audit-2026-06-20.md`. Keep
+the sweep as a dated audit alongside `archive/glossary-drift-audit-2026-06-20.md`. Keep
 this file keyed by *question answered*; if you find yourself writing a definition
 that leads with examples, you are seeding the next drift.
 

@@ -7,7 +7,7 @@ actual records. This proposal does not reopen the stopped v0 enrollment.
 
 ## Preserve the earlier result
 
-The [v0 protocol](../archive/kg-agent-adoption-pilot-v0.md), frozen tasks,
+The [v0 protocol](kg-agent-adoption-pilot-v0.md), frozen tasks,
 source map, captured probe and receipts remain unchanged. Four synthetic logical
 sources were derived from one live record, the live root missed five of six
 top-five queries, immediate audit validation failed, and a later host check-in
