@@ -77,14 +77,33 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/acquire" do
     case extract_acquire_params(conn.body_params) do
       {:ok, params} ->
-        case IdentityBinding.authorize(
-               params.holder_agent_uuid,
+        requested_subject = Map.get(params, :requested_holder_subject)
+
+        distinct_subject? =
+          is_binary(requested_subject) and requested_subject != params.holder_agent_uuid
+
+        expected_subject = requested_subject || params.holder_agent_uuid
+        kind = surface_kind(params.surface_id)
+
+        case IdentityBinding.authorize_lease_principal(
+               expected_subject,
                IdentityBinding.proof_from_conn(conn),
-               surface_kind(params.surface_id),
-               IdentityBinding.request_context(conn)
+               kind,
+               IdentityBinding.request_context(conn),
+               allow_multiple_issuers: true,
+               require_attestation: distinct_subject?
              ) do
-          :ok ->
-            acquire_authorized(conn, params)
+          {:ok, nil} when distinct_subject? ->
+            identity_refusal(conn, :identity_proof_invalid)
+
+          {:ok, principal} ->
+            acquire_params =
+              params
+              |> attach_verified_principal(principal)
+              |> maybe_allow_unverified_principal_fallback(kind)
+              |> maybe_allow_legacy_row_attested_reacquire()
+
+            acquire_authorized(conn, acquire_params)
 
           {:error, reason} ->
             identity_refusal(conn, reason)
@@ -772,10 +791,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   post "/v1/lease/handoff/offer" do
     case extract_handoff_offer_params(conn.body_params) do
-      {:ok, lease_id, to_holder_agent_uuid, ttl_s} ->
+      {:ok, lease_id, to_holder_agent_uuid, ttl_s, opts} ->
         case authorize_active_lease(conn, lease_id) do
           :ok ->
-            handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s)
+            handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s, opts)
 
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
@@ -789,8 +808,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
-  defp handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s) do
-    case UnitaresLeasePlane.handoff_offer(lease_id, to_holder_agent_uuid, ttl_s) do
+  defp handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s, opts) do
+    case UnitaresLeasePlane.handoff_offer(lease_id, to_holder_agent_uuid, ttl_s, opts) do
       {:ok, handoff_id} ->
         json(conn, 200, %{ok: true, handoff_id: handoff_id})
 
@@ -807,8 +826,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     case extract_handoff_accept_params(conn.body_params) do
       {:ok, handoff_id} ->
         case authorize_handoff_recipient(conn, handoff_id) do
-          :ok ->
-            handoff_accept_authorized(conn, handoff_id)
+          {:ok, principal} ->
+            handoff_accept_authorized(conn, handoff_id, principal)
 
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
@@ -825,8 +844,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
-  defp handoff_accept_authorized(conn, handoff_id) do
-    case UnitaresLeasePlane.handoff_accept(handoff_id) do
+  defp handoff_accept_authorized(conn, handoff_id, principal) do
+    case UnitaresLeasePlane.handoff_accept(handoff_id, principal) do
       :ok ->
         json(conn, 200, %{ok: true})
 
@@ -1059,12 +1078,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     if IdentityBinding.enabled?() do
       case Repo.active_lease(lease_id) do
         {:ok, lease} ->
-          IdentityBinding.authorize(
-            lease.holder_agent_uuid,
-            IdentityBinding.proof_from_conn(conn),
-            lease.surface_kind,
-            IdentityBinding.request_context(conn)
-          )
+          expected_subject = Map.get(lease, :holder_subject) || lease.holder_agent_uuid
+          expected_issuer = Map.get(lease, :holder_issuer)
+
+          case IdentityBinding.authorize_lease_principal(
+                 expected_subject,
+                 IdentityBinding.proof_from_conn(conn),
+                 lease.surface_kind,
+                 IdentityBinding.request_context(conn),
+                 expected_issuer: expected_issuer,
+                 allow_multiple_issuers: is_binary(expected_issuer)
+               ) do
+            {:ok, _principal} -> :ok
+            {:error, reason} -> {:error, reason}
+          end
 
         {:error, :not_found} ->
           {:error, :not_found}
@@ -1078,30 +1105,83 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp authorize_handoff_recipient(conn, handoff_id) do
-    if IdentityBinding.enabled?() do
-      case HandoffServer.authorization_context(handoff_id) do
-        {:ok, %{recipient_uuid: recipient_uuid, lease_id: lease_id}} ->
-          case Repo.active_lease(lease_id) do
-            {:ok, lease} ->
-              IdentityBinding.authorize(
-                recipient_uuid,
-                IdentityBinding.proof_from_conn(conn),
-                lease.surface_kind,
-                IdentityBinding.request_context(conn)
-              )
+    case HandoffServer.authorization_context(handoff_id) do
+      {:ok,
+       %{
+         recipient_uuid: recipient_uuid,
+         recipient_issuer: recipient_issuer,
+         recipient_subject: recipient_subject,
+         lease_id: lease_id
+       }} ->
+        distinct_recipient_subject? =
+          is_binary(recipient_subject) and recipient_subject != recipient_uuid
 
-            {:error, :not_found} ->
-              {:error, :not_found}
+        cond do
+          not IdentityBinding.enabled?() and distinct_recipient_subject? ->
+            {:error, :identity_proof_invalid}
 
-            {:error, _reason} ->
-              {:error, :identity_verification_unavailable}
-          end
+          not IdentityBinding.enabled?() ->
+            {:ok, nil}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+          true ->
+            case Repo.active_lease(lease_id) do
+              {:ok, lease} ->
+                expected_subject = recipient_subject || recipient_uuid
+
+                case IdentityBinding.authorize_lease_principal(
+                       expected_subject,
+                       IdentityBinding.proof_from_conn(conn),
+                       lease.surface_kind,
+                       IdentityBinding.request_context(conn),
+                       expected_issuer: recipient_issuer,
+                       require_attestation: distinct_recipient_subject?,
+                       allow_multiple_issuers: is_binary(recipient_issuer)
+                     ) do
+                  {:ok, nil} when distinct_recipient_subject? ->
+                    {:error, :identity_proof_invalid}
+
+                  other ->
+                    other
+                end
+
+              {:error, :not_found} ->
+                {:error, :not_found}
+
+              {:error, _reason} ->
+                {:error, :identity_verification_unavailable}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_verified_principal(params, %{issuer: issuer, subject: subject})
+       when is_binary(issuer) and is_binary(subject) do
+    params
+    |> Map.delete(:requested_holder_subject)
+    |> Map.put(:holder_issuer, issuer)
+    |> Map.put(:holder_subject, subject)
+  end
+
+  defp attach_verified_principal(params, nil) do
+    Map.delete(params, :requested_holder_subject)
+  end
+
+  defp maybe_allow_unverified_principal_fallback(params, surface_kind) do
+    if IdentityBinding.enforced_for_surface?(surface_kind) do
+      params
     else
-      :ok
+      Map.put(params, :allow_unverified_principal_fallback, true)
+    end
+  end
+
+  defp maybe_allow_legacy_row_attested_reacquire(params) do
+    if IdentityBinding.single_or_no_trusted_issuer?() do
+      Map.put(params, :allow_legacy_row_attested_reacquire, true)
+    else
+      params
     end
   end
 
@@ -1306,6 +1386,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         # + sensor.status enforcement happens in the DB CHECKs (typed-error
         # path returns 422 with the constraint name).
         substrate_state = Map.get(body, "substrate_state")
+        holder_subject = Map.get(body, "holder_subject")
 
         substrate_observed_at =
           case Map.get(body, "substrate_state_observed_at") do
@@ -1323,6 +1404,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           end
 
         cond do
+          not is_nil(holder_subject) and not valid_principal_component?(holder_subject) ->
+            {:error,
+             "holder_subject must be a non-empty string up to 256 bytes without whitespace"}
+
           substrate_state != nil and not is_map(substrate_state) ->
             {:error, "substrate_state must be a JSON object"}
 
@@ -1337,6 +1422,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
              %{
                surface_id: canonical_surface_id,
                holder_agent_uuid: body["holder_agent_uuid"],
+               requested_holder_subject: holder_subject,
                holder_class: Map.get(body, "holder_class", "process_instance"),
                holder_kind: body["holder_kind"],
                ttl_s: body["ttl_s"],
@@ -1541,6 +1627,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   defp extract_handoff_offer_params(%{} = body) do
     lease_id = Map.get(body, "lease_id")
     to_holder_agent_uuid = Map.get(body, "to_holder_agent_uuid")
+    to_holder_issuer = Map.get(body, "to_holder_issuer")
+    to_holder_subject = Map.get(body, "to_holder_subject")
     ttl_s = Map.get(body, "ttl_s")
 
     cond do
@@ -1550,6 +1638,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       not (is_binary(to_holder_agent_uuid) and byte_size(to_holder_agent_uuid) > 0) ->
         {:error, "to_holder_agent_uuid required"}
 
+      is_nil(to_holder_issuer) and not IdentityBinding.single_or_no_trusted_issuer?() ->
+        {:error, "to_holder_issuer required when multiple trusted issuers are configured"}
+
+      not is_nil(to_holder_issuer) and not valid_principal_component?(to_holder_issuer) ->
+        {:error, "to_holder_issuer must be a non-empty string up to 256 bytes without whitespace"}
+
+      not is_nil(to_holder_subject) and not valid_principal_component?(to_holder_subject) ->
+        {:error,
+         "to_holder_subject must be a non-empty string up to 256 bytes without whitespace"}
+
       not is_integer(ttl_s) ->
         {:error, "ttl_s must be an integer"}
 
@@ -1557,11 +1655,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:error, "ttl_s must be in (0, 3600]"}
 
       true ->
-        {:ok, lease_id, to_holder_agent_uuid, ttl_s}
+        {:ok, lease_id, to_holder_agent_uuid, ttl_s,
+         [to_holder_issuer: to_holder_issuer, to_holder_subject: to_holder_subject]}
     end
   end
 
   defp extract_handoff_offer_params(_), do: {:error, "body must be a JSON object"}
+
+  defp valid_principal_component?(value), do: IdentityBinding.valid_principal_component?(value)
 
   defp extract_handoff_accept_params(%{"handoff_id" => handoff_id})
        when is_binary(handoff_id) and byte_size(handoff_id) > 0 do
@@ -1700,6 +1801,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       surface_id: lease.surface_id,
       surface_kind: lease.surface_kind,
       holder_agent_uuid: lease.holder_agent_uuid,
+      holder_issuer: Map.get(lease, :holder_issuer),
+      holder_subject: Map.get(lease, :holder_subject),
       holder_class: lease.holder_class,
       holder_kind: lease.holder_kind,
       holder_pid: lease.holder_pid,

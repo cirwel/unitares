@@ -19,16 +19,22 @@ defmodule UnitaresLeasePlane.HandoffServer do
       :handoff_id,
       :lease_id,
       :to_holder_agent_uuid,
+      :to_holder_issuer,
+      :to_holder_subject,
       :ttl_s,
       :offered_at,
       :expires_at
     ]
   end
 
+  @type principal :: %{issuer: String.t(), subject: String.t()}
+
   @type pending :: %Pending{
           handoff_id: binary(),
           lease_id: binary(),
           to_holder_agent_uuid: binary(),
+          to_holder_issuer: String.t() | nil,
+          to_holder_subject: String.t() | nil,
           ttl_s: pos_integer(),
           offered_at: DateTime.t(),
           expires_at: DateTime.t()
@@ -38,21 +44,27 @@ defmodule UnitaresLeasePlane.HandoffServer do
 
   def start_link(_args), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
-  @spec offer(binary(), binary(), pos_integer()) :: {:ok, binary()} | {:error, term()}
-  def offer(lease_id, to_holder_agent_uuid, ttl_s)
+  @spec offer(binary(), binary(), pos_integer(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def offer(lease_id, to_holder_agent_uuid, ttl_s, opts \\ [])
       when is_binary(lease_id) and is_binary(to_holder_agent_uuid) and is_integer(ttl_s) and
-             ttl_s > 0 do
-    GenServer.call(__MODULE__, {:offer, lease_id, to_holder_agent_uuid, ttl_s})
+             ttl_s > 0 and is_list(opts) do
+    GenServer.call(__MODULE__, {:offer, lease_id, to_holder_agent_uuid, ttl_s, opts})
   end
 
-  @spec accept(binary()) :: :ok | {:error, term()}
-  def accept(handoff_id) when is_binary(handoff_id) do
-    GenServer.call(__MODULE__, {:accept, handoff_id})
+  @spec accept(binary(), principal() | nil) :: :ok | {:error, term()}
+  def accept(handoff_id, principal \\ nil) when is_binary(handoff_id) do
+    GenServer.call(__MODULE__, {:accept, handoff_id, principal})
   end
 
   @doc "Return the immutable recipient and source lease for an active offer."
   @spec authorization_context(binary()) ::
-          {:ok, %{recipient_uuid: binary(), lease_id: binary()}}
+          {:ok,
+           %{
+             recipient_uuid: binary(),
+             recipient_issuer: String.t() | nil,
+             recipient_subject: String.t() | nil,
+             lease_id: binary()
+           }}
           | {:error, :not_found | :expired}
   def authorization_context(handoff_id) when is_binary(handoff_id) do
     GenServer.call(__MODULE__, {:authorization_context, handoff_id})
@@ -69,9 +81,9 @@ defmodule UnitaresLeasePlane.HandoffServer do
   def init(_args), do: {:ok, %{pending: %{}}}
 
   @impl true
-  def handle_call({:offer, lease_id, to_holder_agent_uuid, ttl_s}, _from, state) do
+  def handle_call({:offer, lease_id, to_holder_agent_uuid, ttl_s, opts}, _from, state) do
     with {:ok, lease} <- Repo.active_lease(lease_id),
-         pending = new_pending(lease_id, to_holder_agent_uuid, ttl_s),
+         pending = new_pending(lease_id, to_holder_agent_uuid, ttl_s, opts),
          :ok <- Repo.log_handoff_offer(lease, pending) do
       ms = max(DateTime.diff(pending.expires_at, DateTime.utc_now(), :millisecond), 1)
       Process.send_after(self(), {:expire, pending.handoff_id}, ms)
@@ -84,10 +96,10 @@ defmodule UnitaresLeasePlane.HandoffServer do
     end
   end
 
-  def handle_call({:accept, handoff_id}, _from, state) do
+  def handle_call({:accept, handoff_id, principal}, _from, state) do
     case Map.fetch(state.pending, handoff_id) do
       {:ok, pending} ->
-        accept_pending(pending, state)
+        accept_pending(pending, principal, state)
 
       :error ->
         {:reply, {:error, :not_found}, state}
@@ -102,8 +114,13 @@ defmodule UnitaresLeasePlane.HandoffServer do
           {:reply, {:error, :expired}, state}
         else
           {:reply,
-           {:ok, %{recipient_uuid: pending.to_holder_agent_uuid, lease_id: pending.lease_id}},
-           state}
+           {:ok,
+            %{
+              recipient_uuid: pending.to_holder_agent_uuid,
+              recipient_issuer: pending.to_holder_issuer,
+              recipient_subject: pending.to_holder_subject,
+              lease_id: pending.lease_id
+            }}, state}
         end
 
       :error ->
@@ -131,14 +148,28 @@ defmodule UnitaresLeasePlane.HandoffServer do
     end
   end
 
-  defp accept_pending(pending, state) do
+  defp accept_pending(pending, principal, state) do
     cond do
       expired?(pending) ->
         state = %{state | pending: Map.delete(state.pending, pending.handoff_id)}
         {:reply, {:error, :expired}, state}
 
       true ->
-        case Repo.accept_handoff(pending) do
+        handoff_params =
+          pending
+          |> Map.from_struct()
+          |> Map.merge(
+            case principal do
+              %{issuer: issuer, subject: subject}
+              when is_binary(issuer) and is_binary(subject) ->
+                %{holder_issuer: issuer, holder_subject: subject}
+
+              _ ->
+                %{holder_issuer: nil, holder_subject: nil}
+            end
+          )
+
+        case Repo.accept_handoff(handoff_params) do
           {:ok, _new_lease} ->
             LeaseSupervisor.stop_after_handoff(pending.lease_id)
             state = %{state | pending: Map.delete(state.pending, pending.handoff_id)}
@@ -151,7 +182,7 @@ defmodule UnitaresLeasePlane.HandoffServer do
     end
   end
 
-  defp new_pending(lease_id, to_holder_agent_uuid, ttl_s) do
+  defp new_pending(lease_id, to_holder_agent_uuid, ttl_s, opts) do
     now = DateTime.utc_now()
     offer_window_s = Application.get_env(:lease_plane, :handoff_offer_window_s, 30)
 
@@ -159,6 +190,8 @@ defmodule UnitaresLeasePlane.HandoffServer do
       handoff_id: uuid4(),
       lease_id: lease_id,
       to_holder_agent_uuid: to_holder_agent_uuid,
+      to_holder_issuer: Keyword.get(opts, :to_holder_issuer),
+      to_holder_subject: Keyword.get(opts, :to_holder_subject),
       ttl_s: ttl_s,
       offered_at: now,
       expires_at: DateTime.add(now, offer_window_s, :second)

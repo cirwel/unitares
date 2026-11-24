@@ -410,6 +410,20 @@ _PREFLIGHT_UNAVAILABLE_CODES = frozenset({
 #: A failover attempt is started only while a full thorough attempt still fits
 #: inside the consult tool timeout.
 _THOROUGH_ATTEMPT_S = 240
+#: Host-specific thorough attempt overrides. Headless Antigravity (`agy`) pays
+#: cold isolated-HOME startup plus tool-denial resume turns on top of model
+#: latency, so it gets more wall-clock headroom while staying inside
+#: `CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S` (450s) and
+#: `DelegateInferenceParams.timeout_s <= 420`.
+_THOROUGH_HOST_ATTEMPT_S: dict[str, int] = {
+    "antigravity:host-adapter": 360,
+}
+
+
+def _thorough_attempt_timeout_s(host_id: str | None) -> int:
+    if host_id is not None:
+        return _THOROUGH_HOST_ATTEMPT_S.get(host_id, _THOROUGH_ATTEMPT_S)
+    return _THOROUGH_ATTEMPT_S
 
 
 def _clock() -> float:
@@ -433,8 +447,13 @@ def _note_skip(request: ConsultRequest, item: dict[str, str]) -> None:
         request.skipped.append(item)
 
 
-def _next_peer(request: ConsultRequest, tried: list[str]) -> str | None:
-    """The next available host after the last one tried, recording what it passes."""
+def _find_next_peer(
+    request: ConsultRequest,
+    tried: list[str],
+    *,
+    remaining_s: float | None = None,
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Locate the next available host after the last one tried that fits remaining_s."""
     walk = request.thorough_order or tuple((h, None) for h in request.thorough_peers)
     ids = [h for h, _ in walk]
     start = ids.index(tried[-1]) + 1 if tried and tried[-1] in ids else 0
@@ -444,15 +463,20 @@ def _next_peer(request: ConsultRequest, tried: list[str]) -> str | None:
             continue
         if static is not None:
             passed.append(static)
-        elif host_adapter_available(host_id):
-            # Only hosts passed on the way to one that will be tried count;
-            # a scan that finds nothing leaves `skipped` unchanged.
-            for item in passed:
-                _note_skip(request, item)
-            return host_id
-        else:
+        elif not host_adapter_available(host_id):
             passed.append(_availability_skip(host_id))
-    return None
+        elif (
+            remaining_s is not None
+            and _thorough_attempt_timeout_s(host_id) > remaining_s
+        ):
+            passed.append(_skip(
+                host_id,
+                "insufficient_budget",
+                f"requires {_thorough_attempt_timeout_s(host_id)}s; {int(remaining_s)}s remaining",
+            ))
+        else:
+            return host_id, passed
+    return None, []
 
 
 def _safe_provenance(
@@ -769,7 +793,7 @@ async def _run_thorough(
         requesting_agent_uuid=request.requester_uuid,
         host_id=request.thorough_host_id,
         task_type=_THOROUGH_TASK_TYPES[request.purpose],
-        timeout_s=_THOROUGH_ATTEMPT_S,
+        timeout_s=_thorough_attempt_timeout_s(request.thorough_host_id),
     ))
 
 
@@ -797,13 +821,15 @@ async def _run_thorough_with_failover(
             return current, outcome
         reason = _failover_reason(outcome.failure)
         elapsed = _clock() - started
-        if reason is None or (
-            elapsed + _THOROUGH_ATTEMPT_S > CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S
-        ):
+        if reason is None:
             return current, outcome
-        nxt = _next_peer(current, tried)
+        remaining_s = (CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S) - elapsed
+        nxt, passed = _find_next_peer(current, tried, remaining_s=remaining_s)
         if nxt is None:
             return current, outcome
+        # Only hosts passed on the way to one that will actually be tried count.
+        for item in passed:
+            _note_skip(current, item)
         request.failover_trace.append({
             "from_host_id": current.thorough_host_id,
             "reason": reason,

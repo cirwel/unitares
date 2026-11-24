@@ -268,9 +268,11 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
         epoch_started_at = epoch_row["started_at"] if epoch_row else None
 
         if agent_ids:
+            scoped_ids = [str(aid) for aid in agent_ids]
             scope_clause = "WHERE a.id = ANY($1::text[])"
-            scope_args: tuple = (list(agent_ids),)
+            scope_args: tuple = (scoped_ids,)
         else:
+            scoped_ids = None
             scope_clause = "WHERE a.status = 'active'"
             scope_args = ()
 
@@ -306,11 +308,11 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
         """
         state_row = await conn.fetchrow(state_sql, *scope_args)
 
-        if agent_ids:
+        if scoped_ids is not None:
             paused_now = await conn.fetchval(
                 "SELECT count(*)::int FROM core.agents "
                 "WHERE status = 'paused' AND id = ANY($1::text[])",
-                list(agent_ids),
+                scoped_ids,
             )
         else:
             paused_now = await conn.fetchval(
@@ -326,22 +328,35 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
             )
 
             pauses_this_epoch = await count_lifecycle_pauses_since(
-                conn, epoch_started_at
+                conn, epoch_started_at, agent_ids=scoped_ids
             )
 
             proceed_this_epoch = (
                 await count_trajectory_validated_outcomes_for_epoch(
-                    conn, current_epoch
+                    conn, current_epoch, agent_ids=scoped_ids
                 )
             )
 
-            verdict_sql = """
-                SELECT verdict, count(*)::int AS n
-                FROM audit.r1_score_audit
-                WHERE recorded_at >= $1 AND verdict IS NOT NULL
-                GROUP BY verdict
-            """
-            verdict_rows = await conn.fetch(verdict_sql, epoch_started_at)
+            if scoped_ids is not None:
+                verdict_sql = """
+                    SELECT verdict, count(*)::int AS n
+                    FROM audit.r1_score_audit
+                    WHERE recorded_at >= $1
+                      AND verdict IS NOT NULL
+                      AND (successor_id = ANY($2::text[]) OR parent_id = ANY($2::text[]))
+                    GROUP BY verdict
+                """
+                verdict_rows = await conn.fetch(
+                    verdict_sql, epoch_started_at, scoped_ids
+                )
+            else:
+                verdict_sql = """
+                    SELECT verdict, count(*)::int AS n
+                    FROM audit.r1_score_audit
+                    WHERE recorded_at >= $1 AND verdict IS NOT NULL
+                    GROUP BY verdict
+                """
+                verdict_rows = await conn.fetch(verdict_sql, epoch_started_at)
         else:
             pauses_this_epoch = 0
             proceed_this_epoch = 0
@@ -402,6 +417,29 @@ async def _handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextC
             "critical": int(state_row["critical"]),
             "unknown": int(state_row["unknown_health"]),
         }
+
+    scope_notes = []
+    if scoped_ids is not None:
+        scope_notes.append(
+            f"All aggregate counts and current-epoch distributions "
+            f"(pauses_this_epoch, decision_distribution, verdict_distribution) "
+            f"are restricted to the {len(scoped_ids)} requested agent_ids "
+            f"({int(state_row['total_agents'])} matched in core.agents)."
+        )
+    ignored_window_params = [
+        key for key in ("since", "until", "window_hours")
+        if arguments.get(key) is not None
+    ]
+    if ignored_window_params:
+        aggregate_data["ignored_parameters"] = ignored_window_params
+        scope_notes.append(
+            f"Ignored {', '.join(ignored_window_params)}: observe(action='aggregate') "
+            f"always summarizes the current epoch (epoch {int(current_epoch)}); "
+            "use action='audit_events', 'outcome_evidence', or 'telemetry' for "
+            "custom time windows."
+        )
+    if scope_notes:
+        aggregate_data["scope_note"] = " ".join(scope_notes)
 
     return success_response({
         "aggregate": aggregate_data,

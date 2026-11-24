@@ -569,6 +569,133 @@ def test_lease_record_accepts_earned_status_earned():
     assert record.earned_status == "earned"
 
 
+def test_lease_record_principal_fields_default_none_and_validate_pair():
+    unattested = LeaseRecord.model_validate(_lease_payload())
+    assert unattested.holder_issuer is None
+    assert unattested.holder_subject is None
+
+    payload = _lease_payload()
+    payload["holder_issuer"] = "operator-a"
+    payload["holder_subject"] = "sentinel-principal-1"
+    attested = LeaseRecord.model_validate(payload)
+    assert attested.holder_issuer == "operator-a"
+    assert attested.holder_subject == "sentinel-principal-1"
+
+    half_set = _lease_payload()
+    half_set["holder_issuer"] = "operator-a"
+    try:
+        LeaseRecord.model_validate(half_set)
+    except ValidationError as exc:
+        assert "holder_issuer and holder_subject" in str(exc)
+    else:
+        raise AssertionError("half-set lease principal must fail validation")
+
+    whitespace = _lease_payload()
+    whitespace["holder_issuer"] = "operator a"
+    whitespace["holder_subject"] = "sub-1"
+    try:
+        LeaseRecord.model_validate(whitespace)
+    except ValidationError as exc:
+        assert "without whitespace" in str(exc)
+    else:
+        raise AssertionError("whitespace in holder_issuer must fail validation")
+
+
+def test_acquire_request_accepts_and_serializes_holder_subject():
+    holder = uuid4()
+    seen: dict[str, Any] = {}
+
+    def transport(request: LeaseHTTPRequest):
+        seen["body"] = request.json_body
+        payload = _lease_payload(holder_agent_uuid=holder)
+        payload["holder_issuer"] = "operator-a"
+        payload["holder_subject"] = "sentinel-principal-1"
+        return {"ok": True, "lease": payload, "idempotent": False, "drift_warning": []}
+
+    req = AcquireRequest(
+        surface_id="resident:/sentinel",
+        holder_agent_uuid=holder,
+        holder_subject="sentinel-principal-1",
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=90,
+    )
+    result = LeasePlaneClient(transport=transport).acquire(req)
+
+    assert isinstance(result, AcquireOk)
+    assert seen["body"]["holder_subject"] == "sentinel-principal-1"
+    assert result.lease.holder_issuer == "operator-a"
+    assert result.lease.holder_subject == "sentinel-principal-1"
+
+    for bad_subject in ("", "has space", "ctrl\x1csep", "bell\x07char", "del\x7fchar", "nel\u0085char", "s" * 257):
+        try:
+            AcquireRequest(
+                surface_id="resident:/sentinel",
+                holder_agent_uuid=holder,
+                holder_subject=bad_subject,
+                holder_class="process_instance",
+                holder_kind="remote_heartbeat",
+                ttl_s=90,
+            )
+        except ValidationError as exc:
+            assert "holder_subject" in str(exc)
+        else:
+            raise AssertionError(f"invalid holder_subject {bad_subject!r} must fail")
+
+
+def test_handoff_offer_request_accepts_and_serializes_recipient_principal():
+    handoff_id = uuid4()
+    lease_id = uuid4()
+    to_holder = uuid4()
+    seen: dict[str, Any] = {}
+
+    def transport(request: LeaseHTTPRequest):
+        seen["body"] = request.json_body
+        return {"ok": True, "handoff_id": str(handoff_id)}
+
+    req = HandoffOfferRequest(
+        lease_id=lease_id,
+        to_holder_agent_uuid=to_holder,
+        to_holder_issuer="operator-b",
+        to_holder_subject="principal-b",
+        ttl_s=120,
+    )
+    result = LeasePlaneClient(transport=transport).handoff_offer(req)
+
+    assert isinstance(result, SimpleOk)
+    assert result.handoff_id == handoff_id
+    assert seen["body"] == {
+        "lease_id": str(lease_id),
+        "to_holder_agent_uuid": str(to_holder),
+        "to_holder_issuer": "operator-b",
+        "to_holder_subject": "principal-b",
+        "ttl_s": 120,
+    }
+
+    # Independent fields also accepted (matches router)
+    issuer_only = HandoffOfferRequest(
+        lease_id=lease_id,
+        to_holder_agent_uuid=to_holder,
+        to_holder_issuer="operator-b",
+        ttl_s=120,
+    )
+    assert issuer_only.to_holder_issuer == "operator-b"
+    assert issuer_only.to_holder_subject is None
+
+    for bad_val in ("", "bad issuer", "ctrl\x1csep", "bell\x07char", "nel\u0085char", "x" * 257):
+        try:
+            HandoffOfferRequest(
+                lease_id=lease_id,
+                to_holder_agent_uuid=to_holder,
+                to_holder_issuer=bad_val,
+                ttl_s=120,
+            )
+        except ValidationError as exc:
+            assert "to_holder_issuer" in str(exc)
+        else:
+            raise AssertionError(f"invalid to_holder_issuer {bad_val!r} must fail")
+
+
 def test_handoff_offer_returns_handoff_id_on_ok():
     handoff_id = uuid4()
     seen: dict[str, Any] = {}
