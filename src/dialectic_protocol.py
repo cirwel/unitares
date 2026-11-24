@@ -330,7 +330,7 @@ class Resolution:
     The v2 attestation closed council 2026-05-06 NEW-2 — until then the
     bilateral cryptographic claim was effectively single-signer-with-two-
     keys. v2 minting was itself retired (#2449; decided 2026-09-25 as D5 in
-    ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``): a
+    ``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``): a
     symmetric HMAC the server computes with a key the server stores attests
     only that the server wrote the row. New sessions land at v3, unsigned.
     Historical rows are never stripped or backfilled: the v1 rows remain on
@@ -531,7 +531,7 @@ def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
     verification concludes.
 
     Party-HMAC minting is retired (#2449, decided 2026-09-25 as D5 in
-    ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``). The
+    ``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``). The
     scheme is symmetric and the server holds every key it would verify with,
     so a party HMAC the server computes says only that the server wrote the
     row, which the attributed row already says. ``finalize_resolution`` now
@@ -1238,7 +1238,7 @@ class DialecticSession:
 
         Mints no party signature. Party-HMAC minting is retired (#2449,
         decided 2026-09-25 as D5 in
-        ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``):
+        ``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``):
         the HMAC was symmetric and keyed on api_keys the server stores, so it
         attested only the server's own write. Minting stops here, inside this
         method, rather than by relying on keys being absent, because some

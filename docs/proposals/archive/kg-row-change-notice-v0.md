@@ -17,7 +17,7 @@ promotions. The update path does not call it. Its payload is intended for the
 dashboard/bridge and includes a summary, not a durable recipient cursor or
 acknowledgement. It therefore does not establish reliable update delivery.
 
-The existing [message transport](agent-message-transport-v0.md) is deployed
+The existing [message transport](../active/agent-message-transport-v0.md) is deployed
 according to its dated September 23 re-read. It is not a change feed or wake
 system. Its claim-on-read inbox has a known retry/concurrent-consumer concern
 (KG `2026-08-29T20:11:28.155684+00:00`, follow-up
@@ -63,7 +63,7 @@ Default proposal: delivery only while a session is already active, with no
 agent spawning, background model call or new check-in. An offline owner keeps
 a bounded backlog; expired delivery state reports a gap rather than pretending
 the recipient saw everything. Waking a stopped session or spending tokens needs
-the separate [wake gate](../archive/agent-channel-wake-gate-v0.md), unchanged here.
+the separate [wake gate](agent-channel-wake-gate-v0.md), unchanged here.
 
 Costs are a durable mutation journal/outbox, per-consumer cursor state, retention
 and replay logic, a host delivery adapter and tests. Reusing an existing table

@@ -10,7 +10,7 @@ of these decisions recommended the option recorded here. Merging remains the
 operator's act, so the decision is reversible until merge.
 **What that basis is and is not.** The direction is a delegation with one
 criterion, in the form of the
-[outcome-fixture precedent](../archive/outcome-fixture-conflation-decision-packet-v0.md):
+[outcome-fixture precedent](outcome-fixture-conflation-decision-packet-v0.md):
 the operator delegated these selections to the working agent, and under that
 criterion the working agent selected the options below. The adversarial design
 review was the authoring agent's own review, not an independent one, and it is
@@ -48,7 +48,7 @@ root, and as of 2026-09-25 nothing on the other side of that line exists:
 
 Engineering built ahead of a verifier can only be exercised on the operator's own
 hardware, which demonstrates the code and not the trust model. That is reason 4
-of the [`drr.v1` decision packet](dialectic-resolution-receipt-v0.md), and it
+of the [`drr.v1` decision packet](../active/dialectic-resolution-receipt-v0.md), and it
 applies to the whole track, not only to receipts.
 
 **Wake condition.** A real outside party, meaning another person or organisation
@@ -210,7 +210,7 @@ design. Its evaluation design was already in the repository when D3a was
 recorded: the frozen
 [evaluation pre-registration](../registered/accountable-testbed-metrics-preregistration-v1.md)
 (v1.1, frozen 2026-08-05) and the dated
-[two-governor preliminary trace](../archive/accountable-testbed-preliminary-trace.md)
+[two-governor preliminary trace](accountable-testbed-preliminary-trace.md)
 (captured 2026-08-03). The 2026-09-25 text also did not mention that a pending
 external funding application for the multi-principal testbed existed at the
 time. This addendum records it.

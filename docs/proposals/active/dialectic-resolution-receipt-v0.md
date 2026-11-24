@@ -14,7 +14,7 @@ identity plan's custody invariant (`docs/ontology/plan.md`, S19 B-strict), and
 the multi-principal trust-model commitment (per-principal governance, no shared
 administrative root, cross-principal interaction via verifiable attestation).
 **Decision record:**
-[`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md)
+[`federation-trust-decisions-2026-09-25.md`](../archive/federation-trust-decisions-2026-09-25.md)
 records multi-principal trust work as not scheduled without external funding
 or an outside principal (D3a, with its 2026-10-19 addendum) and custody for
 this receipt's key as deferred behind it (D3b). It does not change the wake criteria
@@ -40,7 +40,7 @@ signature used a uuid-derived fallback key, forgeable from public data and
 removed in #2155; the most recent records carrying two signatures are legacy
 v1 rows from 2025-12-13 (UTC), which cannot be verified. No path mints a
 party signature any more: party-HMAC minting is retired (decided 2026-09-25 as
-D5 in [`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md),
+D5 in [`federation-trust-decisions-2026-09-25.md`](../archive/federation-trust-decisions-2026-09-25.md),
 [#2449](https://github.com/cirwel/unitares/issues/2449)). A receipt minted
 today over a new record would countersign `signature_version` 3 with both
 signature fields empty, and would carry `both_signatures_present: false`. A
@@ -150,7 +150,7 @@ resolution's standing.
    second operator with an independent channel to pin the key and a reason to
    check a record; that party does not exist and this document does not
    schedule one. As of 2026-09-25 that is a recorded decision, not an omission:
-   D3a of the [decision record](federation-trust-decisions-2026-09-25.md)
+   D3a of the [decision record](../archive/federation-trust-decisions-2026-09-25.md)
    records multi-principal trust work as not scheduled without external
    funding or an outside principal. Its wake conditions are a real outside
    party, a person or organisation with its own administrative root, asking to

@@ -10,7 +10,7 @@ for the open decisions pending operator ratification, is
 **Basis.** Operator direction, 2026-10-06: "proceed best for federation",
 given after a coupling map of the codebase and a component-by-component
 narrowing outline in the same session. As in the
-[2026-09-25 federation trust record](federation-trust-decisions-2026-09-25.md),
+[2026-09-25 federation trust record](../archive/federation-trust-decisions-2026-09-25.md),
 that direction is a delegation with one criterion: the working agent selected
 the options below under it, and nothing here claims the operator weighed each
 one. Merging is the operator's ratification and keeps every choice reversible
@@ -19,7 +19,7 @@ until then.
 [`PRODUCT_DEFINITION.md`](../../PRODUCT_DEFINITION.md): many runtimes sharing
 one operator-controlled server and authority domain. Trust across
 administrative roots stays unscheduled without external funding or an outside
-principal ([D3a](federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
+principal ([D3a](../archive/federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
 nothing here wakes it.
 **Inputs:** the survival audit's keep/interface/freeze list
 ([`../../ontology/competitive-survival-audit-2026-09.md`](../../ontology/competitive-survival-audit-2026-09.md));

@@ -10,6 +10,7 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 |---|---|
 | [`lease-lifecycle-declaration-v0.md`](lease-lifecycle-declaration-v0.md) | **Closed** · **REFUTED as written.** The permanent-strand diagnosis stands; the proposed TTL-only fix would break execution exclusion. Retained as a negative design record and prerequisite warning for any fence/lifecycle follow-up |
 | [`lease-plane-phase-a-latency-2026-05-20.md`](lease-plane-phase-a-latency-2026-05-20.md) | **Closed** · First latency measurement anchoring the substrate-tax gate from the BEAM roadmap |
+| [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | **Parked (since 2026-06-28)** · v0.2 counter-note / companion to the lease-plane RFC (not a replacement); archived 2026-11-23 |
 
 ## BEAM footprint (substrate migration waves)
 
@@ -37,6 +38,7 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 | [`agent-identity-credential-aic-v0.md`](agent-identity-credential-aic-v0.md) | **Parked (since 2026-06-24)** · Prototype + design draft (2026-06-24); not wired into the live identity path |
 | [`fleet-workload-identity-auth-audit-v0.md`](fleet-workload-identity-auth-audit-v0.md) | **Parked (since 2026-08-24)** · Draft v0.2 (2026-08-24) - council-ratified and Claude-reviewed threat model/Lease Plane pilot specification; v0.2 adds OS-isolated workload bootstrap, canonical proofs, fixed replay/audit semantics, off-state parity tests, availability/capacity gates, and break-glass recovery; live auth remains blocked. Parked at the 2026-10-18 re-read; archived 2026-10-20 |
 | [`cedar-delegation-authz-v0.md`](cedar-delegation-authz-v0.md) | **Parked (since 2026-08-21)** · Draft v0 (2026-08-21) — decision pending, deferred-by-default. Cedar as the family's shared policy engine (pre-dispatch authorize step + the governed-effect plane's §6 veto, whose endpoint has since landed in #1073 without a policy engine behind it), principals from explicit delegation carriers only (operator token, vouched bindings — never lineage), #1387 `(tool, action)` as the action vocabulary, `stakes_table.py` as seed policy, shadow-mode first. Parked at the 2026-09-23 re-read: deferred-by-default by its own status; nothing open depends on it. Archived 2026-10-20 |
+| [`kg-cross-agent-archive-policy-v0.md`](kg-cross-agent-archive-policy-v0.md) | **Parked (since 2026-10-19)** · Operator decision recorded 2026-10-13 to retain collaborative low/medium curation; existing rules and alternative authority boundaries without permission/guard changes, untouched since 2026-10-19; archived 2026-11-23 |
 
 ## Other records
 
@@ -64,6 +66,15 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 | [`governed-effect-s7-strong-tier-recert.md`](governed-effect-s7-strong-tier-recert.md) | **Built** · Design v0.2, revised after review — strong-tier re-certification gate for governed-effect `execute agent_spawn`; implementation landed separately in the governed-effect track; shipped as #1074 and succeeded by [`governed-effect-effect-binding-v0.md`](../active/governed-effect-effect-binding-v0.md), which tracks the per-effect residual. Archived 2026-10-20 |
 | [`kg-own-row-closeout-v0.md`](kg-own-row-closeout-v0.md) | **Built** · Friction fix shipped (#2771): the closeout command and lifecycle skill remind writers to revisit at most three own actionable rows; no auto-closure, check-in, hook or permission change. Re-read 2026-10-18. Archived 2026-10-20: the fix is complete and nothing further is proposed |
 | [`open-decisions-other-2026-10-10.md`](open-decisions-other-2026-10-10.md) | **Closed** · Superseded 2026-10-20. The 2026-10-10 collection of other pending operator decisions, merged into [Pending operator decisions](../active/README.md#pending-operator-decisions) in the current proposals index, which is maintained instead; retained as collected |
+| [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md) | **Closed** · All seven decisions disposed in its decision index (D4 on 2026-09-23; D5/D6 on 2026-10-16; D1/D2/D3/D7 on 2026-10-22); archived 2026-11-23 |
+| [`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md) | **Closed** · Decision record, 2026-09-25: multi-principal trust not scheduled without external funding or an outside principal (2026-10-19 addendum), receipt-key custody deferred behind it, v2 party-HMAC minting retired (#2449 / #2463); archived 2026-11-23 |
+| [`dialectic-terminal-state-fidelity-v0.md`](dialectic-terminal-state-fidelity-v0.md) | **Parked (since 2026-09-13)** · Decision packet raised 2026-09-13 (`DialecticPhase.FAILED` terminal-state fidelity, issue #2202); nothing implemented, parked at 2026-10-18 re-read, archived 2026-11-23 |
+| [`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md) | **Closed** · Decision record (2026-10-01) recommending not to build the forecast mirror while calibration stays payoff-free and the resolver shares OS user custody; archived 2026-11-23 |
+| [`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md) | **Parked (since 2026-09-23)** · Decision recorded 2026-09-17 (NeMo Relay exporter/gate shipped as optional SDK extra; execute half open); 2026-11-03 checkpoint passed untouched, archived 2026-11-23 |
+| [`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md) | **Closed** · Pre-registration and commissioned comparative analysis (`§§7–12`, `c98f84fa`) both complete; decides no execute-plane option and carries no implementation authority, archived 2026-11-23 |
+| [`pcalm-primal-dual-governance-v0.md`](pcalm-primal-dual-governance-v0.md) | **Parked (since 2026-10-11)** · Replay-first research design (primitive `src/constraint_pressure.py` merged #2250, registered KEEP-DORMANT in `docs/operations/dormant-capability-registry.md`); untouched >30d, archived 2026-11-23 |
+| [`interface-contract-release-batching-v0.md`](interface-contract-release-batching-v0.md) | **Parked (since 2026-09-30)** · Draft v1 (2026-09-30) proposing one interface release per server release; untouched >30d, archived 2026-11-23 |
+| [`kg-agent-adoption-matched-corpus-v1.md`](kg-agent-adoption-matched-corpus-v1.md) | **Closed** · Read-only retrieval feasibility comparison over six actual records completed (`docs/evaluations/kg-agent-adoption/matched-corpus-feasibility-v1.md`); stopped v0 preserved, no model-assisted study enrolled, archived 2026-11-23 |
 
 ## EISV maths, coherence, and outcome grounding
 
@@ -74,6 +85,8 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 | [`eisv-individuality-v2-result.md`](eisv-individuality-v2-result.md) | **Closed** · Registered verdict FAIL; inference status UNTESTED AS DEPLOYED. The individuality axiom is retired for raw behavioral EISV as currently measured; a further attempt must change the measurement and pre-register before any of its data exists |
 | [`eisv-general-solution-v0.md`](eisv-general-solution-v0.md) | **Parked (since 2026-08-13)** · Derivation + numerical verification; no deployed behaviour or flag. Parked at the 2026-09-23 re-read: the derivation is complete; its named follow-ups (level-crossing/autocorrelation sizing of the windowed gate, a parameter/rate choice for the active configuration, and a live-parameter estimation procedure) remain open, with none in flight. Archived 2026-10-20 |
 | [`eisv-grounded-coherence-rederivation-v0.md`](eisv-grounded-coherence-rederivation-v0.md) | **Parked (since 2026-08-17)** · Design proposal, whiteboard candidate; not deployed. Parked at the 2026-09-23 re-read: whiteboard candidate; nothing in flight. Archived 2026-10-20 |
+| [`eisv-grounding-next-move-v0.md`](eisv-grounding-next-move-v0.md) | **Parked (since 2026-08-17)** · Design-intent roadmap waiting on the registered 2026-12-01 outcome-grounding stop-rule read ([stop rule](../registered/eisv-outcome-grounding-stop-rule-v0.md)); archived 2026-11-23 |
+| [`phi-effort-overflag-test-v0.md`](phi-effort-overflag-test-v0.md) | **Parked (since 2026-10-03)** · Unregistered test design (2026-10-03) and cold-start-prior options; waits on operator choices and the registered 2026-12-01 read, archived 2026-11-23 |
 
 ## Shipped / resolved
 
@@ -90,6 +103,8 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 | [`docs-consolidation-v0.md`](docs-consolidation-v0.md) | **Built** · SHIPPED — contested-claim lint, audience-split index, shorter README, and thin compatibility/manual routes landed by 2026-08-11 |
 | [`beam-wave-1-sentinel.md`](beam-wave-1-sentinel.md) | **Built** · SHIPPED — Wave 1 executed RFC; active follow-on work belongs to later waves; compatibility stub retained at the old path |
 | [`beam-wave-3a-read-only-handlers.md`](beam-wave-3a-read-only-handlers.md) | **Built** · DEPLOYED — Wave 3a read-only listener execution record; compatibility stub retained at the old path |
+| [`kg-row-change-notice-v0.md`](kg-row-change-notice-v0.md) | **Built** · Bounded replayable notices for owned or explicitly addressed KG rows shipped (#2776, #2778); no automatic wake, delivery, or authorization change; archived 2026-11-23 |
+| [`outcome-calibration-delivery-v0.md`](outcome-calibration-delivery-v0.md) | **Built** · Durable calibration delivery contract for #2247, merged in #3155 (migration 080, shipped in v4.0.0); archived 2026-11-23 |
 
 ## Closed by negative result
 

@@ -1,7 +1,7 @@
 # Durable delivery of prediction-bound outcome calibration
 
 Status: implementation contract for [#2247](https://github.com/cirwel/unitares/issues/2247),
-implemented in draft [#3155](https://github.com/cirwel/unitares/pull/3155).
+merged ([#3155](https://github.com/cirwel/unitares/pull/3155), shipped in v4.0.0).
 This is not a claim that the running deployment has adopted the change.
 
 ## Required invariant and boundary

@@ -33,6 +33,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 ### Canonical reference
 
 - **[`CAPABILITIES_AND_DEPLOYMENT.md`](CAPABILITIES_AND_DEPLOYMENT.md)** — core workflow versus advanced capabilities, deployment prerequisites, and discovery versus readiness.
+- **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — thin pointer to [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) layered architecture and maturity table.
 
 - **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the Core/userland boundary, MCP's place in the stack, identity, claims/evidence, review, outcomes, and reconstruction, and the honest limits. Start here when the architecture nouns aren't landing.
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc, organized around the record: userlands and interfaces, then the core layers (identity and lineage, findings and the knowledge graph, review, outcomes, policy and the EISV instrument), coordination, and storage, with each layer's maturity. Start here for architecture.
@@ -125,12 +126,13 @@ For people working on UNITARES itself, not using it.
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
 - [`TOOL_EDGE_INDEX.md`](dev/TOOL_EDGE_INDEX.md) — generated: every tool resolved to its handler, action delegates, and params schema
 - [`TOOL_REFERENCE.md`](dev/TOOL_REFERENCE.md) — generated: what every tool does, with its identity requirement, timeouts, and other names
+- [`REVIEW_HISTORY_IMPORT.md`](dev/REVIEW_HISTORY_IMPORT.md) — review-history importer CLI and `review-history-v1` observation format, pending adoption
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 - [`proposals-layout-2347.md`](dev/proposals-layout-2347.md) — record of the `docs/proposals/` three-directory layout migration (`#2347`)
 
 ### `releases/` — release notes and errata
 
-Per-release notes and post-release errata, for example [`releases/3.4.0.md`](releases/3.4.0.md). [`CHANGELOG.md`](CHANGELOG.md) is the cumulative history.
+Per-release notes and post-release errata, for example [`releases/3.4.0.md`](releases/3.4.0.md) and [`releases/4.0.0.md`](releases/4.0.0.md). [`CHANGELOG.md`](CHANGELOG.md) is the cumulative history from `3.0.0` onward; pre-`3.0.0` history lives in [`releases/archive/CHANGELOG-pre-3.0.md`](releases/archive/CHANGELOG-pre-3.0.md).
 
 ## Research, provenance, and optional interpretation
 
@@ -141,7 +143,7 @@ is the versioned measurement → derivation → policy → enforcement provenanc
 stored with each new state row. It belongs to the EISV instrument; read it after
 [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md).
 
-### `evaluations/` and `evaluation/` — dated evaluation records
+### `evaluations/` — dated evaluation records
 
 Study protocols, enrollments, schemas and results, one subfolder per study.
 [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) is the reader's index; the
@@ -151,9 +153,12 @@ subfolders are:
 - [`accountable-coordination-ablation/`](evaluations/accountable-coordination-ablation/) — draft plumbing pilot plan
 - [`assurance-cases/`](evaluations/assurance-cases/) — draft outcome-binding assurance case
 - [`ax-dogfood/`](evaluations/ax-dogfood/) — exploratory agent-experience dogfood read
+- [`calibration-supply-2026-11-10/`](evaluations/calibration-supply-2026-11-10/) — per-agent `I` calibration deployed behavior and evidence supply audit
+- [`consult-constraint/`](evaluations/consult-constraint/) — consult critique constraint probe and replay records
 - [`eisv-ei-referent/`](evaluations/eisv-ei-referent/), [`eisv-i-rest-live-read/`](evaluations/eisv-i-rest-live-read/), [`eisv-s-faithfulness/`](evaluations/eisv-s-faithfulness/) — EISV coordinate studies
 - [`eisv-incremental-value/`](evaluations/eisv-incremental-value/) — episode and federation-pilot schemas
 - [`kg-agent-adoption/`](evaluations/kg-agent-adoption/) — enrollment schema and canary receipts
+- [`kg-memory-workflow-refinement.md`](evaluations/kg-memory-workflow-refinement.md) — KG memory workflow observations from planning replay
 - [`orientation-constraint-set/`](evaluations/orientation-constraint-set/) — diagnostic orientation constraint set: enrollments and registered results
 - [`production-snapshots/`](evaluations/production-snapshots/) — machine-readable snapshots behind [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)
 - [`relational-calibration-instrument-supply/`](evaluations/relational-calibration-instrument-supply/) — registered instrument-supply read
@@ -171,9 +176,10 @@ date; none is a deployed contract:
 - [`contraction-proof-audit-2026-10-12.md`](analysis/contraction-proof-audit-2026-10-12.md) — audit of the v6 contraction proof and discrete RK4 one-step counterexample
 - [`integrator-shadow-2026-10-12.md`](analysis/integrator-shadow-2026-10-12.md) — offline synthetic shadow comparison for the substepped RK4 candidate
 - [`shadow-overhead-and-mirror-review-2026-10-12.md`](analysis/shadow-overhead-and-mirror-review-2026-10-12.md) — synthetic overhead benchmark and session-mirror consumer review
-- [`tagged-search-closure-2026-10-13.md`](analysis/tagged-search-closure-2026-10-13.md) — dialectic closure benchmark and live probe evidence for tagged KG search
+- [`tagged-search-closure-2026-10-13.md`](analysis/tagged-search-closure-2026-10-13.md) — dialectic closure benchmark and live probe evidence for tagged KG search (companions: [`tagged-search-benchmark-2026-10-13.json`](analysis/tagged-search-benchmark-2026-10-13.json), [`tagged-search-live-probes-2026-10-13.json`](analysis/tagged-search-live-probes-2026-10-13.json))
 - [`shadow-reads-2026-10-14.md`](analysis/shadow-reads-2026-10-14.md) — descriptive 30-day reads of the coherence-gate and legacy-coherence identity shadows
 - [`envelope-field-audit-2026-10-19.md`](analysis/envelope-field-audit-2026-10-19.md) — bounded audit of canonical handler fields dropped by `build_experience_envelope` (`#2125`)
+- [`behavioral-self-loop-shadow-read-2026-11-18.md`](analysis/behavioral-self-loop-shadow-read-2026-11-18.md) — per-era read of the behavioral sensor self-loop neutralization shadows
 
 ### `plans/` — dated plans and review records
 
