@@ -77,6 +77,7 @@ _EXPLICIT_TARGET_CALLS = call_set(
     "inject_identity.explicit_target",
     actions={("agent", "archive"), ("agent", "delete")},
 )
+EXPLICIT_TARGET_CALLS = _EXPLICIT_TARGET_CALLS
 
 
 # Reserved dispatch metadata must never be trusted merely because a caller used
@@ -153,9 +154,9 @@ def _bound_identity_aliases(bound_id: str) -> set[str]:
         pass
 
     try:
-        from ..identity.shared import _session_identities
+        from ..identity.shared import get_session_identities
 
-        for binding in _session_identities.values():
+        for binding in get_session_identities().values():
             if binding.get("bound_agent_id") == bound_id or binding.get("agent_uuid") == bound_id:
                 for key in ("display_agent_id", "public_agent_id", "agent_label", "label"):
                     value = binding.get(key)

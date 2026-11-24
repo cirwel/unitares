@@ -225,6 +225,11 @@ def _dtw_similarity(s1: List[float], s2: List[float]) -> float:
     return math.exp(-dist * 2.0)
 
 
+def dtw_similarity(s1: List[float], s2: List[float]) -> float:
+    """Public DTW similarity score in [0, 1] between two numeric series."""
+    return _dtw_similarity(s1, s2)
+
+
 def _eisv_trajectory_similarity(
     sig1: "TrajectorySignature",
     sig2: "TrajectorySignature",
