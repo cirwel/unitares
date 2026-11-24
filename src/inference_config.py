@@ -46,7 +46,9 @@ JOB_MODES: Mapping[str, str] = {
     "pr_review": "collect_families",
 }
 JOB_HOST_CAP: Mapping[str, int] = {"first_answer": 3, "collect_families": 4}
-SKIP_REASONS: tuple[str, ...] = ("disabled", "unconfigured", "cooldown", "excluded_family", "egress")
+SKIP_REASONS: tuple[str, ...] = (
+    "disabled", "unconfigured", "cooldown", "excluded_family", "egress", "insufficient_budget",
+)
 
 # Builtins stay in code (proposal 2.2); the file may switch one off, set its
 # family, and list it in jobs. The default family is the family of the model

@@ -86,6 +86,15 @@ These are additive diagnostic fields within the existing normalized envelope;
 the capability catalog and input schemas do not change, so the interface
 contract version and digests do not move.
 
+### Thorough consultation failover
+
+The closed vocabulary for `skipped[].reason` includes `disabled`, `unconfigured`,
+`cooldown`, `excluded_family`, `egress`, and `insufficient_budget`. During
+`consult` failover, `insufficient_budget` means the host is available but its
+full attempt would exceed the remaining budget. The scan continues in the
+operator's order. It adds skips only when it finds a host to try, and records
+a single `failover` hop from the failed host to that next attempt.
+
 ## Core workflow and advanced capabilities
 
 The [capability guide](CAPABILITIES_AND_DEPLOYMENT.md) presents identity,
@@ -653,9 +662,9 @@ job is set, which is the order the per-family peer table gave. Results:
 - `family` (compact and full) names the served host's model family, and the
   audit record's route carries it.
 - `skipped` lists the hosts passed over before the one that served, in order,
-  each with a closed reason code (`disabled`, `unconfigured`, `cooldown`,
-  `excluded_family`) and a sentence. It appears only when a host was skipped,
-  and never on `privacy="local"`, which contacts no thorough host.
+  each with a reason code and a sentence. See [Thorough consultation failover](#thorough-consultation-failover)
+  for the current closed set of reason codes. `skipped` appears only when a host
+  was skipped and is omitted for `privacy="local"`.
 - New refusals: `INFERENCE_CONFIG_INVALID` (the hosts file does not load; the
   standard lane is unaffected), `CONSULT_NO_ELIGIBLE_HOST` (every host in the
   job was skipped; with `allow_degraded=true` the call answers locally

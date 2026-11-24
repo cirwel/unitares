@@ -2045,19 +2045,61 @@ class TestHandleAggregateMetrics:
 
     @pytest.mark.asyncio
     async def test_specific_agent_ids_scopes_query(self):
-        """When agent_ids passed, the SQL uses WHERE a.id = ANY($1::text[])."""
+        """When agent_ids passed, every rollup and current-epoch distribution
+        query filters by agent_ids, and scope_note documents the restriction."""
         conn = _FakeAggregateConn(
             state_row={**_FakeAggregateConn().__dict__["_state_row"], "total_agents": 1, "agents_with_data": 1},
+            pauses_this_epoch=2,
+            proceed_this_epoch=5,
+            verdict_rows=[{"verdict": "plausible", "n": 3}],
         )
         ids = ["aaaaaaaa-bbbb-cccc-dddd-111111111111"]
         with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            await handle_aggregate_metrics({"agent_ids": ids})
+            result = await handle_aggregate_metrics({"agent_ids": ids})
 
         # First fetchrow after epoch lookup is the state rollup with the scope
         state_call = [c for c in conn.fetchrow_calls if "scope" in c[0]][0]
         assert "ANY($1::text[])" in state_call[0]
         assert state_call[1] == (ids,)
+
+        # Pauses, proceed outcomes, and R1 verdicts must also be scoped to agent_ids
+        pause_call = [c for c in conn.fetchval_calls if "lifecycle_paused" in c[0]][0]
+        assert "agent_id = ANY($2::text[])" in pause_call[0]
+        assert pause_call[1][1] == ids
+
+        proceed_call = [c for c in conn.fetchval_calls if "trajectory_validated" in c[0]][0]
+        assert "agent_id = ANY($2::text[])" in proceed_call[0]
+        assert proceed_call[1][1] == ids
+
+        verdict_call = [c for c in conn.fetch_calls if "r1_score_audit" in c[0]][0]
+        assert "ANY($2::text[])" in verdict_call[0]
+        assert verdict_call[1][1] == ids
+
+        agg = parse_result(result)["aggregate"]
+        assert agg["pauses_this_epoch"] == 2
+        assert agg["decision_distribution"] == {"proceed": 5, "pause": 2, "total": 7}
+        assert agg["verdict_distribution"] == {
+            "safe": 3,
+            "caution": 0,
+            "high-risk": 0,
+            "total": 3,
+        }
+        assert "restricted to the 1 requested agent_ids" in agg["scope_note"]
+
+    @pytest.mark.asyncio
+    async def test_ignored_window_parameters_disclosed_in_scope_note(self):
+        """Passing since/until/window_hours to action='aggregate' surfaces
+        ignored_parameters and a scope_note rather than silently dropping them."""
+        conn = _FakeAggregateConn()
+        with _patch_db(conn):
+            from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
+            result = await handle_aggregate_metrics({"since": "1h"})
+
+        agg = parse_result(result)["aggregate"]
+        assert agg["ignored_parameters"] == ["since"]
+        assert "Ignored since" in agg["scope_note"]
+        assert "always summarizes the current epoch" in agg["scope_note"]
 
     @pytest.mark.asyncio
     async def test_health_breakdown_excluded(self):
