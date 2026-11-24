@@ -57,7 +57,6 @@ import argparse
 import ast
 import re
 import subprocess
-import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
