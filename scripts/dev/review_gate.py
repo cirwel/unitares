@@ -255,26 +255,36 @@ def require_operator_account() -> None:
         raise SystemExit("review_gate: operator-only actions require a user account, not a bot")
 
 
+#: GitHub's answer to GET /user from an installation token (App or Actions).
+INTEGRATION_REFUSAL = "Resource not accessible by integration"
+
+
 def require_agent_credential() -> None:
     """Agent record writes must never go out under a person's GitHub login.
 
     Records, dispositions and review requests post with whatever gh credential
     is in effect. Outside the App runner that is the operator's own login, and
     GitHub then shows the operator as the author of an agent's review. This
-    refuses a user account before any reviewer runs. App installation tokens
-    and the Actions token cannot read GET /user, so a failed read means "not a
-    user": the write proceeds, or fails on its own. Operator-only commands
-    (waive) call require_operator_account instead.
+    runs before any reviewer does, and fails closed: the only answer that lets
+    a write proceed is GitHub's refusal of GET /user to an integration, which
+    is how App installation tokens and the Actions token answer. A user
+    account, an outage, a transport error or an unreadable reply all refuse.
+    Operator-only commands (waive) call require_operator_account instead.
     """
-    try:
-        actor = gh_json("api", "user")
-    except (SystemExit, subprocess.SubprocessError, ValueError):
+    proc = _launch(["gh", "api", "user"], text=True, capture_output=True)
+    if proc.returncode != 0 and INTEGRATION_REFUSAL in (proc.stdout or "") + (proc.stderr or ""):
         return
-    if isinstance(actor, dict) and actor.get("type") == "User":
-        raise SystemExit(
-            f"review_gate: refusing to post as the GitHub user {actor.get('login')!r}. "
-            "Agent review writes go through the agents' App: run "
-            "`unitares-github -- review ...` from this checkout instead.")
+    route = ("Agent review writes go through the agents' App: run "
+             "`unitares-github -- review ...` from this checkout instead.")
+    if proc.returncode != 0:
+        raise SystemExit("review_gate: could not confirm the posting credential is an App token "
+                         f"(GET /user: {(proc.stderr or '').strip()[:200] or 'no answer'}). {route}")
+    try:
+        actor = json.loads(proc.stdout)
+    except ValueError:
+        actor = None
+    login = actor.get("login") if isinstance(actor, dict) else None
+    raise SystemExit(f"review_gate: refusing to post as the GitHub account {login!r}. {route}")
 
 
 # Every PR read and write here goes through REST (`gh api`), never `gh pr`

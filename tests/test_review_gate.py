@@ -1227,21 +1227,34 @@ def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(
         rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
 
 
-def test_agent_writes_refuse_a_user_login(monkeypatch):
-    monkeypatch.setattr(rg, "gh_json", lambda *a: {"type": "User", "login": "someone"})
+def _user_lookup(monkeypatch, returncode, stdout="", stderr=""):
+    def launch(cmd, **kwargs):
+        assert cmd == ["gh", "api", "user"]
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    monkeypatch.setattr(rg, "_launch", launch)
+
+
+def test_agent_writes_accept_only_githubs_integration_refusal(monkeypatch):
+    # What `gh api user` prints under an App installation token.
+    _user_lookup(monkeypatch, 1,
+                 '{"message":"Resource not accessible by integration","status":"403"}',
+                 "gh: Resource not accessible by integration (HTTP 403)\n")
+    _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+@pytest.mark.parametrize("stdout", ['{"type": "User", "login": "someone"}', '{}', 'not json'])
+def test_agent_writes_refuse_any_account_that_can_read_user(monkeypatch, stdout):
+    _user_lookup(monkeypatch, 0, stdout)
     with pytest.raises(SystemExit, match="unitares-github -- review"):
         _REAL_REQUIRE_AGENT_CREDENTIAL()
 
 
-@pytest.mark.parametrize("actor", [None, {"type": "Bot"}, {}, []])
-def test_agent_writes_accept_app_and_actions_tokens(monkeypatch, actor):
-    def identity(*args):
-        assert args == ("api", "user")
-        if actor is None:
-            raise SystemExit("HTTP 403: Resource not accessible by integration")
-        return actor
-    monkeypatch.setattr(rg, "gh_json", identity)
-    _REAL_REQUIRE_AGENT_CREDENTIAL()
+@pytest.mark.parametrize("stderr", ["gh: Service Unavailable (HTTP 503)\n",
+                                    "error connecting to api.github.com\n", ""])
+def test_agent_writes_fail_closed_when_the_lookup_fails(monkeypatch, stderr):
+    _user_lookup(monkeypatch, 1, "", stderr)
+    with pytest.raises(SystemExit, match="could not confirm"):
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
 
 
 def test_record_post_checks_the_credential_but_a_waiver_does_not(monkeypatch):
