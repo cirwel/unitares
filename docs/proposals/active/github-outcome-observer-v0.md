@@ -122,7 +122,7 @@ Choices part 1 made inside §4, for the part 2 reviewer to confirm or change:
 
 - *P1, grading CI.* A `test_failed` row for every red run on an open PR, once per workflow and re-run, contradicts the 2026-10-23 direction and biases the labels toward the agents that iterate in the open. Changed: merges only. Which CI verdict should grade, if any (for example post-merge CI on the merge commit), is left to §8.4.
 - *P1, outcomes after a 409.* The first draft posted an outcome whenever the event route answered 409, which could grade an event this observer never validated, or with a footer edited since. Changed: the pending queue above.
-- *P1, duplicates.* The harness route has no idempotency key. Kept as a residual: an outcome whose write committed but whose answer was lost is sent again, so a duplicate row is possible there. Two cases record no outcome by design: the ambiguous footers above, and a merge another writer had already stored whose first attempt from this store lost its answer (its 409 cannot be told from this store's own). The fix is server-side (an idempotency key on `POST /v1/harness/outcome`, or a unique index on `detail->>'github_event_fingerprint'`), a follow-up outside this change.
+- *P1, duplicates.* The harness route has no idempotency key. Kept as a residual: an outcome whose write committed but whose answer was lost is sent again, so a duplicate row is possible there. The ambiguous footers above record no outcome by design. One case is graded on an unconfirmed claim: when another writer stored the merge while this store's attempt lost its answer, the next 409 cannot be told from one for this store's own write, so the outcome is released with that attempt's footer, which the event route may never have checked; a second row is possible if the other writer grades the merge too. The fix is server-side (an idempotency key on `POST /v1/harness/outcome`, or a unique index on `detail->>'github_event_fingerprint'`), a follow-up outside this change.
 - *P2, silent 400.* Changed: 400 and 422 are counted and fail the poll.
 - *P2, snapshot timing.* An outcome is joined to the agent's EISV state when it is ingested, which can be up to one poll interval (and any retry delay) after the merge. Recorded here; not changed.
 - *P2, producer.* The rows are told apart from other `external_signal` rows only by `detail.producer`. Recorded; a separate verification source would be a new label channel by the stop rule's definition, which this change avoids.
@@ -137,6 +137,10 @@ A second review of the reworked head (shared review host, Google family, 2026-11
 A third review (same host, Google family, on the merged head) found one:
 
 - *Ambiguity decided too early.* Two unanswered attempts with different footers marked the outcome done at once, so a later 201, which shows neither attempt stored the event, released nothing. Changed: those attempts leave a marker in the queue; a 201 releases the event as posted and only a 409 drops the outcome as ambiguous.
+
+A fourth review (same host, Google family, of 6122c0d) found one:
+
+- *A wrong claim in the docs.* The docstring and this section said a merge another writer stored, after this store's attempt lost its answer, records no outcome. The code records one, since the 409 looks the same as one for this store's own write. Changed: the docstring and the residual above now say so, including that the footer may be unchecked and a second row is possible.
 
 **What it changes, for the reviewer.**
 

@@ -43,9 +43,12 @@ row ``calibration_excluded``. No ``prediction_id`` is sent; that route ignores
 one by design. The queue is retried on every poll, independent of whether
 GitHub still lists the pull request. The route has no idempotency key, so an
 outcome whose write committed but whose answer was lost is sent again: a
-duplicate row is possible there. An outcome is not recorded in two cases: the
-ambiguous footers above, and a merge another writer stored whose first attempt
-here lost its answer, which a 409 cannot tell from this store's own (§6b).
+duplicate row is possible there. The ambiguous footers above record no
+outcome. One case is graded on an unconfirmed claim: a merge another writer
+stored while this store's attempt lost its answer. The next 409 cannot be told
+from one for this store's own write, so the outcome is released with that
+attempt's footer, which the event route may never have checked, and a second
+row is possible if the other writer grades the merge too (§6b).
 """
 
 from __future__ import annotations
