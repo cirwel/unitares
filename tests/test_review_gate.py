@@ -5432,6 +5432,63 @@ def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_follow
     assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
 
 
+def test_sensitive_followup_skips_when_chosen_family_lacks_full_anchor(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    # Keep only the OpenAI full review; Anthropic has NO full-review anchor yet.
+    openai_only = comments[:1]
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'gemini/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: openai_only)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    seen_followup = []
+
+    def fake_review(args, pr, key, reviewer):
+        seen_followup.append(getattr(args, 'followup', None))
+        return 0
+
+    monkeypatch.setattr(rg, 'review_with_fallback', fake_review)
+    monkeypatch.setattr(rg, 'completed_review_exit', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    rc = rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude'))
+    assert rc == 0
+    assert seen_followup == [None], "claude must run a full pass rather than a follow-up that cannot credit anthropic"
+
+
+def test_sensitive_followup_kept_when_authors_unknown_or_budget_exhausted(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    openai_only = comments[:1]
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'gemini/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: openai_only)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'completed_review_exit', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+
+    # Case 1: unknown authors -> keep follow-up so we do not deadlock at the cap.
+    seen = []
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: set())
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda args, *a: (seen.append(getattr(args, 'followup', None)), 0)[1])
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert seen == [fix] or (len(seen) == 1 and seen[0] is not None)
+
+    # Case 2: known authors, but full-review cycle budget already exhausted -> keep follow-up.
+    seen.clear()
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert len(seen) == 1 and seen[0] is not None
+
+    # Case 3: operator waiver covers the second family -> keep follow-up instead of burning a cycle.
+    seen.clear()
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    monkeypatch.setattr(rg, 'waiver_reason_for', lambda *a: 'waived by operator')
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert len(seen) == 1 and seen[0] is not None
+
+
 def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):
     comments, fix = reviewed_followup
     fix.scope, fix.verdict = 'full-required', 'FAILED'
