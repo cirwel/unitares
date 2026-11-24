@@ -37,7 +37,7 @@ Around the entries: [Codex review recommendations](#codex-review-recommendations
 [Council review](#council-review--recorded-2026-09-12),
 [Why this packet exists](#why-this-packet-exists), [The order, and why](#the-order-and-why),
 [Reading the entries](#reading-the-entries), and after entry 7,
-[Evidence gaps and review observations](#evidence-gaps-and-review-observations). Other pending operator decisions are listed under [Pending operator decisions](README.md#pending-operator-decisions) in the current proposals index, merged there 2026-10-20 from the archived [2026-10-10 collection](../archive/open-decisions-other-2026-10-10.md); this packet is at its length baseline.
+[Evidence gaps and review observations](#evidence-gaps-and-review-observations). Other pending operator decisions are listed under [Pending operator decisions](../active/README.md#pending-operator-decisions) in the current proposals index, merged there 2026-10-20 from the archived [2026-10-10 collection](open-decisions-other-2026-10-10.md); this packet is at its length baseline.
 
 ---
 

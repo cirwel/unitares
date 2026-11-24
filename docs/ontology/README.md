@@ -23,7 +23,7 @@ Prefixes correspond to row IDs in [`plan.md`](plan.md):
 | sub-letter (`s8a`, `s21b`) | Phase or sub-item of the parent row | |
 | `v7-*` | Paper v7 alignment specs | |
 
-So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-token-retirement.md` resolves row S1; `s8a-tag-discipline-audit.md` is phase 1 of S8a (its phase 2 prep note is [archived](archive/s8a-phase2-prep.md)).
+So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-token-retirement.md` resolves row S1; both phases of S8a are now [archived](archive/s8a-tag-discipline-audit.md).
 
 ## Index by category
 
@@ -58,7 +58,6 @@ Every current document in this folder has one entry below. Dated notes that curr
 
 **System RFCs** (S-rows, *descriptive* cleanups):
 - [`s1-continuity-token-retirement.md`](s1-continuity-token-retirement.md) — token deprecation plan
-- [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) — tag discipline (phase 1; the phase 2 prep note is archived)
 - [`s10-fleet-aggregation-plan.md`](s10-fleet-aggregation-plan.md) — fleet aggregation
 - [`s15-server-side-skills.md`](s15-server-side-skills.md) — server-side skills surface
 - [`s21-session-resolution-bypass-incident.md`](s21-session-resolution-bypass-incident.md) — S21 incident record
@@ -70,13 +69,15 @@ Every current document in this folder has one entry below. Dated notes that curr
 - [`openshell-federation-fit-2026-10.md`](openshell-federation-fit-2026-10.md) — NVIDIA OpenShell read in full history: the enforcement-versus-record layer split, and four candidate opt-in federation seams (gateway `post_commit`, OCSF ingest, in-sandbox MCP, subagent lineage)
 
 **Dated records kept in place**:
-- [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md); cited by the glossary's audit trail and the drift ledger
-- [`glossary-drift-audit-2026-09-18.md`](glossary-drift-audit-2026-09-18.md) — semantic re-sweep of the glossary (ODE coupling correction; V / coherence / drift / entropy homonyms); the newest audit is published on the public site by `scripts/dev/build_public_site.py`
+- [`glossary-drift-audit-2026-11-01.md`](glossary-drift-audit-2026-11-01.md) — latest semantic sweep of [`glossary.md`](glossary.md) (policy actuation, identity, evidence boundaries, and core vocabulary); published on the public site by `scripts/dev/build_public_site.py`
 
 ## Archived
 
 Dated notes in [`archive/`](archive/README.md). Archive placement does not reject a finding or change a decision recorded in the note; it says that no current document relies on the note except as provenance or a pointer to its full text.
 
+- [`archive/glossary-drift-audit-2026-06-20.md`](archive/glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md); cited by the glossary's audit trail and the drift ledger
+- [`archive/glossary-drift-audit-2026-09-18.md`](archive/glossary-drift-audit-2026-09-18.md) — semantic re-sweep of the glossary (ODE coupling correction; V / coherence / drift / entropy homonyms); superseded by the 2026-11-01 audit
+- [`archive/s8a-tag-discipline-audit.md`](archive/s8a-tag-discipline-audit.md) — S8a Phase 1 tag-discipline audit (2026-04-23)
 - [`archive/frontier-brief-2026-09-24.md`](archive/frontier-brief-2026-09-24.md) — source check of an operator-supplied weekly frontier brief (Anthropic oversight metrics, OpenAI assessment principles, WorkWorlds, RoboHarm) mapped onto existing work; records the operator disposition that produced the outcome-binding assurance case
 - [`archive/frontier-brief-2026-10-05.md`](archive/frontier-brief-2026-10-05.md) — source check of the 2026-09-28 to 10-05 brief: configuration manifest as a join over existing write-context fields; the coordination ablation stopped on feasibility
 - [`archive/frontier-brief-2026-10-12.md`](archive/frontier-brief-2026-10-12.md) — source check of the 2026-10-05 to 10-12 brief: evaluation envelope, capability lease and revoke-between-plan-and-execute mapped onto the governed-effect plane; basis for the file-write custody recheck

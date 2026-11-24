@@ -15,7 +15,10 @@ cite as live reference stay in the parent folder.
 | [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) | MI9 and Auton triage. Superseded as the market map by [`competitive-analysis-2026-09.md`](../competitive-analysis-2026-09.md); its paper-positioning verdicts stand |
 | [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) | NeoHorse-1 triage: a training-plane neighbor that collides on the word *harness* |
 | [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) | Triage of the deferred and blocked ledger rows, folded into the preserved [June 14 ledger](../plan-2026-06-14.md) |
-| [`s8a-phase2-prep.md`](s8a-phase2-prep.md) | S8a Phase 2 prep diagnostic (2026-04-29); Phase 1 is [`s8a-tag-discipline-audit.md`](../s8a-tag-discipline-audit.md) |
+| [`s8a-phase2-prep.md`](s8a-phase2-prep.md) | S8a Phase 2 prep diagnostic (2026-04-29); Phase 1 is [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) |
+| [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) | S8a Phase 1 tag-discipline audit (2026-04-23), archived 2026-11-23 |
+| [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) | Initial vocabulary sweep that seeded [`glossary.md`](../glossary.md); superseded by newer sweeps, archived 2026-11-23 |
+| [`glossary-drift-audit-2026-09-18.md`](glossary-drift-audit-2026-09-18.md) | Semantic re-sweep of [`glossary.md`](../glossary.md) (ODE coupling and homonyms); superseded by [`glossary-drift-audit-2026-11-01.md`](../glossary-drift-audit-2026-11-01.md), archived 2026-11-23 |
 
 Older internal-dialogue notes from this folder were moved to the operator's
 private archive on 2026-05-21; see *Operator-archived docs* in the

@@ -7,7 +7,7 @@ A dialectic resolution record has two party-signature fields,
 attestation in them: each party's HMAC-SHA256 over the canonical payload,
 keyed on that party's ``api_key`` (``Resolution.compute_signature``). Minting
 those is retired (#2449, decided 2026-09-25 as D5 in
-``docs/proposals/active/federation-trust-decisions-2026-09-25.md``): the
+``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``): the
 server holds every key it would verify with, so the HMAC attested only the
 server's own write, and it was unverifiable by anyone who does not hold the
 keys, a second principal being exactly the party who cannot be handed them

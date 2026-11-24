@@ -24,7 +24,7 @@ process of writing; inspect its subsequent completion receipt when auditing it.
 
 For the dependency-ordered operational closure plan, immutable safety surfaces
 and registered adaptive-versus-fixed evaluation, see
-[Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
+[Bounded fix-loop readiness](archive/bounded-fix-loop-readiness.md).
 
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
 no dependencies). Run it from a checkout or install it on `PATH`. No particular

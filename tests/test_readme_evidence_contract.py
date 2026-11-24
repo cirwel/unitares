@@ -44,7 +44,7 @@ def test_detailed_qualifications_remain_on_the_evidence_surface() -> None:
         assert phrase in NORMALIZED_EVIDENCE
     for reference in (
         "operations/DEPLOYMENT_DATA_CAVEAT.md",
-        "proposals/active/federation-trust-decisions-2026-09-25.md",
+        "proposals/archive/federation-trust-decisions-2026-09-25.md",
         "UNIFIED_ARCHITECTURE.md",
     ):
         assert reference in EVIDENCE
