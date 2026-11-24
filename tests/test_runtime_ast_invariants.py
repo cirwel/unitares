@@ -403,3 +403,54 @@ async def ok(coro):
     ]
 
 
+def test_p004_reexport_unguarded_call_caught_and_subpackage_module_call_bounded(
+    tmp_path: Path,
+) -> None:
+    # 1. Subpackage `from . import persistence` + `wait_for(persistence._bounded_op())`
+    #    resolves cleanly as guarded without spurious unguarded-attribute hits.
+    _write(
+        tmp_path,
+        "src/mcp_handlers/sub/persistence.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
+
+async def _bounded_op(k: str):
+    r = await get_redis()
+    return await r.get(k) if r else None
+
+async def _reexported_leak(k: str):
+    r = await get_redis()
+    return await r.get(k) if r else None
+
+async def local_guarded_caller(k: str):
+    return await asyncio.wait_for(_reexported_leak(k), timeout=0.5)
+""",
+    )
+    _write(
+        tmp_path,
+        "src/mcp_handlers/sub/__init__.py",
+        "from .persistence import _reexported_leak\n",
+    )
+    _write(
+        tmp_path,
+        "src/mcp_handlers/sub/handlers.py",
+        """\
+import asyncio
+from . import persistence
+from src.mcp_handlers.sub import _reexported_leak
+
+async def good_caller(k: str):
+    return await asyncio.wait_for(persistence._bounded_op(k), timeout=0.5)
+
+async def bad_reexport_caller(k: str):
+    return await _reexported_leak(k)
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/mcp_handlers/sub/persistence.py", "P004", 10),
+    ]
+
+
+

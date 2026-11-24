@@ -245,7 +245,11 @@ class _ModuleImports:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
-                resolved_mod_rel = _resolve_import_rel_path(rel_path, node.module, node.level)
+                resolved_mod_rel = (
+                    _resolve_import_rel_path(rel_path, node.module, node.level)
+                    if node.module
+                    else None
+                )
                 for alias in node.names:
                     local = alias.asname or alias.name
                     if alias.name in _TASK_SPAWN_NAMES:
@@ -260,12 +264,16 @@ class _ModuleImports:
                         self.monitor_names.add(local)
                     if mod.endswith("redis_client") and alias.name == "get_redis":
                         self.raw_redis_getters.add(local)
+                    # Check submodule import (`from . import persistence` or
+                    # `from src.mcp_handlers.identity import persistence`)
+                    submod_name = f"{node.module}.{alias.name}" if node.module else alias.name
+                    sub_rel = _resolve_import_rel_path(rel_path, submod_name, node.level)
+                    if sub_rel is not None:
+                        self.handler_mod_imports[local] = sub_rel
                     if resolved_mod_rel is not None:
                         self.handler_func_imports[local] = (resolved_mod_rel, alias.name)
                     elif node.level > 0 and not node.module:
-                        sub_rel = _resolve_import_rel_path(rel_path, alias.name, node.level)
-                        if sub_rel is not None:
-                            self.handler_mod_imports[local] = sub_rel
+                        pass
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     local = alias.asname or alias.name.split(".")[-1]
@@ -447,15 +455,22 @@ def _resolve_callee_targets(
         if name in defined_by_module.get(rel_path, ()):
             return {(rel_path, name)}, True
         if name in imports.handler_func_imports:
-            target = imports.handler_func_imports[name]
-            if target[1] in defined_by_module.get(target[0], ()):
-                return {target}, True
+            target_rel, orig_name = imports.handler_func_imports[name]
+            if orig_name in defined_by_module.get(target_rel, ()):
+                return {(target_rel, orig_name)}, True
+            # Imported from a package `__init__.py` or re-export module (e.g.
+            # `from src.mcp_handlers.identity import _h` or `from .shared import _h`):
+            # fall back conservatively across matching helper names so an
+            # unguarded re-exported call cannot slip past P004.
+            return set(all_by_bare_name.get(orig_name, ())), False
         return set(), True
     if recv in imports.handler_mod_imports:
         t_rel = imports.handler_mod_imports[recv]
-        if name in defined_by_module.get(t_rel, ()):
-            return {(t_rel, name)}, True
-        return set(), True
+        if t_rel in defined_by_module:
+            if name in defined_by_module[t_rel]:
+                return {(t_rel, name)}, True
+            # Re-exported attribute on an imported handler module (`shared._h()`)
+            return set(all_by_bare_name.get(name, ())), False
     # Dynamic/unknown attribute receiver (e.g. `self._h()` or `obj._h()`):
     # conservatively mark every matching helper name across handler modules as
     # potentially called unguarded so an unguarded attribute call cannot slip past.
@@ -531,9 +546,12 @@ def _scan_block_references(
                 else:
                     unguarded.update(targets)
 
-            # Walk arguments (skipping node.func when it is a bare Name so the
-            # callee identifier itself isn't misread as a callback reference).
-            if not isinstance(node.func, ast.Name):
+            # Walk arguments and receiver expression without re-visiting the
+            # callee Name/Attribute itself (which would misclassify a bounded
+            # `persistence._h()` call as an unguarded attribute value load).
+            if isinstance(node.func, ast.Attribute):
+                walk_expr(node.func.value, bounded=bounded)
+            elif not isinstance(node.func, ast.Name):
                 walk_expr(node.func, bounded=bounded)
             for arg in node.args:
                 walk_expr(arg, bounded=bounded)
