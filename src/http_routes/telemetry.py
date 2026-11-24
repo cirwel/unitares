@@ -6,8 +6,10 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+import weakref
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -187,6 +189,16 @@ async def http_eisv_agents(request):
 
 _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
 _eisv_telemetry_health_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_eisv_telemetry_health_locks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[int, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def _eisv_telemetry_health_lock(days: int) -> asyncio.Lock:
+    """Return a per-window single-flight lock scoped to the running event loop."""
+    loop = asyncio.get_running_loop()
+    per_loop = _eisv_telemetry_health_locks.setdefault(loop, {})
+    return per_loop.setdefault(days, asyncio.Lock())
 
 
 async def http_eisv_telemetry_health(request):
@@ -216,21 +228,27 @@ async def http_eisv_telemetry_health(request):
     if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
         return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
 
-    try:
-        from src.db import get_db
-        from src.eisv_telemetry_health import query_eisv_telemetry_health
+    async with _eisv_telemetry_health_lock(days):
+        now = time.monotonic()
+        cached = _eisv_telemetry_health_cache.get(days)
+        if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
+            return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
 
-        db = get_db()
-        async with db.acquire() as conn:
-            report = await query_eisv_telemetry_health(conn, window_days=days)
-        _eisv_telemetry_health_cache[days] = (now, report)
-        return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
-    except Exception as exc:  # noqa: BLE001 — read-only operator surface
-        logger.error("EISV telemetry health query failed: %s", exc)
-        return JSONResponse(
-            {"success": False, "error": "telemetry health query failed"},
-            status_code=500,
-        )
+        try:
+            from src.db import get_db
+            from src.eisv_telemetry_health import query_eisv_telemetry_health
+
+            db = get_db()
+            async with db.acquire() as conn:
+                report = await query_eisv_telemetry_health(conn, window_days=days)
+            _eisv_telemetry_health_cache[days] = (time.monotonic(), report)
+            return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
+        except Exception as exc:  # noqa: BLE001 — read-only operator surface
+            logger.error("EISV telemetry health query failed: %s", exc)
+            return JSONResponse(
+                {"success": False, "error": "telemetry health query failed"},
+                status_code=500,
+            )
 
 
 _GOVERNANCE_TREND_CACHE_TTL_SECONDS = 600.0

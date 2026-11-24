@@ -170,6 +170,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -962,6 +963,105 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
     return 0
 
 
+def _git_bytes(root: str, *args: str) -> bytes | None:
+    proc = subprocess.run(
+        ["git", "-C", root, *args],
+        capture_output=True, check=False,
+    )
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def check_merged_skills(root: str, projects_root: str, base_ref: str) -> int:
+    """Check working-tree freshness, then simulate merging ``base_ref`` into HEAD.
+
+    CI evaluates skill freshness on the PR merge commit (``refs/pull/N/merge``),
+    so a branch that passes locally can still fail CI when ``base_ref`` also
+    edited a cited source file. Uses read-only ``git merge-tree --write-tree``
+    without touching the working tree or index.
+    """
+    rc = check_skills(root, projects_root)
+    if rc != 0:
+        return rc
+
+    if _git_bytes(root, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}") is None:
+        print(
+            f"  [{RED}ERROR{NC}] merged freshness check unavailable: ref {base_ref!r} could not be resolved",
+            file=sys.stderr,
+        )
+        return 2
+
+    head_tree_bytes = _git_bytes(root, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
+    merge_proc = subprocess.run(
+        ["git", "-C", root, "merge-tree", "--write-tree", base_ref, "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    if merge_proc.returncode != 0:
+        if merge_proc.returncode == 1:
+            print(f"  [{YELLOW}WARN{NC}] merged freshness check skipped: HEAD conflicts with {base_ref}")
+            return 0
+        print(
+            f"  [{RED}ERROR{NC}] merged freshness check unavailable "
+            f"(git merge-tree exit {merge_proc.returncode}; needs git 2.38+)",
+            file=sys.stderr,
+        )
+        return 2
+    tree_oid = merge_proc.stdout.splitlines()[0].strip() if merge_proc.stdout else ""
+    if not tree_oid:
+        return 0
+    if head_tree_bytes is not None and head_tree_bytes.decode("ascii", "replace").strip() == tree_oid:
+        return 0
+
+    skill_paths_raw = _git_bytes(root, "ls-tree", "-r", "--name-only", tree_oid, "skills")
+    if not skill_paths_raw:
+        return 0
+
+    with tempfile.TemporaryDirectory(prefix="unitares-skill-merge-") as tmpdir:
+        tmp_root = Path(tmpdir)
+        for rel in skill_paths_raw.decode("utf-8", "replace").splitlines():
+            rel = rel.strip()
+            if not rel:
+                continue
+            blob = _git_bytes(root, "show", f"{tree_oid}:{rel}")
+            if blob is None:
+                continue
+            dest = tmp_root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(blob)
+
+        cited_local: set[str] = set()
+        skills_dir = tmp_root / "skills"
+        if skills_dir.is_dir():
+            for skill_dir in sorted(skills_dir.iterdir()):
+                skill_file = skill_dir / "SKILL.md"
+                if not skill_file.exists():
+                    continue
+                meta = parse_frontmatter(skill_file.read_text())
+                if not meta:
+                    continue
+                for src in load_source_files(skill_dir, meta["source_files"]):
+                    raw_path, _ = split_anchor(src)
+                    if raw_path.startswith(THIS_REPO_PREFIX):
+                        cited_local.add(raw_path[len(THIS_REPO_PREFIX):])
+
+        for rel in sorted(cited_local):
+            blob = _git_bytes(root, "show", f"{tree_oid}:{rel}")
+            if blob is None:
+                continue
+            dest = tmp_root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(blob)
+
+        print(f"Checking merged skill freshness against {base_ref} (simulated merge {tree_oid[:12]})...")
+        merged_rc = check_skills(str(tmp_root), projects_root)
+        if merged_rc != 0:
+            print()
+            print(
+                f"Merged freshness check against {base_ref} failed: CI's merge commit would be "
+                f"STALE. Merge {base_ref} locally, re-check the cited claims, and --stamp before pushing."
+            )
+        return merged_rc
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("root", help="repository root; skills live in <root>/skills")
@@ -979,6 +1079,9 @@ def main(argv: list[str]) -> int:
                        help="move frontmatter source_digests blocks into attestations")
     group.add_argument("--prune", type=int, metavar="KEEP",
                        help="keep only the newest KEEP attestations per skill")
+    group.add_argument("--merged-with", metavar="REF",
+                       help=("also check freshness on a read-only simulated merge of REF into HEAD "
+                             "(catches CI merge-commit staleness before pushing)"))
     args = parser.parse_args(argv)
     if args.stamp:
         return stamp_skills(args.root, args.projects_root, args.stamp)
@@ -986,6 +1089,8 @@ def main(argv: list[str]) -> int:
         return migrate_skills(args.root)
     if args.prune is not None:
         return prune_attestations(args.root, args.projects_root, args.prune)
+    if args.merged_with:
+        return check_merged_skills(args.root, args.projects_root, args.merged_with)
     return check_skills(args.root, args.projects_root)
 
 

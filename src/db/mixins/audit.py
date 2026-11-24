@@ -477,8 +477,19 @@ async def count_eisv_sync_events_by_agents(
     )
 
 
-async def count_lifecycle_pauses_since(conn, epoch_started_at) -> int:
+async def count_lifecycle_pauses_since(
+    conn, epoch_started_at, agent_ids: Optional[List[str]] = None
+) -> int:
     """Count `lifecycle_paused` audit events since `epoch_started_at`."""
+    if agent_ids is not None:
+        pause_sql = """
+            SELECT count(*)::int FROM audit.events
+            WHERE ts >= $1 AND event_type = 'lifecycle_paused'
+              AND agent_id = ANY($2::text[])
+        """
+        return int(
+            (await conn.fetchval(pause_sql, epoch_started_at, list(agent_ids))) or 0
+        )
     pause_sql = """
         SELECT count(*)::int FROM audit.events
         WHERE ts >= $1 AND event_type = 'lifecycle_paused'
