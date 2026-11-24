@@ -267,7 +267,7 @@ decision to keep a symmetric stack, with asymmetric DPoP shelved on 2026-04-19,
 covers agent identity (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md));
 it was not a decision to keep the party HMAC. Minting it is retired (decided
 2026-09-25 as D5 in
-[`federation-trust-decisions-2026-09-25.md`](proposals/active/federation-trust-decisions-2026-09-25.md),
+[`federation-trust-decisions-2026-09-25.md`](proposals/archive/federation-trust-decisions-2026-09-25.md),
 implemented in [#2449](https://github.com/cirwel/unitares/issues/2449)): new
 resolutions carry `signature_version` 3 with both signature fields empty, and
 `describe_attestation` reports them as `unsigned` by design. Historical rows are
@@ -307,7 +307,7 @@ than removing them. The decision genuinely upstream of any exchange work is
 therefore which verification semantics a multi-principal deployment requires;
 what key material that implies follows from it, and is not settled here. No
 multi-principal trust work is scheduled to settle it: D3a of the
-[decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+[decision record](proposals/archive/federation-trust-decisions-2026-09-25.md)
 records it as not scheduled without external funding or an outside principal,
 because as of 2026-09-25 no second principal and no external verifier exist.
 The recorded wake conditions are a real outside party, a person or

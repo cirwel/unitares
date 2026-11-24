@@ -1,8 +1,11 @@
 """Shared helper for agents to post findings to /api/findings.
 
 Best-effort fire-and-forget — never raises, never blocks the agent.
-Localhost callers bypass bearer auth via _is_trusted_network(); the
-token is only sent if UNITARES_HTTP_API_TOKEN is set in env.
+When ``UNITARES_FINDINGS_AGENT_TOKEN`` is set (or an explicit ``token`` is
+passed), that per-agent ``findings``-scoped bearer is sent so Core can attach
+server-verified actor provenance. Otherwise the client falls back to the
+standard ``UNITARES_HTTP_API_TOKEN`` / ``UNITARES_MCP_BEARER_TOKEN`` resolution
+(and loopback callers still work on local trusted networks when unset).
 """
 
 from __future__ import annotations
@@ -76,6 +79,18 @@ DEFAULT_URL = os.environ.get(
     "UNITARES_FINDINGS_URL", "http://localhost:8767/api/findings"
 )
 DEFAULT_TIMEOUT_SECONDS = 3.0
+FINDINGS_AGENT_TOKEN_ENV = "UNITARES_FINDINGS_AGENT_TOKEN"
+
+
+def resolve_findings_bearer_token(
+    explicit_token: Optional[str] = None,
+) -> Optional[str]:
+    """Optional per-agent findings-scoped bearer for POST /api/findings; falls back to HTTP/MCP env tokens when unset."""
+    if explicit_token is not None:
+        stripped = explicit_token.strip()
+        return stripped or None
+    env_token = os.environ.get(FINDINGS_AGENT_TOKEN_ENV, "").strip()
+    return env_token or None
 
 # Wave 3 §3.2 (prereq PR #10): one bounded retry on HTTP 503, honoring the
 # server's Retry-After header / retry_after_seconds body field. Capped low —
@@ -179,6 +194,7 @@ def post_finding_result(
     extra: Optional[dict] = None,
     url: str = DEFAULT_URL,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    token: Optional[str] = None,
 ) -> str:
     """POST a finding and report which of DELIVERED / DEDUPED / FAILED happened.
 
@@ -244,9 +260,11 @@ def post_finding_result(
             resp_inner = _httpx_post(url, json=body, headers=headers, timeout=timeout)
         return resp_inner
 
+    resolved_token = resolve_findings_bearer_token(token)
     try:
         resp = send_with_bearer_fallback(
             _post_with_headers,
+            explicit_token=resolved_token,
             base_url=url,
             json_body=True,
         )

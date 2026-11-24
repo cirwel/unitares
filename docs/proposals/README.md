@@ -31,7 +31,10 @@ did not flag keep the 2026-09-03 reading. A re-read on **2026-10-18** retagged e
 rows whose shipped work, flag state or landed decision had overturned the tag
 (Built, Built (partial), Built (dormant), Closed); and, at the operator's
 selection, parked six Active rows untouched for 30 days with nothing in flight
-waiting on them. The tags are not a current work queue or permission
+waiting on them. A further re-read on **2026-11-23** retagged shipped rows
+whose status had moved, moved already-Closed/Parked and completed one-off specs
+to `archive/`, and parked or closed untouched >30d proposals at the operator's
+selection. The tags are not a current work queue or permission
 to build. In particular, an Active row can be blocked or already partly built.
 Read its body and linked implementation before choosing work.
 
@@ -44,7 +47,7 @@ Read its body and linked implementation before choosing work.
 | **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
 
 Current counts:
-Built 45 · Registered 7 · Active 27 · Parked 29 · Closed 33
+Built 53 · Registered 7 · Active 11 · Parked 35 · Closed 36
 
 These counts cover the tagged entries across all three indexes. They include
 the 19 older records previously indexed under `resolved/`, tagged from their own

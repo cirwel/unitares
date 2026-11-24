@@ -98,7 +98,7 @@ original inputs, root misses, derived-source mismatch, audit-validation failure
 and later calibration contamination remain unchanged adverse evidence. This
 run used a separate corpus/task enrollment and does not repair that result.
 
-The [prospective protocol](../../proposals/active/kg-agent-adoption-matched-corpus-v1.md)
+The [prospective protocol](../../proposals/archive/kg-agent-adoption-matched-corpus-v1.md)
 still requires a separate model-assisted enrollment and operator decisions for
 scientific thresholds, utility weights and stop rules before a scored study.
 Earlier temporary PostgreSQL test instances violated the repository policy;

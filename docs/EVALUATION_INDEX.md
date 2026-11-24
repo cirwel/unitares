@@ -132,7 +132,7 @@ computed from the unrounded p (`SIGNAL_CANDIDATE` means `p ≤ 0.05`). Where it
 reads `SIGNAL_CANDIDATE`, condition 2 holds by the implication even when the
 two printed columns look equal. The
 condition-2 option record is
-[`open-decisions-packet-v0.md`](proposals/active/open-decisions-packet-v0.md),
+[`open-decisions-packet-v0.md`](proposals/archive/open-decisions-packet-v0.md),
 entry 3 (D5). D5 was disposed on 2026-10-16 under the operator's delegation:
 no note goes inside the stop rule.
 
@@ -140,7 +140,7 @@ no note goes inside the stop rule.
 selective null permutes `(agent, prior-state snapshot)` blocks across agents.
 Between-agent heterogeneity alone can therefore clear conditions 1 and 2. The
 existence proof is in
-[`open-decisions-packet-v0.md`](proposals/active/open-decisions-packet-v0.md)
+[`open-decisions-packet-v0.md`](proposals/archive/open-decisions-packet-v0.md)
 entry 2 (D6), and the unit-of-resampling problem is the 2026-08-23 Unit check.
 D6 was disposed as option A, so no stratified null is added.
 

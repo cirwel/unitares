@@ -29,7 +29,7 @@ that rule owns the maintainer-deployment outcome question and its fixed
 for, or informs it.** The interlocks are in §3 and are the load-bearing part of
 this document.
 
-Companion to [`eisv-grounding-next-move-v0.md`](../active/eisv-grounding-next-move-v0.md)
+Companion to [`eisv-grounding-next-move-v0.md`](eisv-grounding-next-move-v0.md)
 (the design tournament that named bad-label supply as the binding constraint)
 and [`independent-operator-cohort-preregistration-v0.md`](../registered/independent-operator-cohort-preregistration-v0.md)
 (which addresses a different gap — external validity, not label supply).
