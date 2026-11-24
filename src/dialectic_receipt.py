@@ -7,7 +7,7 @@ A dialectic resolution record has two party-signature fields,
 attestation in them: each party's HMAC-SHA256 over the canonical payload,
 keyed on that party's ``api_key`` (``Resolution.compute_signature``). Minting
 those is retired (#2449, decided 2026-09-25 as D5 in
-``docs/proposals/active/federation-trust-decisions-2026-09-25.md``): the
+``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``): the
 server holds every key it would verify with, so the HMAC attested only the
 server's own write, and it was unverifiable by anyone who does not hold the
 keys, a second principal being exactly the party who cannot be handed them
@@ -96,8 +96,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.identity.agent_identity_credential import (
     AICError,
-    _b64u_decode,
-    _b64u_encode,
+    b64u_decode,
+    b64u_encode,
     key_id,
     load_signing_key_if_configured,
 )
@@ -253,11 +253,11 @@ def mint_resolution_receipt(
         "signature_version": record.get("signature_version"),
         "both_signatures_present": bool(record.get("signature_a")) and bool(record.get("signature_b")),
     }
-    payload_b64 = _b64u_encode(
+    payload_b64 = b64u_encode(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
     signature = signing_key.sign((RECEIPT_PREFIX + payload_b64).encode("ascii"))
-    return f"{RECEIPT_PREFIX}{payload_b64}.{_b64u_encode(signature)}"
+    return f"{RECEIPT_PREFIX}{payload_b64}.{b64u_encode(signature)}"
 
 
 def attach_receipt_if_configured(
@@ -344,7 +344,7 @@ def _public_key_from_jwks(jwks: Any, kid: Any) -> "Ed25519PublicKey":
     if jwk.get("kty") != "OKP" or jwk.get("crv") != "Ed25519" or not isinstance(jwk.get("x"), str):
         raise ReceiptError("unsupported_key", "JWK is not an Ed25519 OKP key")
     try:
-        return Ed25519PublicKey.from_public_bytes(_b64u_decode(jwk["x"]))
+        return Ed25519PublicKey.from_public_bytes(b64u_decode(jwk["x"]))
     except Exception as exc:
         raise ReceiptError("unsupported_key", f"JWK public bytes are malformed: {exc}") from exc
 
@@ -413,8 +413,8 @@ def verify_resolution_receipt(
         raise ReceiptError("malformed", "receipt must be drr.v1.<payload>.<signature>")
     payload_b64, signature_b64 = parts
     try:
-        claims = json.loads(_b64u_decode(payload_b64))
-        signature = _b64u_decode(signature_b64)
+        claims = json.loads(b64u_decode(payload_b64))
+        signature = b64u_decode(signature_b64)
     except Exception as exc:
         raise ReceiptError("malformed", f"receipt is not decodable: {exc}") from exc
     if (

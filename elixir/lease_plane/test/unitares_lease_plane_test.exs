@@ -159,9 +159,98 @@ defmodule UnitaresLeasePlaneTest do
       assert reason == "down_local"
       _ = lease
     end
+
+    test "falls back to Repo.release and returns :not_found when holder exits after handoff",
+         ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      assert {:ok, handoff_id} =
+               UnitaresLeasePlane.handoff_offer(lease.lease_id, random_uuid(), 45)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      # Real handoff closes the old DB row and casts :handoff_released to pid.
+      assert :ok = UnitaresLeasePlane.handoff_accept(handoff_id)
+      task = Task.async(fn -> UnitaresLeasePlane.release(lease.lease_id, "normal") end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert {:error, :not_found} = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    test "falls back to Repo.release when holder exits normally while row is still active", ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      LeaseHolder.handoff_released(pid)
+      task = Task.async(fn -> UnitaresLeasePlane.release(lease.lease_id, "normal") end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert :ok = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+      assert {:ok, nil} = UnitaresLeasePlane.status(ctx.surface)
+    end
   end
 
   describe "renew/1" do
+    test "falls back to Repo.renew and returns :not_found when holder exits after handoff", ctx do
+      params = local_beam_params(ctx.surface, ttl_s: 60)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      assert {:ok, handoff_id} =
+               UnitaresLeasePlane.handoff_offer(lease.lease_id, random_uuid(), 45)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      assert :ok = UnitaresLeasePlane.handoff_accept(handoff_id)
+      task = Task.async(fn -> UnitaresLeasePlane.renew(lease.lease_id) end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert {:error, :not_found} = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    test "falls back to Repo.renew when holder exits normally while row is still active", ctx do
+      params = local_beam_params(ctx.surface, ttl_s: 60)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert {:ok, pid} = LeaseSupervisor.holder_for(lease.lease_id)
+
+      ref = Process.monitor(pid)
+      :ok = :sys.suspend(pid)
+      LeaseHolder.handoff_released(pid)
+      task = Task.async(fn -> UnitaresLeasePlane.renew(lease.lease_id) end)
+
+      assert wait_until(fn ->
+               match?({:message_queue_len, n} when n >= 2, Process.info(pid, :message_queue_len))
+             end)
+
+      :ok = :sys.resume(pid)
+
+      assert :ok = Task.await(task, 2_000)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
     test "extends expires_at by original_ttl_s", ctx do
       params = local_beam_params(ctx.surface, ttl_s: 60)
       assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
@@ -326,6 +415,93 @@ defmodule UnitaresLeasePlaneTest do
       assert {:ok, refreshed, :idempotent} = UnitaresLeasePlane.acquire_local_beam(params)
       assert refreshed.substrate_state == nil
       assert refreshed.substrate_state_observed_at == nil
+    end
+
+    test "update_substrate_on_idempotent release race preserves verified principal from acquire params" do
+      rand = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+      surface = "resident:/test_elixir_race_principal_#{rand}"
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      holder = random_uuid()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      substrate = %{"sensor" => %{"status" => "healthy"}}
+
+      # Seed an issuerless pre-084 row and release it to simulate a reaper race
+      # occurring between maybe_existing_active and the idempotent UPDATE.
+      assert {:ok, existing, :new} =
+               Repo.acquire(%{
+                 surface_id: surface,
+                 holder_agent_uuid: holder,
+                 holder_class: "process_instance",
+                 holder_kind: "remote_heartbeat",
+                 ttl_s: 60
+               })
+
+      assert existing.holder_issuer == nil
+      assert existing.holder_subject == nil
+      assert :ok = Repo.release(existing.lease_id, "reaped_remote_ttl")
+
+      attested_p = %{
+        surface_id: surface,
+        holder_agent_uuid: holder,
+        holder_issuer: "operator-a",
+        holder_subject: holder,
+        holder_class: "process_instance",
+        holder_kind: "remote_heartbeat",
+        ttl_s: 60,
+        substrate_state: substrate,
+        substrate_state_observed_at: observed_at
+      }
+
+      assert {:ok, {:ok, {:ok, replacement, :new}}} =
+               Postgrex.transaction(UnitaresLeasePlane.DB, fn conn ->
+                 Repo.update_substrate_on_idempotent(
+                   conn,
+                   attested_p,
+                   existing,
+                   substrate,
+                   observed_at
+                 )
+               end)
+
+      assert replacement.lease_id != existing.lease_id
+      assert replacement.holder_issuer == "operator-a"
+      assert replacement.holder_subject == holder
+      assert replacement.substrate_state == substrate
+
+      assert {:ok, persisted} = UnitaresLeasePlane.status(surface)
+      assert persisted.lease_id == replacement.lease_id
+      assert persisted.holder_issuer == "operator-a"
+      assert persisted.holder_subject == holder
+
+      # Converse: if an attested lease is released before an unauthenticated
+      # fallback retry updates substrate, the replacement row stays unattested.
+      assert :ok = Repo.release(replacement.lease_id, "reaped_remote_ttl")
+
+      unattested_p = %{
+        surface_id: surface,
+        holder_agent_uuid: holder,
+        holder_class: "process_instance",
+        holder_kind: "remote_heartbeat",
+        ttl_s: 60,
+        substrate_state: substrate,
+        substrate_state_observed_at: observed_at
+      }
+
+      assert {:ok, {:ok, {:ok, unattested_replacement, :new}}} =
+               Postgrex.transaction(UnitaresLeasePlane.DB, fn conn ->
+                 Repo.update_substrate_on_idempotent(
+                   conn,
+                   unattested_p,
+                   replacement,
+                   substrate,
+                   observed_at
+                 )
+               end)
+
+      assert unattested_replacement.lease_id != replacement.lease_id
+      assert unattested_replacement.holder_issuer == nil
+      assert unattested_replacement.holder_subject == nil
     end
   end
 

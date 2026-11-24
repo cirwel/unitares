@@ -31,9 +31,12 @@
 services:
   governance-mcp:
     environment:
-      # Per-agent REST check-in digests (<agent_uuid>:sha256:<64 hex>) for
-      # remote embodied/resident callers on POST /v1/tools/call.
+      # Per-agent REST digests (<agent_uuid>:sha256:<64 hex>[:<scope1+scope2>])
+      # for remote embodied/resident callers on POST /v1/tools/call and POST /api/findings.
       UNITARES_HTTP_AGENT_TOKENS: ${UNITARES_HTTP_AGENT_TOKENS:-}
+      # Optional HMAC secret persisting server-verified finding provenance in
+      # audit-DB backfill across container restarts (empty = ephemeral key).
+      UNITARES_AUDIT_PROVENANCE_SECRET: ${UNITARES_AUDIT_PROVENANCE_SECRET:-}
       # Deployment-specific resident roster, manifest/inference paths, and
       # read-only / operator-hub digests (commonly synced into .env via
       # scripts/ops/apply_dotenv_overlay.py). Empty values preserve base defaults.

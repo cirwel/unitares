@@ -10,7 +10,7 @@ for the open decisions pending operator ratification, is
 **Basis.** Operator direction, 2026-10-06: "proceed best for federation",
 given after a coupling map of the codebase and a component-by-component
 narrowing outline in the same session. As in the
-[2026-09-25 federation trust record](federation-trust-decisions-2026-09-25.md),
+[2026-09-25 federation trust record](../archive/federation-trust-decisions-2026-09-25.md),
 that direction is a delegation with one criterion: the working agent selected
 the options below under it, and nothing here claims the operator weighed each
 one. Merging is the operator's ratification and keeps every choice reversible
@@ -19,7 +19,7 @@ until then.
 [`PRODUCT_DEFINITION.md`](../../PRODUCT_DEFINITION.md): many runtimes sharing
 one operator-controlled server and authority domain. Trust across
 administrative roots stays unscheduled without external funding or an outside
-principal ([D3a](federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
+principal ([D3a](../archive/federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
 nothing here wakes it.
 **Inputs:** the survival audit's keep/interface/freeze list
 ([`../../ontology/competitive-survival-audit-2026-09.md`](../../ontology/competitive-survival-audit-2026-09.md));
@@ -121,7 +121,7 @@ measurement (Section 6) excludes owner modules and replaces these figures.
 | `agents/chronicler/scrapers.py`, `agents/sentinel/forced_release_alarm.py` | Read-only SQL against Core tables | Resident userland: breach |
 | `agents/vigil/agent.py:82` → `scripts/eval/retrieval_eval.py:32` | Launches a script that imports `src.mcp_handlers.knowledge.handlers` | Resident userland: breach through a subprocess |
 | `agents/sentinel/phase_b_promotion.py:32` → `scripts/lease_plane/evaluate_phase_b_promotion.py` | Launches a script that opens `psycopg2` directly | Resident userland: breach through a subprocess |
-| `agents/{sentinel,vigil,watcher}/routes.py` | `src.*` imports, including a private name (`sentinel/routes.py:18` imports `_FINDING_SEVERITIES`), `lazy_mcp_server`, the broadcaster and `audit_db` | Route packs mounted in-process by `src/http_routes/packs.py`: extension code, not userland, but with unrestricted access |
+| `agents/{sentinel,vigil,watcher}/routes.py` | `src.*` imports, `lazy_mcp_server`, the broadcaster and `audit_db` | Route packs mounted in-process by `src/http_routes/packs.py`: extension code, not userland, but with unrestricted access |
 | `agents/sdk/src/unitares_sdk/lease_plane/client.py:157` | `src.perf_monitor` | Optional guarded host hook, absent outside the server checkout: not a dependency |
 
 The distinction in the last column matters: a route pack runs inside the server

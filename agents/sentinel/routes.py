@@ -16,10 +16,12 @@ from datetime import datetime, timedelta, timezone
 from starlette.responses import JSONResponse
 
 from src.http_routes import access
-from src.http_routes.findings import _FINDING_SEVERITIES
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+# Allowed severity values for finding backlog queries (matches finding intake).
+_FINDING_SEVERITIES = frozenset({"info", "low", "medium", "warning", "high", "critical"})
 
 
 # Finding event types as persisted in audit.events (the durable store behind

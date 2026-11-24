@@ -618,13 +618,13 @@ WITH state_rows AS MATERIALIZED (
         date_trunc('day', s.recorded_at)::date AS day,
         s.risk_score::double precision AS state_risk,
         s.coherence::double precision AS state_coherence,
-        s.state_json,
+        s.state_json->>'verdict' AS state_verdict,
         s.state_json->'eisv_telemetry' AS envelope
     FROM core.agent_state s
     WHERE s.synthetic IS NOT TRUE
       AND s.recorded_at >= now() - make_interval(days => $1)
 ),
-extracted AS MATERIALIZED (
+extracted AS NOT MATERIALIZED (
     SELECT
         *,
         coalesce(jsonb_typeof(envelope) <> 'null', false) AS envelope_present,
@@ -716,13 +716,32 @@ extracted AS MATERIALIZED (
         CASE
             WHEN jsonb_typeof(envelope #> '{enforcement,applied}') = 'boolean'
             THEN (envelope #>> '{enforcement,applied}')::boolean
-        END AS enforcement_applied,
-        state_json->>'verdict' AS state_verdict
+        END AS enforcement_applied
     FROM state_rows
 ),
 normalized AS MATERIALIZED (
     SELECT
-        *,
+        identity_id,
+        recorded_at,
+        day,
+        envelope_present,
+        envelope_valid,
+        primary_source,
+        measurement_source,
+        is_baselined,
+        missing_inputs,
+        maturity_outcome,
+        maturity_ineligibility_reason,
+        maturity_reset_reason,
+        measurement_ready,
+        maturity_eligible,
+        maturity_would_defer,
+        maturity_actuation_enabled,
+        maturity_actuation_ready,
+        maturity_actuation_applied,
+        enforcement_basis,
+        enforcement_requested,
+        enforcement_applied,
         array_remove(ARRAY[
             CASE WHEN envelope_present AND NOT envelope_valid
                  THEN 'unsupported_envelope_schema' END,
@@ -1109,3 +1128,271 @@ AGENT_STATE_SNAPSHOT_SCALAR_SQL: Dict[str, str] = {
         "AND state_json->>'action' NOT IN ('approve', 'guide')"
     ),
 }
+
+
+async def fetch_authored_report_cadences_by_identity(conn) -> list:
+    """Return authored-report counts and timestamps grouped by `identity_id`."""
+    return await conn.fetch(
+        """
+        SELECT s.identity_id,
+               count(*)::int AS report_count,
+               min(s.recorded_at) AS first_report_at,
+               max(s.recorded_at) AS last_report_at
+        FROM core.agent_state s
+        WHERE s.synthetic = false
+          AND coalesce(s.epistemic_class,
+                       s.state_json->>'epistemic_class') = 'agent_report'
+        GROUP BY s.identity_id
+        """
+    )
+
+
+async def fetch_agent_history_rows(
+    conn,
+    *,
+    identity_ids: List[int],
+    limit: int,
+    mode: str,
+) -> list:
+    """Fetch windowed, segmented, and optionally decimated history rows from `core.agent_state`."""
+    if not identity_ids:
+        return []
+    return await conn.fetch(
+        """
+        WITH numbered AS (
+            SELECT s.state_id, s.recorded_at,
+                   (s.state_json->>'E')::real AS e,
+                   s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
+                   s.coherence, s.risk_score, s.state_json,
+                   coalesce(s.epistemic_class,
+                            s.state_json->>'epistemic_class') AS epistemic_class,
+                   (jsonb_typeof(s.state_json->'eisv_telemetry') = 'object')
+                       AS telemetry_available,
+                   coalesce(s.state_json #>>
+                       '{eisv_telemetry,measurement,primary,source}',
+                       'unknown') AS primary_source,
+                   jsonb_build_array(
+                       s.state_json #>> '{eisv_telemetry,measurement,coherence,source}',
+                       s.state_json #>> '{eisv_telemetry,measurement,coherence,role}'
+                   ) AS coherence_producer,
+                   s.state_json->'eisv_instrument'->>'id' AS instrument_id,
+                   coalesce(s.state_json #>>
+                       '{eisv_telemetry,policy_evaluation,maturity_gate,measurement_phase}',
+                       s.state_json #>>
+                       '{eisv_telemetry,measurement,behavioral,warmup,phase}',
+                       'unknown') AS maturity_phase,
+                   row_number() OVER (ORDER BY s.recorded_at, s.state_id) AS rn,
+                   count(*) OVER () AS total,
+                   count(*) FILTER (
+                       WHERE coalesce(s.epistemic_class,
+                                      s.state_json->>'epistemic_class') = 'agent_report'
+                   ) OVER () AS agent_report_total,
+                   count(*) FILTER (
+                       WHERE coalesce(s.epistemic_class,
+                                      s.state_json->>'epistemic_class')
+                             IN ('substrate_observation', 'substrate_interpretation')
+                   ) OVER () AS substrate_total,
+                   count(*) FILTER (
+                       WHERE jsonb_typeof(s.state_json->'eisv_telemetry') = 'object'
+                   ) OVER () AS telemetry_total
+            FROM core.agent_state s
+            WHERE s.identity_id = ANY($1::bigint[]) AND s.synthetic = false
+        ),
+        requested AS (
+            -- Select the requested observation window BEFORE sampling.
+            -- For mode=all, chart decimation must not enlarge cadence
+            -- gaps or remove observations from the regression.
+            SELECT *, CASE WHEN primary_source = 'behavioral' THEN
+                coalesce(state_json #>>
+                    '{eisv_telemetry,measurement,behavioral,observation_source}',
+                    state_json #>>
+                    '{eisv_telemetry,measurement,submitted_sensor,source}',
+                    primary_source)
+                ELSE primary_source END AS measurement_source
+            FROM numbered
+            WHERE $3 = 'all' OR rn > total - $2
+        ),
+        timed AS (
+            SELECT *,
+                extract(epoch FROM (recorded_at - min(recorded_at) OVER ()))
+                    ::double precision / 3600.0 AS elapsed_hours,
+                extract(epoch FROM (recorded_at - lag(recorded_at) OVER w))
+                    ::double precision AS gap_seconds,
+                lag(primary_source) OVER w AS previous_primary_source,
+                lag(measurement_source) OVER w AS previous_measurement_source,
+                lag(coherence_producer) OVER w AS previous_coherence_producer,
+                lag(instrument_id) OVER w AS previous_instrument_id,
+                lag(maturity_phase) OVER w AS previous_maturity_phase
+            FROM requested
+            WINDOW w AS (ORDER BY rn)
+        ),
+        segmented AS (
+            -- Count boundaries BEFORE decimation: an A -> B -> A
+            -- excursion must still break the line if B is not plotted.
+            -- IDs are local to this response, not instrument identities.
+            SELECT *,
+                sum(CASE WHEN primary_source IS DISTINCT FROM previous_primary_source
+                    OR measurement_source IS DISTINCT FROM previous_measurement_source
+                    OR instrument_id IS DISTINCT FROM previous_instrument_id
+                    THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS eisv_segment,
+                sum(CASE WHEN coherence_producer IS DISTINCT FROM previous_coherence_producer
+                    OR instrument_id IS DISTINCT FROM previous_instrument_id
+                    THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS coherence_segment
+            FROM timed
+        ),
+        trajectory AS (
+            SELECT jsonb_build_object(
+                'observations', count(*),
+                'first_observed_at', min(recorded_at),
+                'last_observed_at', max(recorded_at),
+                'elapsed_seconds', CASE WHEN count(*) > 1 THEN
+                    extract(epoch FROM (max(recorded_at) - min(recorded_at)))
+                    ELSE NULL END,
+                'cadence', jsonb_build_object(
+                    'gap_count', count(gap_seconds),
+                    'zero_gap_count', count(*) FILTER (WHERE gap_seconds = 0),
+                    'median_seconds', percentile_cont(0.5)
+                        WITHIN GROUP (ORDER BY gap_seconds),
+                    'p95_seconds', percentile_cont(0.95)
+                        WITHIN GROUP (ORDER BY gap_seconds),
+                    'max_seconds', max(gap_seconds)),
+                'transitions', jsonb_build_object(
+                    'primary_source', count(*) FILTER (
+                        WHERE previous_primary_source IS NOT NULL
+                        AND primary_source <> previous_primary_source),
+                    'measurement_source', count(*) FILTER (
+                        WHERE previous_measurement_source IS NOT NULL
+                        AND measurement_source <> previous_measurement_source),
+                    'maturity_phase', count(*) FILTER (
+                        WHERE previous_maturity_phase IS NOT NULL
+                        AND maturity_phase <> previous_maturity_phase),
+                    'unknown_source_observations', count(*) FILTER (
+                        WHERE measurement_source = 'unknown'),
+                    'unknown_maturity_observations', count(*) FILTER (
+                        WHERE maturity_phase = 'unknown')),
+                'slopes_per_hour', jsonb_build_object(
+                    'E', regr_slope(e, elapsed_hours),
+                    'I', regr_slope(i, elapsed_hours),
+                    'S', regr_slope(s_entropy, elapsed_hours),
+                    'V', regr_slope(v, elapsed_hours)),
+                'slope_observations', jsonb_build_object(
+                    'E', regr_count(e, elapsed_hours),
+                    'I', regr_count(i, elapsed_hours),
+                    'S', regr_count(s_entropy, elapsed_hours),
+                    'V', regr_count(v, elapsed_hours))
+            ) AS trajectory_stats
+            FROM timed
+        )
+        SELECT segmented.recorded_at, e, i, s_entropy, v, coherence, risk_score,
+               state_json, epistemic_class, telemetry_available, total,
+               agent_report_total, substrate_total, telemetry_total,
+               trajectory_stats, eisv_segment, coherence_segment
+        FROM segmented CROSS JOIN trajectory
+        WHERE CASE WHEN $3 = 'all'
+                   THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
+                   ELSE true
+              END
+        ORDER BY rn
+        """,
+        identity_ids,
+        limit,
+        mode,
+    )
+
+
+async def fetch_runtime_reflection_summary_by_identity(
+    conn,
+    identity_ids: List[int],
+) -> list:
+    """Aggregate per-epistemic-class check-in counts and timestamps per `identity_id`."""
+    if not identity_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT s.identity_id,
+               max(s.recorded_at) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class = 'agent_report'
+               ) AS last_reflection_at,
+               count(s.state_id) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class = 'agent_report'
+               ) AS reflection_count,
+               max(s.recorded_at) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class = 'substrate_interpretation'
+               ) AS last_interpretation_at,
+               count(s.state_id) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class = 'substrate_interpretation'
+               ) AS interpretation_count,
+               max(s.recorded_at) FILTER (
+                   WHERE s.synthetic = true
+               ) AS last_bootstrap_at,
+               count(s.state_id) FILTER (
+                   WHERE s.synthetic = true
+               ) AS bootstrap_count,
+               max(s.recorded_at) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class IS NULL
+               ) AS last_unclassified_at,
+               (array_agg(s.state_json ORDER BY s.recorded_at DESC) FILTER (
+                   WHERE s.synthetic = false
+                     AND s.epistemic_class = 'agent_report'
+               ))[1] AS last_reflection_state
+        FROM core.agent_state s
+        WHERE s.identity_id = ANY($1::bigint[])
+        GROUP BY s.identity_id
+        """,
+        identity_ids,
+    )
+
+
+def measured_state_exists_sql(identity_alias: str = "i") -> str:
+    """Return an EXISTS predicate matching identities with at least one measured
+    (``synthetic = false``) row in ``core.agent_state``."""
+    return (
+        f"EXISTS (SELECT 1 FROM core.agent_state s "
+        f"WHERE s.identity_id = {identity_alias}.identity_id AND s.synthetic = false)"
+    )
+
+
+def latest_measured_eisv_by_agent_sql(
+    *,
+    identity_join_sql: str,
+    identity_alias: str = "i",
+    agent_param: str = "$1",
+    epoch_param: str = "$2",
+) -> str:
+    """Return a query selecting the latest non-synthetic ``core.agent_state`` EISV row
+    for an agent joined via ``identity_join_sql``."""
+    return f"""
+        SELECT s.state_json, s.entropy, s.integrity, s.volatility,
+               s.coherence, s.regime
+        FROM core.agent_state s
+        {identity_join_sql}
+        WHERE {identity_alias}.agent_id = {agent_param} AND s.epoch = {epoch_param}
+          AND s.synthetic = false
+        ORDER BY s.recorded_at DESC
+        LIMIT 1
+    """
+
+
+def prior_measured_state_lateral_sql(
+    *,
+    identity_from_sql_fragment: str,
+    agent_id_expr: str = "o.agent_id",
+    outcome_ts_expr: str = "o.ts",
+    lead_minutes_param: str = "$2",
+) -> str:
+    """Return a LATERAL subquery selecting the latest non-synthetic
+    ``core.agent_state`` row for ``agent_id_expr`` at least
+    ``lead_minutes_param`` minutes before ``outcome_ts_expr``."""
+    return f"""    SELECT s.recorded_at, s.risk_score, s.state_json
+    {identity_from_sql_fragment}
+    JOIN core.agent_state s ON s.identity_id = i.identity_id
+    WHERE i.agent_id = {agent_id_expr}
+      AND s.synthetic IS NOT TRUE
+      AND s.recorded_at <= {outcome_ts_expr} - ({lead_minutes_param}::double precision * INTERVAL '1 minute')
+    ORDER BY s.recorded_at DESC
+    LIMIT 1"""

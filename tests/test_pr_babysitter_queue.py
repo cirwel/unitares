@@ -82,8 +82,13 @@ if [ "$1" = "api" ]; then
     */check-runs*)
       sha=$(sed -E 's#.*commits/([^/]+)/check-runs.*#\1#' <<<"$*")
       [ -f "$d/checkruns_$sha.fail" ] && exit 1
-      cat "$d/checkruns_$sha.json" 2>/dev/null \
-        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}'
+      runs=$(cat "$d/checkruns_$sha.json" 2>/dev/null \
+        || echo '{"check_runs":[{"name":"review","completed_at":"2026-01-01T00:00:00Z","output":{"title":"clean (codex, antigravity)"}}]}')
+      # Like GitHub, return only the newest run of each name unless asked for all.
+      case "$*" in
+        *filter=all*) echo "$runs" ;;
+        *) jq -c '.check_runs |= (group_by(.name) | map(max_by(.started_at // .completed_at // "")))' <<<"$runs" ;;
+      esac
       exit 0 ;;
     */commits/*)
       # A later read in the same tick may see master moved (base_moved).
@@ -1550,7 +1555,7 @@ def test_an_unreviewed_auth_path_pr_is_skipped_by_default(tmp_path: Path) -> Non
     calls, out = _run(tmp_path, [_unreviewed(1, "aaa"), _unreviewed(2, "bbb")],
                       timelines={1: _timeline(12), 2: _timeline(8)},
                       compares={"aaa": AUTH, "bbb": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == [_arm(2, "bbb")]
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested", _arm(2, "bbb")]
     assert "review=NEUTRAL (required on an auth path: src/identity/deep/tokens.py)" in out
 
 
@@ -1565,7 +1570,7 @@ def test_a_rename_out_of_an_auth_path_still_counts(tmp_path: Path) -> None:
     moved = {"files": [{"filename": "src/elsewhere.py", "previous_filename": "src/identity/a.py",
                         "status": "renamed", "sha": "b3", "patch": "@@ -1 +1 @@\n-a\n+b"}]}
     calls, _ = _run(tmp_path, [_unreviewed(1, "aaa")], compares={"aaa": moved}, PR_QUEUE_REQUIRED_CHECKS="")
-    assert calls == []
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
 
 
 @pytest.mark.parametrize("broken", ["missing", "not-json", "empty-list"])
@@ -1839,18 +1844,45 @@ def test_an_old_declaration_nobody_pinned_must_be_renewed(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "body",
     [
-        "",
         "Classification: capability",
         "class: `capability`",
-        # A fix mentioned in passing does not outvote the PR's own classification.
+    ],
+)
+def test_a_capability_draft_on_a_two_family_path_is_promoted(tmp_path: Path, body: str) -> None:
+    _review_policy(tmp_path, "f")
+    calls, _ = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
+    assert calls == PROMOTE
+
+
+def test_a_capability_draft_outside_two_family_paths_or_waived_is_not_promoted(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "outside two-family review paths" in out
+
+    _review_policy(tmp_path, "f")
+    _review_title(
+        tmp_path,
+        "second family waived by the operator (2 changed line(s) on f; have: openai): tiny",
+        sha="sha1",
+    )
+    calls, out = _run(tmp_path, [_declared(body="Classification: capability")], timelines={1: _declaration()})
+    assert calls == []
+    assert "passed on an operator waiver" in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        # Conflicting classifications in the same body are refused.
         "Classification: capability\n\nThe earlier proposal used Classification: fix.",
         "Classification: fix\n\nClassification: capability",
     ],
 )
-def test_only_a_pr_classified_as_a_fix_is_promoted(tmp_path: Path, body: str) -> None:
+def test_an_unclassified_or_conflicting_pr_is_not_promoted(tmp_path: Path, body: str) -> None:
     calls, out = _run(tmp_path, [_declared(body=body)], timelines={1: _declaration()})
     assert calls == []
-    assert "without Classification: fix" in out
+    assert "without a single Classification: fix or capability" in out
 
 
 @pytest.mark.parametrize(
@@ -2076,9 +2108,12 @@ def test_a_sensitive_pr_is_not_armed_until_review_passes(tmp_path: Path, review:
     calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
                       PR_QUEUE_REQUIRED_CHECKS="")
     assert not [c for c in calls if "--auto" in c]
-    if review in ("NEUTRAL", None):
+    if review == "NEUTRAL":
+        assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+        assert "review=NEUTRAL" in out
+    elif review is None:
         assert calls == []
-        assert f"review={review or 'MISSING'}" in out
+        assert "review=MISSING" in out
 
 
 def test_a_sensitive_diff_outside_two_family_review_stays_hand_merge(tmp_path: Path) -> None:
@@ -2287,6 +2322,112 @@ def test_a_review_that_passed_on_a_waiver_is_not_two_families(tmp_path: Path, ti
     assert why in out and "the operator merges it by hand" in out
 
 
+WAIVED = "second family waived by the operator (2 changed line(s) on config/governance_config.py; have: openai): tiny"
+
+
+def _tagged_run(pr: int, title: str, day: int, head: str = "aaa", conclusion: str = "success",
+                status: str = "completed") -> dict:
+    return {"name": "review", "status": status, "conclusion": conclusion,
+            "external_id": f"unitares-review:{pr}:{head}",
+            "started_at": f"2026-01-0{day}T00:00:00Z", "completed_at": f"2026-01-0{day}T00:01:00Z",
+            "output": {"title": title}}
+
+
+@pytest.mark.parametrize("runs, armed, why, rollup", [
+    # Another open PR on the same head passed later; its run is not this PR's.
+    ([_tagged_run(1, WAIVED, 1), _tagged_run(2, "clean (codex, antigravity)", 2)], False,
+     "its review passed on an operator waiver, not on two model families", "SUCCESS"),
+    # Only the other PR has reported on this head: this PR's review is MISSING,
+    # and the queue waits for it rather than handing the PR to the operator.
+    ([_tagged_run(2, "clean (codex, antigravity)", 2)], False, "waiting on review=MISSING", "SUCCESS"),
+    # An untagged pass on a head that also carries tagged runs cannot be
+    # attributed to this PR, so it does not stand in for this PR's review.
+    ([{"name": "review", "status": "completed", "conclusion": "success",
+       "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z",
+       "output": {"title": "clean (codex, antigravity)"}},
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "waiting on review=MISSING", "SUCCESS"),
+    # A skipped run from a `labeled` workflow is not this PR's review either.
+    ([_tagged_run(2, "clean (codex, antigravity)", 2),
+      {"name": "review", "status": "completed", "conclusion": "skipped",
+       "started_at": "2026-01-03T00:00:00Z", "completed_at": "2026-01-03T00:00:01Z",
+       "output": {"title": None}}], False, "waiting on review=MISSING", "SUCCESS"),
+    # This PR's own two-family pass still lands it, whatever the other PR's run says.
+    ([_tagged_run(1, "clean (codex, antigravity)", 1), _tagged_run(2, WAIVED, 2)], True, None, "SUCCESS"),
+    # This PR's review needs action; a newer pass on the other PR does not hide it.
+    ([_tagged_run(1, "FINDINGS(1)", 1, conclusion="action_required"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "ACTION_REQUIRED", "SUCCESS"),
+    # This PR's review is still running.
+    ([_tagged_run(1, "", 1, conclusion=None, status="in_progress"),
+      _tagged_run(2, "clean (codex, antigravity)", 2)], False, "review=PENDING", "SUCCESS"),
+    # This PR passed; the other PR's newer unreviewed or findings run, which
+    # is what the head's rollup shows, does not hold it back.
+    ([_tagged_run(1, "clean (codex, antigravity)", 1),
+      _tagged_run(2, "unreviewed", 2, conclusion="neutral")], True, None, "NEUTRAL"),
+    ([_tagged_run(1, "clean (codex, antigravity)", 1),
+      _tagged_run(2, "FINDINGS(1)", 2, conclusion="action_required")], True, None, "ACTION_REQUIRED"),
+])
+def test_review_runs_are_read_for_this_pr_not_for_its_head(tmp_path: Path, runs, armed, why, rollup) -> None:
+    pr, timeline = _delegable(tmp_path, review=rollup)
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.json").write_text(json.dumps({"check_runs": runs}))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    expected = [_arm(1, "aaa")] if armed else (
+        ["pr edit 1 -R o/r --add-label review-requested"] if why == "ACTION_REQUIRED" else []
+    )
+    assert calls == expected
+    if why:
+        assert why in out
+    if why and "MISSING" in why:
+        assert "the operator merges it by hand" not in out
+
+
+def test_unreadable_review_runs_leave_the_rollup_as_reported(tmp_path: Path) -> None:
+    # Findings on the head stay parked when the per-PR lookup fails; they are
+    # not replaced by a pending entry the default queue does not block on.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", review="ACTION_REQUIRED")])
+    assert calls == []
+    assert "#1 review runs on aaa could not be read" in out
+    assert "ACTION_REQUIRED" in out
+
+
+@pytest.mark.parametrize("required", ["", "review"])
+def test_unreadable_review_runs_keep_older_findings_under_a_newer_pass(tmp_path: Path, required) -> None:
+    # On a shared head the rollup holds this PR's older findings and the other
+    # PR's newer pass; with the lookup failing, the findings still decide.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    checks = [_check("test"), _check("review", "ACTION_REQUIRED", run=900, started_min_ago=60),
+              _check("review", "SUCCESS", run=901, started_min_ago=5)]
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", checks=checks, review=None)],
+                      PR_QUEUE_REQUIRED_CHECKS=required)
+    assert calls == []
+    assert "ACTION_REQUIRED" in out
+    assert "waiting on" not in out
+
+
+def test_unreadable_review_runs_never_lend_another_prs_pass(tmp_path: Path) -> None:
+    # The head's newest pass may be another PR's; where review is required, a
+    # failed lookup makes this PR wait instead of arming on it.
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "checkruns_aaa.fail").write_text("")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa", review="SUCCESS")], PR_QUEUE_REQUIRED_CHECKS="review")
+    assert calls == []
+    assert "review=PENDING" in out
+
+
+def test_an_effect_line_removed_since_the_snapshot_stops_the_arm(tmp_path: Path) -> None:
+    pr, timeline = _delegable(tmp_path)
+    (tmp_path / "gh").mkdir()
+    (tmp_path / "gh" / "prs_live.json").write_text(json.dumps([{**pr, "body": "No stated effect any more."}]))
+    calls, out = _run(tmp_path, [pr], timelines={1: timeline}, compares={"aaa": SENSITIVE},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    assert "#1 lost its Expected effect: line since this tick began; not armed" in out
+
+
 def test_the_waiver_wording_the_queue_looks_for_is_the_gates(tmp_path: Path) -> None:
     gate = (Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py").read_text()
     assert 'return ("success", f"second family waived by the operator (' in gate
@@ -2353,3 +2494,30 @@ def test_the_queue_names_the_same_hand_merge_files_as_the_docs() -> None:
     for path in RESERVED:
         assert (REPO / path).exists(), path
         assert f"`{path}`" in doc, path
+
+
+def test_queued_unreviewed_pr_respects_no_auto_review_and_requests_once(tmp_path: Path) -> None:
+    _review_policy(tmp_path, "src/identity/*")
+    # Already carries review-requested: do not re-add it.
+    pr_req = _unreviewed(1, "aaa")
+    pr_req["labels"].append({"name": "review-requested"})
+    calls, _ = _run(tmp_path, [pr_req], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Carries no-auto-review: never add review-requested.
+    pr_hold = _unreviewed(1, "aaa")
+    pr_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Queued PR with review=ACTION_REQUIRED (e.g. missing second family): requests review once.
+    pr_ar = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_ar], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == ["pr edit 1 -R o/r --add-label review-requested"]
+    # Respects no-auto-review on review=ACTION_REQUIRED too.
+    pr_ar_hold = _pr(1, head="aaa", review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    pr_ar_hold["labels"].append({"name": "no-auto-review"})
+    calls, _ = _run(tmp_path, [pr_ar_hold], compares={"aaa": AUTH}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []
+    # Non-review ACTION_REQUIRED check must NOT add review-requested.
+    pr_other_ar = _pr(1, head="aaa", checks=[_check("test"), _check("deploy-approval", "ACTION_REQUIRED", run=5)])
+    calls, _ = _run(tmp_path, [pr_other_ar], compares={"aaa": PLAIN}, PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == []

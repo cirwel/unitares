@@ -507,3 +507,123 @@ async def test_all_registered_aliases_fail_closed_unless_explicitly_scoped(route
         else:
             assert res.status_code == 403, f"expected 403 for {alias_name}"
             assert route["prebinds"] == prebinds_before
+
+
+# --- findings scope isolation -------------------------------------------------
+
+
+def test_findings_scope_parses_alone_and_combined(monkeypatch):
+    second_token = "d" * 64
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        f"{_entry(AGENT, TOKEN, 'findings')},{_entry(OTHER, second_token, 'checkin+findings')}",
+    )
+    grant1 = http_agent_tokens.grant_for_bearer(TOKEN)
+    grant2 = http_agent_tokens.grant_for_bearer(second_token)
+    assert grant1 is not None and grant1.scopes == frozenset({"findings"})
+    assert grant2 is not None and grant2.scopes == frozenset({"checkin", "findings"})
+
+
+def test_default_omitted_scope_does_not_include_findings():
+    grant = http_agent_tokens.grant_for_bearer(TOKEN)
+    assert grant is not None
+    assert grant.scopes == frozenset({"checkin"})
+    assert "findings" not in grant.scopes
+
+
+def test_findings_token_is_not_accepted_by_generic_http_auth(monkeypatch):
+    from src.http_routes.access import _check_http_auth
+
+    shared_http_token = "real-shared-http-api-token"
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", shared_http_token)
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "findings"),
+    )
+    # Control: generic _check_http_auth accepts the configured HTTP API token from an untrusted IP.
+    assert (
+        _check_http_auth(
+            _plain_request(auth=f"Bearer {shared_http_token}"),
+            http_api_token=shared_http_token,
+        )
+        is True
+    )
+    # Findings-scoped agent token is still rejected by generic _check_http_auth.
+    assert (
+        _check_http_auth(
+            _plain_request(auth=f"Bearer {TOKEN}"),
+            http_api_token=shared_http_token,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_findings_only_token_is_refused_on_all_v1_tools(route, monkeypatch):
+    monkeypatch.setenv(
+        http_agent_tokens.AGENT_TOKENS_ENV,
+        _entry(AGENT, TOKEN, "findings"),
+    )
+    calls = [
+        ("process_agent_update", dict(CHECKIN)),
+        ("sync_state", dict(CHECKIN)),
+        (
+            "outcome_event",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "outcome_type": "task_completed",
+            },
+        ),
+        (
+            "record_result",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "outcome_type": "task_completed",
+            },
+        ),
+        (
+            "knowledge",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "action": "store",
+                "summary": "x",
+            },
+        ),
+        (
+            "store_finding",
+            {
+                "client_session_id": CHECKIN["client_session_id"],
+                "summary": "x",
+            },
+        ),
+        ("identity", dict(CHECKIN)),
+        ("onboard", dict(CHECKIN)),
+    ]
+    for tool_name, args in calls:
+        res = await route["call"](_request(tool_name, args))
+        assert res.status_code == 403, f"expected 403 for {tool_name}"
+        assert json.loads(res.body)["error_type"] == "AgentTokenScope"
+    assert route["prebinds"] == 0
+    route["execute"].assert_not_awaited()
+
+
+def test_findings_refusal_enforces_scope_and_forbids_extra_headers():
+    assert http_agent_tokens.findings_refusal(scopes=frozenset({"findings"})) is None
+    assert (
+        http_agent_tokens.findings_refusal(
+            scopes=frozenset({"checkin", "outcome", "knowledge_store"})
+        )
+        is not None
+    )
+    assert (
+        http_agent_tokens.findings_refusal(
+            operator_header="op-secret", scopes=frozenset({"findings"})
+        )
+        is not None
+    )
+    assert (
+        http_agent_tokens.findings_refusal(
+            agent_id_header=AGENT, scopes=frozenset({"findings"})
+        )
+        is not None
+    )

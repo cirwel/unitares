@@ -746,9 +746,9 @@ def _onboard_built_full_shape(arguments: Dict[str, Any]) -> bool:
     onboard then falls back to the verbose flag, so ("detailed", verbose)
     builds the full shape although the envelope sees no explicit request.
     """
-    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
+    from src.mcp_handlers.identity.handlers import derive_onboard_response_mode
 
-    return _derive_onboard_response_mode(arguments)[1] == "full"
+    return derive_onboard_response_mode(arguments)[1] == "full"
 
 
 
@@ -1890,6 +1890,13 @@ async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, 
         # envelope would add is derived from governance state that is never
         # computed before identity is proven, so there is nothing to lose.
         if identity_refusal_status(payload) is not None:
+            return _refusal_with_friendly_tool(payload, invoked, result)
+        # The harness-onboarding decline is a refusal of the same kind: the
+        # caller must see `refused` and `status` at the top level, not an
+        # onboarding envelope telling it to save credentials it was not given.
+        from src.identity.harness_onboarding import is_harness_onboarding_declined
+
+        if is_harness_onboarding_declined(payload):
             return _refusal_with_friendly_tool(payload, invoked, result)
 
         envelope = build_experience_envelope(

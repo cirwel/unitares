@@ -400,3 +400,39 @@ async def test_http_startup_holds_a_usable_key_and_proceeds(secret_path, monkeyp
     assert key
     secret_path.unlink()
     assert session_mod._get_continuity_secret() == key
+
+
+def test_a_concurrent_first_start_reads_the_winners_complete_key(secret_path, monkeypatch):
+    # Another server publishes its key between this one's existence check and
+    # its own publish. This one must read that key, never an empty file.
+    secret_path.parent.mkdir(mode=0o700, parents=True)
+    real_link = os.link
+
+    def winner_first(src, dst, *args, **kwargs):
+        if str(dst) == str(secret_path) and not secret_path.exists():
+            fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, b"winner-key\n")
+            os.close(fd)
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(cs.os, "link", winner_first)
+    assert cs.ensure_generated_secret() == secret_path
+    assert secret_path.read_text().strip() == "winner-key"
+    assert not [p for p in secret_path.parent.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_the_key_path_is_never_visible_before_it_holds_the_key(secret_path, monkeypatch):
+    # Every moment the key path exists, it already holds the whole key.
+    secret_path.parent.mkdir(mode=0o700, parents=True)
+    seen = []
+    real_link = os.link
+
+    def observe(src, dst, *args, **kwargs):
+        seen.append(secret_path.exists())
+        result = real_link(src, dst, *args, **kwargs)
+        seen.append(len(secret_path.read_text().strip()))
+        return result
+
+    monkeypatch.setattr(cs.os, "link", observe)
+    cs.ensure_generated_secret()
+    assert seen == [False, 64]

@@ -6,8 +6,11 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import time
+import weakref
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -17,8 +20,17 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.http_routes.findings import (
+    PROVENANCE_SOURCE_FINDINGS_TOKEN,
+    strip_internal_provenance_fields,
+    verify_finding_provenance_mac,
+)
 
 logger = get_logger(__name__)
+
+_PROVENANCE_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
@@ -187,6 +199,16 @@ async def http_eisv_agents(request):
 
 _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
 _eisv_telemetry_health_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_eisv_telemetry_health_locks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[int, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def _eisv_telemetry_health_lock(days: int) -> asyncio.Lock:
+    """Return a per-window single-flight lock scoped to the running event loop."""
+    loop = asyncio.get_running_loop()
+    per_loop = _eisv_telemetry_health_locks.setdefault(loop, {})
+    return per_loop.setdefault(days, asyncio.Lock())
 
 
 async def http_eisv_telemetry_health(request):
@@ -216,21 +238,27 @@ async def http_eisv_telemetry_health(request):
     if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
         return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
 
-    try:
-        from src.db import get_db
-        from src.eisv_telemetry_health import query_eisv_telemetry_health
+    async with _eisv_telemetry_health_lock(days):
+        now = time.monotonic()
+        cached = _eisv_telemetry_health_cache.get(days)
+        if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
+            return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
 
-        db = get_db()
-        async with db.acquire() as conn:
-            report = await query_eisv_telemetry_health(conn, window_days=days)
-        _eisv_telemetry_health_cache[days] = (now, report)
-        return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
-    except Exception as exc:  # noqa: BLE001 — read-only operator surface
-        logger.error("EISV telemetry health query failed: %s", exc)
-        return JSONResponse(
-            {"success": False, "error": "telemetry health query failed"},
-            status_code=500,
-        )
+        try:
+            from src.db import get_db
+            from src.eisv_telemetry_health import query_eisv_telemetry_health
+
+            db = get_db()
+            async with db.acquire() as conn:
+                report = await query_eisv_telemetry_health(conn, window_days=days)
+            _eisv_telemetry_health_cache[days] = (time.monotonic(), report)
+            return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
+        except Exception as exc:  # noqa: BLE001 — read-only operator surface
+            logger.error("EISV telemetry health query failed: %s", exc)
+            return JSONResponse(
+                {"success": False, "error": "telemetry health query failed"},
+                status_code=500,
+            )
 
 
 _GOVERNANCE_TREND_CACHE_TTL_SECONDS = 600.0
@@ -347,7 +375,9 @@ async def http_events(request):
                             continue
                     # Reshape audit row → dashboard event shape
                     payload = de.get("details", {})
-                    events.append({
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    row = {
                         "type": payload.get("type", de.get("event_type", "")),
                         "severity": payload.get("severity", "info"),
                         "message": payload.get("message", de.get("event_type", "")),
@@ -355,7 +385,47 @@ async def http_events(request):
                         "agent_name": payload.get("agent_name", ""),
                         "timestamp": de.get("timestamp"),
                         "event_id": de_id,
-                    })
+                    }
+                    if any(
+                        k in payload
+                        for k in (
+                            "provenance_verified",
+                            "verified_actor_agent_uuid",
+                            "provenance_source",
+                            "provenance_mac",
+                        )
+                    ):
+                        raw_actor = payload.get("verified_actor_agent_uuid")
+                        normalized_actor = (
+                            raw_actor.lower()
+                            if isinstance(raw_actor, str)
+                            and _PROVENANCE_UUID_RE.fullmatch(raw_actor.lower())
+                            else None
+                        )
+                        if (
+                            payload.get("provenance_source")
+                            == PROVENANCE_SOURCE_FINDINGS_TOKEN
+                            and payload.get("provenance_verified") is True
+                            and normalized_actor is not None
+                            and verify_finding_provenance_mac(
+                                mac=payload.get("provenance_mac"),
+                                provenance_source=PROVENANCE_SOURCE_FINDINGS_TOKEN,
+                                verified_actor_agent_uuid=normalized_actor,
+                                agent_id=str(row["agent_id"] or ""),
+                                event_type=str(row["type"] or ""),
+                                severity=str(row["severity"] or ""),
+                                agent_name=str(row["agent_name"] or ""),
+                                message=str(row["message"] or ""),
+                                fingerprint=str(payload.get("fingerprint") or ""),
+                                timestamp=de.get("timestamp"),
+                            )
+                        ):
+                            row["provenance_verified"] = True
+                            row["verified_actor_agent_uuid"] = normalized_actor
+                        else:
+                            row["provenance_verified"] = False
+                            row["verified_actor_agent_uuid"] = None
+                    events.append(row)
                 events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
                 events = events[:limit]
             except Exception as db_err:
@@ -411,41 +481,10 @@ async def http_enforcement_divergence(request):
             days = 90
         days = max(1, min(days, 365))
         from src.db import get_db
+        from src.db.mixins.audit import fetch_pause_divergence_summary
         db = get_db()
         async with db.acquire() as conn:
-            totals = await conn.fetchrow(
-                """
-                SELECT
-                  count(*) FILTER (WHERE event_type = 'auto_attest'
-                                     AND payload->>'decision' = 'pause') AS produced,
-                  count(*) FILTER (WHERE event_type = 'auto_attest'
-                                     AND payload->>'decision' = 'pause'
-                                     AND payload->>'gap_suppressed' = 'true') AS gap_suppressed,
-                  count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
-                FROM audit.events
-                WHERE ts > now() - make_interval(days => $1)
-                  AND event_type IN ('auto_attest', 'lifecycle_paused')
-                """,
-                days,
-            )
-            last_row = await conn.fetchrow(
-                "SELECT max(ts) AS last_delivered FROM audit.events "
-                "WHERE event_type = 'lifecycle_paused'"
-            )
-            weekly = await conn.fetch(
-                """
-                SELECT to_char(date_trunc('week', ts), 'MM-DD') AS week,
-                       count(*) FILTER (WHERE event_type = 'auto_attest'
-                                          AND payload->>'decision' = 'pause') AS produced,
-                       count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
-                FROM audit.events
-                WHERE ts > now() - make_interval(days => $1)
-                  AND event_type IN ('auto_attest', 'lifecycle_paused')
-                GROUP BY date_trunc('week', ts)
-                ORDER BY date_trunc('week', ts)
-                """,
-                days,
-            )
+            totals, last_row, weekly = await fetch_pause_divergence_summary(conn, days=days)
         last_delivered = last_row["last_delivered"] if last_row else None
         return JSONResponse({
             "window_days": days,
@@ -534,13 +573,14 @@ async def http_lifecycle_recent(request):
 
         events = []
         for r in rows:
-            details = r.get("details") or {}
+            raw_details = r.get("details") or {}
+            details = strip_internal_provenance_fields(raw_details)
             events.append({
                 "timestamp": r.get("timestamp"),
                 "event_type": r.get("event_type"),
                 "agent_id": r.get("agent_id"),
                 "agent_label": uuid_to_label.get(r.get("agent_id"), ""),
-                "reason": details.get("reason"),
+                "reason": details.get("reason") if isinstance(details, dict) else None,
                 "details": details,
                 "event_id": r.get("event_id"),
             })

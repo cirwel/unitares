@@ -88,7 +88,7 @@
              /v1/metrics/catalog lists them. Empty (the default) registers
              none. Set it only if you run the reference Chronicler; see
              docs/operations/resident-roster.md.
-             Example: /PATH/TO/UNITARES/agents/chronicler/metrics_catalog.json -->
+             Example: /PATH/TO/DEPLOYMENT/config/chronicler-metrics.json -->
         <key>UNITARES_METRICS_CATALOG_EXTRA</key>
         <string></string>
         <!-- 0 (default) binds to loopback only. Set to 1 only when clients on

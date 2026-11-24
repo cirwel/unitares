@@ -255,6 +255,42 @@ def require_operator_account() -> None:
         raise SystemExit("review_gate: operator-only actions require a user account, not a bot")
 
 
+#: GitHub's answer to GET /user from an installation token (App or Actions).
+INTEGRATION_REFUSAL = "Resource not accessible by integration"
+
+
+def require_agent_credential() -> None:
+    """Agent record writes must never go out under a person's GitHub login.
+
+    Records, dispositions and review requests post with whatever gh credential
+    is in effect. Outside the App runner that is the operator's own login, and
+    GitHub then shows the operator as the author of an agent's review. This
+    runs before any reviewer does, and fails closed: the only answer that lets
+    a write proceed is GitHub's refusal of GET /user to an integration, which
+    is how App installation tokens and the Actions token answer. A user
+    account, an outage, a transport error or an unreadable reply all refuse.
+    Operator-only commands (waive) call require_operator_account instead.
+    """
+    proc = _launch(["gh", "api", "user"], text=True, capture_output=True)
+    if proc.returncode != 0 and INTEGRATION_REFUSAL in (proc.stdout or "") + (proc.stderr or ""):
+        return
+    route = ("Agent review writes go through the agents' App: run "
+             "`unitares-github -- review ...` from this checkout instead. A hosted "
+             "session without the App can print a record or disposition with "
+             "`record --emit` or `dispose --emit` and post it through its connector, "
+             "or add the `review-requested` label for the review host "
+             "(docs/operations/github-workflow-conventions.md, Recording a review without gh).")
+    if proc.returncode != 0:
+        raise SystemExit("review_gate: could not confirm the posting credential is an App token "
+                         f"(GET /user: {(proc.stderr or '').strip()[:200] or 'no answer'}). {route}")
+    try:
+        actor = json.loads(proc.stdout)
+    except ValueError:
+        actor = None
+    login = actor.get("login") if isinstance(actor, dict) else None
+    raise SystemExit(f"review_gate: refusing to post as the GitHub account {login!r}. {route}")
+
+
 # Every PR read and write here goes through REST (`gh api`), never `gh pr`
 # or `gh repo view`: those use GraphQL, which Claude Code cloud sessions
 # refuse with HTTP 403, so a review there failed as "no PR for this branch".
@@ -307,7 +343,9 @@ def open_prs(repo: str) -> list[dict]:
     return [pr_fields(p) for p in api_pages(f"repos/{repo}/pulls?state=open&per_page=100")]
 
 
-def post_comment(pr: int, body: str) -> None:
+def post_comment(pr: int, body: str, *, operator: bool = False) -> None:
+    if not operator:
+        require_agent_credential()
     _launch(["gh", "api", "--method", "POST", f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
              "-F", "body=@-"], input=body, text=True, check=True, capture_output=True)
 
@@ -3368,6 +3406,7 @@ class review_lock:
 def cmd_review(args) -> int:
     args.base = getattr(args, "base", DEFAULT_BASE)
     pr, repo, key, branch = _resolve(args)
+    require_agent_credential()  # before a reviewer spends minutes on a record it cannot post
     choices = selected_reviewers(args.reviewer)
     reviewer = choices[0] if choices else None
     args.branch = branch
@@ -3434,6 +3473,37 @@ def cmd_review(args) -> int:
                 if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
                     snapshot = read_native(repo, pr, key, head, comments)
                     source = followup_candidate(args.base, head, key, comments, snapshot.records)
+                    if source:
+                        # On a sensitive diff, a follow-up only preserves its
+                        # anchor families and never credits a new family. If
+                        # authors are known, the anchor carries fewer than two
+                        # independent families, the chosen reviewer is an
+                        # eligible missing family, AND the full-review budget
+                        # permits a full pass without failing at the cap, skip
+                        # follow-up so the full pass below can supply that family.
+                        req_family = provider_family(reviewer)
+                        req_sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
+                        req_authors = pr_authors_or_unknown(repo, pr) if req_sensitive else set()
+                        anchor_families = (
+                            {record_family(r) for r in followup_sources(source, comments, snapshot.records)} - {None}
+                            if req_sensitive and req_authors else set()
+                        )
+                        anchor_independent = independent_families(anchor_families, req_authors) if req_authors else set()
+                        if (req_sensitive and req_family and req_authors
+                                and req_family not in req_authors
+                                and len(anchor_independent) < 2
+                                and req_family not in anchor_independent
+                                and not waiver_reason_for(comments, key, changed, req_sensitive,
+                                                          anchor_families, args.base, head, req_authors)):
+                            try:
+                                pre_rounds = review_budget(pr_rounds(repo, pr, key, head, comments), pr, comments)
+                            except (ValueError, OSError, subprocess.SubprocessError):
+                                pre_rounds = None
+                            if (pre_rounds is not None and not pre_rounds.unknown_history
+                                    and not pre_rounds.exhausted(pre_rounds.can_join(head, key, req_family), key, head)):
+                                print(f"[review] skipping follow-up: {req_family} has no full-review anchor "
+                                      "on this sensitive diff; running full pass")
+                                source = None
                     if source:
                         args.followup = source
                         args.followup_reviews = "\n\n".join(
@@ -4007,6 +4077,8 @@ def cmd_record(args) -> int:
     # Without --emit, gh is resolved first: a machine without it is UNREVIEWED
     # (exit 2) before any input is read.
     resolved = None if args.emit else _resolve(args)
+    if resolved is not None:
+        require_agent_credential()
     text = Path(args.file).read_text()
     parsed = parse_verdict(text)
     if parsed is None:
@@ -4108,7 +4180,7 @@ def cmd_waive(args) -> int:
             + "\n\n"
             f"Reason: {reason}\n\nThis applies to this diff only; any push that changes the diff "
             f"voids it. Waived hunks:\n\n```diff\n{hunks.strip()}\n```\n")
-    post_comment(pr, body)
+    post_comment(pr, body, operator=True)
     print(f"[review] waiver posted for diff {key[:12]} on PR #{pr}; the review check re-evaluates")
     return 0
 
@@ -4117,6 +4189,7 @@ def cmd_dispose(args) -> int:
     if getattr(args, "emit", False):
         return _dispose_emit(args)
     pr, repo, key, branch = _resolve(args)
+    require_agent_credential()
     prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
         raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
@@ -4326,6 +4399,8 @@ def cmd_sweep(args) -> int:
         print("[sweep] no reviewer selected; configure --reviewer (repeat for fallbacks) "
               "or UNITARES_REVIEWER. No review started.")
         return UNREVIEWED
+    if not args.dry_run:
+        require_agent_credential()
     repo = repo_slug()
     prs = open_prs(repo)
     candidates = 0

@@ -18,7 +18,7 @@ a live change to `I` or the bins may land once its PR records
 `instrument_change_at`, and the registered read then admits only outcomes before
 that instant. The other prerequisites in section 8 are unchanged.
 **Out of scope:** Outcome-prediction claims (`#1425`) and proper-scoring
-incentive design ([`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md),
+incentive design ([`forecast-bound-calibration-mirror-v0.md`](../archive/forecast-bound-calibration-mirror-v0.md),
 `#2605`).
 **Design decision (`#2818`, 2026-10-15; made by agents on operator delegation,
 reversible):** no constant without a referent. Calibration is reported first as
@@ -243,7 +243,7 @@ This source is a **dependency, not an existing verified supply guarantee**.
 `src/outcome_corroboration.py:tool_observation_triggers` accepts caller-described
 return codes and payload shapes for `TOOL_OBSERVED`. A grade or weight >=0.65
 alone does not prove truth. Registry binding alone does not prove truth either.
-The [forecast-bound proposal](forecast-bound-calibration-mirror-v0.md), C2 and
+The [forecast-bound proposal](../archive/forecast-bound-calibration-mirror-v0.md), C2 and
 section 5, explains the shared-OS-user producer problem. Reusing its proposed
 receipts requires independent authorization and trust-boundary work; this note
 does not reopen its incentive proposal or authorize a new tool.

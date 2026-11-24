@@ -313,7 +313,9 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
                 # So delegate only where the delegate is actually looking.
                 if link.startswith(_REPO_ROOT_PREFIXES):
                     repo_target = REPO_ROOT / link
-                    if not any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+                    if not any(
+                        d in rel.parts for d in (_DEAD_REF_SKIP_DIRS | {"archive"})
+                    ):
                         if not repo_target.is_file():
                             continue
                         target = repo_target.resolve()
@@ -1276,10 +1278,37 @@ def collect_md_files() -> list[Path]:
     return sorted(md_files)
 
 
+def collect_non_proposal_archive_md_files() -> list[Path]:
+    """Collect archived docs outside `docs/proposals/archive/` for relative-link checks.
+
+    Historical prose, counts, and bare implementation paths inside `archive/`
+    remain out of scope for `collect_md_files()`, but clickable relative `.md`
+    links break silently when documents are relocated into `archive/` without
+    adjusting `../` depth.
+    """
+    docs_root = REPO_ROOT / "docs"
+    if not docs_root.is_dir():
+        return []
+    proposal_archive = docs_root / "proposals" / "archive"
+    archived: list[Path] = []
+    for fpath in docs_root.rglob("*.md"):
+        if fpath.name in SKIP_FILES:
+            continue
+        if fpath.is_relative_to(proposal_archive):
+            continue
+        rel = fpath.relative_to(REPO_ROOT)
+        if "archive" in rel.parts and not any(
+            d in rel.parts for d in _REL_LINK_SKIP_DIRS
+        ):
+            archived.append(fpath)
+    return sorted(archived)
+
+
 def main():
     strict = "--strict" in sys.argv
     show_demotion = "--demotion-candidates" in sys.argv
     md_files = collect_md_files()
+    archive_rel_link_files = collect_non_proposal_archive_md_files()
     tool_names = _load_tool_names()
 
     all_warnings = []
@@ -1288,7 +1317,7 @@ def main():
     if dead:
         all_warnings.append(("Dead file references", dead))
 
-    rel_links = check_relative_links(md_files)
+    rel_links = check_relative_links(md_files + archive_rel_link_files)
     if rel_links:
         all_warnings.append(("Broken relative .md links", rel_links))
 

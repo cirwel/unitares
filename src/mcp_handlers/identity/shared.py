@@ -48,6 +48,16 @@ _uuid_prefix_index: Dict[str, str] = {}
 # residual sync half of KG 2026-04-20T00:57:45.
 _bind_fingerprints: Dict[str, str] = {}
 
+
+def get_session_identities() -> Dict[str, Dict[str, Any]]:
+    """Return the in-memory session -> agent identity binding cache."""
+    return _session_identities
+
+
+def get_uuid_prefix_index() -> Dict[str, str]:
+    """Return the in-memory UUID prefix -> full UUID index."""
+    return _uuid_prefix_index
+
 # =============================================================================
 # UUID PREFIX INDEX
 # =============================================================================
@@ -378,6 +388,12 @@ def _get_lineage(agent_id: str) -> list:
     lineage.reverse()  # Oldest ancestor first
     return lineage
 
+
+def get_lineage(agent_id: str) -> list:
+    """Public accessor returning full lineage [oldest_ancestor, ..., parent, self]."""
+    return _get_lineage(agent_id)
+
+
 # =============================================================================
 # EXPORTS
 # =============================================================================
@@ -387,6 +403,8 @@ __all__ = [
     '_session_identities',
     '_uuid_prefix_index',
     '_bind_fingerprints',
+    'get_session_identities',
+    'get_uuid_prefix_index',
     # UUID prefix functions
     '_register_uuid_prefix',
     '_lookup_uuid_by_prefix',
@@ -401,4 +419,5 @@ __all__ = [
     'require_write_permission',
     # Lineage
     '_get_lineage',
+    'get_lineage',
 ]

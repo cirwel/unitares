@@ -80,6 +80,16 @@ def no_cloud_reads(monkeypatch):
 
 
 
+_REAL_REQUIRE_AGENT_CREDENTIAL = rg.require_agent_credential
+
+
+@pytest.fixture(autouse=True)
+def _agent_credential(monkeypatch):
+    """Unit commands run as if under the App runner; the credential check has
+    its own tests below, which call _REAL_REQUIRE_AGENT_CREDENTIAL."""
+    monkeypatch.setattr(rg, "require_agent_credential", lambda: None)
+
+
 @pytest.fixture(autouse=True)
 def _no_reasoning_floor(monkeypatch):
     """Most tests here use short stand-in reviews ("fine / VERDICT: CLEAN") to
@@ -1215,6 +1225,64 @@ def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(
     monkeypatch.setattr(rg, "_resolve", lambda *a: pytest.fail("resolved or ran an operator action"))
     with pytest.raises(SystemExit, match="operator"):
         rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
+
+
+def _user_lookup(monkeypatch, returncode, stdout="", stderr=""):
+    def launch(cmd, **kwargs):
+        assert cmd == ["gh", "api", "user"]
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    monkeypatch.setattr(rg, "_launch", launch)
+
+
+def test_agent_writes_accept_only_githubs_integration_refusal(monkeypatch):
+    # What `gh api user` prints under an App installation token.
+    _user_lookup(monkeypatch, 1,
+                 '{"message":"Resource not accessible by integration","status":"403"}',
+                 "gh: Resource not accessible by integration (HTTP 403)\n")
+    _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+@pytest.mark.parametrize("stdout", ['{"type": "User", "login": "someone"}', '{}', 'not json'])
+def test_agent_writes_refuse_any_account_that_can_read_user(monkeypatch, stdout):
+    _user_lookup(monkeypatch, 0, stdout)
+    with pytest.raises(SystemExit, match="unitares-github -- review"):
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+@pytest.mark.parametrize("stderr", ["gh: Service Unavailable (HTTP 503)\n",
+                                    "error connecting to api.github.com\n", ""])
+def test_agent_writes_fail_closed_when_the_lookup_fails(monkeypatch, stderr):
+    _user_lookup(monkeypatch, 1, "", stderr)
+    with pytest.raises(SystemExit, match="could not confirm"):
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+def test_agent_credential_refusal_names_the_hosted_session_routes(monkeypatch):
+    _user_lookup(monkeypatch, 0, '{"type": "User", "login": "someone"}')
+    with pytest.raises(SystemExit) as exc:
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
+    message = str(exc.value)
+    assert "record --emit" in message and "dispose --emit" in message
+    assert "review-requested" in message
+
+
+def test_record_post_checks_the_credential_but_a_waiver_does_not(monkeypatch):
+    checked, launched = [], []
+    monkeypatch.setattr(rg, "require_agent_credential", lambda: checked.append(True))
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: launched.append(cmd))
+    rg.post_comment(4, "record\n")
+    assert checked == [True] and len(launched) == 1
+    rg.post_comment(4, "waiver\n", operator=True)
+    assert checked == [True] and len(launched) == 2
+
+
+def test_review_refuses_a_user_login_before_any_reviewer_runs(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "k" * 64, "gemini/x"))
+    monkeypatch.setattr(rg, "require_agent_credential",
+                        lambda: (_ for _ in ()).throw(SystemExit("review_gate: refusing to post")))
+    monkeypatch.setattr(rg, "selected_reviewers", lambda *a: pytest.fail("chose a reviewer"))
+    with pytest.raises(SystemExit, match="refusing to post"):
+        rg.cmd_review(SimpleNamespace(base="master", reviewer="codex", budget=30))
 
 
 @pytest.mark.parametrize("verdict,disposed,state", [
@@ -5430,6 +5498,63 @@ def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_follow
     history = comments + [original, _comment(disposed, text='1. rebutted: documented caller')]
     rec = rg.latest_matching(history, fix.key)
     assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
+
+
+def test_sensitive_followup_skips_when_chosen_family_lacks_full_anchor(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    # Keep only the OpenAI full review; Anthropic has NO full-review anchor yet.
+    openai_only = comments[:1]
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'gemini/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: openai_only)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    seen_followup = []
+
+    def fake_review(args, pr, key, reviewer):
+        seen_followup.append(getattr(args, 'followup', None))
+        return 0
+
+    monkeypatch.setattr(rg, 'review_with_fallback', fake_review)
+    monkeypatch.setattr(rg, 'completed_review_exit', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    rc = rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude'))
+    assert rc == 0
+    assert seen_followup == [None], "claude must run a full pass rather than a follow-up that cannot credit anthropic"
+
+
+def test_sensitive_followup_kept_when_authors_unknown_or_budget_exhausted(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    openai_only = comments[:1]
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'gemini/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: openai_only)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    monkeypatch.setattr(rg, 'completed_review_exit', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+
+    # Case 1: unknown authors -> keep follow-up so we do not deadlock at the cap.
+    seen = []
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: set())
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda args, *a: (seen.append(getattr(args, 'followup', None)), 0)[1])
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert seen == [fix] or (len(seen) == 1 and seen[0] is not None)
+
+    # Case 2: known authors, but full-review cycle budget already exhausted -> keep follow-up.
+    seen.clear()
+    monkeypatch.setattr(rg, 'pr_authors_or_unknown', lambda *a: {'google'})
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert len(seen) == 1 and seen[0] is not None
+
+    # Case 3: operator waiver covers the second family -> keep follow-up instead of burning a cycle.
+    seen.clear()
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    monkeypatch.setattr(rg, 'waiver_reason_for', lambda *a: 'waived by operator')
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='claude')) == 0
+    assert len(seen) == 1 and seen[0] is not None
 
 
 def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):

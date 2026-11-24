@@ -1,7 +1,7 @@
 """Boundary ratchet and HTTP contract tests for resident DB/Core decoupling.
 
 Enforces `docs/proposals/active/federation-component-boundaries-v0.md` §2.3 / §6
-across Python client-side residents (`agents/{chronicler,sentinel,vigil,watcher,steward,common}`)
+across Python client-side residents (`agents/{sentinel,steward,common}`)
 and verifies strict-mode authentication, error isolation, and validation on the
 read-only Core `/v1/*` telemetry routes that replaced direct PostgreSQL reads.
 """
@@ -25,10 +25,7 @@ from starlette.routing import Route
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 CLIENT_RESIDENT_DIRS = (
-    "agents/chronicler",
     "agents/sentinel",
-    "agents/vigil",
-    "agents/watcher",
     "agents/steward",
     "agents/common",
 )
@@ -673,7 +670,6 @@ class TestBearerFallbackAndUrlNormalization:
     def test_url_normalization_preserves_reverse_proxy_prefix_and_scopes_metrics_url(
         self, monkeypatch
     ):
-        from agents.chronicler import scrapers
         from agents.common.http_client import resolve_governance_base_url
 
         assert resolve_governance_base_url("https://host/unitares") == "https://host/unitares"
@@ -688,40 +684,13 @@ class TestBearerFallbackAndUrlNormalization:
             == "https://host/unitares"
         )
 
-        # UNITARES_METRICS_URL must NOT hijack Sentinel/Vigil's governance base URL...
+        # UNITARES_METRICS_URL must NOT hijack Sentinel/Vigil's governance base URL.
+        # (A metrics scraper honouring it is that scraper's own concern and is
+        # tested with the scraper.)
         monkeypatch.delenv("GOV_REST_URL", raising=False)
         monkeypatch.setenv("UNITARES_METRICS_URL", "https://metrics-host/unitares")
         monkeypatch.setenv("MCP_SERVER_URL", "https://core-host:8767/mcp/")
         assert resolve_governance_base_url() == "https://core-host:8767"
-
-        # ...while Chronicler's snapshot fetcher DOES honor UNITARES_METRICS_URL + prefix!
-        scrapers.clear_snapshot_cache()
-        seen_urls: list[str] = []
-
-        class _FakeClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_exc):
-                return False
-
-            def get(self, url, **_kw):
-                seen_urls.append(url)
-                return httpx.Response(
-                    200,
-                    json={
-                        "success": True,
-                        "metrics": {"agents.active.7d": 3.0},
-                        "finding_counts_7d": {},
-                        "errors": {},
-                    },
-                )
-
-        with patch("agents.chronicler.scrapers.httpx.Client", return_value=_FakeClient()):
-            snap = scrapers._fetch_metrics_snapshot()
-        assert seen_urls == ["https://metrics-host/unitares/v1/metrics/snapshot"]
-        assert snap["metrics"]["agents.active.7d"] == 3.0
-        scrapers.clear_snapshot_cache()
 
 
 class TestSitrepExactWindowAndUrl:
@@ -792,163 +761,16 @@ class TestSitrepExactWindowAndUrl:
         assert 199.5 <= delta_long_h <= 200.5, f"expected ~200h window, got {delta_long_h}h"
 
 
-class TestVigilRemoteRetrievalEval:
-    """Parity between `agents.vigil.remote_eval` and `scripts.eval.metrics`,
-    plus Core-sourced ranker config tag selection."""
-
-    @pytest.mark.parametrize(
-        "ranked,relevant",
-        [
-            (["a", "b", "c"], {"a"}),
-            (["x", "a", "b", "c"], {"a", "c"}),
-            (["x", "y", "z"], {"a", "b"}),
-            ([], {"a"}),
-            (["a", "b"], set()),
-        ],
-    )
-    def test_ranking_math_matches_canonical_eval_metrics(
-        self, ranked: list[str], relevant: set[str]
-    ):
-        from agents.vigil import remote_eval
-        from scripts.eval import metrics as server_metrics
-
-        for k in (1, 3, 10, 20):
-            assert remote_eval.ndcg_at_k(ranked, relevant, k) == pytest.approx(
-                server_metrics.ndcg_at_k(ranked, relevant, k), abs=1e-12
-            )
-            assert remote_eval.recall_at_k(ranked, relevant, k) == pytest.approx(
-                server_metrics.recall_at_k(ranked, relevant, k), abs=1e-12
-            )
-        assert remote_eval.mrr(ranked, relevant) == pytest.approx(
-            server_metrics.mrr(ranked, relevant), abs=1e-12
-        )
-
-    def test_run_remote_retrieval_eval_produces_vigil_compatible_shape(self, tmp_path: Path):
-        from agents.vigil.agent import _derive_eval_config_tag, _normalize_eval_metrics
-        from agents.vigil.remote_eval import run_remote_retrieval_eval
-
-        labels = tmp_path / "labels.json"
-        labels.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "pairs": [
-                        {"query": "q_hit", "relevant_ids": ["doc-1"]},
-                        {"query": "q_miss", "relevant_ids": ["doc-2"]},
-                    ],
-                }
-            )
-        )
-
-        def _fake_search(query: str, limit: int) -> dict[str, Any]:
-            assert limit == 20
-            if query == "q_hit":
-                return {
-                    "success": True,
-                    "search_mode_used": "hybrid_rrf",
-                    "discoveries": [{"id": "doc-1"}, {"id": "other"}],
-                }
-            return {
-                "success": True,
-                "search_mode_used": "hybrid_rrf",
-                "discoveries": [{"id": "other"}],
-            }
-
-        report = run_remote_retrieval_eval(
-            labels_path=labels,
-            search_fn=_fake_search,
-            config_fn=lambda: {
-                "embedding_model": "bge-m3",
-                "hybrid": True,
-                "graph_expand": False,
-                "rerank": False,
-            },
-        )
-        assert report["corpus"] == {
-            "path": "labels.json",
-            "pair_count": 2,
-            "scored_pair_count": 2,
-            "schema_version": 1,
-        }
-        assert report["config"]["hybrid"] is True
-        assert report["config"]["rerank"] is False
-        assert report["config"]["embedding_model"] == "bge-m3"
-        assert report["config"]["config_source"] == "core"
-        assert report["config"]["search_modes_observed"] == ["hybrid_rrf"]
-        assert _derive_eval_config_tag(report["config"]) == "hybrid_rrf"
-        assert report["aggregate"]["flat_miss_count"] == 1
-        assert report["aggregate"]["flat_miss_rate"] == 0.5
-
-        flat = _normalize_eval_metrics(report)
-        assert flat["nDCG@10"] == pytest.approx(0.5, abs=1e-6)
-        assert flat["Recall@20"] == pytest.approx(0.5, abs=1e-6)
-        assert flat["MRR"] == pytest.approx(0.5, abs=1e-6)
-        assert "latency_p50" in flat
-        assert "latency_p95" in flat
+class TestHealthCheckRetrievalConfig:
+    """Core health-check contract for remote retrieval-eval callers."""
 
     @pytest.mark.asyncio
-    async def test_vigil_eval_step_picks_core_hybrid_baseline_when_local_env_unset(
-        self, tmp_path: Path, monkeypatch
+    async def test_health_check_populates_retrieval_config_in_lite_and_full_modes(
+        self, monkeypatch
     ):
-        from agents.vigil.agent import VigilAgent
-
-        for k in (
-            "UNITARES_EMBEDDING_MODEL",
-            "UNITARES_ENABLE_HYBRID",
-            "UNITARES_ENABLE_GRAPH_EXPANSION",
-            "UNITARES_ENABLE_RELATED_EXPANSION",
-            "UNITARES_ENABLE_RERANKER",
-        ):
-            monkeypatch.delenv(k, raising=False)
-
-        (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(
-            json.dumps({"aggregate": {"ndcg@10": {"mean": 0.80}}})
-        )
-        (tmp_path / "baseline_2026-04-20_default.json").write_text(
-            json.dumps({"aggregate": {"ndcg@10": {"mean": 0.40}}})
-        )
-
-        observed_urls: list[str | None] = []
-
-        def _fake_eval(base_url: str | None = None) -> dict[str, Any]:
-            observed_urls.append(base_url)
-            return {
-                "config": {
-                    "embedding_model": "bge-m3",
-                    "hybrid": True,
-                    "graph_expand": False,
-                    "rerank": False,
-                    "config_source": "core",
-                },
-                "aggregate": {"ndcg@10": {"mean": 0.78}},
-            }
-
-        vigil = VigilAgent(mcp_url="http://core-host:8767/mcp/", with_eval=True)
-        with (
-            patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path),
-            patch("agents.vigil.agent._run_eval_subprocess", side_effect=_fake_eval),
-        ):
-            result = await vigil._run_eval_step()
-
-        assert observed_urls == ["http://core-host:8767/mcp/"]
-        assert result["ran"] is True
-        assert result["config_tag"] == "hybrid_rrf"
-        assert result["baseline"] == "baseline_2026-04-20_hybrid_rrf.json"
-        assert result["regression"] is False
-
-    @pytest.mark.asyncio
-    async def test_health_check_retrieval_config_round_trips_through_remote_eval_and_503_fallback(
-        self, tmp_path: Path, monkeypatch
-    ):
-        """End-to-end contract: `get_health_check_data` populates
-        `checks.knowledge_graph.retrieval_config` in both lite and full modes,
-        `run_remote_retrieval_eval` parses that exact wire shape over HTTP, and
-        when `/health/deep` returns 503 during warmup, observed
-        `search_mode_used='hybrid_rrf_graph'` still preserves `graph_expand=True`
-        (`hybrid_graph`)."""
+        """`get_health_check_data` populates `checks.knowledge_graph.retrieval_config`
+        in both lite and full modes."""
         from unittest.mock import AsyncMock, MagicMock
-        from agents.vigil.agent import _derive_eval_config_tag
-        from agents.vigil.remote_eval import run_remote_retrieval_eval
         from src.services.runtime_queries import get_health_check_data
 
         monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
@@ -994,103 +816,6 @@ class TestVigilRemoteRetrievalEval:
         }
         assert full_health["checks"]["knowledge_graph"]["retrieval_config"] == expected_cfg
         assert lite_health["checks"]["knowledge_graph"]["retrieval_config"] == expected_cfg
-
-        labels = tmp_path / "labels.json"
-        labels.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "pairs": [{"query": "q_graph", "relevant_ids": ["doc-1"]}],
-                }
-            )
-        )
-
-        # Clear Vigil's local env so only Core's response can select `hybrid_graph`.
-        for k in (
-            "UNITARES_EMBEDDING_MODEL",
-            "UNITARES_ENABLE_HYBRID",
-            "UNITARES_ENABLE_GRAPH_EXPANSION",
-            "UNITARES_ENABLE_RELATED_EXPANSION",
-            "UNITARES_ENABLE_RERANKER",
-        ):
-            monkeypatch.delenv(k, raising=False)
-
-        real_client_cls = httpx.Client
-
-        # Case A: `/health/deep` returns 200 with the real `full_health` payload.
-        def _transport_200(req: httpx.Request) -> httpx.Response:
-            if req.url.path.endswith("/health/deep"):
-                return httpx.Response(200, json=full_health)
-            if req.url.path.endswith("/v1/tools/call"):
-                return httpx.Response(
-                    200,
-                    json={
-                        "success": True,
-                        "result": {
-                            "success": True,
-                            "search_mode_used": "hybrid_rrf_graph",
-                            "discoveries": [{"id": "doc-1"}],
-                        },
-                    },
-                )
-            return httpx.Response(404)
-
-        with patch(
-            "agents.vigil.remote_eval.httpx.Client",
-            side_effect=lambda **kw: real_client_cls(
-                transport=httpx.MockTransport(_transport_200), **kw
-            ),
-        ):
-            report_200 = run_remote_retrieval_eval(
-                labels_path=labels,
-                base_url="https://gov.example/mcp/",
-                api_token="tok",
-            )
-
-        assert report_200["config"]["config_source"] == "core"
-        assert report_200["config"]["embedding_model"] == "bge-m3"
-        assert report_200["config"]["graph_expand"] is True
-        assert _derive_eval_config_tag(report_200["config"]) == "hybrid_graph"
-
-        # Case B: `/health/deep` stays 503 throughout warmup -> observed
-        # `search_mode_used="hybrid_rrf_graph"` STILL sets `graph_expand=True`
-        # and selects `hybrid_graph` rather than `hybrid_rrf`!
-        def _transport_503(req: httpx.Request) -> httpx.Response:
-            if req.url.path.endswith("/health/deep"):
-                return httpx.Response(
-                    503,
-                    json={"status": "unavailable", "retry_after_seconds": 5},
-                )
-            if req.url.path.endswith("/v1/tools/call"):
-                return httpx.Response(
-                    200,
-                    json={
-                        "success": True,
-                        "result": {
-                            "success": True,
-                            "search_mode_used": "hybrid_rrf_graph",
-                            "discoveries": [{"id": "doc-1"}],
-                        },
-                    },
-                )
-            return httpx.Response(404)
-
-        with patch(
-            "agents.vigil.remote_eval.httpx.Client",
-            side_effect=lambda **kw: real_client_cls(
-                transport=httpx.MockTransport(_transport_503), **kw
-            ),
-        ):
-            report_503 = run_remote_retrieval_eval(
-                labels_path=labels,
-                base_url="https://gov.example/mcp/",
-                api_token="tok",
-            )
-
-        assert report_503["config"]["config_source"] == "observed_search_mode"
-        assert report_503["config"]["hybrid"] is True
-        assert report_503["config"]["graph_expand"] is True
-        assert _derive_eval_config_tag(report_503["config"]) == "hybrid_graph"
 
 
 class TestServerTelemetryPostgresRoundTrip:

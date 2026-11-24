@@ -15,7 +15,7 @@ registered outcome-grounding read.
 ([`../ontology/competitive-survival-audit-2026-09.md`](../../ontology/competitive-survival-audit-2026-09.md), #2257);
 its independent review
 ([`../plans/competitive-survival-audit-review-2026-09-17.md`](../../plans/competitive-survival-audit-review-2026-09-17.md), #2258);
-the Relay re-layering packet ([`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md), #2255);
+the Relay re-layering packet ([`relay-substrate-relayering-v0.md`](../archive/relay-substrate-relayering-v0.md), #2255);
 the incident #2168 capture-stage comparison
 ([`../evaluations/accountability-journey/capture-stage-2168-v0.md`](../../evaluations/accountability-journey/capture-stage-2168-v0.md), #2267);
 and the outcome-grounding stop rule

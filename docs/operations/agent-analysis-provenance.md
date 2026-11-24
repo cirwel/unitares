@@ -2,7 +2,7 @@
 
 **Applies to** any agent-authored analysis of this system — independent multi-reviewer reviews, the
 dispatched-reviewer pattern recorded in
-`docs/proposals/active/open-decisions-packet-v0.md` (§ *Council review*), a `consult`
+`docs/proposals/archive/open-decisions-packet-v0.md` (§ *Council review*), a `consult`
 critique, or a single session's own diagnosis.
 
 **The rule.** Mark every load-bearing claim with its source:

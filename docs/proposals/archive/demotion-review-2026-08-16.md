@@ -30,7 +30,7 @@ still-operative protocol is not, by itself, grounds for archival.
 | [`relational-calibration-pilot-v0.md`](../registered/relational-calibration-pilot-v0.md) | Retain active | It is specification-only and explicitly prohibits runtime collection; “complete instrument lock” describes protocol rigor, not delivery. |
 | [`surface-lease-plane-phase-a-plan.md`](../active/surface-lease-plane-phase-a-plan.md) | Retain current ledger | The completed plan is still a load-bearing sequencing source referenced by the BEAM roadmap and coordination kernel, and the shared repository contract treats it as a hot single-writer surface. |
 | [`verification-weighted-verdict-v0.md`](../active/verification-weighted-verdict-v0.md) | Retain current safety contract | Wiring landed default-off; enabling remains council-gated, so the phase definitions and safety envelope are still operative. |
-| [`worktree-isolation-vs-lease-default.md`](../active/worktree-isolation-vs-lease-default.md) | Retain current design record | Its own status is an active counter-note; “SHIPPED” describes the related lease-plane contract, not this document. |
+| [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | Retain current design record | Its own status is an active counter-note; “SHIPPED” describes the related lease-plane contract, not this document. |
 
 ## Checker follow-up
 

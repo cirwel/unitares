@@ -414,8 +414,8 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
         # Resolve label to UUID if needed (consistent with observe_agent)
         try:
             if not (len(agent_id) == 36 and agent_id.count('-') == 4):
-                from src.mcp_handlers.identity.handlers import _find_agent_by_label
-                resolved = await _find_agent_by_label(agent_id)
+                from src.mcp_handlers.identity.handlers import find_agent_by_label
+                resolved = await find_agent_by_label(agent_id)
                 if resolved:
                     agent_id = resolved
         except Exception:
@@ -827,15 +827,9 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
 
 async def _fetch_scope_total_updates(conn, scope_clause: str, scope_args: tuple) -> int:
     """Return total_updates across the selected agent scope."""
-    updates_sql = f"""
-        SELECT COALESCE(
-            SUM(COALESCE((i.metadata->>'total_updates')::int, 0)), 0
-        )::bigint AS total_updates
-        FROM core.agents a
-        JOIN core.identities i ON i.agent_id = a.id
-        {scope_clause}
-    """
-    return await conn.fetchval(updates_sql, *scope_args)
+    from src.db.mixins.identity import fetch_scope_total_updates
+
+    return await fetch_scope_total_updates(conn, scope_clause, scope_args)
 
 
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)

@@ -15,10 +15,10 @@ To install the SDK as it shipped with a specific server release, use the Git
 URL instead:
 
 ```bash
-pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v3.6.0#subdirectory=agents/sdk"
+pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v4.1.0#subdirectory=agents/sdk"
 ```
 
-Replace `@v3.6.0` with another server release tag only after checking the
+Replace `@v4.1.0` with another server release tag only after checking the
 [compatibility map](https://github.com/cirwel/unitares/blob/master/docs/COMPATIBILITY.md).
 Pin a commit SHA when reproducing a specific development build.
 
@@ -165,8 +165,7 @@ Do **not** override `_ensure_identity`, `_handle_cycle_result`, or
   forever with heartbeats when idle. Reference:
   `agents/sentinel/agent.py`.
 - **Scheduled:** `asyncio.run(agent.run_once())` under launchd /
-  systemd cron. References: `agents/chronicler/agent.py`,
-  `agents/vigil/agent.py`.
+  systemd cron.
 
 Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
 
@@ -230,9 +229,9 @@ for that migration window.
 - The violation taxonomy is server-owned vocabulary
   (`src/violation_taxonomy.yaml`); consume it via the `/v1/taxonomy`
   endpoint rather than importing server code.
-- Watcher (`agents/watcher/agent.py`) uses a different execution
-  model (sync, hook-driven, one-shot per tool-use event) and does not
-  subclass `GovernanceAgent`.
+- A hook-driven resident such as a code watcher (sync, one-shot per
+  tool-use event) does not need to subclass `GovernanceAgent`; it can use
+  `SyncGovernanceClient` directly.
 
 ## NeMo Relay integration
 

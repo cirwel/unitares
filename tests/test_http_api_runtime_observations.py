@@ -718,3 +718,92 @@ def test_tool_outcome_fields_on_another_kind_are_not_stored(client, recorder):
     assert "tool_error_delta" not in details
     assert "repeat_failure_delta" not in details
     assert "window_truncated" not in details
+
+
+@pytest.mark.asyncio
+async def test_read_runtime_activity_composes_identity_and_state_summaries():
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from src.runtime_observations import read_runtime_activity
+
+    t_old = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
+    t_new = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+    events = [
+        {
+            "agent_id": "agent-multi",
+            "event_type": "runtime_observation.activity_rollup",
+            "timestamp": t_new.isoformat(),
+            "details": {"host_family": "claude", "slot_hash": "ab" * 16, "observed_at": t_new.isoformat()},
+        },
+        {
+            "agent_id": "agent-nostate",
+            "event_type": "runtime_observation.activity_rollup",
+            "timestamp": t_new.isoformat(),
+            "details": {"host_family": "codex", "slot_hash": "cd" * 16, "observed_at": t_new.isoformat()},
+        },
+    ]
+
+    conn = MagicMock()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [
+                {"agent_id": "agent-multi", "label": "Multi", "identity_id": 10},
+                {"agent_id": "agent-multi", "label": "Multi", "identity_id": 11},
+                {"agent_id": "agent-nostate", "label": "NoState", "identity_id": None},
+            ],
+            [
+                {
+                    "identity_id": 10,
+                    "last_reflection_at": t_old,
+                    "reflection_count": 2,
+                    "last_interpretation_at": t_old,
+                    "interpretation_count": 1,
+                    "last_bootstrap_at": None,
+                    "bootstrap_count": 0,
+                    "last_unclassified_at": None,
+                    "last_reflection_state": {"E": 0.4},
+                },
+                {
+                    "identity_id": 11,
+                    "last_reflection_at": t_new,
+                    "reflection_count": 3,
+                    "last_interpretation_at": t_new,
+                    "interpretation_count": 4,
+                    "last_bootstrap_at": t_old,
+                    "bootstrap_count": 1,
+                    "last_unclassified_at": None,
+                    "last_reflection_state": {"E": 0.8},
+                },
+            ],
+        ]
+    )
+
+    class _Acquire:
+        async def __aenter__(self):
+            return conn
+
+        async def __aexit__(self, *_args):
+            return False
+
+    db = MagicMock()
+    db.acquire.return_value = _Acquire()
+    captured = {}
+
+    def _capture_summarize(ev, refl_rows, **kwargs):
+        captured["reflection_rows"] = refl_rows
+        return {"success": True, "summary": {"processes": len(ev)}, "processes": []}
+
+    with patch("src.audit_db.query_audit_events_async", AsyncMock(return_value=events)), \
+         patch("src.db.get_db", return_value=db), \
+         patch("src.runtime_observations.summarize_runtime_activity", side_effect=_capture_summarize):
+        result = await read_runtime_activity(window_hours=24, limit=100)
+
+    assert result["success"] is True
+    by_agent = {row["agent_id"]: row for row in captured["reflection_rows"]}
+    assert by_agent["agent-multi"]["reflection_count"] == 5
+    assert by_agent["agent-multi"]["interpretation_count"] == 5
+    assert by_agent["agent-multi"]["bootstrap_count"] == 1
+    assert by_agent["agent-multi"]["last_reflection_at"] == t_new
+    assert by_agent["agent-multi"]["last_reflection_state"] == {"E": 0.8}
+    assert by_agent["agent-nostate"]["reflection_count"] == 0
+    assert by_agent["agent-nostate"]["last_reflection_at"] is None

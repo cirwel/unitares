@@ -498,7 +498,7 @@ def test_simulate_update_escalation_rewraps_the_nested_verdict():
 
     source = inspect.getsource(core.handle_simulate_update)
     escalation = source[source.index("escalated_decision is not decision"):]
-    assert "_rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
+    assert "rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
     assert "apply_policy_actuation_posture(result, posture=posture)" in source
 
 

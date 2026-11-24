@@ -1,6 +1,6 @@
 # Branch Hygiene Runbook
 
-`agents/vigil_hygiene/agent.py` is the resident branch-hygiene sweep. It is
+`scripts/dev/branch_hygiene/agent.py` is the branch-hygiene sweep. It is
 designed to remove branch clutter without deleting salvageable work.
 
 The same safety contract is available during manual workspace closeout:
@@ -22,10 +22,15 @@ For local branches whose upstream is gone:
 - empty output means the branch has no commits ahead of `master`. The branch is
   safe to prune if the worktree is clean.
 - unparseable or failed `git cherry` output means **SKIP**. Do not delete.
-- dirty worktrees are never removed by the sweep. The in-progress-operation
-  check looks for sentinels under `<worktree>/.git/`, which a linked worktree
-  does not have, so a clean linked worktree paused mid-rebase or mid-bisect
-  can still be removed; finish or abort the operation first.
+- dirty or locked worktrees are never removed by the sweep. The
+  in-progress-operation check resolves both primary `.git/` directories and
+  linked-worktree `.git` pointer files (`gitdir: ...` / `git rev-parse --git-dir`),
+  holding worktrees with `locked`, `rebase-merge`, `rebase-apply`,
+  `CHERRY_PICK_HEAD`, `MERGE_HEAD`, `REVERT_HEAD`, or `BISECT_LOG`.
+- detached linked worktrees (`*-deploy` checkouts are always protected) are
+  removed only when clean and their `HEAD` commit is an ancestor of or
+  patch-equivalent to the remote default branch; detached worktrees with unique
+  commits are recorded under `holds` and left in place.
 - a stale branch checked out in the sweep process's current repo or in the
   primary checkout is held; move that checkout off the branch before removing
   it.

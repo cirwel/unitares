@@ -1,6 +1,6 @@
 """Party-HMAC minting is retired; history stays readable (#2449).
 
-Decision D5 in ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``:
+Decision D5 in ``docs/proposals/archive/federation-trust-decisions-2026-09-25.md``:
 new dialectic resolutions stop receiving v2 party-HMAC signatures, because a
 symmetric HMAC the server computes with a key the server stores attests only
 the server's own write. The constraints that decision binds:

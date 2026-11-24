@@ -1,0 +1,43 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-fundamentals",
+  "verified_at": "2026-11-21T09:36:03Z",
+  "verified_date": "2026-11-21",
+  "verifier": "w3b-bounds-b3: re-checked claims after B3 private cross-component import cleanup (additive public delegating wrappers + import switches only; zero auth, lifecycle, envelope, dialectic, KG, or schema behavior changes)",
+  "source_digests": {
+    "unitares/config/governance_config.py": "6112deea9bd0c7e9",
+    "unitares/docs/EISV_COMPUTATION.md": "95d7d8a248ee2c31",
+    "unitares/governance_core/coherence.py": "ef819003ee72b388",
+    "unitares/governance_core/parameters.py": "e02c333c8772f9b0",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
+    "unitares/src/behavioral_assessment.py": "c1da9970c7fd36d2",
+    "unitares/src/behavioral_sensor.py": "3b063d310095d37d",
+    "unitares/src/behavioral_state.py": "b3af4f476856efba",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/cold_start_risk_confirmation.py": "5ccc450c9dfd9aa4",
+    "unitares/src/confidence.py": "dbdcb394613325fd",
+    "unitares/src/eisv_telemetry.py": "4c86d7dfbb76fe86",
+    "unitares/src/governance_glossary.py": "9cf70dff34b9b593",
+    "unitares/src/governance_monitor.py": "06f64f6c5e944b2e",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "10f49597316e140a",
+    "unitares/src/mcp_handlers/observability/outcome_events.py": "4ee47d956251cbb9",
+    "unitares/src/mcp_handlers/response_formatter.py": "19578fd700ce2737",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/mcp_handlers/updates/context.py": "bfae0beb8ed92df6",
+    "unitares/src/monitor_calibration.py": "5fc4932dd6e3f598",
+    "unitares/src/monitor_decision.py": "059d229f8f3a3f90",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/monitor_result.py": "a081e8047caff81f",
+    "unitares/src/outcomes.py": "830ead978f3e2a0c",
+    "unitares/src/services/runtime_queries.py": "deea3a8596ad0382"
+  },
+  "skill_digest": "981acbc29ad1f470",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "6cd0fccc0e50d208"
+    ]
+  }
+}
