@@ -80,6 +80,16 @@ def no_cloud_reads(monkeypatch):
 
 
 
+_REAL_REQUIRE_AGENT_CREDENTIAL = rg.require_agent_credential
+
+
+@pytest.fixture(autouse=True)
+def _agent_credential(monkeypatch):
+    """Unit commands run as if under the App runner; the credential check has
+    its own tests below, which call _REAL_REQUIRE_AGENT_CREDENTIAL."""
+    monkeypatch.setattr(rg, "require_agent_credential", lambda: None)
+
+
 @pytest.fixture(autouse=True)
 def _no_reasoning_floor(monkeypatch):
     """Most tests here use short stand-in reviews ("fine / VERDICT: CLEAN") to
@@ -1215,6 +1225,42 @@ def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(
     monkeypatch.setattr(rg, "_resolve", lambda *a: pytest.fail("resolved or ran an operator action"))
     with pytest.raises(SystemExit, match="operator"):
         rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
+
+
+def test_agent_writes_refuse_a_user_login(monkeypatch):
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"type": "User", "login": "someone"})
+    with pytest.raises(SystemExit, match="unitares-github -- review"):
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+@pytest.mark.parametrize("actor", [None, {"type": "Bot"}, {}, []])
+def test_agent_writes_accept_app_and_actions_tokens(monkeypatch, actor):
+    def identity(*args):
+        assert args == ("api", "user")
+        if actor is None:
+            raise SystemExit("HTTP 403: Resource not accessible by integration")
+        return actor
+    monkeypatch.setattr(rg, "gh_json", identity)
+    _REAL_REQUIRE_AGENT_CREDENTIAL()
+
+
+def test_record_post_checks_the_credential_but_a_waiver_does_not(monkeypatch):
+    checked, launched = [], []
+    monkeypatch.setattr(rg, "require_agent_credential", lambda: checked.append(True))
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: launched.append(cmd))
+    rg.post_comment(4, "record\n")
+    assert checked == [True] and len(launched) == 1
+    rg.post_comment(4, "waiver\n", operator=True)
+    assert checked == [True] and len(launched) == 2
+
+
+def test_review_refuses_a_user_login_before_any_reviewer_runs(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "k" * 64, "gemini/x"))
+    monkeypatch.setattr(rg, "require_agent_credential",
+                        lambda: (_ for _ in ()).throw(SystemExit("review_gate: refusing to post")))
+    monkeypatch.setattr(rg, "selected_reviewers", lambda *a: pytest.fail("chose a reviewer"))
+    with pytest.raises(SystemExit, match="refusing to post"):
+        rg.cmd_review(SimpleNamespace(base="master", reviewer="codex", budget=30))
 
 
 @pytest.mark.parametrize("verdict,disposed,state", [
