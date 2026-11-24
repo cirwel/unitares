@@ -3669,16 +3669,25 @@ def agy_family_lanes(branch: str, families: set[str], authors: set[str],
     return lanes
 
 
-def budget_refuses(rounds: CodexRounds | None, family: str | None, key: str, head: str) -> bool:
+def budget_refuses(rounds: CodexRounds | None, family: str | None, key: str, head: str,
+                   families: set[str]) -> bool:
     """Whether cmd_review would refuse a required-family pass by ``family``
-    without an operator grant. A family that already took part in an earlier
-    cycle gets no missing-family exemption, so it runs only within the cycle
-    budget. The sweep asks first: a refused pass posts nothing, and would
-    otherwise hold the sweep's one-PR-per-run slot on every run."""
+    without an operator grant. The sweep asks first: a refused pass posts
+    nothing, and would otherwise hold the sweep's one-PR-per-run slot on
+    every run.
+
+    Mirrors cmd_review's missing-family exemption for a caller that has
+    already established the rest of it (a sensitive diff, known authors,
+    ``family`` outside them and missing, no waiver): a family that never took
+    part in a cycle is exempt from the cycle budget, but only once some
+    classified family (``families``) has passed. Otherwise the budget decides.
+    """
     if rounds is None or rounds.unknown_history:
         return True
     attempted = bool(family) and any(family in cycle.families for cycle in rounds.cycles)
-    return attempted and rounds.exhausted(rounds.can_join(head, key, family), key, head)
+    if family and families and not attempted:
+        return False
+    return rounds.exhausted(rounds.can_join(head, key, family), key, head)
 
 
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
@@ -4513,14 +4522,14 @@ def cmd_sweep(args) -> int:
                             rounds = None
                     selected = next((p for p in choices if p in eligible
                                      and not _skips_author_family(p, authored_by)
-                                     and not budget_refuses(rounds, provider_family(p), key, head)), None)
+                                     and not budget_refuses(rounds, provider_family(p), key, head, families)), None)
                     lanes = ([] if waived or selected or "antigravity" not in choices else
                              [m for m in agy_family_lanes(p["headRefName"], independent, authored_by,
                                                           comments, key)
-                              if not budget_refuses(rounds, model_family(m), key, head)])
+                              if not budget_refuses(rounds, model_family(m), key, head, families)])
                     held = ([] if waived else
                             [f for f in eligible_families(authored_by, independent)
-                             if budget_refuses(rounds, f, key, head)])
+                             if budget_refuses(rounds, f, key, head, families)])
                     if selected:
                         reviewer = selected
                         required_family = True
