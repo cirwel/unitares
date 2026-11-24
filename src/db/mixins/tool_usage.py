@@ -770,9 +770,18 @@ async def fetch_outcomes_for_correlation(
 
 
 async def count_trajectory_validated_outcomes_for_epoch(
-    conn, current_epoch: int
+    conn, current_epoch: int, agent_ids: Optional[List[str]] = None
 ) -> int:
     """Count `trajectory_validated` outcome events for `current_epoch`."""
+    if agent_ids is not None:
+        proceed_sql = """
+            SELECT count(*)::int FROM audit.outcome_events
+            WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
+              AND agent_id = ANY($2::text[])
+        """
+        return int(
+            (await conn.fetchval(proceed_sql, current_epoch, list(agent_ids))) or 0
+        )
     proceed_sql = """
         SELECT count(*)::int FROM audit.outcome_events
         WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
