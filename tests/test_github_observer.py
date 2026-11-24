@@ -1787,15 +1787,43 @@ def test_an_unsent_attempt_does_not_pin_its_footer_on_later_attempts():
     assert [p["agent_uuid"] for p in writer.posted] == ["agent-after-edit"]
 
 
-def test_two_unanswered_attempts_with_different_footers_record_nothing():
+def test_two_unanswered_attempts_with_different_footers_record_nothing_on_a_409():
     # Either may be the one the server stored: no guess, and it is counted.
     store, writer = oc.MemoryPendingStore(), _Outcomes()
     queue = oc.OutcomeQueue(store, writer)
     counts = _drive(queue, ("agent-before-edit", "failed"), ("agent-after-edit", "failed"))
-    assert counts["outcomes_ambiguous"] == 1 and writer.posted == []
-    later = _drive(queue, ("agent-after-edit", "duplicate"))
-    assert writer.posted == [] and later["outcomes_ambiguous"] == 0
+    assert counts["outcomes_ambiguous"] == 0 and writer.posted == []
+    settled = _drive(queue, ("agent-after-edit", "duplicate"))
+    assert writer.posted == [] and settled["outcomes_ambiguous"] == 1
     assert store._pending == {}
+    assert _drive(queue, ("agent-after-edit", "duplicate"))["outcomes_ambiguous"] == 0
+
+
+def test_a_201_after_two_unanswered_attempts_with_different_footers_releases_it():
+    # The 201 shows neither earlier attempt stored the event: grade it as posted.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    counts = _drive(
+        oc.OutcomeQueue(store, writer),
+        ("agent-before-edit", "failed"),
+        ("agent-after-edit", "failed"),
+        ("agent-third", "failed"),
+        ("agent-after-edit", "written"),
+    )
+    assert [p["agent_uuid"] for p in writer.posted] == ["agent-after-edit"]
+    assert counts["outcomes_ambiguous"] == 0 and store._pending == {}
+
+
+@pytest.mark.parametrize("answer", ["unknown_agent", "untrusted_author", "future_timestamp", "unsent"])
+def test_a_retried_refusal_keeps_the_ambiguity_marker(answer):
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    counts = _drive(
+        oc.OutcomeQueue(store, writer),
+        ("agent-before-edit", "failed"),
+        ("agent-after-edit", "failed"),
+        ("agent-after-edit", answer),
+        ("agent-after-edit", "duplicate"),
+    )
+    assert writer.posted == [] and counts["outcomes_ambiguous"] == 1
 
 
 def test_two_unanswered_attempts_with_the_same_footer_still_release_on_409():
@@ -2008,9 +2036,14 @@ def test_an_ambiguous_outcome_fails_the_poll(tmp_path, monkeypatch, capsys):
     live.put_pending(oc.outcome_key(merge), oc.outcome_payload(merge), accepted=False)
     live.close()
     monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
-    monkeypatch.setattr(obs, "UnitaresEventWriter", lambda *a, **k: _Answers("failed"))
     monkeypatch.setattr(obs, "UnitaresOutcomeWriter", lambda *a, **k: _Outcomes())
     args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
+    # This poll's attempt, with the recorded footer, loses its answer too.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", lambda *a, **k: _Answers("failed"))
+    obs.main([*args, "--record-outcomes"])
+    assert json.loads(capsys.readouterr().err)["outcomes_ambiguous"] == 0
+    # The next answer is a 409: one of the two was stored, and nobody knows which.
+    monkeypatch.setattr(obs, "UnitaresEventWriter", lambda *a, **k: _Answers("duplicate"))
     assert obs.main([*args, "--record-outcomes"]) == 1
     assert json.loads(capsys.readouterr().err)["outcomes_ambiguous"] == 1
 

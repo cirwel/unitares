@@ -31,8 +31,10 @@ as it was, and drops an outcome it queued itself. A refusal the observer
 retries (unknown agent, untrusted author, future timestamp) does the same, so
 it cannot erase the record of an earlier attempt that may have stored the
 event. When two unanswered attempts carried different footers, either may be
-the one stored, so the outcome is dropped and counted as
-``outcomes_ambiguous`` rather than credited to a guess.
+the one stored, so the queue keeps only a marker that the attempts disagree.
+A later 201 still releases the event as posted, since it shows neither earlier
+attempt stored anything; a later 409 drops the outcome and counts it as
+``outcomes_ambiguous`` rather than credit a guess.
 
 Delivery. Outcomes post to ``POST /v1/harness/outcome`` under the operator
 credential with ``verification_source="external_signal"``. No ``confidence``
@@ -55,6 +57,9 @@ import urllib.request
 from typing import Any, Callable, Iterable, Mapping, Protocol, TextIO
 
 OUTCOME_KEY_PREFIX = "outcome:"
+# A queued row with this key instead of a body: two unanswered attempts carried
+# different footers. It is never released; only a 201 or a 409 settles it.
+AMBIGUOUS = "ambiguous_footers"
 VERIFICATION_SOURCE = "external_signal"
 PRODUCER = "github_observer"
 
@@ -207,7 +212,13 @@ class OutcomeQueue:
             # follows that body, not one queued by an attempt that never landed.
             self._store.put_pending(key, payload, accepted=True)
         elif result == "duplicate":
-            if queued_earlier:
+            queued = self._store.pending_payload(key) if queued_earlier else None
+            if queued is not None and queued.get(AMBIGUOUS):
+                # Stored by one of two attempts whose footers differ: no guess.
+                self._store.drop_pending(key)
+                self._store.add(key, payload["outcome_type"])
+                self._ambiguous += 1
+            elif queued_earlier:
                 # An earlier attempt of ours stored it and its answer was lost.
                 self._store.accept_pending(key)
             else:
@@ -224,18 +235,24 @@ class OutcomeQueue:
         else:
             # ``failed`` and anything unknown: this attempt may have stored the
             # event. If an earlier unanswered attempt carried another footer,
-            # either may be the stored one.
+            # either may be the stored one: keep only the marker, so a later
+            # 201 can still release and a later 409 drops it.
             queued = self._store.pending_payload(key) if queued_earlier else None
-            if queued is not None and queued.get("agent_uuid") != payload["agent_uuid"]:
-                self._store.drop_pending(key)
-                self._store.add(key, payload["outcome_type"])
-                self._ambiguous += 1
+            if (
+                queued is not None
+                and not queued.get(AMBIGUOUS)
+                and queued.get("agent_uuid") != payload["agent_uuid"]
+            ):
+                marker = {AMBIGUOUS: True, "outcome_type": payload["outcome_type"]}
+                self._store.put_pending(key, marker, accepted=False)
 
     def flush(self, counts: dict[str, int]) -> None:
         """Send every released outcome; keep the ones that failed for the next poll."""
         counts["outcomes_ambiguous"] += self._ambiguous
         self._ambiguous = 0
         for key, payload in list(self._store.accepted_pending()):
+            if payload.get(AMBIGUOUS):
+                continue  # never released; settled by the event's next answer
             result = self._writer.write(payload)
             if result == "written":
                 self._store.add(key, payload["outcome_type"])
