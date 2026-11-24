@@ -259,25 +259,15 @@ async def _load_provisional_lineage_candidates(
 
 
 def _stale_public_r1_scores_count_sql() -> str:
-    return """
-        SELECT COUNT(*)
-        FROM knowledge.discoveries
-        WHERE type = 'trajectory_continuity_score'
-          AND status = 'open'
-          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
-    """
+    from src.db.mixins.knowledge_graph import stale_public_r1_scores_count_sql
+
+    return stale_public_r1_scores_count_sql()
 
 
 def _stale_public_r1_scores_select_sql(*, limit: Optional[int]) -> str:
-    return f"""
-        SELECT id, agent_id, created_at, updated_at, status
-        FROM knowledge.discoveries
-        WHERE type = 'trajectory_continuity_score'
-          AND status = 'open'
-          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
-        ORDER BY COALESCE(updated_at, created_at)
-        LIMIT {int(limit) if limit is not None else 20}
-    """
+    from src.db.mixins.knowledge_graph import stale_public_r1_scores_select_sql
+
+    return stale_public_r1_scores_select_sql(limit=limit)
 
 
 def _stale_public_r1_scores_ids_sql(*, limit: Optional[int]) -> str:
@@ -287,16 +277,9 @@ def _stale_public_r1_scores_ids_sql(*, limit: Optional[int]) -> str:
     every matching id (bounded only by an explicit ``limit``) so the apply
     path archives the whole stale set, not just a 20-row preview.
     """
-    limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
-    return f"""
-        SELECT id, agent_id, created_at, updated_at, status
-        FROM knowledge.discoveries
-        WHERE type = 'trajectory_continuity_score'
-          AND status = 'open'
-          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
-        ORDER BY COALESCE(updated_at, created_at)
-        {limit_sql}
-    """
+    from src.db.mixins.knowledge_graph import stale_public_r1_scores_ids_sql
+
+    return stale_public_r1_scores_ids_sql(limit=limit)
 
 
 def _row_to_stale_score(row: Any) -> dict[str, Any]:

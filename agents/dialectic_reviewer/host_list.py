@@ -27,7 +27,7 @@ from typing import Mapping, Optional
 
 from urllib.parse import urlsplit
 
-from src.local_inference_env import (
+from agents.common.local_inference_env import (
     endpoint_reaches_local_address,
     model_base_url,
     same_endpoint,

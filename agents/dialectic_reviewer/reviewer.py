@@ -35,8 +35,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
-from src.identity.lineage_semantics import LineageSpawnReason
-from src.local_inference_env import (
+from agents.common.local_inference_env import (
     no_redirect_http_client,
     EndpointNotLocalError,
     ModelNotConfiguredError,
@@ -73,7 +72,9 @@ _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 # OpenAI-compatible base including /v1.
 DEFAULT_MODEL = default_local_model()
 OLLAMA_BASE_URL = model_base_url()
-SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
+# Registered in ``src/identity/lineage_semantics.py`` (LineageSpawnReason.DIALECTIC_REVIEWER);
+# held equal by ``tests/test_lineage_semantics.py::test_dialectic_reviewer_uses_registered_reason``.
+SPAWN_REASON = "dialectic_reviewer"
 REVIEWER_NAME = "DialecticReviewer"
 # Keep a rejecting reviewer available for the protocol's full synthesis-response
 # window. DialecticSession.MAX_SYNTHESIS_WAIT is one hour; the old ten-minute
