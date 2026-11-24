@@ -1257,6 +1257,15 @@ def test_agent_writes_fail_closed_when_the_lookup_fails(monkeypatch, stderr):
         _REAL_REQUIRE_AGENT_CREDENTIAL()
 
 
+def test_agent_credential_refusal_names_the_hosted_session_routes(monkeypatch):
+    _user_lookup(monkeypatch, 0, '{"type": "User", "login": "someone"}')
+    with pytest.raises(SystemExit) as exc:
+        _REAL_REQUIRE_AGENT_CREDENTIAL()
+    message = str(exc.value)
+    assert "record --emit" in message and "dispose --emit" in message
+    assert "review-requested" in message
+
+
 def test_record_post_checks_the_credential_but_a_waiver_does_not(monkeypatch):
     checked, launched = [], []
     monkeypatch.setattr(rg, "require_agent_credential", lambda: checked.append(True))

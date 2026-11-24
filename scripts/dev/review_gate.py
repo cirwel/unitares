@@ -275,7 +275,11 @@ def require_agent_credential() -> None:
     if proc.returncode != 0 and INTEGRATION_REFUSAL in (proc.stdout or "") + (proc.stderr or ""):
         return
     route = ("Agent review writes go through the agents' App: run "
-             "`unitares-github -- review ...` from this checkout instead.")
+             "`unitares-github -- review ...` from this checkout instead. A hosted "
+             "session without the App can print a record or disposition with "
+             "`record --emit` or `dispose --emit` and post it through its connector, "
+             "or add the `review-requested` label for the review host "
+             "(docs/operations/github-workflow-conventions.md, Recording a review without gh).")
     if proc.returncode != 0:
         raise SystemExit("review_gate: could not confirm the posting credential is an App token "
                          f"(GET /user: {(proc.stderr or '').strip()[:200] or 'no answer'}). {route}")
