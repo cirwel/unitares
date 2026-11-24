@@ -883,21 +883,10 @@ def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] =
 
 
 def same_reviewed_diff(source: Record, base: str) -> bool:
-    """An unrelated advance of the base does not invalidate the source diff.
-
-    When ``source.base`` was a stacked PR branch that has since been
-    squash-merged and deleted, CI's clone no longer holds ``source.base``;
-    ``diff_key(base, source.head) == source.key`` still proves the exact
-    reviewed diff against ``base`` by SHA-256. If ``source.base`` is present
-    locally, verify it too so a mismatched ``source.base`` fails closed.
-    """
-    if not source.base:
-        return False
+    """An unrelated advance of the base does not invalidate the source diff."""
     try:
-        if git("rev-parse", "--verify", "--quiet", f"{source.base}^{{commit}}", check=False).strip():
-            if diff_key(source.base, source.head) != source.key:
-                return False
-        return diff_key(base, source.head) == source.key
+        return (bool(source.base) and diff_key(source.base, source.head) == source.key
+                and diff_key(base, source.head) == source.key)
     except (SystemExit, subprocess.SubprocessError):
         return False
 

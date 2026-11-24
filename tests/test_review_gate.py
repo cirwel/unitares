@@ -5432,25 +5432,6 @@ def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_follow
     assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
 
 
-def test_followup_survives_deleted_stacked_base_when_diff_key_matches(repo, reviewed_followup):
-    comments, fix = reviewed_followup
-    # Simulate a stacked base branch that was squash-merged and deleted so CI
-    # no longer has the old source.base commit object, while diff_key(master,
-    # source.head) still matches source.key.
-    dead_base = '0' * 40
-    source = full_record(fix.from_key, 'CLEAN', 0, False, 'claude',
-                         head=fix.from_head, base=dead_base)
-    assert rg.same_reviewed_diff(source, fix.base) is True
-    # A mismatched key against master still fails closed even with a dead base.
-    bad_source = full_record('f' * 64, 'CLEAN', 0, False, 'claude',
-                             head=fix.from_head, base=dead_base)
-    assert rg.same_reviewed_diff(bad_source, fix.base) is False
-    # When source.base DOES exist locally and disagrees with source.key, fail closed.
-    wrong_live_base = full_record(fix.from_key, 'CLEAN', 0, False, 'claude',
-                                  head=fix.from_head, base=fix.from_head)
-    assert rg.same_reviewed_diff(wrong_live_base, fix.base) is False
-
-
 def test_sensitive_followup_skips_when_chosen_family_lacks_full_anchor(repo, reviewed_followup, monkeypatch):
     comments, fix = reviewed_followup
     # Keep only the OpenAI full review; Anthropic has NO full-review anchor yet.
