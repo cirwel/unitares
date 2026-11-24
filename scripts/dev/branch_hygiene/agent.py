@@ -202,12 +202,19 @@ def cherry(repo: Path, branch: str, base: str = "master") -> str:
         return ""
 
 
-def cherry_local(repo: Path, branch: str, base: str = "master") -> Optional[str]:
+def cherry_local(
+    repo: Path,
+    branch: str,
+    base: str = "master",
+    *,
+    subject_label: Optional[str] = None,
+) -> Optional[str]:
     try:
         result = run_git("cherry", base, branch, repo=repo)
         return result.stdout
     except subprocess.CalledProcessError as e:
-        log(f"SKIP gone-branch '{branch}': git cherry failed ({e.stderr.strip()})")
+        subject = subject_label or f"gone-branch '{branch}'"
+        log(f"SKIP {subject}: git cherry failed ({e.stderr.strip()})")
         return None
 
 
@@ -429,7 +436,12 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
             == 0
         )
         if not is_ancestor:
-            detached_cherry = cherry_local(repo, head_sha, base=base)
+            detached_cherry = cherry_local(
+                repo,
+                head_sha,
+                base=base,
+                subject_label=f"detached worktree {path} ({head_sha[:12]})",
+            )
             if detached_cherry is None:
                 continue
             detached_verdict = classify_local_gone_cherry(detached_cherry, base=base)
