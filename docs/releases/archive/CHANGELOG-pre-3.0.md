@@ -27,7 +27,7 @@ unchanged from v2.22.0. No database migration is introduced.
 
 ## [2.22.0] - 2026-09-07
 
-Published contents are recorded below. See [post-publication errata](releases/2.22.0-errata.md) for the Compose upgrade correction.
+Published contents are recorded below. See [post-publication errata](../2.22.0-errata.md) for the Compose upgrade correction.
 
 ### Changed
 
@@ -290,7 +290,7 @@ Published contents are recorded below. See [post-publication errata](releases/2.
 
 ## [2.19.0] - 2026-08-21
 
-_Corrected 2026-08-21: thirteen pull requests merged as merge commits were omitted from the published entry — see [2.19.0-errata.md](releases/2.19.0-errata.md). Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
+_Corrected 2026-08-21: thirteen pull requests merged as merge commits were omitted from the published entry — see [2.19.0-errata.md](../2.19.0-errata.md). Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
 
 ### Added
 

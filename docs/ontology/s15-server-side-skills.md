@@ -326,7 +326,7 @@ S15-a alone closes the structural source-of-truth problem on the server. S15-b i
 
 ## 12. Pointers for next process-instance executing this plan
 
-- Read this doc + `unitares/docs/ontology/identity.md` (target ontology to teach) + `unitares/docs/ontology/s8a-tag-discipline-audit.md` (write-path-drift parable) + S1 doc for retirement-pattern shape.
+- Read this doc + `unitares/docs/ontology/identity.md` (target ontology to teach) + `unitares/docs/ontology/archive/s8a-tag-discipline-audit.md` (write-path-drift parable) + S1 doc for retirement-pattern shape.
 - Check `plan.md` S15 row for `WIP-PR:` field before opening S15-a.
 - Target: `unitares` master. Docs-only preflight (this doc) lands first; S15-a is the first code PR.
 - Cite this doc's §4 and §5 in the S15-a PR body. §5 in particular surfaces the activation-trigger portability problem that future adapter PRs must address.

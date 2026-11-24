@@ -719,7 +719,9 @@ order or authorize a change to the default observation posture.
 ## Maintenance
 
 When a sweep finds a new collision, add it to the high-risk table here and log
-the sweep as a dated audit alongside `archive/glossary-drift-audit-2026-06-20.md`. Keep
+the sweep as a dated audit at `docs/ontology/glossary-drift-audit-YYYY-MM-DD.md`
+(alongside `glossary-drift-audit-2026-11-01.md` so the public-site build picks
+it up; superseded sweeps move to `archive/`). Keep
 this file keyed by *question answered*; if you find yourself writing a definition
 that leads with examples, you are seeding the next drift.
 

@@ -82,6 +82,7 @@ INDEX_EXEMPT = {
     # Frozen evidence and instruments retain their literal original references.
     "eisv-maths-roadmap-v0.md",
     "open-decisions-packet-v0.md",
+    "active/open-decisions-packet-v0.md",
     "eisv-individuality-v2-preregistration.md",
 }
 
