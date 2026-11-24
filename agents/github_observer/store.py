@@ -68,6 +68,12 @@ class FingerprintStore:
         )
         self._db.commit()
 
+    def pending_payload(self, key: str) -> dict | None:
+        row = self._db.execute(
+            "SELECT payload FROM pending_outcomes WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else json.loads(row[0])
+
     def accept_pending(self, key: str) -> None:
         self._db.execute("UPDATE pending_outcomes SET accepted = 1 WHERE key = ?", (key,))
         self._db.commit()
@@ -101,5 +107,30 @@ def read_only_fingerprints(path: str | Path) -> frozenset[str]:
     db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         return frozenset(row[0] for row in db.execute("SELECT fingerprint FROM emitted"))
+    finally:
+        db.close()
+
+
+def read_only_pending(path: str | Path) -> list[tuple[str, dict, bool]]:
+    """The queued outcomes in an existing store, without creating or changing it.
+
+    ``(key, payload, accepted)`` rows; none for a missing file or a store made
+    before the outcome queue existed. Raises ``sqlite3.Error`` when the file is
+    not a fingerprint store.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        has_table = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pending_outcomes'"
+        ).fetchone()
+        if has_table is None:
+            return []
+        rows = db.execute(
+            "SELECT key, payload, accepted FROM pending_outcomes ORDER BY key"
+        ).fetchall()
+        return [(key, json.loads(payload), bool(accepted)) for key, payload, accepted in rows]
     finally:
         db.close()

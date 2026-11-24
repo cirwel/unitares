@@ -18,6 +18,7 @@ import importlib.util
 import io
 import itertools
 import json
+import socket
 import sys
 import threading
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ import pytest
 
 from agents.github_observer import events as ev
 from agents.github_observer import observer as obs
-from agents.github_observer.store import FingerprintStore, read_only_fingerprints
+from agents.github_observer.store import FingerprintStore, read_only_fingerprints, read_only_pending
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "github_observer"
@@ -1319,7 +1320,7 @@ def test_unitares_event_writer_posts_with_operator_header_and_no_redirect():
     assert lowered["x-unitares-operator"] == "secret-op"
     assert "authorization" not in lowered
 
-    for code, expected in ((409, "duplicate"), (404, "unknown_agent"), (403, "failed"), (500, "failed")):
+    for code, expected in ((409, "duplicate"), (404, "unknown_agent"), (403, "unsent"), (500, "failed")):
         def err_opener(request, timeout=None, _code=code):
             raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(b"secret"))
 
@@ -1467,8 +1468,9 @@ def test_permanent_refusals_classify_rejected_and_dry_run_ignores_unitares_url(t
         (422, b'{"error": "observed_at outside accepted retention window"}', "rejected"),
         (422, b'{"error": "observed_at in the future"}', "future_timestamp"),
         (403, b'{"error": "untrusted pr_author"}', "untrusted_author"),
-        (403, b'{"error": "operator credential required"}', "failed"),
-        (401, b'{"error": "unauthorized"}', "failed"),
+        (403, b'{"error": "operator credential required"}', "unsent"),
+        (401, b'{"error": "unauthorized"}', "unsent"),
+        (429, b'{"error": "slow down"}', "unsent"),
     ):
         def opener(request, timeout=None, _code=code, _body=body_bytes):
             raise urllib.error.HTTPError(request.full_url, _code, "err", {}, _io.BytesIO(_body))
@@ -1577,7 +1579,7 @@ def test_writer_handles_incomplete_read_in_http_error_body():
             pass
 
     event = {"type": "github.pr_opened", "fingerprint": "1#2:opened", "agent_uuid": AGENT}
-    for code, expected in ((422, "failed"), (403, "failed")):
+    for code, expected in ((422, "failed"), (403, "unsent")):
         def opener(request, timeout=None, _code=code):
             raise urllib.error.HTTPError(request.full_url, _code, "err", {}, CutOffBody())
 
@@ -1702,7 +1704,7 @@ def test_a_poll_posts_the_merge_once_and_a_second_poll_posts_nothing():
 def test_an_event_the_route_refused_posts_no_outcome_and_queues_nothing():
     # The route checks the subject uuid and the PR author before its dedup;
     # an outcome follows only an event it stored, so it inherits both checks.
-    for refusal in ("unknown_agent", "untrusted_author", "future_timestamp", "rejected"):
+    for refusal in ("unknown_agent", "untrusted_author", "future_timestamp", "rejected", "unsent"):
         writer = _Outcomes()
         _, store = outcome_cycle(FakeReader(), writer=_Answers(refusal), outcome_writer=writer)
         assert writer.posted == [], refusal
@@ -1752,6 +1754,96 @@ def test_a_201_releases_the_body_the_server_just_stored():
     queue.after_event(queue.before_event(_merge_event(agent="agent-after-edit")), "written")
     queue.flush(dict.fromkeys(obs.COUNTS, 0))
     assert [p["agent_uuid"] for p in writer.posted] == ["agent-after-edit"]
+
+
+def _drive(queue, *steps):
+    """Run (agent, event-route answer) attempts for one merge, then flush."""
+    for agent, answer in steps:
+        queue.after_event(queue.before_event(_merge_event(agent=agent)), answer)
+    counts = dict.fromkeys(obs.COUNTS, 0)
+    queue.flush(counts)
+    return counts
+
+
+def test_an_attempt_that_sent_nothing_leaves_no_claim_on_a_later_409():
+    # A credential or rate-limit refusal, or no connection, stored nothing. If
+    # the merge was stored by another writer, the next 409 is not ours.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    counts = _drive(oc.OutcomeQueue(store, writer), (AGENT, "unsent"), (AGENT, "duplicate"))
+    assert writer.posted == [] and store._pending == {}
+    assert counts["outcomes_written"] == 0
+
+
+def test_an_unsent_attempt_does_not_pin_its_footer_on_later_attempts():
+    # Poll 1 never reached the server; the footer is edited; poll 2 lands with
+    # its answer lost; poll 3 gets the 409 for poll 2's event.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    _drive(
+        oc.OutcomeQueue(store, writer),
+        ("agent-before-edit", "unsent"),
+        ("agent-after-edit", "failed"),
+        ("agent-after-edit", "duplicate"),
+    )
+    assert [p["agent_uuid"] for p in writer.posted] == ["agent-after-edit"]
+
+
+def test_two_unanswered_attempts_with_different_footers_record_nothing():
+    # Either may be the one the server stored: no guess, and it is counted.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    queue = oc.OutcomeQueue(store, writer)
+    counts = _drive(queue, ("agent-before-edit", "failed"), ("agent-after-edit", "failed"))
+    assert counts["outcomes_ambiguous"] == 1 and writer.posted == []
+    later = _drive(queue, ("agent-after-edit", "duplicate"))
+    assert writer.posted == [] and later["outcomes_ambiguous"] == 0
+    assert store._pending == {}
+
+
+def test_two_unanswered_attempts_with_the_same_footer_still_release_on_409():
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    counts = _drive(oc.OutcomeQueue(store, writer), (AGENT, "failed"), (AGENT, "failed"), (AGENT, "duplicate"))
+    assert [p["agent_uuid"] for p in writer.posted] == [AGENT]
+    assert counts["outcomes_ambiguous"] == 0
+
+
+@pytest.mark.parametrize("answer", ["unknown_agent", "untrusted_author", "future_timestamp", "unsent"])
+def test_a_retried_refusal_keeps_an_earlier_unanswered_attempt_queued(answer):
+    # Poll 1 stored the merge and lost its answer. Poll 2 is refused before the
+    # route's dedup (a footer typo, clock skew, an allowlist slip). Poll 3's
+    # 409 is poll 1's event, so its outcome must still be there.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    _drive(
+        oc.OutcomeQueue(store, writer),
+        ("agent-first", "failed"),
+        ("agent-typo", answer),
+        ("agent-first", "duplicate"),
+    )
+    assert [p["agent_uuid"] for p in writer.posted] == ["agent-first"]
+
+
+def test_a_final_rejection_drops_an_earlier_queued_outcome():
+    # The observer marks a rejected event and never sends it again.
+    store, writer = oc.MemoryPendingStore(), _Outcomes()
+    _drive(oc.OutcomeQueue(store, writer), (AGENT, "failed"), (AGENT, "rejected"))
+    assert writer.posted == [] and store._pending == {}
+
+
+def test_the_event_writer_tells_a_write_that_sent_nothing_from_a_lost_answer():
+    import urllib.error
+
+    event = {"type": "github.pr_merged", "fingerprint": "1#2:state:7", "agent_uuid": AGENT}
+
+    def raising(exc):
+        def opener(request, timeout=None):
+            raise exc
+        return obs.UnitaresEventWriter("http://127.0.0.1:8767", "op", opener=opener)
+
+    assert raising(ConnectionRefusedError()).write(event) == "unsent"
+    assert raising(urllib.error.URLError(ConnectionRefusedError())).write(event) == "unsent"
+    assert raising(urllib.error.URLError(socket.gaierror())).write(event) == "unsent"
+    # These may have committed before the answer was lost.
+    assert raising(TimeoutError()).write(event) == "failed"
+    assert raising(ConnectionResetError()).write(event) == "failed"
+    assert raising(urllib.error.URLError(TimeoutError())).write(event) == "failed"
 
 
 def test_a_failed_outcome_is_retried_from_the_queue_on_later_polls():
@@ -1867,6 +1959,60 @@ def test_the_dry_run_with_the_flag_prints_the_merge_outcome_and_writes_nothing(t
     assert [o["outcome_type"] for o in outcomes] == ["task_completed"] and len(lines) == 13
     assert json.loads(captured.err)["outcomes_written"] == 1
     assert not state.exists()
+
+
+def test_the_dry_run_shows_outcomes_a_live_store_still_owes(tmp_path, monkeypatch, capsys):
+    # A live poll stored the merge but could not deliver its outcome; the next
+    # live poll will send it, so the dry run must show it too.
+    state = tmp_path / "emitted.sqlite3"
+    live = FingerprintStore(state)
+    payload = oc.outcome_payload(_merge_event())
+    live.put_pending(oc.outcome_key(_merge_event()), payload, accepted=True)
+    live.put_pending("outcome:still-waiting", {**payload, "agent_uuid": "other"}, accepted=False)
+    live.close()
+    before = state.read_bytes()
+
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.delenv("GITHUB_OBSERVER_TRUSTED_APPS", raising=False)
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader(pulls=[]))
+    args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
+    assert obs.main([*args, "--dry-run", "--record-outcomes"]) == 0
+    captured = capsys.readouterr()
+    outcomes = [json.loads(line)["outcome"] for line in captured.out.splitlines()]
+    assert outcomes == [payload]
+    assert json.loads(captured.err)["outcomes_written"] == 1
+    assert state.read_bytes() == before
+
+
+def test_the_dry_run_reads_a_store_made_before_the_outcome_queue(tmp_path):
+    import sqlite3 as _sqlite3
+
+    state = tmp_path / "old.sqlite3"
+    db = _sqlite3.connect(state)
+    db.execute("CREATE TABLE emitted (fingerprint TEXT PRIMARY KEY, event_type TEXT NOT NULL, recorded_at TEXT NOT NULL)")
+    db.commit()
+    db.close()
+    assert read_only_pending(state) == [] and read_only_pending(tmp_path / "missing") == []
+
+
+def test_an_ambiguous_outcome_fails_the_poll(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKEN", "op")
+    monkeypatch.delenv("GITHUB_OBSERVER_TRUSTED_APPS", raising=False)
+    state = tmp_path / "s.sqlite3"
+    live = FingerprintStore(state)
+    # An earlier attempt for the recorded merge, with another footer, lost its answer.
+    found = _Outcomes()
+    outcome_cycle(FakeReader(), outcome_writer=found)
+    merge = {**_merge_event(agent="agent-before-edit"), "fingerprint": found.posted[0]["detail"]["github_event_fingerprint"]}
+    live.put_pending(oc.outcome_key(merge), oc.outcome_payload(merge), accepted=False)
+    live.close()
+    monkeypatch.setattr(obs, "GitHubReader", lambda client: FakeReader())
+    monkeypatch.setattr(obs, "UnitaresEventWriter", lambda *a, **k: _Answers("failed"))
+    monkeypatch.setattr(obs, "UnitaresOutcomeWriter", lambda *a, **k: _Outcomes())
+    args = ["--repo", REPO, "--state-path", str(state), "--trusted-app", f"{APP_ID}:{APP_ACTOR_ID}"]
+    assert obs.main([*args, "--record-outcomes"]) == 1
+    assert json.loads(capsys.readouterr().err)["outcomes_ambiguous"] == 1
 
 
 @pytest.mark.parametrize("result,count", [("failed", "outcomes_failed"), ("rejected", "outcomes_rejected")])

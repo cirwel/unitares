@@ -23,6 +23,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import urllib.error
@@ -50,7 +51,11 @@ from agents.github_observer.outcomes import (
     OutcomeQueue,
     UnitaresOutcomeWriter,
 )
-from agents.github_observer.store import FingerprintStore, read_only_fingerprints
+from agents.github_observer.store import (
+    FingerprintStore,
+    read_only_fingerprints,
+    read_only_pending,
+)
 
 DEFAULT_API_URL = "https://api.github.com"
 DEFAULT_UNITARES_URL = "http://127.0.0.1:8767"
@@ -303,6 +308,13 @@ def _validate_http_url(url: str) -> str:
     return url.rstrip("/")
 
 
+# Answers and errors that show an event write stored nothing. ``failed`` is
+# kept for the rest (a timeout, a reset, a 5xx), where the write may have
+# committed before its answer was lost.
+_UNSENT_STATUSES = frozenset({401, 403, 429})
+_UNSENT_ERRORS = (ConnectionRefusedError, socket.gaierror)
+
+
 def _error_reason(exc: urllib.error.HTTPError) -> str | None:
     """Return JSON ``error`` string from a small HTTP error response, if readable."""
     try:
@@ -368,7 +380,16 @@ class UnitaresEventWriter:
             if exc.code == 403:
                 if _error_reason(exc) == "untrusted pr_author":
                     return "untrusted_author"
+            if exc.code in _UNSENT_STATUSES:
+                # Refused before the route stores anything (credential or
+                # rate limit): this attempt did not store the event.
+                return "unsent"
             return "failed"
+        except urllib.error.URLError as exc:
+            # No connection was made, so nothing was sent.
+            return "unsent" if isinstance(exc.reason, _UNSENT_ERRORS) else "failed"
+        except _UNSENT_ERRORS:
+            return "unsent"
         except (OSError, http.client.HTTPException, UnicodeDecodeError, ValueError, AttributeError):
             return "failed"
         if (
@@ -399,6 +420,7 @@ COUNTS = (
     "outcomes_written",
     "outcomes_rejected",
     "outcomes_failed",
+    "outcomes_ambiguous",
 )
 # What one unreadable or malformed pull request can raise. It is counted and
 # the poll goes on; MalformedPullRequest is a ValueError.
@@ -596,7 +618,10 @@ def main(argv: list[str] | None = None) -> int:
             mark_fn = lambda fingerprint, event_type: None
             writer: Writer = DryRunWriter(sys.stdout)
             outcomes: OutcomeQueue | None = (
-                OutcomeQueue(MemoryPendingStore(known), DryRunOutcomeWriter(sys.stdout))
+                OutcomeQueue(
+                    MemoryPendingStore(known, read_only_pending(state_path)),
+                    DryRunOutcomeWriter(sys.stdout),
+                )
                 if args.record_outcomes
                 else None
             )
@@ -647,6 +672,7 @@ def main(argv: list[str] | None = None) -> int:
         or counts["writes_failed"]
         or counts["outcomes_failed"]
         or counts["outcomes_rejected"]
+        or counts["outcomes_ambiguous"]
         or counts["events_unknown_agent"]
         or counts["events_untrusted_author"]
         or counts["events_future"]

@@ -24,6 +24,16 @@ between cannot move the outcome to another agent. A 409 for an event this
 store never queued (another writer, or an event stored before the flag was
 on) records nothing.
 
+An outcome stays queued, unreleased, only while an attempt that may have
+stored its event is unanswered. An attempt that shows it stored nothing (a
+credential or rate-limit refusal, no connection: ``unsent``) leaves the queue
+as it was, and drops an outcome it queued itself. A refusal the observer
+retries (unknown agent, untrusted author, future timestamp) does the same, so
+it cannot erase the record of an earlier attempt that may have stored the
+event. When two unanswered attempts carried different footers, either may be
+the one stored, so the outcome is dropped and counted as
+``outcomes_ambiguous`` rather than credited to a guess.
+
 Delivery. Outcomes post to ``POST /v1/harness/outcome`` under the operator
 credential with ``verification_source="external_signal"``. No ``confidence``
 is sent: the observer has no prediction of its own, so the server stamps the
@@ -31,7 +41,9 @@ row ``calibration_excluded``. No ``prediction_id`` is sent; that route ignores
 one by design. The queue is retried on every poll, independent of whether
 GitHub still lists the pull request. The route has no idempotency key, so an
 outcome whose write committed but whose answer was lost is sent again: a
-duplicate row is possible there, never a lost one (§6b).
+duplicate row is possible there. An outcome is not recorded in two cases: the
+ambiguous footers above, and a merge another writer stored whose first attempt
+here lost its answer, which a 409 cannot tell from this store's own (§6b).
 """
 
 from __future__ import annotations
@@ -55,10 +67,11 @@ _DETAIL_FIELDS = (
     "observed_at",
 )
 
-# Event route answers that mean the event is not stored, and that sending the same event again would not
-# change. ``failed`` is not here: a write whose answer was lost may have
-# committed, so its queued outcome is kept for the next attempt's answer.
-REFUSED = frozenset({"unknown_agent", "untrusted_author", "future_timestamp", "rejected"})
+# Event route answers that mean this attempt did not store the event. The
+# observer retries the first three on later polls; ``rejected`` is final.
+# ``failed`` is not here: a write whose answer was lost may have committed.
+RETRIED_REFUSALS = frozenset({"unknown_agent", "untrusted_author", "future_timestamp"})
+NOT_STORED = RETRIED_REFUSALS | {"unsent"}
 
 
 def outcome_key(event: Mapping[str, Any]) -> str:
@@ -98,6 +111,7 @@ class PendingStore(Protocol):
     """Where queued outcomes wait. ``FingerprintStore`` is the durable one."""
 
     def pending_state(self, key: str) -> str | None: ...
+    def pending_payload(self, key: str) -> dict | None: ...
     def put_pending(self, key: str, payload: dict, *, accepted: bool) -> None: ...
     def accept_pending(self, key: str) -> None: ...
     def drop_pending(self, key: str) -> None: ...
@@ -109,14 +123,26 @@ class PendingStore(Protocol):
 class MemoryPendingStore:
     """The dry run's queue: nothing outlives the process."""
 
-    def __init__(self, known: Iterable[str] = ()):
+    def __init__(
+        self,
+        known: Iterable[str] = (),
+        pending: Iterable[tuple[str, dict, bool]] = (),
+    ):
+        """``pending`` seeds the queue from a live store, so a dry run shows
+        the outcomes the next live poll would send."""
         self._known = set(known)
-        self._pending: dict[str, tuple[dict, bool]] = {}
+        self._pending: dict[str, tuple[dict, bool]] = {
+            key: (payload, accepted) for key, payload, accepted in pending
+        }
 
     def pending_state(self, key):
         if key not in self._pending:
             return None
         return "accepted" if self._pending[key][1] else "queued"
+
+    def pending_payload(self, key):
+        entry = self._pending.get(key)
+        return None if entry is None else entry[0]
 
     def put_pending(self, key, payload, *, accepted):
         self._pending[key] = (payload, accepted)
@@ -150,6 +176,7 @@ class OutcomeQueue:
     def __init__(self, store: PendingStore, writer: OutcomeWriter):
         self._store = store
         self._writer = writer
+        self._ambiguous = 0
 
     def before_event(self, event: Mapping[str, Any]) -> tuple[str, bool, dict] | None:
         """Queue the event's outcome before the event is posted.
@@ -186,12 +213,28 @@ class OutcomeQueue:
             else:
                 # Stored by someone else, or before the flag was on.
                 self._store.drop_pending(key)
-        elif result in REFUSED:
+        elif result == "rejected":
+            # Final: the observer marks the event and never sends it again.
             self._store.drop_pending(key)
-        # ``failed`` and anything unknown: keep it queued, unreleased.
+        elif result in NOT_STORED:
+            # This attempt stored nothing. An earlier attempt may have, so its
+            # queued outcome waits for a later answer; one queued only now goes.
+            if not queued_earlier:
+                self._store.drop_pending(key)
+        else:
+            # ``failed`` and anything unknown: this attempt may have stored the
+            # event. If an earlier unanswered attempt carried another footer,
+            # either may be the stored one.
+            queued = self._store.pending_payload(key) if queued_earlier else None
+            if queued is not None and queued.get("agent_uuid") != payload["agent_uuid"]:
+                self._store.drop_pending(key)
+                self._store.add(key, payload["outcome_type"])
+                self._ambiguous += 1
 
     def flush(self, counts: dict[str, int]) -> None:
         """Send every released outcome; keep the ones that failed for the next poll."""
+        counts["outcomes_ambiguous"] += self._ambiguous
+        self._ambiguous = 0
         for key, payload in list(self._store.accepted_pending()):
             result = self._writer.write(payload)
             if result == "written":
