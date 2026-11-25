@@ -609,8 +609,15 @@ class ExecutorPool:
 
     @property
     def _closed(self) -> Any:
-        # Mirror asyncpg's internal `_closed` attribute. dialectic_db.py:55
-        # reads this to test pool liveness.
+        # DialecticDB._pool_is_alive reads this to decide whether its cached
+        # pool reference is still usable. The wrapper stops dispatching as
+        # soon as close() begins or the executor loop exits, while asyncpg
+        # sets its own `_closed` only when its close() finishes. A close that
+        # times out (the backend then orphans this pool and creates another)
+        # never reaches that point, so the raw flag alone would call a pool
+        # that refuses every operation alive.
+        if getattr(self, "_closed_flag", False) or getattr(self, "_closing", False):
+            return True
         return self._raw_pool._closed
 
     def get_size(self) -> Any:

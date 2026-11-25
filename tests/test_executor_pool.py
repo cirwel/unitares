@@ -411,3 +411,55 @@ async def test_close_returns_when_raw_pool_close_hangs():
     assert hang_started.is_set(), (
         "raw_pool.close was never scheduled — wedged-loop test invalid"
     )
+
+
+@pytest.mark.asyncio
+async def test_closed_reports_a_pool_whose_raw_close_never_finished():
+    """A close that hangs leaves asyncpg's own `_closed` False, yet the wrapper
+    refuses every later operation. `_closed` is what DialecticDB reads to
+    decide whether to drop its cached pool, so it must report that pool closed
+    (2026-11-24: dialectic reads failed for a whole server lifetime after the
+    backend orphaned a pool whose close timed out).
+    """
+    async def hung_close():
+        await asyncio.sleep(3600)
+
+    raw_pool = MagicMock()
+    raw_pool._closed = False
+    raw_pool.close = hung_close
+
+    wrapped = ExecutorPool(raw_pool)
+    assert wrapped._closed is False
+
+    import src.db.executor_pool as ep_mod
+    original_close_timeout = ep_mod.CLOSE_TIMEOUT_SECONDS
+    ep_mod.CLOSE_TIMEOUT_SECONDS = 0.5
+    try:
+        await asyncio.wait_for(wrapped.close(), timeout=5.0)
+    finally:
+        ep_mod.CLOSE_TIMEOUT_SECONDS = original_close_timeout
+
+    assert raw_pool._closed is False, "the raw pool's close never completed"
+    assert wrapped._closed is True
+    with pytest.raises(ConnectionError, match="executor loop is not running"):
+        async with wrapped.acquire():
+            pass
+
+
+@pytest.mark.asyncio
+async def test_closed_reports_a_cancelled_close():
+    """The backend bounds close() with wait_for, so a wedged close is
+    cancelled from outside. The pool must read as closed from that moment."""
+    async def hung_close():
+        await asyncio.sleep(3600)
+
+    raw_pool = MagicMock()
+    raw_pool._closed = False
+    raw_pool.close = hung_close
+
+    wrapped = ExecutorPool(raw_pool)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(wrapped.close(), timeout=0.2)
+
+    assert raw_pool._closed is False
+    assert wrapped._closed is True
