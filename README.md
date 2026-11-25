@@ -83,7 +83,7 @@ Then connect MCP clients at `http://localhost:8767/mcp/` and open the dashboard 
 
 ## Who it is for
 
-UNITARES is built for operators running long-lived AI agents across vendors on infrastructure they control, where work spans sessions, repositories, or runtimes. It works alongside Git, issue trackers, handoff notes, evals, and guardrails: each agent keeps its own loop and model, while UNITARES ties their identities, claims, reviews, and outcomes into one queryable record.
+UNITARES is built for operators running long-lived AI agents across vendors on infrastructure they control, where work spans sessions, repositories, or runtimes. It works alongside Git, issue trackers, handoff notes, evals, and guardrails: each agent keeps its own loop and model, while UNITARES ties their identities, claims, reviews, and outcomes into one queryable record. The operator is whoever administers a deployment, one person or a team holding its operator credentials, so "single-operator" means one administrative root, not one user.
 
 ## How it fits together
 
