@@ -468,7 +468,8 @@ def test_fetch_reference_is_identity_blind():
     "/etc/passwd",
     "sub/nested.md",
     "verdicts-and-margin.txt",
-    "VERDICTS-AND-MARGIN.MD",  # case-sensitive allowlist check (matters on macOS APFS)
+    "VERDICTS-AND-MARGIN.MD",
+    "Verdicts-And-Margin.md",  # lowercase .md passes normalization; exercises case-sensitive allowlist on macOS APFS
     "does-not-exist.md",
     "bad\x00name.md",
     "references\\verdicts-and-margin.md",
@@ -489,6 +490,7 @@ def test_fetch_reference_requires_name():
     payload = _call_handler({"reference": "verdicts-and-margin.md"})
     assert payload["success"] is False
     assert "name" in payload["error"]
+    assert "available_references" not in payload
     assert "agent_signature" not in payload
 
 

@@ -32,6 +32,7 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/identity/operator.py
   - unitares/src/mcp_handlers/lifecycle/query.py
+  - unitares/skills/dialectic-reasoning/references/facilitation-and-effects.md
 ---
 
 # Dialectic Reasoning

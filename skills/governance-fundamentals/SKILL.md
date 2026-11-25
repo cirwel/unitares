@@ -35,6 +35,8 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
   - unitares/src/outcomes.py
+  - unitares/skills/governance-fundamentals/references/eisv-and-calibration.md
+  - unitares/skills/governance-fundamentals/references/verdicts-and-margin.md
 ---
 
 # Governance Fundamentals
@@ -43,12 +45,9 @@ source_files:
 
 UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator federation kernel for agent identity, claims and
-evidence, review, outcomes, and reconstruction. EISV is one instrument inside
-it: digital proprioception that runs synchronously on check-ins, blending and
-smoothing behavioral observations against thresholds and the agent's own
-trajectory. Operational role, intended interpretations, and evidence of benefit
-are governed by the
-[computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
+evidence, review, outcomes, and reconstruction. EISV runs synchronously on
+check-ins as digital proprioception (blending and smoothing observations); see
+the [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
 
 ## EISV State Vector
 
@@ -59,32 +58,26 @@ are governed by the
 | **S** (Entropy) | [0, 1] | Drift, complexity divergence, and available continuity and tool features (controller regime-instability self-loop neutralized by default) |
 | **V** (Valence) | [-1, 1] | Separately EMA-smoothed gap between raw E and I observations |
 
-These are weighted indices with historical names, not direct measurements of
-thermodynamic quantities. Deviation is information first, not a guilty verdict:
-in the default `observe` posture policy recommendations cannot change lifecycle
-state or block writes. Prefer live tool output over static range lore.
+These are weighted indices with historical names, not thermodynamic quantities.
+Deviation is information first, not a guilty verdict: in the default `observe`
+posture, policy recommendations never block writes. Prefer live tool output.
 
 ## Live Readings, Defaults, and Stages
 
 - **Self-loops neutralized by default**: `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`
   and `UNITARES_PER_AGENT_I_CALIBRATION=1` exclude legacy controller/coherence
-  self-loops and lifetime fleet-strategic bins from E, I, and S (setting
-  `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` or `UNITARES_PER_AGENT_I_CALIBRATION=0`
-  restores those legacy terms).
-- **Unread axes stay held**: an axis is measured only when at least one base
-  term was supplied (`UNITARES_HOLD_UNREAD_AXES=1`). Check `reading_coverage`
-  (`measured`, `defaulted`, `v_rests_on_defaults`) — a defaulted axis is a
-  placeholder, not a low or high reading, and after 10 unread check-ins it moves
-  to `behavioral.assessment.unscored_axes`.
-- **Stage progression**: check-ins 1–5 use the Φ cold-start prior; check-ins
-  6–27 (once `behavioral.confidence >= 0.3`) use behavioral thresholds (or
-  `insufficient_reading` with `safe`/risk 0 when too few readings exist);
-  check-in 28+ enables self-relative z-score baselines.
+  self-loops and lifetime fleet bins (`=0` restores legacy terms; explicitly
+  `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`).
+- **Unread axes stay held** (`UNITARES_HOLD_UNREAD_AXES=1`): check
+  `reading_coverage` (`measured`, `defaulted`, `v_rests_on_defaults`). A
+  defaulted axis is a placeholder; after 10 unread check-ins it moves to
+  `behavioral.assessment.unscored_axes`.
+- **Stages**: check-ins 1–5 use the Φ prior; 6–27 (`behavioral.confidence >= 0.3`)
+  use behavioral thresholds (else `insufficient_reading`); 28+ enable Welford
+  z-score baselines.
 
-When `reading_coverage` shows defaulted axes, `outcomes_in_e` appears, or you
-need per-axis formulas, era flags (`SH1`/`HU1`/`SD1`), or stage boundaries,
-read `references/eisv-and-calibration.md`
-(remote MCP: `skills(name="governance-fundamentals", reference="eisv-and-calibration.md")`).
+For per-axis formulas, era flags (`SH1`/`HU1`/`SD1`), or `outcomes_in_e`, read
+`references/eisv-and-calibration.md` (`skills(name="governance-fundamentals", reference="eisv-and-calibration.md")`).
 
 ## Basins
 

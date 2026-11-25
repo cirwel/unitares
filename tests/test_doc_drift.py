@@ -234,7 +234,7 @@ class TestSkillProgressiveDisclosure:
         every references/*.md pointer in SKILL.md must resolve locally, and no skill may link
         directly into another skill's references/ directory."""
         ref_pattern = re.compile(r"references/([A-Za-z0-9._-]+\.md)")
-        cross_skill_pattern = re.compile(r"skills/[A-Za-z0-9._-]+/references/")
+        cross_skill_pattern = re.compile(r"skills/([A-Za-z0-9._-]+)/references/")
 
         for skill_dir in sorted(SKILLS_DIR.iterdir()):
             skill_file = skill_dir / "SKILL.md"
@@ -243,8 +243,11 @@ class TestSkillProgressiveDisclosure:
             skill_name = skill_dir.name
             skill_text = skill_file.read_text(encoding="utf-8")
 
-            assert not cross_skill_pattern.search(skill_text), (
-                f"{skill_name}/SKILL.md links directly into another skill's references/"
+            foreign_in_skill = [
+                target for target in cross_skill_pattern.findall(skill_text) if target != skill_name
+            ]
+            assert not foreign_in_skill, (
+                f"{skill_name}/SKILL.md links directly into another skill's references/: {foreign_in_skill}"
             )
 
             refs_dir = skill_dir / "references"
@@ -257,8 +260,11 @@ class TestSkillProgressiveDisclosure:
                         f"Unexpected non-.md entry in {refs_dir}: {entry.name}"
                     )
                     ref_text = entry.read_text(encoding="utf-8")
-                    assert not cross_skill_pattern.search(ref_text), (
-                        f"{skill_name}/references/{entry.name} links into another skill's references/"
+                    foreign_in_ref = [
+                        target for target in cross_skill_pattern.findall(ref_text) if target != skill_name
+                    ]
+                    assert not foreign_in_ref, (
+                        f"{skill_name}/references/{entry.name} links into another skill's references/: {foreign_in_ref}"
                     )
                     on_disk.add(entry.name)
 
@@ -274,11 +280,16 @@ class TestSkillProgressiveDisclosure:
                 assert expected_mcp in skill_text, (
                     f"{skill_name}/SKILL.md must include remote MCP callable form: {expected_mcp}"
                 )
+                expected_source = f"unitares/skills/{skill_name}/references/{ref_name}"
+                assert expected_source in skill_text, (
+                    f"{skill_name}/SKILL.md must cite {expected_source} in source_files so "
+                    "freshness attestations cover reference edits"
+                )
 
     def test_governance_fundamentals_session_start_80_line_window(self):
         """The plugin session-start hook slices lines 1..80 of governance-fundamentals/SKILL.md.
-        Those 80 lines must include the full EISV table, end cleanly without cutting mid-table,
-        and leave no unclosed fenced code block."""
+        Those 80 lines must include the full EISV table, end on a clean block boundary
+        (never mid-table, mid-bullet, or mid-sentence), and leave no unclosed code fence."""
         lines = _read_skill("governance-fundamentals").splitlines()
         window = lines[:80]
         window_text = "\n".join(window)
@@ -293,6 +304,16 @@ class TestSkillProgressiveDisclosure:
 
         assert not window[-1].lstrip().startswith("|"), (
             f"Lines 1-80 of governance-fundamentals/SKILL.md cut off mid-table: {window[-1]!r}"
+        )
+        next_line = lines[80] if len(lines) > 80 else ""
+        ends_cleanly = (
+            window[-1].strip() == ""
+            or next_line.strip() == ""
+            or next_line.startswith("#")
+        )
+        assert ends_cleanly, (
+            f"Lines 1-80 of governance-fundamentals/SKILL.md cut mid-block: "
+            f"line 80={window[-1]!r}, line 81={next_line!r}"
         )
         fence_count = sum(1 for line in window if line.lstrip().startswith(("```", "~~~")))
         assert fence_count % 2 == 0, "Lines 1-80 leave an unclosed markdown code fence"

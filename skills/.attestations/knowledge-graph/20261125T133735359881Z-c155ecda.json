@@ -1,11 +1,13 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-11-25T12:52:56Z",
+  "verified_at": "2026-11-25T13:37:35Z",
   "verified_date": "2026-11-25",
-  "verifier": "Gemini 4 Neon (progressive-disclosure split into SKILL.md + references/ preserving verified contracts)",
+  "verifier": "Gemini 4 Neon (progressive-disclosure split + references cited in source_files + interface contract 2.6.0)",
   "source_digests": {
     "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
+    "unitares/skills/knowledge-graph/references/authority-and-synthesis.md": "0476d1f5cf606699",
+    "unitares/skills/knowledge-graph/references/search-and-notices.md": "e832c21d149e25dc",
     "unitares/src/alias_schema.py": "3746fd4d6b089dea",
     "unitares/src/db/mixins/knowledge_graph.py": "2679d31a7e247f3b",
     "unitares/src/knowledge_authority.py": "e265e82153d9d911",
@@ -29,5 +31,5 @@
     "unitares/src/storage/knowledge_graph_postgres.py": "b4b787a4b13bda85",
     "unitares/src/tool_descriptions.json": "fe277640e5ae2f9e"
   },
-  "skill_digest": "4ffce1b5f107f082"
+  "skill_digest": "cb45ae60959e4c8e"
 }

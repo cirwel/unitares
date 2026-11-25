@@ -29,6 +29,8 @@ source_files:
   - unitares/src/storage/knowledge_graph_age.py
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
+  - unitares/skills/knowledge-graph/references/authority-and-synthesis.md
+  - unitares/skills/knowledge-graph/references/search-and-notices.md
 ---
 
 # Knowledge Graph

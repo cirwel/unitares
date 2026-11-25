@@ -55,6 +55,9 @@ source_files:
   # descriptions are abridged and names describe_tool as where the full text
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
+  - unitares/skills/governance-lifecycle/references/checkpoints-and-envelopes.md
+  - unitares/skills/governance-lifecycle/references/identity-and-recovery.md
+  - unitares/skills/governance-lifecycle/references/tools-and-envelopes.md
 ---
 
 # Agent Lifecycle

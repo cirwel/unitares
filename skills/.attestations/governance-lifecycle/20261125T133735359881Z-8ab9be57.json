@@ -1,11 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-11-25T13:04:10Z",
+  "verified_at": "2026-11-25T13:37:35Z",
   "verified_date": "2026-11-25",
-  "verifier": "Gemini 4 Neon (progressive-disclosure split + interface contract 2.6.0)",
+  "verifier": "Gemini 4 Neon (progressive-disclosure split + references cited in source_files + interface contract 2.6.0)",
   "source_digests": {
     "unitares/commands/closeout.md": "a295890758851260",
+    "unitares/skills/governance-lifecycle/references/checkpoints-and-envelopes.md": "a588eb5c328faed2",
+    "unitares/skills/governance-lifecycle/references/identity-and-recovery.md": "21bf0470a8328450",
+    "unitares/skills/governance-lifecycle/references/tools-and-envelopes.md": "3b0ffb3e30061d82",
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
     "unitares/src/agent_storage.py": "2bfdba81602f6e04",
     "unitares/src/checkpoints.py": "b2e7e31b7c3ee48b",
@@ -38,5 +41,5 @@
     "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
     "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
   },
-  "skill_digest": "475e79c3b4cde74f"
+  "skill_digest": "aefa9db2fc9febcd"
 }
