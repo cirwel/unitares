@@ -1930,3 +1930,25 @@ def test_an_explicit_url_still_beats_the_env_file(tmp_path):
     )
     assert f"UNITARES_URL    : http://127.0.0.1:{named}" in result.stdout
     assert str(written) not in result.stdout
+
+
+def test_health_rejects_an_unknown_option(tmp_path):
+    cli, env = _cli_copy_with_env_file(tmp_path, None)
+    result = subprocess.run(
+        [str(cli), "health", "--bogus"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 2
+    assert "unknown health option '--bogus' (--deep)" in result.stderr
+
+
+def test_deep_health_fails_cleanly_when_unreachable(tmp_path):
+    # Deep health is the install readiness bar, so an unreachable server must
+    # exit non-zero with a plain message, not a traceback.
+    port = _free_port()
+    cli, env = _cli_copy_with_env_file(tmp_path, f"GOVERNANCE_HOST_PORT={port}\n")
+    result = subprocess.run(
+        [str(cli), "health", "--deep"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 1
+    assert f"could not reach http://localhost:{port}/health/deep" in result.stderr
+    assert "Traceback" not in result.stderr
