@@ -615,5 +615,70 @@ def test_adversarial_ast_edge_cases(
     assert got == expected, f"case {case_id} mismatch: got={got} expected={expected}"
 
 
+def test_p004_nested_closure_in_try_class_methods_pipeline_buffering_and_gather(
+    tmp_path: Path,
+) -> None:
+    # 1. Closure inside `try:` calling `_leaf` unbounded revokes `_leaf`'s caller-boundedness
+    _write(
+        tmp_path,
+        "src/mcp_handlers/try_closure.py",
+        _GR_HDR
+        + """\
+async def _leaf(k):
+    r = await get_redis()
+    return await r.get(k)
+
+async def warm(k):
+    return await asyncio.wait_for(_leaf(k), timeout=1)
+
+@mcp_tool("t")
+async def h(k):
+    try:
+        async def _run():
+            return await _leaf(k)
+        return await _run()
+    except Exception:
+        return None
+""",
+    )
+    # 2. Class method in src/mcp_handlers/ with unguarded raw Redis await is caught
+    _write(
+        tmp_path,
+        "src/mcp_handlers/cls_handler.py",
+        """\
+from src.cache.redis_client import get_redis
+
+class Store:
+    async def bad_method(self, k: str):
+        r = await get_redis()
+        return await r.get(k)
+""",
+    )
+    # 3. Synchronous pipeline buffering, single-use coro var, and asyncio.gather inside wait_for are allowed
+    _write(
+        tmp_path,
+        "src/mcp_handlers/safe_patterns.py",
+        _GR_HDR
+        + """\
+@mcp_tool("ok")
+async def ok_handler(k: str):
+    r = await get_redis()
+    pipe = r.pipeline()
+    pipe.multi()
+    pipe.set(k, "1")
+    await asyncio.wait_for(pipe.execute(), timeout=1)
+    coro = r.get(k)
+    await asyncio.wait_for(coro, timeout=1)
+    await asyncio.wait_for(asyncio.gather(r.get("a"), r.get("b")), timeout=1)
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/mcp_handlers/cls_handler.py", "P004", 6),
+        ("src/mcp_handlers/try_closure.py", "P004", 7),
+    ]
+
+
+
 
 
