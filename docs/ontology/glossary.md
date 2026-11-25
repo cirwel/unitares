@@ -498,6 +498,7 @@ against a baseline.
 |---|---|---|
 | `UNITARES` | What shared system attributes and preserves agent identity, claims and evidence, review, outcomes, and reconstruction? A self-hosted, single-operator federation kernel. | `docs/PRODUCT_DEFINITION.md` |
 | `federation` | Which independent runtimes share the record and authority domain? Many runtimes connect to one operator-controlled server; this does not mean replication between independent servers. | `docs/PRODUCT_DEFINITION.md` |
+| `single-operator` | Whose administrative root does a deployment answer to? One: the person or team that runs the server and holds its operator credentials, not one user. Roots that do not share trust are the cross-operator (multi-principal) case. | `docs/PRODUCT_DEFINITION.md` |
 | `finding` | What durable claim, evidence, correction or unresolved question should another agent retrieve? Search before storing; keep its sources and later revisions attached. | `docs/CAPABILITIES_AND_DEPLOYMENT.md`; `docs/PRODUCT_DEFINITION.md` |
 | `supersession` | Which newer finding replaces this older claim, and where can the reader follow that correction? It records replacement rather than silently erasing the original. | `docs/PRODUCT_DEFINITION.md`; `docs/CAPABILITIES_AND_DEPLOYMENT.md` |
 | `reconstruction` | What can a successor recover from findings, review conditions, history and outcomes, given each surface's retention and authorization? Retrieval is not proof that the successor integrated the record. | `docs/CAPABILITIES_AND_DEPLOYMENT.md`; `docs/PRODUCT_DEFINITION.md` |
