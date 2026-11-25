@@ -5,10 +5,12 @@
  * summary w/ highlight, tags, expandable details, staleness). Composes kit;
  * reads DATA.discoveries() (live-or-snapshot).
  *
- * In live mode, search/type/time queries hit the server's KG search endpoint
- * via DATA.discoveries(query, opts) so the full corpus is searchable rather
- * than only the latest 30 entries. In snapshot/offline mode, filtering stays
- * client-side over the bundled snapshot list.
+ * In live mode, submitted search queries (Enter / Search button) and discrete
+ * type/time filter changes hit the server's KG search endpoint via
+ * DATA.discoveries(query, opts) so the full corpus is searchable (up to the
+ * 30-row page limit) without sending partial keystroke fragments into
+ * recall_misses.jsonl. In snapshot/offline mode, filtering stays client-side
+ * over the bundled snapshot list.
  */
 (function () {
   "use strict";
@@ -17,7 +19,7 @@
   const TYPE_ORDER = ["insight", "improvement", "bug_found", "pattern", "question", "answer", "analysis", "note", "exploration"];
   const STATUS_COLOR = { open: "var(--ok)", resolved: "var(--eisv-c)", archived: "var(--faint)", superseded: "var(--warn)", closed: "var(--muted)" };
   const TIME_WINDOW_MS = { "24h": 864e5, "7d": 6048e5, "30d": 2592e6 };
-  const SEARCH_DEBOUNCE_MS = 250;
+  const PAGE_LIMIT = 30;
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const label = (t) => t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -39,29 +41,41 @@
     const ms = TIME_WINDOW_MS[tf];
     return ms ? new Date(Date.now() - ms).toISOString() : null;
   }
-  function highlight(text, q) {
-    text = esc(text);
-    if (!q) return text;
+  function highlight(raw, q) {
+    const text = String(raw == null ? "" : raw);
+    if (!q) return esc(text);
     const terms = Array.from(new Set(q.trim().split(/\s+/).filter(Boolean)))
       .sort((a, b) => b.length - a.length)
       .slice(0, 8);
-    if (!terms.length) return text;
+    if (!terms.length) return esc(text);
     try {
       const pat = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-      return text.replace(new RegExp("(" + pat + ")", "ig"), "<mark>$1</mark>");
-    } catch { return text; }
+      const re = new RegExp(pat, "ig");
+      let out = "", last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) out += esc(text.slice(last, m.index));
+        out += "<mark>" + esc(m[0]) + "</mark>";
+        last = m.index + m[0].length;
+        if (m[0].length === 0) re.lastIndex += 1;
+      }
+      if (last < text.length) out += esc(text.slice(last));
+      return out;
+    } catch { return esc(text); }
   }
 
-  let MODEL = { list: [], byType: {}, byStatus: {}, total: 0, source: "snapshot", searchMode: null, lowConfidence: false };
+  let MODEL = {
+    list: [], byType: {}, byStatus: {}, total: 0,
+    source: "snapshot", searchMode: null, lowConfidence: false, moreAvailable: false,
+  };
   let baseSource = "snapshot";
   let defaultList = [];
+  let defaultListStale = false;
   let queryText = "";
   let serverQuery = "";
   let serverType = "all";
   let serverTime = "all";
   let typeFilter = "all", timeFilter = "all";
   let searching = false;
-  let debounceTimer = null;
   let reqSeq = 0;
   // "N new" since the last load. An explore pane stays manual, so a knowledge_write
   // doesn't refetch (that would disrupt search/filter/scroll) — it just bumps this
@@ -100,8 +114,9 @@
       `<div id="dsc-stats"></div>
        <div id="dsc-types" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--space-4)"></div>
        <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4)">
-         <input id="dsc-search" placeholder="search summary · details · tags" value="${esc(queryText)}"
+         <input id="dsc-search" type="search" placeholder="search summary · details · tags (Enter to search)" value="${esc(queryText)}"
            style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
+         <button id="dsc-search-btn" class="theme-toggle" type="button" title="Search the knowledge graph">Search</button>
          <select id="dsc-time" class="theme-toggle">${[["all", "all time"], ["24h", "24h"], ["7d", "7 days"], ["30d", "30 days"]].map(([v, t]) => `<option value="${v}" ${v === timeFilter ? "selected" : ""}>${t}</option>`).join("")}</select>
          <button id="dsc-new" class="theme-toggle" title="New knowledge written since you loaded — click to refresh" style="display:${newCount > 0 ? "inline-flex" : "none"};border-color:var(--accent);color:var(--accent)">${newCount} new · refresh</button>
        </div>
@@ -112,21 +127,22 @@
     if (s) {
       s.oninput = () => {
         queryText = s.value;
-        onQueryOrFilterChange(true);
+        onSearchInput();
       };
       s.onkeydown = (e) => {
         if (e.key === "Enter") {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
-          if (baseSource === "live") runServerSearch();
+          e.preventDefault();
+          submitSearch();
         }
       };
     }
+    const btn = $("#dsc-search-btn", mount);
+    if (btn) btn.onclick = submitSearch;
     const t = $("#dsc-time", mount);
     if (t) {
       t.onchange = () => {
         timeFilter = t.value;
-        onQueryOrFilterChange(false);
+        onDiscreteFilterChange();
       };
     }
     const n = $("#dsc-new", mount);
@@ -174,7 +190,7 @@
       b.onclick = () => {
         typeFilter = b.dataset.type;
         renderStats();
-        onQueryOrFilterChange(false);
+        onDiscreteFilterChange();
       };
     });
   }
@@ -186,13 +202,15 @@
 
     const q = queryText.trim();
     const qLower = q.toLowerCase();
-    const isServerSearch = MODEL.source === "live" && (serverQuery !== "" || serverType !== "all" || serverTime !== "all");
+    const highlightQuery = MODEL.source === "live" ? serverQuery : q;
+    const isServerQuery = MODEL.source === "live" && serverQuery !== "";
+    const isServerFiltered = MODEL.source === "live" && (serverQuery !== "" || serverType !== "all" || serverTime !== "all");
     let rows = MODEL.list.slice();
 
-    // In snapshot/offline mode (or before a live filter catches up), filter
-    // locally. Live server search results already ran hybrid/FTS/semantic
-    // matching on the full corpus, so keep their ranking and never drop
-    // semantic or non-contiguous multi-term matches via .includes(q).
+    // In snapshot/offline mode, filter locally. In live mode, server search
+    // results already ran hybrid/FTS/semantic matching on the corpus, so keep
+    // their ranking and never drop semantic or non-contiguous matches via
+    // .includes(q).
     if (MODEL.source !== "live" || typeFilter !== serverType) {
       if (typeFilter !== "all") rows = rows.filter((d) => (d.type || "note") === typeFilter);
     }
@@ -205,18 +223,27 @@
     if (MODEL.source !== "live" && qLower) {
       rows = rows.filter((d) => ((d.summary || "") + " " + (d.details || "") + " " + (d.tags || []).join(" ")).toLowerCase().includes(qLower));
     }
-    if (!(MODEL.source === "live" && serverQuery !== "")) {
+    if (!isServerQuery) {
       rows.sort((a, b) => Date.parse(b.id || 0) - Date.parse(a.id || 0));
     }
 
     if (statusEl) {
+      const capped = MODEL.moreAvailable || rows.length >= PAGE_LIMIT;
       if (searching) {
         statusEl.textContent = "Searching knowledge graph…";
         statusEl.style.display = "block";
-      } else if (isServerSearch && serverQuery) {
-        const mode = MODEL.searchMode ? MODEL.searchMode + " · " : "";
-        const conf = MODEL.lowConfidence ? " · exploratory (semantic-only)" : "";
-        statusEl.textContent = `${mode}${rows.length} match${rows.length === 1 ? "" : "es"}${conf}`;
+      } else if (baseSource === "live" && q !== serverQuery) {
+        statusEl.textContent = q
+          ? "Press Enter or click Search to query the knowledge graph."
+          : "";
+        statusEl.style.display = q ? "block" : "none";
+      } else if (isServerFiltered) {
+        const mode = isServerQuery && MODEL.searchMode ? MODEL.searchMode + " · " : "";
+        const countLabel = isServerQuery
+          ? (capped ? `showing top ${rows.length} (capped at ${PAGE_LIMIT})` : `${rows.length} result${rows.length === 1 ? "" : "s"}`)
+          : (capped ? `showing latest ${rows.length} (capped at ${PAGE_LIMIT})` : `showing ${rows.length} matching`);
+        const conf = isServerQuery && MODEL.lowConfidence ? " · exploratory (semantic-only)" : "";
+        statusEl.textContent = `${mode}${countLabel}${conf}`;
         statusEl.style.display = "block";
       } else {
         statusEl.textContent = "";
@@ -225,7 +252,7 @@
     }
 
     listEl.innerHTML = rows.length
-      ? rows.map((d) => card(d, q)).join("")
+      ? rows.map((d) => card(d, highlightQuery)).join("")
       : MODEL.source === "unavailable"
         ? `<p class="empty">Server not answering — discoveries unavailable.</p>`
         : `<p class="empty">No matches. Clear filters or change search.</p>`;
@@ -237,19 +264,8 @@
     renderList();
   }
 
-  function onQueryOrFilterChange(fromTyping) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-
-    if (baseSource !== "live") {
-      renderList();
-      return;
-    }
-
-    const q = queryText.trim();
-    if (!q && typeFilter === "all" && timeFilter === "all") {
-      // Back to default unfiltered view: cancel any in-flight query and restore
-      // the cached recent list immediately when no refetch is needed.
+  function restoreOrRefetchDefault() {
+    if (!defaultListStale) {
       reqSeq += 1;
       searching = false;
       serverQuery = "";
@@ -261,20 +277,58 @@
         source: "live",
         searchMode: null,
         lowConfidence: false,
+        moreAvailable: defaultList.length >= PAGE_LIMIT,
       };
       renderStats();
       renderList();
       return;
     }
+    runServerSearch();
+  }
 
-    if (fromTyping) {
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        runServerSearch();
-      }, SEARCH_DEBOUNCE_MS);
-    } else {
-      runServerSearch();
+  function onSearchInput() {
+    if (baseSource !== "live") {
+      renderList();
+      return;
     }
+    const q = queryText.trim();
+    if (!q && (serverQuery !== "" || searching)) {
+      // Clearing the search box immediately exits search mode without sending
+      // partial prefixes to the server.
+      if (typeFilter === "all" && timeFilter === "all") {
+        restoreOrRefetchDefault();
+      } else {
+        runServerSearch();
+      }
+      return;
+    }
+    renderList();
+  }
+
+  function submitSearch() {
+    if (baseSource !== "live") {
+      renderList();
+      return;
+    }
+    const q = queryText.trim();
+    if (!q && typeFilter === "all" && timeFilter === "all") {
+      restoreOrRefetchDefault();
+      return;
+    }
+    runServerSearch();
+  }
+
+  function onDiscreteFilterChange() {
+    if (baseSource !== "live") {
+      renderList();
+      return;
+    }
+    const q = queryText.trim();
+    if (!q && typeFilter === "all" && timeFilter === "all") {
+      restoreOrRefetchDefault();
+      return;
+    }
+    runServerSearch();
   }
 
   async function runServerSearch() {
@@ -282,6 +336,7 @@
     const q = queryText.trim();
     const tf = typeFilter;
     const tm = timeFilter;
+    const hasFilter = !!(q || tf !== "all" || tm !== "all");
     searching = true;
     renderList();
 
@@ -293,18 +348,27 @@
     if (seq !== reqSeq) return;
     searching = false;
     if (r.source === "unavailable") {
-      MODEL = { ...MODEL, list: [], source: "unavailable", searchMode: null, lowConfidence: false };
+      MODEL = {
+        ...MODEL, list: [], source: "unavailable",
+        searchMode: null, lowConfidence: false, moreAvailable: false,
+      };
       renderStats();
       renderList();
       return;
     }
+    const list = r.data.list || [];
     MODEL = {
       ...MODEL,
-      list: r.data.list || [],
+      list,
       source: r.source,
       searchMode: r.data.searchMode || null,
       lowConfidence: !!r.data.lowConfidence,
+      moreAvailable: !!r.data.moreAvailable,
     };
+    if (!hasFilter && r.source === "live") {
+      defaultList = list.slice();
+      defaultListStale = false;
+    }
     serverQuery = q;
     serverType = tf;
     serverTime = tm;
@@ -313,8 +377,6 @@
   }
 
   async function load() {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
     const seq = ++reqSeq;
     searching = false;
 
@@ -339,10 +401,16 @@
       source: r.source,
       searchMode: r.data.searchMode || null,
       lowConfidence: !!r.data.lowConfidence,
+      moreAvailable: !!r.data.moreAvailable,
     };
     baseSource = r.source;
     if (!hasFilter && r.source === "live") {
       defaultList = list.slice();
+      defaultListStale = false;
+    } else if (hasFilter) {
+      // Filtered refresh did not reload the unfiltered recent list; mark it
+      // stale so clearing filters later refetches instead of showing old rows.
+      defaultListStale = true;
     }
     serverQuery = r.source === "live" ? q : "";
     serverType = r.source === "live" ? tf : "all";
@@ -358,6 +426,7 @@
   // 0), so this just flips it visible and updates the count.
   function notifyNew() {
     newCount += 1;
+    defaultListStale = true;
     const b = $("#dsc-new");
     if (b) { b.textContent = newCount + " new · refresh"; b.style.display = "inline-flex"; }
   }

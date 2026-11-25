@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
@@ -33,13 +33,8 @@ function flushMicrotasks() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe("Discoveries server-side search", () => {
-  it("queries the server on live search input and preserves semantic/non-contiguous hits and ranking", async () => {
-    vi.useFakeTimers();
+  it("submits live search on Enter/Search without firing partial prefixes and preserves ranking", async () => {
     const { dom, calls } = bootLive((url, body) => {
       if (body && body.arguments && body.arguments.action === "stats") {
         return {
@@ -97,40 +92,153 @@ describe("Discoveries server-side search", () => {
 
     await dom.window.Discoveries.load();
     const input = dom.window.document.getElementById("dsc-search");
+    const btn = dom.window.document.getElementById("dsc-search-btn");
     expect(dom.window.document.getElementById("dsc-list").textContent).toContain("Recent unrelated discovery");
 
+    // Partial typing must NOT hit the server (avoids recall_misses.jsonl prefix pollution).
+    input.value = "spi disp";
+    input.dispatchEvent(new dom.window.Event("input"));
+    await flushMicrotasks();
+    expect(calls.filter((c) => c.body?.arguments?.query)).toHaveLength(0);
+    expect(dom.window.document.getElementById("dsc-status").textContent).toContain("Enter");
+
+    // Explicit submit queries the server.
     input.value = "spi display triage";
     input.dispatchEvent(new dom.window.Event("input"));
-
-    // Debounced: no search request fires immediately on typing.
-    const searchCallsBefore = calls.filter((c) => c.body?.arguments?.query === "spi display triage");
-    expect(searchCallsBefore).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(260);
+    btn.click();
+    await flushMicrotasks();
 
     const searchCalls = calls.filter((c) => c.body?.arguments?.query === "spi display triage");
     expect(searchCalls).toHaveLength(1);
     // Input element was not replaced during in-place update.
     expect(dom.window.document.getElementById("dsc-search")).toBe(input);
-
-    // Stats should not be re-fetched on search keystrokes.
-    const statsCalls = calls.filter((c) => c.body?.arguments?.action === "stats");
-    expect(statsCalls).toHaveLength(1);
+    // Stats should not be re-fetched on search submission.
+    expect(calls.filter((c) => c.body?.arguments?.action === "stats")).toHaveLength(1);
 
     const cards = Array.from(dom.window.document.querySelectorAll("#dsc-list .panel"));
     expect(cards).toHaveLength(2);
     // Server relevance order preserved (older June entry stays rank 1 above newer November entry).
     expect(cards[0].textContent).toContain("TFT display triage runbook for embedded controller");
     expect(cards[1].textContent).toContain("Newer entry ranked second by server relevance");
-    // Individual query term highlighted.
     expect(cards[0].innerHTML).toContain("<mark>display</mark>");
-    expect(dom.window.document.getElementById("dsc-status").textContent).toContain("hybrid_rrf · 2 matches");
+    expect(dom.window.document.getElementById("dsc-status").textContent).toContain("hybrid_rrf · 2 results");
 
-    // Clearing restores the cached recent list without another server round-trip.
+    // Clearing restores the cached recent list without another server round-trip when fresh.
     input.value = "";
     input.dispatchEvent(new dom.window.Event("input"));
     expect(dom.window.document.getElementById("dsc-list").textContent).toContain("Recent unrelated discovery");
     expect(dom.window.document.getElementById("dsc-status").style.display).toBe("none");
+  });
+
+  it("refetches the default list after clearing filters when a refresh occurred under a filter", async () => {
+    let version = 1;
+    const { dom } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        return {
+          success: true,
+          stats: { total_discoveries: 2, by_status: { open: 2 }, by_type: { bug_found: 1, note: 1 } },
+        };
+      }
+      if (body?.arguments?.discovery_type === "bug_found") {
+        return {
+          success: true,
+          discoveries: [{ id: "2026-11-25T10:00:00Z", type: "bug_found", status: "open", summary: "Filtered bug v" + version }],
+        };
+      }
+      return {
+        success: true,
+        discoveries: [{ id: "2026-11-25T11:00:00Z", type: "note", status: "open", summary: "Default list v" + version }],
+      };
+    });
+
+    await dom.window.Discoveries.load();
+    expect(dom.window.document.getElementById("dsc-list").textContent).toContain("Default list v1");
+
+    // Select a type chip, receive a live write notification, and click refresh.
+    dom.window.document.querySelector('.dsc-type[data-type="bug_found"]').click();
+    await flushMicrotasks();
+    version = 2;
+    dom.window.Discoveries.notifyNew();
+    dom.window.document.getElementById("dsc-new").click();
+    await flushMicrotasks();
+    expect(dom.window.document.getElementById("dsc-list").textContent).toContain("Filtered bug v2");
+
+    // Clearing back to "all" must refetch v2 instead of restoring stale v1.
+    dom.window.document.querySelector('.dsc-type[data-type="all"]').click();
+    await flushMicrotasks();
+    expect(dom.window.document.getElementById("dsc-list").textContent).toContain("Default list v2");
+  });
+
+  it("reports page-cap truncation honestly on both text searches and type filters", async () => {
+    const thirtyRows = Array.from({ length: 30 }, (_, i) => ({
+      id: `2026-11-25T10:${String(i).padStart(2, "0")}:00Z`,
+      type: "insight",
+      status: "open",
+      summary: `Insight entry ${i}`,
+    }));
+    const { dom } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        return {
+          success: true,
+          stats: { total_discoveries: 500, by_status: { open: 500 }, by_type: { insight: 500 } },
+        };
+      }
+      return {
+        success: true,
+        search_mode_used: body?.arguments?.query ? "hybrid_rrf" : "indexed_filters",
+        _more_available: "Results may be limited to 30.",
+        discoveries: thirtyRows,
+      };
+    });
+
+    await dom.window.Discoveries.load();
+
+    // Type-only filter reports capped status instead of silently hiding the 30-row cap.
+    dom.window.document.querySelector('.dsc-type[data-type="insight"]').click();
+    await flushMicrotasks();
+    expect(dom.window.document.getElementById("dsc-status").textContent).toContain("showing latest 30 (capped at 30)");
+
+    // Text search reports top-30 cap rather than claiming "30 matches".
+    const input = dom.window.document.getElementById("dsc-search");
+    input.value = "insight";
+    input.dispatchEvent(new dom.window.Event("input"));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
+    await flushMicrotasks();
+    const statusText = dom.window.document.getElementById("dsc-status").textContent;
+    expect(statusText).toContain("hybrid_rrf · showing top 30 (capped at 30)");
+    expect(statusText).not.toContain("30 matches");
+  });
+
+  it("highlights terms without corrupting HTML entities or injecting markup", async () => {
+    const { dom } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        return { success: true, stats: { total_discoveries: 1, by_status: { open: 1 }, by_type: { note: 1 } } };
+      }
+      return {
+        success: true,
+        search_mode_used: "hybrid_rrf",
+        discoveries: [{
+          id: "2026-11-25T12:00:00Z",
+          type: "note",
+          status: "open",
+          summary: 'Retry & recover when count < 5 and amp > "0"',
+        }],
+      };
+    });
+
+    await dom.window.Discoveries.load();
+    const input = dom.window.document.getElementById("dsc-search");
+    input.value = "error & amp";
+    input.dispatchEvent(new dom.window.Event("input"));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
+    await flushMicrotasks();
+
+    const summaryEl = dom.window.document.querySelector("#dsc-list .panel");
+    expect(summaryEl.innerHTML).toContain("<mark>&amp;</mark>");
+    expect(summaryEl.innerHTML).toContain("<mark>amp</mark>");
+    expect(summaryEl.innerHTML).not.toContain("<mark>&</mark>amp;");
+    // Decoded textContent stays intact without literal "&amp;" / "&lt;" artifacts.
+    expect(summaryEl.textContent).toContain('Retry & recover when count < 5 and amp > "0"');
   });
 
   it("ignores stale out-of-order server responses", async () => {
