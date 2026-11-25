@@ -1678,12 +1678,13 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 # workspace). The material used to ride inline in ONE argv element, which Linux
 # caps at 128 KiB: PR #2470's diff alone was 143 KB, so every agy review of it
 # failed before starting. Files have no such limit.
-#: Default model: Gemini 4 Argon (High), in `agy models` on 2026-10-13 (the
-#: former 3.1 Pro pin is no longer served). Chosen over 3.8 Flash on a replay
-#: of three past PRs with known defects: Argon found 5, Flash 1, Pro 1. One run
-#: per diff, so a sample, not a quality guarantee. REVIEW_AGY_MODEL overrides
-#: it; "default" leaves the choice to agy.
-AGY_DEFAULT_MODEL = "gemini-4-argon-high"
+#: Default model: Gemini 4 Neon (High), the operator's pin of 2026-11-25
+#: (Neon or Carbon, over Argon). Neon and Carbon both answered through agy that
+#: day; neither has been through the replay that chose Argon on 2026-10-13
+#: (three past PRs with known defects: Argon found 5, 3.8 Flash 1, 3.1 Pro 1;
+#: one run per diff, so a sample, not a quality guarantee). REVIEW_AGY_MODEL
+#: overrides it; "default" leaves the choice to agy.
+AGY_DEFAULT_MODEL = "gemini-4-neon-high"
 _AGY_MODEL_OVERRIDE: str | None = None
 #: A changed file whose name agy would load as instructions (AGENTS.md,
 #: GEMINI.md, CLAUDE.md, anything under .agents/, .agent/ or .gemini/) is
