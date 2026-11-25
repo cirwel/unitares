@@ -1571,7 +1571,7 @@ class KnowledgeGraphAGESearchMixin:
 
         if not embeddings_available():
             logger.warning("sentence-transformers not installed — semantic search degraded")
-            return ([], {"error": "embeddings_unavailable", "message": "sentence-transformers not installed, semantic search unavailable"})
+            return ([], {"error": "embeddings_unavailable", "message": "sentence-transformers is not installed"})
 
         # Get embedding service and embed query
         try:
