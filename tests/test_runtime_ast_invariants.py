@@ -453,4 +453,167 @@ async def bad_reexport_caller(k: str):
     ]
 
 
+_H_REL = "src/mcp_handlers/h.py"
+_GR_HDR = (
+    "from src.cache.redis_client import get_redis\n"
+    "import asyncio\n"
+    "def mcp_tool(*a, **k):\n"
+    "    return lambda f: f\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "files", "expected"),
+    [
+        (
+            "pragma-in-string",
+            {
+                "src/a.py": 'import asyncio\nasync def c(): pass\nasyncio.create_task(c()); s = "# invariant-allow: P001 not a comment"\n'
+            },
+            {("P001", "src/a.py", 3)},
+        ),
+        (
+            "pragma-in-string-arg",
+            {
+                "src/a.py": 'import asyncio\nasync def c(x): pass\nasyncio.create_task(c(\n    "# invariant-allow: P001 smuggled"))\n'
+            },
+            {("P001", "src/a.py", 3)},
+        ),
+        (
+            "docstring-example",
+            {
+                "src/a.py": 'def f():\n    """Usage:\n\n    # invariant-allow: P001\n    """\n'
+            },
+            set(),
+        ),
+        (
+            "main-else",
+            {
+                "src/a.py": 'from m import UNITARESMonitor\nif __name__ == "__main__":\n    pass\nelse:\n    UNITARESMonitor()\n'
+            },
+            {("P003", "src/a.py", 5)},
+        ),
+        (
+            "spoof-tracked-name",
+            {
+                "src/a.py": "from asyncio import create_task as create_tracked_task\nasync def c(): pass\ncreate_tracked_task(c())\n"
+            },
+            {("P001", "src/a.py", 3)},
+        ),
+        (
+            "ifexp-discard",
+            {
+                "src/a.py": "import asyncio\nasync def c(): pass\nflag = True\nasyncio.create_task(c()) if flag else None\n"
+            },
+            {("P001", "src/a.py", 4)},
+        ),
+        (
+            "listcomp-discard",
+            {
+                "src/a.py": "import asyncio\nasync def c(): pass\n[asyncio.create_task(c()) for _ in range(3)]\n"
+            },
+            {("P001", "src/a.py", 3)},
+        ),
+        (
+            "p004-baseline",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    await r.get("k")\n'
+            },
+            {("P004", _H_REL, 8)},
+        ),
+        (
+            "p004-guarded-control",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    await asyncio.wait_for(r.get("k"), timeout=1)\n'
+            },
+            set(),
+        ),
+        (
+            "unrelated-wait_for",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h(cond):\n    r = await get_redis()\n    await cond.wait_for(r.get("k"))\n'
+            },
+            {("P004", _H_REL, 8)},
+        ),
+        (
+            "timeout-none",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    await asyncio.wait_for(r.get("k"), timeout=None)\n'
+            },
+            {("P004", _H_REL, 8)},
+        ),
+        (
+            "pre-awaited",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    await asyncio.wait_for(await r.get("k"), timeout=1)\n'
+            },
+            {("P004", _H_REL, 8)},
+        ),
+        (
+            "annassign",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r: object = await get_redis()\n    await r.get("k")\n'
+            },
+            {("P004", _H_REL, 8)},
+        ),
+        (
+            "from-pkg-import-module",
+            {
+                _H_REL: 'from src.cache import redis_client\ndef mcp_tool(*a, **k):\n    return lambda f: f\n@mcp_tool("t")\nasync def h():\n    r = await redis_client.get_redis()\n    await r.get("k")\n'
+            },
+            {("P004", _H_REL, 7)},
+        ),
+        (
+            "rebind",
+            {
+                _H_REL: _GR_HDR
+                + '@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    r2 = r\n    await r2.get("k")\n'
+            },
+            {("P004", _H_REL, 9)},
+        ),
+        (
+            "kwarg-param",
+            {
+                _H_REL: _GR_HDR
+                + 'async def _use(client):\n    await client.get("k")\n@mcp_tool("t")\nasync def h():\n    r = await get_redis()\n    await _use(client=r)\n'
+            },
+            {("P004", _H_REL, 6)},
+        ),
+        (
+            "returns-client-exempts",
+            {
+                _H_REL: _GR_HDR
+                + 'async def _r():\n    c = await get_redis()\n    await c.set("x", 1)\n    return await get_redis()\n@mcp_tool("t")\nasync def h():\n    await _r()\n'
+            },
+            {("P004", _H_REL, 7)},
+        ),
+        (
+            "returned-coroutine",
+            {
+                _H_REL: _GR_HDR
+                + 'async def _leaf():\n    r = await get_redis()\n    await r.get("k")\nasync def _outer():\n    return _leaf()\n@mcp_tool("t")\nasync def h():\n    coro = await asyncio.wait_for(_outer(), timeout=1)\n    await coro\n'
+            },
+            {("P004", _H_REL, 7)},
+        ),
+    ],
+)
+def test_adversarial_ast_edge_cases(
+    tmp_path: Path,
+    case_id: str,
+    files: dict[str, str],
+    expected: set[tuple[str, str, int]],
+) -> None:
+    for rel, src in files.items():
+        _write(tmp_path, rel, src)
+    got = {(v.rule, v.rel_path, v.line) for v in guard.scan_paths(tmp_path)}
+    assert got == expected, f"case {case_id} mismatch: got={got} expected={expected}"
+
+
+
 

@@ -6,9 +6,10 @@ inference. Enforces three high-signal runtime invariants:
 
 - **P001 (untracked background task)**: ``create_task(...)`` or
   ``ensure_future(...)`` whose returned ``Task`` is discarded at the call
-  statement (bare expression statement or ``_ = ...``). CPython holds only a
-  weak reference to tasks scheduled on an event loop, so an unreferenced task
-  can be garbage-collected mid-await and has no cancellation handle.
+  statement (bare expression statement, ``_ = ...``, or a discarded container /
+  comprehension / conditional expression). CPython holds only a weak reference
+  to tasks scheduled on an event loop, so an unreferenced task can be
+  garbage-collected mid-await and has no cancellation handle.
   Safe forms: ``create_tracked_task(...)``, ``_supervised_create_task(...)``,
   ``tg.create_task(...)`` inside ``async with asyncio.TaskGroup() as tg:``, or
   storing/passing/returning the ``Task`` reference.
@@ -16,32 +17,37 @@ inference. Enforces three high-signal runtime invariants:
   whole-function dataflow on named locals after assignment.
 
 - **P003 (uncached monitor instantiation)**: ``UNITARESMonitor(...)`` outside
-  ``def get_or_create_monitor`` (and outside ``if __name__ == "__main__":``)
-  without ``load_state=False``. Bypassing ``mcp_server.get_or_create_monitor``
-  hydrates disk state into a throwaway instance that never enters the server
-  cache. Explicit ``load_state=False`` simulation/comparison instances are
-  exempt.
+  ``def get_or_create_monitor`` (and outside the ``if`` body of
+  ``if __name__ == "__main__":``) without ``load_state=False``. Bypassing
+  ``mcp_server.get_or_create_monitor`` hydrates disk state into a throwaway
+  instance that never enters the server cache. Explicit ``load_state=False``
+  simulation/comparison instances are exempt.
 
 - **P004 (unguarded raw Redis await in MCP handlers)**: ``await`` / ``async
   for`` / ``async with`` on a raw async Redis client (from
   ``src.cache.redis_client.get_redis``) inside ``src/mcp_handlers/`` that is
-  neither wrapped in ``asyncio.wait_for(...)`` nor confined to a non-entrypoint
-  helper whose statically resolved intra-package call/reference sites are all
-  bounded by ``asyncio.wait_for(...)`` or backgrounded via
-  ``create_tracked_task`` / ``_supervised_create_task``. (``asyncpg`` uses
-  ``ExecutorPool`` and ``SessionCache`` bounds its own calls; raw Redis clients
-  do not.)
+  neither wrapped in ``asyncio.wait_for(..., timeout=...)`` (with a non-``None``
+  timeout) nor confined to a non-entrypoint helper whose statically resolved
+  intra-package call/reference sites are all bounded by ``asyncio.wait_for`` or
+  backgrounded via ``create_tracked_task`` / ``_supervised_create_task``.
+  (``asyncpg`` uses ``ExecutorPool`` and ``SessionCache`` bounds its own calls;
+  raw Redis clients do not.)
 
-Inline escape hatch (requires a non-empty reason):
+Inline escape hatch (real Python ``#`` comments only; requires a non-empty reason):
     ``# invariant-allow: P001 reason explaining why this site is safe``
     ``# invariant-allow: P001, P004 reason explaining why this site is safe``
 Any reasonless ``# invariant-allow: ...`` comment anywhere in a scanned file is
-reported as ``ALLOW_NO_REASON``. Unparseable Python files fail with
-``PARSE_ERROR`` rather than being skipped silently.
+reported as ``ALLOW_NO_REASON``. Strings and docstrings are ignored via
+``tokenize``. Unparseable Python files fail with ``PARSE_ERROR`` rather than
+being skipped silently.
 
 Ratchet mode (default, matching ``check_component_boundaries.py``):
 - Counts violations per ``(rule, file)`` against
-  ``scripts/dev/runtime_ast_invariants_baseline.txt``.
+  ``scripts/dev/runtime_ast_invariants_baseline.txt``. Note: because the
+  baseline stores counts per ``(rule, file)`` rather than line numbers,
+  replacing one grandfathered site with another in the same file keeps the count
+  unchanged by design; fixing a site requires ``--lower`` in the same change so
+  the count can only move downward.
 - Any new ``(rule, file)`` pair or count increase fails.
 - Any count decrease requires ``--lower`` in the same change so fixed sites
   cannot silently regress.
@@ -55,8 +61,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import re
 import subprocess
+import tokenize
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,7 +78,7 @@ MCP_HANDLERS_PREFIX = "src/mcp_handlers/"
 RULES = ("P001", "P003", "P004", "ALLOW_NO_REASON", "PARSE_ERROR")
 
 _ALLOW_RE = re.compile(
-    r"#\s*invariant-allow:\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)(.*)$"
+    r"^#\s*invariant-allow:\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)(.*)$"
 )
 
 _TRACKED_TASK_HELPERS = frozenset({
@@ -78,6 +86,13 @@ _TRACKED_TASK_HELPERS = frozenset({
     "_supervised_create_task",
 })
 _TASK_SPAWN_NAMES = frozenset({"create_task", "ensure_future"})
+_SYNC_REDIS_METHODS = frozenset({
+    "pipeline",
+    "pubsub",
+    "lock",
+    "register_script",
+    "client",
+})
 
 
 @dataclass(frozen=True)
@@ -88,12 +103,12 @@ class Violation:
     message: str
 
 
-def _parse_allow_line(line_text: str) -> tuple[set[str], bool] | None:
-    """Parse ``# invariant-allow: ...`` on a single line.
+def _parse_allow_comment(comment_text: str) -> tuple[set[str], bool] | None:
+    """Parse a real ``tokenize.COMMENT`` string for ``# invariant-allow: ...``.
 
     Returns ``None`` if absent, else ``(allowed_rules, has_non_empty_reason)``.
     """
-    m = _ALLOW_RE.search(line_text)
+    m = _ALLOW_RE.match(comment_text.strip())
     if not m:
         return None
     raw_rules, tail = m.group(1), m.group(2).strip()
@@ -105,27 +120,34 @@ def _parse_allow_line(line_text: str) -> tuple[set[str], bool] | None:
 
 
 def _collect_file_pragmas(
-    rel_path: str, source_lines: list[str]
+    rel_path: str, source: str
 ) -> tuple[dict[int, set[str]], list[Violation]]:
-    """Scan every line in ``source_lines`` once for ``# invariant-allow:``."""
+    """Scan real ``tokenize.COMMENT`` tokens in ``source`` for ``# invariant-allow:``."""
     allowed_by_line: dict[int, set[str]] = {}
     pragma_violations: list[Violation] = []
-    for lineno, line_text in enumerate(source_lines, start=1):
-        parsed = _parse_allow_line(line_text)
-        if parsed is None:
-            continue
-        rules, has_reason = parsed
-        if not has_reason:
-            pragma_violations.append(
-                Violation(
-                    "ALLOW_NO_REASON",
-                    rel_path,
-                    lineno,
-                    "invariant-allow pragma must include a non-empty reason",
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type != tokenize.COMMENT:
+                continue
+            lineno = tok.start[0]
+            parsed = _parse_allow_comment(tok.string)
+            if parsed is None:
+                continue
+            rules, has_reason = parsed
+            if not has_reason:
+                pragma_violations.append(
+                    Violation(
+                        "ALLOW_NO_REASON",
+                        rel_path,
+                        lineno,
+                        "invariant-allow pragma must include a non-empty reason",
+                    )
                 )
-            )
-        else:
-            allowed_by_line[lineno] = rules
+            else:
+                allowed_by_line.setdefault(lineno, set()).update(rules)
+    except (tokenize.TokenError, IndentationError):
+        # Syntax/token errors are reported separately via ast.parse -> PARSE_ERROR.
+        pass
     return allowed_by_line, pragma_violations
 
 
@@ -149,29 +171,48 @@ def _call_func_name(call: ast.Call) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _is_wait_for_call(node: ast.AST, wait_for_aliases: set[str]) -> bool:
+def _has_non_none_timeout(call: ast.Call) -> bool:
+    """Return True iff ``asyncio.wait_for(aw, timeout)`` supplies a non-``None`` timeout."""
+    if not call.args:
+        return False
+    timeout_expr: ast.AST | None = call.args[1] if len(call.args) >= 2 else None
+    has_kw_unpack = False
+    for kw in call.keywords:
+        if kw.arg == "timeout":
+            timeout_expr = kw.value
+        elif kw.arg is None:
+            has_kw_unpack = True
+    if timeout_expr is None:
+        return has_kw_unpack
+    if isinstance(timeout_expr, ast.Constant) and timeout_expr.value is None:
+        return False
+    return True
+
+
+def _is_wait_for_call(node: ast.AST, imports: "_ModuleImports") -> bool:
     if not isinstance(node, ast.Call):
         return False
     recv, name = _call_func_name(node)
-    if recv is None and name in wait_for_aliases:
-        return True
-    if name == "wait_for":
+    is_asyncio_wait_for = (recv is None and name in imports.wait_for_aliases) or (
+        recv in imports.asyncio_modules and name == "wait_for"
+    )
+    if not is_asyncio_wait_for:
+        return False
+    return _has_non_none_timeout(node)
+
+
+def _is_tracked_task_call(node: ast.AST, imports: "_ModuleImports") -> bool:
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    recv, name = _call_func_name(node)
+    if recv is None:
+        return name in imports.tracked_task_aliases
+    if recv != "<expr>" and recv not in imports.asyncio_modules and name in _TRACKED_TASK_HELPERS:
         return True
     return False
 
 
-def _is_tracked_task_call(node: ast.AST, tracked_aliases: set[str]) -> bool:
-    if not isinstance(node, ast.Call):
-        return False
-    recv, name = _call_func_name(node)
-    if recv is None and name in tracked_aliases:
-        return True
-    if name in _TRACKED_TASK_HELPERS:
-        return True
-    return False
-
-
-def _is_taskgroup_context(item: ast.withitem, taskgroup_aliases: set[str]) -> str | None:
+def _is_taskgroup_context(item: ast.withitem, imports: "_ModuleImports") -> str | None:
     """If ``item`` is ``asyncio.TaskGroup() as tg``, return ``'tg'``."""
     if not isinstance(item.optional_vars, ast.Name):
         return None
@@ -179,7 +220,9 @@ def _is_taskgroup_context(item: ast.withitem, taskgroup_aliases: set[str]) -> st
     if not isinstance(ctx, ast.Call):
         return None
     recv, name = _call_func_name(ctx)
-    if (recv is None and name in taskgroup_aliases) or name == "TaskGroup":
+    if (recv is None and name in imports.taskgroup_aliases) or (
+        recv in imports.asyncio_modules and name == "TaskGroup"
+    ):
         return item.optional_vars.id
     return None
 
@@ -192,10 +235,18 @@ def _is_main_guard(node: ast.If) -> bool:
         return False
     left, right = test.left, test.comparators[0]
     return (
-        isinstance(left, ast.Name)
-        and left.id == "__name__"
-        and isinstance(right, ast.Constant)
-        and right.value == "__main__"
+        (
+            isinstance(left, ast.Name)
+            and left.id == "__name__"
+            and isinstance(right, ast.Constant)
+            and right.value == "__main__"
+        )
+        or (
+            isinstance(right, ast.Name)
+            and right.id == "__name__"
+            and isinstance(left, ast.Constant)
+            and left.value == "__main__"
+        )
     )
 
 
@@ -228,10 +279,16 @@ class _ModuleImports:
     """Import alias table for one module."""
 
     def __init__(self, tree: ast.Module, rel_path: str) -> None:
-        self.task_spawn_aliases: set[str] = set(_TASK_SPAWN_NAMES)
-        self.tracked_task_aliases: set[str] = set(_TRACKED_TASK_HELPERS)
-        self.taskgroup_aliases: set[str] = {"TaskGroup"}
-        self.wait_for_aliases: set[str] = {"wait_for"}
+        self.asyncio_modules: set[str] = set()
+        self.task_spawn_aliases: set[str] = set()
+        self.tracked_task_aliases: set[str] = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in _TRACKED_TASK_HELPERS
+        }
+        self.taskgroup_aliases: set[str] = set()
+        self.wait_for_aliases: set[str] = set()
         self.monitor_names: set[str] = {"UNITARESMonitor"}
         self.monitor_modules: set[str] = set()
         self.raw_redis_getters: set[str] = set()
@@ -244,6 +301,7 @@ class _ModuleImports:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
+                is_asyncio = node.level == 0 and (mod == "asyncio" or mod.startswith("asyncio."))
                 resolved_mod_rel = (
                     _resolve_import_rel_path(rel_path, node.module, node.level)
                     if node.module
@@ -253,16 +311,34 @@ class _ModuleImports:
                     local = alias.asname or alias.name
                     if alias.name in _TASK_SPAWN_NAMES:
                         self.task_spawn_aliases.add(local)
-                    if alias.name in _TRACKED_TASK_HELPERS:
+                        self.tracked_task_aliases.discard(local)
+                    elif alias.name in _TRACKED_TASK_HELPERS and not is_asyncio:
                         self.tracked_task_aliases.add(local)
-                    if alias.name == "TaskGroup":
+                        self.task_spawn_aliases.discard(local)
+                    else:
+                        self.tracked_task_aliases.discard(local)
+
+                    if is_asyncio and alias.name == "TaskGroup":
                         self.taskgroup_aliases.add(local)
-                    if alias.name == "wait_for":
+                    else:
+                        self.taskgroup_aliases.discard(local)
+
+                    if is_asyncio and alias.name == "wait_for":
                         self.wait_for_aliases.add(local)
+                    else:
+                        self.wait_for_aliases.discard(local)
+
                     if alias.name == "UNITARESMonitor":
                         self.monitor_names.add(local)
+                    if alias.name == "governance_monitor":
+                        self.monitor_modules.add(local)
                     if mod.endswith("redis_client") and alias.name == "get_redis":
                         self.raw_redis_getters.add(local)
+                    if alias.name == "redis_client" and (
+                        mod in {"src.cache", "cache", ""} or mod.endswith(".cache")
+                    ):
+                        self.raw_redis_modules.add(local)
+
                     # Check submodule import (`from . import persistence` or
                     # `from src.mcp_handlers.identity import persistence`)
                     submod_name = f"{node.module}.{alias.name}" if node.module else alias.name
@@ -271,18 +347,39 @@ class _ModuleImports:
                         self.handler_mod_imports[local] = sub_rel
                     if resolved_mod_rel is not None:
                         self.handler_func_imports[local] = (resolved_mod_rel, alias.name)
-                    elif node.level > 0 and not node.module:
-                        pass
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    local = alias.asname or alias.name.split(".")[-1]
+                    local = alias.asname or alias.name.split(".")[0]
+                    tail_local = alias.asname or alias.name.split(".")[-1]
+                    if alias.name == "asyncio" or alias.name.startswith("asyncio."):
+                        self.asyncio_modules.add(local)
                     if alias.name.endswith("governance_monitor"):
-                        self.monitor_modules.add(local)
+                        self.monitor_modules.add(tail_local)
                     if alias.name.endswith("redis_client"):
-                        self.raw_redis_modules.add(local)
+                        self.raw_redis_modules.add(tail_local)
                     if alias.name.startswith("src.mcp_handlers."):
                         cand = alias.name.replace(".", "/") + ".py"
-                        self.handler_mod_imports[local] = cand
+                        self.handler_mod_imports[tail_local] = cand
+
+
+def _iter_discarded_calls(expr: ast.expr) -> Iterable[ast.Call]:
+    """Yield ``ast.Call`` nodes whose return values are discarded when ``expr`` is discarded."""
+    if isinstance(expr, ast.Call):
+        yield expr
+    elif isinstance(expr, ast.IfExp):
+        yield from _iter_discarded_calls(expr.body)
+        yield from _iter_discarded_calls(expr.orelse)
+    elif isinstance(expr, (ast.ListComp, ast.SetComp)):
+        yield from _iter_discarded_calls(expr.elt)
+    elif isinstance(expr, ast.DictComp):
+        yield from _iter_discarded_calls(expr.key)
+        yield from _iter_discarded_calls(expr.value)
+    elif isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+        for elt in expr.elts:
+            yield from _iter_discarded_calls(elt)
+    elif isinstance(expr, ast.BoolOp):
+        for val in expr.values:
+            yield from _iter_discarded_calls(val)
 
 
 def _check_p001_and_p003(
@@ -299,7 +396,7 @@ def _check_p001_and_p003(
         violations.append(Violation(rule, rel_path, getattr(node, "lineno", 1), msg))
 
     def is_untracked_spawn_call(call: ast.Call, active_taskgroups: set[str]) -> str | None:
-        if _is_tracked_task_call(call, imports.tracked_task_aliases):
+        if _is_tracked_task_call(call, imports):
             return None
         recv, name = _call_func_name(call)
         if recv is None:
@@ -331,42 +428,62 @@ def _check_p001_and_p003(
             if node.name == "get_or_create_monitor":
                 in_monitor_factory = True
         elif isinstance(node, ast.If) and _is_main_guard(node):
-            in_main_guard = True
+            visit(
+                node.test,
+                in_monitor_factory=in_monitor_factory,
+                in_main_guard=in_main_guard,
+                active_taskgroups=active_taskgroups,
+            )
+            for stmt in node.body:
+                visit(
+                    stmt,
+                    in_monitor_factory=in_monitor_factory,
+                    in_main_guard=True,
+                    active_taskgroups=active_taskgroups,
+                )
+            for stmt in node.orelse:
+                visit(
+                    stmt,
+                    in_monitor_factory=in_monitor_factory,
+                    in_main_guard=in_main_guard,
+                    active_taskgroups=active_taskgroups,
+                )
+            return
         elif isinstance(node, ast.AsyncWith):
             extra_tgs = set(active_taskgroups)
             for item in node.items:
-                tg = _is_taskgroup_context(item, imports.taskgroup_aliases)
+                tg = _is_taskgroup_context(item, imports)
                 if tg:
                     extra_tgs.add(tg)
             active_taskgroups = frozenset(extra_tgs)
 
-        discarded_call: ast.Call | None = None
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            discarded_call = node.value
+        discarded_expr: ast.expr | None = None
+        if isinstance(node, ast.Expr):
+            discarded_expr = node.value
         elif isinstance(node, ast.Assign):
             if (
                 len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
                 and node.targets[0].id == "_"
-                and isinstance(node.value, ast.Call)
             ):
-                discarded_call = node.value
+                discarded_expr = node.value
         elif isinstance(node, ast.AnnAssign):
             if (
                 isinstance(node.target, ast.Name)
                 and node.target.id == "_"
-                and isinstance(node.value, ast.Call)
+                and node.value is not None
             ):
-                discarded_call = node.value
+                discarded_expr = node.value
 
-        if discarded_call is not None:
-            spawn_desc = is_untracked_spawn_call(discarded_call, set(active_taskgroups))
-            if spawn_desc is not None:
-                record_if_not_allowed(
-                    "P001",
-                    node,
-                    f"discarded {spawn_desc}(...) return value; use create_tracked_task or store a strong Task reference",
-                )
+        if discarded_expr is not None:
+            for discarded_call in _iter_discarded_calls(discarded_expr):
+                spawn_desc = is_untracked_spawn_call(discarded_call, set(active_taskgroups))
+                if spawn_desc is not None:
+                    record_if_not_allowed(
+                        "P001",
+                        discarded_call,
+                        f"discarded {spawn_desc}(...) return value; use create_tracked_task or store a strong Task reference",
+                    )
 
         if isinstance(node, ast.Call) and is_monitor_ctor(node):
             if not in_monitor_factory and not in_main_guard and not _has_load_state_false(node):
@@ -397,6 +514,31 @@ def _is_raw_redis_getter_call(call: ast.Call, raw_getters: set[str], raw_modules
     return False
 
 
+def _local_redis_imports(
+    fn: ast.AST, base_getters: set[str], base_modules: set[str]
+) -> tuple[set[str], set[str]]:
+    """Collect module + function-local ``get_redis`` and ``redis_client`` aliases."""
+    local_getters = set(base_getters)
+    local_modules = set(base_modules)
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.ImportFrom):
+            mod = sub.module or ""
+            for alias in sub.names:
+                local = alias.asname or alias.name
+                if mod.endswith("redis_client") and alias.name == "get_redis":
+                    local_getters.add(local)
+                if alias.name == "redis_client" and (
+                    mod in {"src.cache", "cache", ""} or mod.endswith(".cache")
+                ):
+                    local_modules.add(local)
+        elif isinstance(sub, ast.Import):
+            for alias in sub.names:
+                tail_local = alias.asname or alias.name.split(".")[-1]
+                if alias.name.endswith("redis_client"):
+                    local_modules.add(tail_local)
+    return local_getters, local_modules
+
+
 def _collect_p004_module_facts(
     tree: ast.Module,
     imports: _ModuleImports,
@@ -414,19 +556,16 @@ def _collect_p004_module_facts(
         for fname, fn in async_funcs.items():
             if fname in raw_getters:
                 continue
-            local_getters = set(raw_getters)
-            for sub in ast.walk(fn):
-                if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("redis_client"):
-                    for alias in sub.names:
-                        if alias.name == "get_redis":
-                            local_getters.add(alias.asname or alias.name)
+            local_getters, local_modules = _local_redis_imports(
+                fn, raw_getters, imports.raw_redis_modules
+            )
             returns_raw = False
             for sub in ast.walk(fn):
                 if (
                     isinstance(sub, ast.Return)
                     and isinstance(sub.value, ast.Await)
                     and isinstance(sub.value.value, ast.Call)
-                    and _is_raw_redis_getter_call(sub.value.value, local_getters, imports.raw_redis_modules)
+                    and _is_raw_redis_getter_call(sub.value.value, local_getters, local_modules)
                 ):
                     returns_raw = True
             if returns_raw:
@@ -457,10 +596,8 @@ def _resolve_callee_targets(
             target_rel, orig_name = imports.handler_func_imports[name]
             if orig_name in defined_by_module.get(target_rel, ()):
                 return {(target_rel, orig_name)}, True
-            # Imported from a package `__init__.py` or re-export module (e.g.
-            # `from src.mcp_handlers.identity import _h` or `from .shared import _h`):
-            # fall back conservatively across matching helper names so an
-            # unguarded re-exported call cannot slip past P004.
+            # Imported from a package `__init__.py` or re-export module: fall
+            # back conservatively across matching helper names.
             return set(all_by_bare_name.get(orig_name, ())), False
         return set(), True
     if recv in imports.handler_mod_imports:
@@ -468,11 +605,7 @@ def _resolve_callee_targets(
         if t_rel in defined_by_module:
             if name in defined_by_module[t_rel]:
                 return {(t_rel, name)}, True
-            # Re-exported attribute on an imported handler module (`shared._h()`)
             return set(all_by_bare_name.get(name, ())), False
-    # Dynamic/unknown attribute receiver (e.g. `self._h()` or `obj._h()`):
-    # conservatively mark every matching helper name across handler modules as
-    # potentially called unguarded so an unguarded attribute call cannot slip past.
     return set(all_by_bare_name.get(name, ())), False
 
 
@@ -483,28 +616,30 @@ def _scan_block_references(
     imports: _ModuleImports,
     defined_by_module: dict[str, set[str]],
     all_by_bare_name: dict[str, set[HandlerKey]],
-    initial_bounded: bool = False,
-) -> tuple[set[HandlerKey], set[HandlerKey], dict[str, bool]]:
+    enclosing_bounded: bool = False,
+) -> tuple[set[HandlerKey], set[HandlerKey], set[HandlerKey], dict[str, bool]]:
     """Single top-down pass over ``stmts`` (never double-visiting nested defs).
 
-    Returns ``(guarded_targets, unguarded_targets, nested_async_is_bounded)``:
-    - Calls inside the first arg of ``asyncio.wait_for(...)`` or
-      ``create_tracked_task(...)`` count as guarded (when resolved unambiguously).
-    - Attribute calls on unknown receivers and bare callback references
-      (e.g. ``schedule(_helper)``) count as unguarded references so a helper
-      passed around as a value or invoked via ``obj._helper()`` cannot inherit
-      a false caller-bounded exemption.
-    - Nested ``async def`` closures (e.g. ``async def _run(): return await _leaf()``
-      passed to ``await asyncio.wait_for(_run(), timeout=...)``) inherit
-      boundedness when every call/reference to the closure in its parent scope
-      is bounded.
+    Returns ``(directly_guarded, awaited_calls, escaped_unguarded, nested_async_is_bounded)``:
+    - ``directly_guarded``: unambiguous coroutine calls passed directly as ``args[0]``
+      of a valid ``asyncio.wait_for(..., timeout=...)`` or ``create_tracked_task(...)``,
+      or ``await helper(...)`` inside a scope whose own execution is already bounded.
+    - ``awaited_calls``: unambiguous ``await helper(...)`` calls inside an unbounded
+      async function (eligible to become bounded only if all callers of the enclosing
+      function are themselves bounded).
+    - ``escaped_unguarded``: unawaited calls (``return _leaf()``, ``coro = _leaf()``),
+      pre-awaited calls inside ``wait_for(await _leaf(), ...)``, callback/attribute
+      references, inexact re-export matches, or calls from sync/module scope. Any
+      helper in ``escaped_unguarded`` can never inherit caller-boundedness.
     """
-    guarded: set[HandlerKey] = set()
-    unguarded: set[HandlerKey] = set()
+    directly_guarded: set[HandlerKey] = set()
+    awaited_calls: set[HandlerKey] = set()
+    escaped_unguarded: set[HandlerKey] = set()
+
     local_nested_async: dict[str, ast.AsyncFunctionDef] = {}
     local_nested_sync: dict[str, ast.FunctionDef] = {}
     nested_guarded_names: set[str] = set()
-    nested_unguarded_names: set[str] = set()
+    nested_escaped_names: set[str] = set()
 
     for stmt in stmts:
         if isinstance(stmt, ast.AsyncFunctionDef):
@@ -514,58 +649,92 @@ def _scan_block_references(
 
     nested_names = set(local_nested_async) | set(local_nested_sync)
 
-    def walk_expr(node: ast.AST, *, bounded: bool) -> None:
+    def walk_call_subexprs(call: ast.Call) -> None:
+        if isinstance(call.func, ast.Attribute):
+            walk_expr(call.func.value)
+        elif not isinstance(call.func, ast.Name):
+            walk_expr(call.func)
+        for arg in call.args:
+            walk_expr(arg)
+        for kw in call.keywords:
+            walk_expr(kw.value)
+
+    def record_call_site(call: ast.Call, *, mode: str) -> None:
+        """Record ``call`` with ``mode`` in ``{'guarded', 'awaited', 'escaped'}``."""
+        recv, cname = _call_func_name(call)
+        if recv is None and cname in nested_names:
+            if cname in local_nested_async and (
+                mode == "guarded" or (mode == "awaited" and enclosing_bounded)
+            ):
+                nested_guarded_names.add(cname)
+            else:
+                nested_escaped_names.add(cname)
+        else:
+            targets, exact = _resolve_callee_targets(
+                rel_path, recv, cname, imports, defined_by_module, all_by_bare_name
+            )
+            if not exact:
+                escaped_unguarded.update(targets)
+            elif mode == "guarded" or (mode == "awaited" and enclosing_bounded):
+                directly_guarded.update(targets)
+            elif mode == "awaited":
+                awaited_calls.update(targets)
+            else:
+                escaped_unguarded.update(targets)
+        walk_call_subexprs(call)
+
+    def walk_expr(node: ast.AST) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return
 
+        if isinstance(node, ast.Await):
+            if isinstance(node.value, ast.Call):
+                inner_call = node.value
+                if _is_wait_for_call(inner_call, imports) or _is_tracked_task_call(
+                    inner_call, imports
+                ):
+                    walk_expr(inner_call)
+                else:
+                    record_call_site(inner_call, mode="awaited")
+                return
+            walk_expr(node.value)
+            return
+
         if isinstance(node, ast.Call):
-            if _is_wait_for_call(node, imports.wait_for_aliases) or _is_tracked_task_call(
-                node, imports.tracked_task_aliases
-            ):
+            if _is_wait_for_call(node, imports) or _is_tracked_task_call(node, imports):
                 if node.args:
-                    walk_expr(node.args[0], bounded=True)
+                    first = node.args[0]
+                    # Only a direct coroutine-creating Call (`wait_for(_op(), timeout=1)`)
+                    # runs inside wait_for; `wait_for(await _op(), timeout=1)` pre-awaits
+                    # `_op()` before wait_for starts and falls through to walk_expr -> Await.
+                    if isinstance(first, ast.Call) and not (
+                        _is_wait_for_call(first, imports)
+                        or _is_tracked_task_call(first, imports)
+                    ):
+                        record_call_site(first, mode="guarded")
+                    else:
+                        walk_expr(first)
                 for arg in node.args[1:]:
-                    walk_expr(arg, bounded=bounded)
+                    walk_expr(arg)
                 for kw in node.keywords:
-                    walk_expr(kw.value, bounded=bounded)
+                    walk_expr(kw.value)
+                if isinstance(node.func, ast.Attribute):
+                    walk_expr(node.func.value)
                 return
 
-            recv, cname = _call_func_name(node)
-            if recv is None and cname in nested_names:
-                if bounded:
-                    nested_guarded_names.add(cname)
-                else:
-                    nested_unguarded_names.add(cname)
-            else:
-                targets, exact = _resolve_callee_targets(
-                    rel_path, recv, cname, imports, defined_by_module, all_by_bare_name
-                )
-                if bounded and exact:
-                    guarded.update(targets)
-                else:
-                    unguarded.update(targets)
-
-            # Walk arguments and receiver expression without re-visiting the
-            # callee Name/Attribute itself (which would misclassify a bounded
-            # `persistence._h()` call as an unguarded attribute value load).
-            if isinstance(node.func, ast.Attribute):
-                walk_expr(node.func.value, bounded=bounded)
-            elif not isinstance(node.func, ast.Name):
-                walk_expr(node.func, bounded=bounded)
-            for arg in node.args:
-                walk_expr(arg, bounded=bounded)
-            for kw in node.keywords:
-                walk_expr(kw.value, bounded=bounded)
+            # Unawaited call (e.g. `return _leaf()`, `coro = _leaf()`, or sync call):
+            # the created coroutine is not awaited here and can outlive any caller timeout.
+            record_call_site(node, mode="escaped")
             return
 
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if node.id in nested_names:
-                nested_unguarded_names.add(node.id)
+                nested_escaped_names.add(node.id)
             else:
                 targets, _ = _resolve_callee_targets(
                     rel_path, None, node.id, imports, defined_by_module, all_by_bare_name
                 )
-                unguarded.update(targets)
+                escaped_unguarded.update(targets)
             return
 
         if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
@@ -573,48 +742,110 @@ def _scan_block_references(
             targets, _ = _resolve_callee_targets(
                 rel_path, recv, node.attr, imports, defined_by_module, all_by_bare_name
             )
-            unguarded.update(targets)
-            walk_expr(node.value, bounded=bounded)
+            escaped_unguarded.update(targets)
+            walk_expr(node.value)
             return
 
         for child in ast.iter_child_nodes(node):
-            walk_expr(child, bounded=bounded)
+            walk_expr(child)
 
     for stmt in stmts:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        walk_expr(stmt, bounded=initial_bounded)
+        walk_expr(stmt)
 
     nested_bounded_map: dict[str, bool] = {}
     for nname, nfn in local_nested_async.items():
-        is_b = initial_bounded or (
-            nname in nested_guarded_names and nname not in nested_unguarded_names
-        )
+        is_b = nname in nested_guarded_names and nname not in nested_escaped_names
         nested_bounded_map[nname] = is_b
-        cg, cu, _ = _scan_block_references(
+        cg, ca, ce, _ = _scan_block_references(
             nfn.body,
             rel_path=rel_path,
             imports=imports,
             defined_by_module=defined_by_module,
             all_by_bare_name=all_by_bare_name,
-            initial_bounded=is_b,
+            enclosing_bounded=is_b,
         )
-        guarded.update(cg)
-        unguarded.update(cu)
+        directly_guarded.update(cg)
+        awaited_calls.update(ca)
+        escaped_unguarded.update(ce)
 
     for _sname, sfn in local_nested_sync.items():
-        cg, cu, _ = _scan_block_references(
+        cg, ca, ce, _ = _scan_block_references(
             sfn.body,
             rel_path=rel_path,
             imports=imports,
             defined_by_module=defined_by_module,
             all_by_bare_name=all_by_bare_name,
-            initial_bounded=False,
+            enclosing_bounded=False,
         )
-        guarded.update(cg)
-        unguarded.update(cu)
+        directly_guarded.update(cg)
+        escaped_unguarded.update(ca)
+        escaped_unguarded.update(ce)
 
-    return guarded, unguarded, nested_bounded_map
+    return directly_guarded, awaited_calls, escaped_unguarded, nested_bounded_map
+
+
+def _extract_assign_targets_and_value(stmt: ast.AST) -> tuple[list[str], ast.expr | None]:
+    if isinstance(stmt, ast.Assign):
+        names = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        return names, stmt.value
+    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+        return [stmt.target.id], stmt.value
+    if isinstance(stmt, ast.NamedExpr) and isinstance(stmt.target, ast.Name):
+        return [stmt.target.id], stmt.value
+    return [], None
+
+
+def _compute_func_raw_vars(
+    fn: ast.AST,
+    seed_vars: set[str],
+    local_getters: set[str],
+    local_modules: set[str],
+) -> set[str]:
+    """Propagate raw Redis client variables across assignments, annotations, rebinds, and pipelines."""
+    rvars = set(seed_vars)
+    changed = True
+    while changed:
+        changed = False
+        for sub in ast.walk(fn):
+            names, val = _extract_assign_targets_and_value(sub)
+            if names and val is not None:
+                is_raw = False
+                if (
+                    isinstance(val, ast.Await)
+                    and isinstance(val.value, ast.Call)
+                    and _is_raw_redis_getter_call(val.value, local_getters, local_modules)
+                ):
+                    is_raw = True
+                elif isinstance(val, ast.Name) and val.id in rvars:
+                    is_raw = True
+                elif (
+                    isinstance(val, ast.Call)
+                    and isinstance(val.func, ast.Attribute)
+                    and isinstance(val.func.value, ast.Name)
+                    and val.func.value.id in rvars
+                    and val.func.attr == "pipeline"
+                ):
+                    is_raw = True
+                if is_raw:
+                    for nm in names:
+                        if nm not in rvars:
+                            rvars.add(nm)
+                            changed = True
+            elif isinstance(sub, ast.AsyncWith):
+                for item in sub.items:
+                    if (
+                        isinstance(item.context_expr, ast.Call)
+                        and isinstance(item.context_expr.func, ast.Attribute)
+                        and isinstance(item.context_expr.func.value, ast.Name)
+                        and item.context_expr.func.value.id in rvars
+                        and isinstance(item.optional_vars, ast.Name)
+                        and item.optional_vars.id not in rvars
+                    ):
+                        rvars.add(item.optional_vars.id)
+                        changed = True
+    return rvars
 
 
 def _check_p004_mcp_handlers(
@@ -623,15 +854,19 @@ def _check_p004_mcp_handlers(
     """Check P004 across all parsed files under ``src/mcp_handlers/``."""
     defined_by_module: dict[str, set[str]] = {}
     all_by_bare_name: dict[str, set[HandlerKey]] = {}
-    for rel_path, tree, _allowed, _imports in handler_trees:
-        funcs = {
-            node.name
-            for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef)
-        }
-        defined_by_module[rel_path] = funcs
-        for fname in funcs:
-            all_by_bare_name.setdefault(fname, set()).add((rel_path, fname))
+    async_funcs_by_key: dict[HandlerKey, ast.AsyncFunctionDef] = {}
+    imports_by_module: dict[str, _ModuleImports] = {}
+    raw_getters_by_module: dict[str, set[str]] = {}
+
+    for rel_path, tree, _allowed, imports in handler_trees:
+        imports_by_module[rel_path] = imports
+        async_funcs, mod_getters = _collect_p004_module_facts(tree, imports)
+        raw_getters_by_module[rel_path] = mod_getters
+        defined_by_module[rel_path] = set(async_funcs)
+        for fname, fn in async_funcs.items():
+            key = (rel_path, fname)
+            async_funcs_by_key[key] = fn
+            all_by_bare_name.setdefault(fname, set()).add(key)
 
     def is_mcp_entrypoint(fn: ast.AsyncFunctionDef) -> bool:
         for dec in fn.decorator_list:
@@ -643,139 +878,136 @@ def _check_p004_mcp_handlers(
                 return True
         return False
 
-    all_guarded: set[HandlerKey] = set()
-    all_unguarded: set[HandlerKey] = set()
-    unguarded_callers_of: dict[HandlerKey, set[HandlerKey | str]] = {}
+    all_directly_guarded: set[HandlerKey] = set()
+    all_escaped_unguarded: set[HandlerKey] = set()
+    awaited_callers_of: dict[HandlerKey, set[HandlerKey]] = {}
 
     for rel_path, tree, _allowed, imports in handler_trees:
         mod_stmts: list[ast.stmt] = []
         for top in tree.body:
             if isinstance(top, ast.AsyncFunctionDef):
-                g, u, _ = _scan_block_references(
+                dg, ac, eu, _ = _scan_block_references(
                     top.body,
                     rel_path=rel_path,
                     imports=imports,
                     defined_by_module=defined_by_module,
                     all_by_bare_name=all_by_bare_name,
-                    initial_bounded=False,
+                    enclosing_bounded=False,
                 )
-                all_guarded.update(g)
-                all_unguarded.update(u)
+                all_directly_guarded.update(dg)
+                all_escaped_unguarded.update(eu)
                 caller_key: HandlerKey = (rel_path, top.name)
-                for target in u:
-                    unguarded_callers_of.setdefault(target, set()).add(caller_key)
+                for target in ac:
+                    awaited_callers_of.setdefault(target, set()).add(caller_key)
             elif isinstance(top, ast.FunctionDef):
-                g, u, _ = _scan_block_references(
+                dg, ac, eu, _ = _scan_block_references(
                     top.body,
                     rel_path=rel_path,
                     imports=imports,
                     defined_by_module=defined_by_module,
                     all_by_bare_name=all_by_bare_name,
-                    initial_bounded=False,
+                    enclosing_bounded=False,
                 )
-                all_guarded.update(g)
-                all_unguarded.update(u)
-                for target in u:
-                    unguarded_callers_of.setdefault(target, set()).add(f"sync:{rel_path}:{top.name}")
+                all_directly_guarded.update(dg)
+                all_escaped_unguarded.update(ac)
+                all_escaped_unguarded.update(eu)
             else:
                 mod_stmts.append(top)
 
         if mod_stmts:
-            g, u, _ = _scan_block_references(
+            dg, ac, eu, _ = _scan_block_references(
                 mod_stmts,
                 rel_path=rel_path,
                 imports=imports,
                 defined_by_module=defined_by_module,
                 all_by_bare_name=all_by_bare_name,
-                initial_bounded=False,
+                enclosing_bounded=False,
             )
-            all_guarded.update(g)
-            all_unguarded.update(u)
-            for target in u:
-                unguarded_callers_of.setdefault(target, set()).add(f"module:{rel_path}")
+            all_directly_guarded.update(dg)
+            all_escaped_unguarded.update(ac)
+            all_escaped_unguarded.update(eu)
 
+    entrypoints: set[HandlerKey] = {
+        key for key, fn in async_funcs_by_key.items() if is_mcp_entrypoint(fn)
+    }
     caller_bounded_helpers: set[HandlerKey] = set()
-    entrypoints: set[HandlerKey] = set()
-    for rel_path, tree, _allowed, _imports in handler_trees:
-        for top in tree.body:
-            if isinstance(top, ast.AsyncFunctionDef):
-                key = (rel_path, top.name)
-                if is_mcp_entrypoint(top):
-                    entrypoints.add(key)
-                elif key in all_guarded and key not in all_unguarded:
-                    caller_bounded_helpers.add(key)
+    for key in async_funcs_by_key:
+        if (
+            key not in entrypoints
+            and key in all_directly_guarded
+            and key not in all_escaped_unguarded
+            and not awaited_callers_of.get(key)
+        ):
+            caller_bounded_helpers.add(key)
 
-    # Propagate caller-boundedness across multi-hop helper chains in O(E)
-    for _ in range(4):
+    # Propagate caller-boundedness across multi-hop awaited helper chains
+    for _ in range(6):
         added = False
-        for rel_path, funcs in defined_by_module.items():
-            for fname in funcs:
-                key = (rel_path, fname)
-                if key in caller_bounded_helpers or key in entrypoints:
-                    continue
-                callers = unguarded_callers_of.get(key, set())
-                if callers and all(
-                    isinstance(c, tuple) and c in caller_bounded_helpers for c in callers
-                ):
-                    caller_bounded_helpers.add(key)
-                    added = True
+        for key in async_funcs_by_key:
+            if key in caller_bounded_helpers or key in entrypoints or key in all_escaped_unguarded:
+                continue
+            callers = awaited_callers_of.get(key, set())
+            if callers and all(c in caller_bounded_helpers for c in callers):
+                caller_bounded_helpers.add(key)
+                added = True
         if not added:
+            break
+
+    # Propagate raw-Redis client variables across positional & keyword helper arguments
+    param_seeds: dict[HandlerKey, set[str]] = {k: set() for k in async_funcs_by_key}
+    raw_vars_by_key: dict[HandlerKey, set[str]] = {}
+    for _ in range(4):
+        changed_params = False
+        for key, fn in async_funcs_by_key.items():
+            rel_path, _fname = key
+            imports = imports_by_module[rel_path]
+            local_getters, local_modules = _local_redis_imports(
+                fn, raw_getters_by_module[rel_path], imports.raw_redis_modules
+            )
+            rvars = _compute_func_raw_vars(fn, param_seeds[key], local_getters, local_modules)
+            raw_vars_by_key[key] = rvars
+            if not rvars:
+                continue
+            for sub in ast.walk(fn):
+                if not isinstance(sub, ast.Call):
+                    continue
+                recv, cname = _call_func_name(sub)
+                targets, exact = _resolve_callee_targets(
+                    rel_path, recv, cname, imports, defined_by_module, all_by_bare_name
+                )
+                if not exact or len(targets) != 1:
+                    continue
+                t_key = next(iter(targets))
+                target_fn = async_funcs_by_key.get(t_key)
+                if target_fn is None:
+                    continue
+                pos_params = [a.arg for a in target_fn.args.posonlyargs] + [
+                    a.arg for a in target_fn.args.args
+                ]
+                named_params = set(pos_params) | {a.arg for a in target_fn.args.kwonlyargs}
+                for idx, arg in enumerate(sub.args):
+                    if isinstance(arg, ast.Name) and arg.id in rvars and idx < len(pos_params):
+                        pname = pos_params[idx]
+                        if pname not in param_seeds[t_key]:
+                            param_seeds[t_key].add(pname)
+                            changed_params = True
+                for kw in sub.keywords:
+                    if (
+                        kw.arg
+                        and kw.arg in named_params
+                        and isinstance(kw.value, ast.Name)
+                        and kw.value.id in rvars
+                        and kw.arg not in param_seeds[t_key]
+                    ):
+                        param_seeds[t_key].add(kw.arg)
+                        changed_params = True
+        if not changed_params:
             break
 
     violations: list[Violation] = []
 
     for rel_path, tree, allowed_by_line, imports in handler_trees:
-        async_funcs, module_raw_getters = _collect_p004_module_facts(tree, imports)
-
-        raw_param_map: dict[str, set[int]] = {}
-        raw_vars_by_func: dict[str, set[str]] = {}
-
-        for fname, fn in async_funcs.items():
-            local_getters = set(module_raw_getters)
-            for sub in ast.walk(fn):
-                if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("redis_client"):
-                    for alias in sub.names:
-                        if alias.name == "get_redis":
-                            local_getters.add(alias.asname or alias.name)
-            rvars: set[str] = set()
-            for sub in ast.walk(fn):
-                if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-                    val = sub.value
-                    if (
-                        isinstance(val, ast.Await)
-                        and isinstance(val.value, ast.Call)
-                        and _is_raw_redis_getter_call(val.value, local_getters, imports.raw_redis_modules)
-                    ):
-                        rvars.add(sub.targets[0].id)
-                elif isinstance(sub, ast.AsyncWith):
-                    for item in sub.items:
-                        if (
-                            isinstance(item.context_expr, ast.Call)
-                            and isinstance(item.context_expr.func, ast.Attribute)
-                            and isinstance(item.context_expr.func.value, ast.Name)
-                            and item.context_expr.func.value.id in rvars
-                            and isinstance(item.optional_vars, ast.Name)
-                        ):
-                            rvars.add(item.optional_vars.id)
-            raw_vars_by_func[fname] = rvars
-
-        for fname, fn in async_funcs.items():
-            rvars = raw_vars_by_func.get(fname, set())
-            if not rvars:
-                continue
-            for sub in ast.walk(fn):
-                if isinstance(sub, ast.Call):
-                    recv, cname = _call_func_name(sub)
-                    if recv is None and cname in async_funcs:
-                        for idx, arg in enumerate(sub.args):
-                            if isinstance(arg, ast.Name) and arg.id in rvars:
-                                raw_param_map.setdefault(cname, set()).add(idx)
-
-        for cname, idxs in raw_param_map.items():
-            target_fn = async_funcs[cname]
-            for idx in idxs:
-                if idx < len(target_fn.args.args):
-                    raw_vars_by_func.setdefault(cname, set()).add(target_fn.args.args[idx].arg)
+        module_raw_getters = raw_getters_by_module[rel_path]
 
         def record_p004(node: ast.AST, msg: str) -> None:
             if _is_rule_allowed(allowed_by_line, node, "P004"):
@@ -791,47 +1023,52 @@ def _check_p004_mcp_handlers(
         ) -> None:
             if is_top_level and (rel_path, fn.name) in caller_bounded_helpers:
                 enclosing_bounded = True
-            if is_top_level and fn.name in module_raw_getters and fn.name != "get_redis":
-                return
 
-            local_getters = set(module_raw_getters)
-            for sub in fn.body:
-                if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("redis_client"):
-                    for alias in sub.names:
-                        if alias.name == "get_redis":
-                            local_getters.add(alias.asname or alias.name)
-
-            rvars = set(inherited_raw_vars) | (
-                set(raw_vars_by_func.get(fn.name, set())) if is_top_level else set()
+            local_getters, local_modules = _local_redis_imports(
+                fn, module_raw_getters, imports.raw_redis_modules
             )
-            if not is_top_level:
-                for sub in fn.body:
-                    if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("redis_client"):
-                        for alias in sub.names:
-                            if alias.name == "get_redis":
-                                local_getters.add(alias.asname or alias.name)
-                for sub in ast.walk(fn):
-                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-                        val = sub.value
-                        if (
-                            isinstance(val, ast.Await)
-                            and isinstance(val.value, ast.Call)
-                            and _is_raw_redis_getter_call(val.value, local_getters, imports.raw_redis_modules)
-                        ):
-                            rvars.add(sub.targets[0].id)
+            seed_vars = (
+                set(raw_vars_by_key.get((rel_path, fn.name), set()))
+                if is_top_level
+                else set(inherited_raw_vars)
+            )
+            rvars = _compute_func_raw_vars(fn, seed_vars, local_getters, local_modules)
 
-            _, _, nested_bounded_map = _scan_block_references(
+            _, _, _, nested_bounded_map = _scan_block_references(
                 fn.body,
                 rel_path=rel_path,
                 imports=imports,
                 defined_by_module=defined_by_module,
                 all_by_bare_name=all_by_bare_name,
-                initial_bounded=enclosing_bounded,
+                enclosing_bounded=enclosing_bounded,
             )
 
-            def walk_node(node: ast.AST, *, in_wait_for: bool) -> None:
+            def _raw_redis_call_desc(call: ast.Call) -> str | None:
+                if not isinstance(call.func, ast.Attribute):
+                    return None
+                if (
+                    isinstance(call.func.value, ast.Await)
+                    and isinstance(call.func.value.value, ast.Call)
+                    and _is_raw_redis_getter_call(call.func.value.value, local_getters, local_modules)
+                ):
+                    return f"(await get_redis()).{call.func.attr}(...)"
+                if isinstance(call.func.value, ast.Name) and call.func.value.id in rvars:
+                    return f"{call.func.value.id}.{call.func.attr}(...)"
+                return None
+
+            def _walk_call_args_and_recv(call: ast.Call) -> None:
+                if isinstance(call.func, ast.Attribute):
+                    walk_node(call.func.value)
+                elif not isinstance(call.func, ast.Name):
+                    walk_node(call.func)
+                for arg in call.args:
+                    walk_node(arg)
+                for kw in call.keywords:
+                    walk_node(kw.value)
+
+            def walk_node(node: ast.AST, *, direct_bounded_coro: bool = False) -> None:
                 if isinstance(node, ast.AsyncFunctionDef):
-                    child_bounded = enclosing_bounded or nested_bounded_map.get(node.name, False)
+                    child_bounded = nested_bounded_map.get(node.name, False)
                     scan_func(
                         node,
                         is_top_level=False,
@@ -849,50 +1086,33 @@ def _check_p004_mcp_handlers(
                             and isinstance(item.context_expr.func, ast.Attribute)
                             and isinstance(item.context_expr.func.value, ast.Name)
                             and item.context_expr.func.value.id in rvars
+                            and not enclosing_bounded
                         ):
-                            if isinstance(item.optional_vars, ast.Name):
-                                rvars.add(item.optional_vars.id)
-                            if not enclosing_bounded and not in_wait_for:
-                                record_p004(
-                                    node,
-                                    f"unguarded async with {item.context_expr.func.value.id}.{item.context_expr.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
-                                )
-
-                if isinstance(node, ast.Call) and (
-                    _is_wait_for_call(node, imports.wait_for_aliases)
-                    or _is_tracked_task_call(node, imports.tracked_task_aliases)
-                ):
-                    if node.args:
-                        walk_node(node.args[0], in_wait_for=True)
-                    for arg in node.args[1:]:
-                        walk_node(arg, in_wait_for=in_wait_for)
-                    for kw in node.keywords:
-                        walk_node(kw.value, in_wait_for=in_wait_for)
+                            record_p004(
+                                node,
+                                f"unguarded async with {item.context_expr.func.value.id}.{item.context_expr.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
+                            )
+                        walk_node(item.context_expr)
+                        if item.optional_vars is not None:
+                            walk_node(item.optional_vars)
+                    for stmt in node.body:
+                        walk_node(stmt)
                     return
 
-                if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-                    call = node.value
-                    if (
-                        isinstance(call.func, ast.Attribute)
-                        and isinstance(call.func.value, ast.Await)
-                        and isinstance(call.func.value.value, ast.Call)
-                        and _is_raw_redis_getter_call(call.func.value.value, local_getters, imports.raw_redis_modules)
-                    ):
-                        if not enclosing_bounded and not in_wait_for:
-                            record_p004(
-                                node,
-                                f"unguarded await (await get_redis()).{call.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
-                            )
-                    elif (
-                        isinstance(call.func, ast.Attribute)
-                        and isinstance(call.func.value, ast.Name)
-                        and call.func.value.id in rvars
-                    ):
-                        if not enclosing_bounded and not in_wait_for:
-                            record_p004(
-                                node,
-                                f"unguarded await {call.func.value.id}.{call.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
-                            )
+                if isinstance(node, ast.Await):
+                    if isinstance(node.value, ast.Call):
+                        call = node.value
+                        desc = _raw_redis_call_desc(call)
+                        if desc is not None:
+                            if not enclosing_bounded:
+                                record_p004(
+                                    node,
+                                    f"unguarded await {desc} in MCP handler; wrap with asyncio.wait_for",
+                                )
+                            _walk_call_args_and_recv(call)
+                            return
+                    walk_node(node.value)
+                    return
 
                 if isinstance(node, ast.AsyncFor):
                     it = node.iter
@@ -901,19 +1121,56 @@ def _check_p004_mcp_handlers(
                         and isinstance(it.func, ast.Attribute)
                         and isinstance(it.func.value, ast.Name)
                         and it.func.value.id in rvars
+                    ):
+                        if not enclosing_bounded:
+                            record_p004(
+                                node,
+                                f"unguarded async for over {it.func.value.id}.{it.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
+                            )
+                        _walk_call_args_and_recv(it)
+                    else:
+                        walk_node(it)
+                    for stmt in node.body:
+                        walk_node(stmt)
+                    for stmt in node.orelse:
+                        walk_node(stmt)
+                    return
+
+                if isinstance(node, ast.Call):
+                    if _is_wait_for_call(node, imports) or _is_tracked_task_call(node, imports):
+                        if node.args:
+                            walk_node(
+                                node.args[0],
+                                direct_bounded_coro=isinstance(node.args[0], ast.Call),
+                            )
+                        for arg in node.args[1:]:
+                            walk_node(arg)
+                        for kw in node.keywords:
+                            walk_node(kw.value)
+                        if isinstance(node.func, ast.Attribute):
+                            walk_node(node.func.value)
+                        return
+
+                    desc = _raw_redis_call_desc(node)
+                    if (
+                        desc is not None
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr not in _SYNC_REDIS_METHODS
                         and not enclosing_bounded
-                        and not in_wait_for
+                        and not direct_bounded_coro
                     ):
                         record_p004(
                             node,
-                            f"unguarded async for over {it.func.value.id}.{it.func.attr}(...) in MCP handler; wrap with asyncio.wait_for",
+                            f"unguarded raw Redis coroutine {desc} in MCP handler; wrap with asyncio.wait_for",
                         )
+                    _walk_call_args_and_recv(node)
+                    return
 
                 for child in ast.iter_child_nodes(node):
-                    walk_node(child, in_wait_for=in_wait_for)
+                    walk_node(child)
 
             for stmt in fn.body:
-                walk_node(stmt, in_wait_for=False)
+                walk_node(stmt)
 
         for top in tree.body:
             if isinstance(top, ast.AsyncFunctionDef):
@@ -965,8 +1222,7 @@ def scan_paths(root: Path, paths: Iterable[Path] | None = None) -> list[Violatio
             if in_scope:
                 violations.append(Violation("PARSE_ERROR", rel_path, 1, f"cannot read file: {exc}"))
             continue
-        lines = source.splitlines()
-        allowed_by_line, pragma_violations = _collect_file_pragmas(rel_path, lines)
+        allowed_by_line, pragma_violations = _collect_file_pragmas(rel_path, source)
         if in_scope:
             violations.extend(pragma_violations)
         try:
