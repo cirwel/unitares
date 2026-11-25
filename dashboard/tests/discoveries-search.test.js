@@ -319,7 +319,41 @@ describe("Discoveries server-side search", () => {
     expect(timeCall).toBeTruthy();
   });
 
-  it("shows unavailable instead of stale results when a live server search fails", async () => {
+  it("does not send unsubmitted draft text on type chip, time select, or refresh clicks", async () => {
+    const { dom, calls } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        return {
+          success: true,
+          stats: { total_discoveries: 10, by_status: { open: 10 }, by_type: { bug_found: 5, note: 5 } },
+        };
+      }
+      return {
+        success: true,
+        discoveries: [{ id: "2026-11-25T12:00:00Z", type: "bug_found", status: "open", summary: "Filtered bug" }],
+      };
+    });
+
+    await dom.window.Discoveries.load();
+    const input = dom.window.document.getElementById("dsc-search");
+    input.value = "disp";
+    input.dispatchEvent(new dom.window.Event("input"));
+
+    dom.window.document.querySelector('.dsc-type[data-type="bug_found"]').click();
+    await flushMicrotasks();
+
+    const timeSelect = dom.window.document.getElementById("dsc-time");
+    timeSelect.value = "7d";
+    timeSelect.dispatchEvent(new dom.window.Event("change"));
+    await flushMicrotasks();
+
+    dom.window.Discoveries.notifyNew();
+    dom.window.document.getElementById("dsc-new").click();
+    await flushMicrotasks();
+
+    expect(calls.filter((c) => c.body?.arguments?.query)).toHaveLength(0);
+  });
+
+  it("shows unavailable instead of stale results on search failure and recovers when cleared", async () => {
     let failSearch = false;
     const { dom } = bootLive((url, body) => {
       if (body && body.arguments && body.arguments.action === "stats") {
@@ -344,6 +378,13 @@ describe("Discoveries server-side search", () => {
     expect(text).toContain("Server not answering");
     expect(text).not.toContain("Initial row");
     expect(text).not.toContain("No matches");
+
+    // Clearing the box restores the cached live default list instead of staying stuck.
+    input.value = "";
+    input.dispatchEvent(new dom.window.Event("input"));
+    const recovered = dom.window.document.getElementById("dsc-list").textContent;
+    expect(recovered).toContain("Initial row");
+    expect(recovered).not.toContain("Server not answering");
   });
 
   it("keeps client-side filtering working in offline snapshot mode", async () => {

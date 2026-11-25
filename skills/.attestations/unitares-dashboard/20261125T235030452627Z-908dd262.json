@@ -1,16 +1,16 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-25T23:45:38Z",
+  "verified_at": "2026-11-25T23:50:30Z",
   "verified_date": "2026-11-25",
-  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (re-checked unitares-dashboard SKILL.md after PR #3396 review fixes: explicit submit search, stale defaultList refetch, cap status, entity-safe highlight)",
+  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (re-checked unitares-dashboard SKILL.md against data.js and sections/discoveries.js live server search, explicit submit, and recovery)",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "8fe1598b043d548e",
     "unitares/dashboard/redesign/app.html": "aaa47bf0c9727a5a",
     "unitares/dashboard/redesign/data.js": "f5137789e17934b4",
     "unitares/dashboard/redesign/sections/connectors.js": "541c5fa3dba14b3d",
-    "unitares/dashboard/redesign/sections/discoveries.js": "68da3d92fb9c75fb",
+    "unitares/dashboard/redesign/sections/discoveries.js": "0b13ec308d20c254",
     "unitares/dashboard/redesign/sections/eisv.js": "a7a678c31726f94f",
     "unitares/dashboard/redesign/sections/knowledge-flow.js": "c8f60496ac6b245f",
     "unitares/dashboard/redesign/sections/landing.js": "3248181369d783aa",
@@ -35,10 +35,10 @@
   "skill_digest": "ed8c417af389aaf4",
   "superseded_digests": {
     "unitares/dashboard/redesign/data.js": [
-      "504ff57a0905d0b0"
+      "9881c91f045f94f1"
     ],
     "unitares/dashboard/redesign/sections/discoveries.js": [
-      "5e3c0878213c0801"
+      "2adb8b060e6d6744"
     ]
   }
 }

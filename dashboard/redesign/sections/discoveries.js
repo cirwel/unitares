@@ -283,7 +283,7 @@
       renderList();
       return;
     }
-    runServerSearch();
+    runServerSearch("");
   }
 
   function onSearchInput() {
@@ -292,13 +292,13 @@
       return;
     }
     const q = queryText.trim();
-    if (!q && (serverQuery !== "" || searching)) {
-      // Clearing the search box immediately exits search mode without sending
-      // partial prefixes to the server.
+    if (!q && (serverQuery !== "" || searching || MODEL.source === "unavailable")) {
+      // Clearing the search box immediately exits search/error mode without
+      // sending partial prefixes to the server.
       if (typeFilter === "all" && timeFilter === "all") {
         restoreOrRefetchDefault();
       } else {
-        runServerSearch();
+        runServerSearch("");
       }
       return;
     }
@@ -315,7 +315,7 @@
       restoreOrRefetchDefault();
       return;
     }
-    runServerSearch();
+    runServerSearch(q);
   }
 
   function onDiscreteFilterChange() {
@@ -323,17 +323,19 @@
       renderList();
       return;
     }
-    const q = queryText.trim();
+    // Use the committed serverQuery rather than uncommitted keystrokes in
+    // queryText so chip clicks / time changes never send partial prefixes.
+    const q = serverQuery;
     if (!q && typeFilter === "all" && timeFilter === "all") {
       restoreOrRefetchDefault();
       return;
     }
-    runServerSearch();
+    runServerSearch(q);
   }
 
-  async function runServerSearch() {
+  async function runServerSearch(submittedQuery) {
     const seq = ++reqSeq;
-    const q = queryText.trim();
+    const q = typeof submittedQuery === "string" ? submittedQuery.trim() : serverQuery;
     const tf = typeFilter;
     const tm = timeFilter;
     const hasFilter = !!(q || tf !== "all" || tm !== "all");
@@ -380,7 +382,7 @@
     const seq = ++reqSeq;
     searching = false;
 
-    const q = queryText.trim();
+    const q = serverQuery;
     const tf = typeFilter;
     const tm = timeFilter;
     const hasFilter = !!(q || tf !== "all" || tm !== "all");
