@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.5.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.6.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1393,3 +1393,13 @@ A server's operator decides whether a harness may ask it for an identity, and `o
 - **Compatibility:** nothing changes for a caller that does not send `harness_request`. `onboard_origin` remains descriptive and is not consulted by the policy. The policy holds an adapter that asks to be held; it is not a boundary against a caller that omits the flag. A server older than 2.5.0 ignores both parameters.
 - **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `onboard` and `start_session` move. No other tool's digest moves.
 - **Client action:** none for agents. An adapter that binds identities on a session's behalf should send `harness_request=true` and treat `harness_onboarding_declined` as "leave this session unbound", not as a failure to retry.
+
+## 2.6.0 (2026-11-25)
+
+`skills` lists companion `references/*.md` files and accepts an optional `reference` parameter to fetch one safely without changing flat-skill behavior.
+
+- **New input:** `skills` accepts an optional `reference` string (e.g. `"recovery.md"` or `"references/recovery.md"`), valid only alongside `name`. Resolution uses a strict case-sensitive allowlist of regular, non-symlink `.md` files directly under `skills/<name>/references/` and rejects traversal, nested paths, symlinks, unknown names, or missing `name` with an explicit identity-blind `success: false` error carrying `available_references`.
+- **New output:** skills that ship companion files under `references/` include `"references": ["<file>.md", ...]` in both index and `name` responses, and fold reference contents into `content_hash` and `registry_hash`. Flat skills without `references/` keep their existing shape and hash unchanged. Fetching a reference returns `{success: true, skill, reference, path, content, content_hash, registry_version, registry_hash}` with no identity fields.
+- **Compatibility:** purely additive. Callers omitting `reference` see identical behavior for flat skills and an extra `references` metadata list for split skills.
+- **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `skills` move; no other tool's digest moves.
+- **Client action:** none required for existing callers. Remote MCP clients following a `references/<file>.md` pointer in a split skill can call `skills(name="<skill>", reference="<file>.md")`.
