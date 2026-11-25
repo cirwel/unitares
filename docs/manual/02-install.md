@@ -103,6 +103,11 @@ make coordination-demo
 Cloning an annotated release tag with `--depth 1` prints a harmless Git notice
 (`warning: refs/tags/vX.Y.Z … is not a commit!`).
 
+Besides Git, `curl` and Docker Compose, the checks after the install
+(`make coordination-demo`, `make demo`, `./scripts/unitares`) need `make` and
+Python 3 on the host. The first start pulls a few gigabytes of images, most of
+it the PostgreSQL image.
+
 ### Managed checkout alternative
 
 With Docker running, Git, curl and a POSIX shell, the launcher creates and
@@ -203,11 +208,22 @@ ports can collide with something already running. If either default port is
 occupied:
 
 ```bash
-GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 \
-  docker compose up -d --wait
-UNITARES_DEMO_PORT=18767 make demo
-GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo
+printf 'GOVERNANCE_HOST_PORT=18767\nLEASE_PLANE_HOST_PORT=18788\n' >> .env
+docker compose up -d --wait
+make demo
+make coordination-demo
 ```
+
+Compose, both demos and `./scripts/unitares` read the ports from `.env`, so
+every later command reaches the moved stack. The README's one-line install
+starts the stack straight after the clone; on a machine where a port is taken,
+clone first, write `.env`, then run `docker compose up -d --wait`.
+
+A variable exported in your shell overrides the same name in `.env`, for
+Compose and for these scripts alike. If your shell profile already exports
+`UNITARES_*` or `LEASE_PLANE_*` variables (from another install, or from the
+governance plugin's secrets), the new stack takes those values.
+`docker compose config` prints what Compose will actually use.
 
 The coordination demo talks to both the governance server and the lease plane,
 so give it both ports. If only one port is moved and nothing in the environment

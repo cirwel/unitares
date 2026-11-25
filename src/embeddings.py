@@ -79,7 +79,9 @@ SENTENCE_TRANSFORMERS_AVAILABLE = (
 if not SENTENCE_TRANSFORMERS_AVAILABLE:
     logger.warning(
         "sentence-transformers not available; semantic search falls back to "
-        "Postgres FTS. Install the extra: "
+        "Postgres FTS, the Docker quickstart's default. To enable it, add "
+        "docker-compose.full.yml (Docker Compose, docs/manual/02-install.md "
+        "section 2.4) or install the extra on a native install: "
         'pip install -e ".[full,embeddings]" -c constraints.txt'
     )
 

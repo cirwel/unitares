@@ -13,8 +13,11 @@ Run::
     make demo
     # or: python3 scripts/demo/quick_demo.py
 
-If the server is on another host-side port, set UNITARES_DEMO_PORT=18767 or
-UNITARES_DEMO_URL=http://127.0.0.1:18767/v1/tools/call.
+The port comes from, in order: UNITARES_DEMO_URL
+(http://127.0.0.1:18767/v1/tools/call), UNITARES_DEMO_PORT, GOVERNANCE_HOST_PORT
+exported in the shell, GOVERNANCE_HOST_PORT in this checkout's .env, then 8767.
+That is the order Compose itself resolves the published port in, so a stack
+moved off 8767 through .env is the stack this demo talks to.
 
 What this shows:
 - The agent onboards and gets a real UUID + session.
@@ -55,6 +58,54 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _dotenv_values(path: Path | None = None) -> dict[str, str]:
+    """Simple KEY=VALUE lines from the checkout's .env, quotes dropped.
+
+    The same subset scripts/demo/coordination_demo.py reads; kept local so
+    this file still loads on its own (tests import it by path).
+    """
+    resolved = path or REPO_ROOT / ".env"
+    try:
+        lines = resolved.read_text().splitlines()
+    except (FileNotFoundError, NotADirectoryError):
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
+    return values
+
+
+def _governance_port(
+    environ: Mapping[str, str] | None = None,
+    dotenv_path: Path | None = None,
+) -> str:
+    """The host-side port of the governance server, resolved as Compose does.
+
+    Without the .env step, a stack moved off 8767 through .env (the case
+    GOVERNANCE_HOST_PORT exists for) left this demo talking to whatever else
+    holds 8767.
+    """
+    env = os.environ if environ is None else environ
+    return (
+        env.get("UNITARES_DEMO_PORT")
+        or env.get("GOVERNANCE_HOST_PORT")
+        or _dotenv_values(dotenv_path).get("GOVERNANCE_HOST_PORT")
+        or "8767"
+    )
 
 
 def _rest_url() -> str:
@@ -62,12 +113,7 @@ def _rest_url() -> str:
     explicit = os.environ.get("UNITARES_DEMO_URL")
     if explicit:
         return explicit
-    port = (
-        os.environ.get("UNITARES_DEMO_PORT")
-        or os.environ.get("GOVERNANCE_HOST_PORT")
-        or "8767"
-    )
-    return f"http://127.0.0.1:{port}/v1/tools/call"
+    return f"http://127.0.0.1:{_governance_port()}/v1/tools/call"
 
 
 def _dashboard_url() -> str:
@@ -77,12 +123,7 @@ def _dashboard_url() -> str:
     install (the exact case GOVERNANCE_HOST_PORT exists for) pointed at
     whatever else was on 8767 (#1792).
     """
-    port = (
-        os.environ.get("UNITARES_DEMO_PORT")
-        or os.environ.get("GOVERNANCE_HOST_PORT")
-        or "8767"
-    )
-    return f"http://localhost:{port}/dashboard"
+    return f"http://localhost:{_governance_port()}/dashboard"
 
 
 REST = _rest_url()
