@@ -6418,8 +6418,12 @@ def test_second_family_pass_judges_printed_candidates_without_one_shot_agy_model
 def test_malformed_cooldown_state_never_raises(monkeypatch, tmp_path):
     path = tmp_path / "antigravity.json"
     monkeypatch.setattr(rg, "provider_state_path", lambda r: path)
-    for bad in ("null", "[]", "1", '{"retry_after": "bad"}', '{"models": {"gemini-4-argon-high": "bad"}}',
-                '{"models": {"gemini-4-argon-high": {"retry_after": null, "reason": "quota"}}}'):
+    # Keyed by the default model, so the per-model entries are the ones
+    # provider_cooldown actually reads whatever the default is.
+    model = rg.AGY_DEFAULT_MODEL
+    for bad in ("null", "[]", "1", '{"retry_after": "bad"}',
+                '{"models": {"%s": "bad"}}' % model,
+                '{"models": {"%s": {"retry_after": null, "reason": "quota"}}}' % model):
         path.write_text(bad)
         assert rg.provider_cooldown("antigravity") is None
         rg.clear_provider_cooldown("antigravity")
