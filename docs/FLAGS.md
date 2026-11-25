@@ -108,7 +108,7 @@ additions merge cleanly. -->
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_DROP_CONTINUITY_E_BLEND` | `'1'` | Return True when ``continuity_E_input`` is dropped from behavioral E | src/behavioral_sensor.py |
 | `UNITARES_DROP_UNIQUE_TOOLS_I_BLEND` | `'1'` | Return True when ``unique_tools_ratio`` is dropped from behavioral I | src/behavioral_sensor.py |
-| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:249) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py |
+| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:251) | Return the normalized `UNITARES_EMBEDDING_MODEL` value | src/embeddings.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89) | True when related-finding expansion should run | src/retrieval.py |
 | `UNITARES_ENABLE_HYBRID` | `False` | True when hybrid RRF retrieval should run | src/retrieval.py |
