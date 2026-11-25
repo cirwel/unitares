@@ -68,6 +68,63 @@ def _content_hash(body: str) -> str:
     return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _skill_content_hash(body: str, references: Dict[str, str]) -> str:
+    """Deterministic hash of a skill's body plus any companion references.
+
+    Flat skills without references hash the markdown body identically to the
+    historical format so their content_hash stays stable.
+    """
+    if not references:
+        return _content_hash(body)
+    hasher = hashlib.sha256()
+    hasher.update(body.encode("utf-8"))
+    for ref_name in sorted(references):
+        hasher.update(b"\0ref:")
+        hasher.update(ref_name.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(references[ref_name].encode("utf-8"))
+    return "sha256:" + hasher.hexdigest()
+
+
+def _load_references(skill_dir: Path) -> Dict[str, str]:
+    """Load regular, non-symlink *.md files directly inside `skill_dir/references`."""
+    refs_dir = skill_dir / "references"
+    if not refs_dir.is_dir() or refs_dir.is_symlink():
+        return {}
+    try:
+        refs_root = refs_dir.resolve(strict=True)
+    except OSError:
+        return {}
+    loaded: Dict[str, str] = {}
+    for entry in sorted(refs_dir.iterdir(), key=lambda p: p.name):
+        if entry.is_symlink() or not entry.is_file() or entry.suffix != ".md":
+            continue
+        try:
+            resolved = entry.resolve(strict=True)
+            if resolved.parent != refs_root:
+                continue
+            loaded[entry.name] = entry.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("[SKILLS] could not read reference %s: %s", entry, exc)
+    return loaded
+
+
+def _normalize_reference_name(raw: str) -> Optional[str]:
+    """Normalize a requested reference name without trusting filesystem resolution."""
+    if not raw or "\x00" in raw or "\\" in raw:
+        return None
+    candidate = raw[len("references/"):] if raw.startswith("references/") else raw
+    if not candidate or "/" in candidate or ".." in candidate or not candidate.endswith(".md"):
+        return None
+    return candidate
+
+
+def _identity_blind_error(payload: Dict[str, Any]) -> Sequence[TextContent]:
+    """Return an explicit, identity-blind error payload (no agent_signature)."""
+    body = {"success": False, **payload}
+    return [TextContent(type="text", text=json.dumps(body, indent=2))]
+
+
 # ---------------------------------------------------------------------
 # Skill loading
 # ---------------------------------------------------------------------
@@ -111,6 +168,8 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(triggers, dict):
         triggers = None
 
+    references_map = _load_references(skill_dir)
+
     skill: Dict[str, Any] = {
         "name": str(name),
         "description": str(meta.get("description") or "").strip(),
@@ -121,8 +180,11 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
         "triggers": triggers,
         "stale": _compute_stale(last_verified, meta.get("freshness_days")),
         "content": body,
-        "content_hash": _content_hash(body),
+        "content_hash": _skill_content_hash(body, references_map),
     }
+    if references_map:
+        skill["references"] = sorted(references_map.keys())
+        skill["_references_content"] = references_map
     return skill
 
 
@@ -250,10 +312,50 @@ async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         if isinstance(args.get("since_version"), str)
         else None
     )
+    reference = args.get("reference") if isinstance(args.get("reference"), str) else None
 
     all_skills = _load_all_skills()
     registry_hash = _registry_hash(all_skills)
     registry_version = _registry_version(all_skills)
+
+    if reference:
+        if not name:
+            return _identity_blind_error({
+                "error": "reference parameter requires name",
+                "reference": reference,
+            })
+        match = next((s for s in all_skills if s["name"] == name), None)
+        if match is None:
+            return _identity_blind_error({
+                "error": f"Unknown skill: {name}",
+                "skill": name,
+                "reference": reference,
+                "available_references": [],
+            })
+        ref_map: Dict[str, str] = match.get("_references_content") or {}
+        available = sorted(ref_map.keys())
+        normalized = _normalize_reference_name(reference)
+        if normalized is None or normalized not in ref_map:
+            return _identity_blind_error({
+                "error": f"Unknown reference '{reference}' for skill '{name}'",
+                "skill": name,
+                "reference": reference,
+                "available_references": available,
+            })
+        ref_body = ref_map[normalized]
+        return success_response(
+            {
+                "skill": name,
+                "reference": normalized,
+                "path": f"references/{normalized}",
+                "content": ref_body,
+                "content_hash": _content_hash(ref_body),
+                "registry_version": registry_version,
+                "registry_hash": registry_hash,
+            },
+            arguments={"lite_response": True},
+        )
+
     filtered = _filter_skills(all_skills, name=name, since_version=since_version)
 
     # A bare call is discovery, so it gets an index. Full text went out for
@@ -264,11 +366,11 @@ async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Truthiness, matching _filter_skills: a caller sending "" for an unset
     # optional string must get the index, not the unfiltered full bundle.
     index_only = not name and not since_version
-    if index_only:
-        filtered = [
-            {k: v for k, v in skill.items() if k != "content"}
-            for skill in filtered
-        ]
+    omit_keys = {"_references_content", "content"} if index_only else {"_references_content"}
+    filtered = [
+        {k: v for k, v in skill.items() if k not in omit_keys}
+        for skill in filtered
+    ]
 
     data = {
         "skills": filtered,
@@ -277,7 +379,10 @@ async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     }
     if index_only:
         data["content_omitted"] = True
-        data["fetch"] = "skills(name='<skill>') returns one skill's full content."
+        data["fetch"] = (
+            "skills(name='<skill>') returns one skill's full content; "
+            "skills(name='<skill>', reference='<file>.md') fetches a listed companion reference."
+        )
     # lite_response=True suppresses the default `agent_signature: {"uuid": None}`
     # block — without it, even an unbound caller gets an identity-shaped field
     # in the response, which violates the §4.5 identity-blindness invariant

@@ -435,6 +435,7 @@ SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
 # describe_tool; every skills/<name>/SKILL.md is served by the `skills` tool.
 SERVED_PROSE_FILES = ("src/tool_descriptions.json",)
 SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
+SERVED_SKILL_REFERENCES_GLOB = "skills/*/references/*.md"
 
 # Served surfaces that name residents today, each pinned to the EXACT
 # multiset of matched values (name per occurrence, case as served) it is
@@ -666,6 +667,7 @@ def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
         if (repo_root / rel).is_file():
             files.add(repo_root / rel)
     files.update(repo_root.glob(SERVED_SKILLS_GLOB))
+    files.update(repo_root.glob(SERVED_SKILL_REFERENCES_GLOB))
     return sorted(files)
 
 

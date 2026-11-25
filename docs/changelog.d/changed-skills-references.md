@@ -1,0 +1,1 @@
+- Interface contract 2.6.0: skills lists companion references/*.md files and accepts an optional reference parameter to fetch one safely without changing flat-skill behavior.

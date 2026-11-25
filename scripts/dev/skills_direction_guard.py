@@ -187,6 +187,90 @@ def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
     return canon_oldest < mirror_newest
 
 
+def is_removed_canonical_state(canon_path: pathlib.Path, mirror: pathlib.Path) -> bool:
+    """True when canonical previously carried ``mirror``'s exact blob at
+    ``canon_path`` and later deleted that path in git history."""
+    repo_root = _git(canon_path.parent.parent, "rev-parse", "--show-toplevel")
+    if repo_root is None:
+        return False
+    repo = pathlib.Path(repo_root.strip())
+    try:
+        rel = canon_path.resolve().relative_to(repo.resolve())
+    except (OSError, ValueError):
+        return False
+    mirror_blob = _blob_id(repo, mirror)
+    if not mirror_blob:
+        return False
+    history = _git(repo, "log", "--raw", "--no-abbrev", "--format=", "--", str(rel))
+    if not history:
+        return False
+    events: list[tuple[str, str, str]] = []
+    for line in history.splitlines():
+        if not line.startswith(":"):
+            continue
+        fields = line.split()
+        # :<oldmode> <newmode> <oldblob> <newblob> <status>\t<path>
+        if len(fields) >= 5:
+            events.append((fields[2], fields[3], fields[4]))
+    if not events or not events[0][2].startswith("D"):
+        return False
+    seen_blobs = {blob for old_b, new_b, _ in events for blob in (old_b, new_b)}
+    return mirror_blob in seen_blobs
+
+
+def reference_regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
+    """Mirror-side changes to ``<skill>/references/*.md`` that sync would clobber."""
+    blocked: list[str] = []
+    for mirror_ref in sorted(dst.glob("*/references/*.md")):
+        skill_name = mirror_ref.parents[1].name
+        canon_md = src / skill_name / "SKILL.md"
+        if not canon_md.exists():
+            # Whole skill dropped from canonical — canonical owns which skills exist.
+            continue
+        canon_ref = src / skill_name / "references" / mirror_ref.name
+        label = f"{skill_name}/references/{mirror_ref.name}"
+        if canon_ref.exists():
+            try:
+                if canon_ref.read_bytes() == mirror_ref.read_bytes():
+                    continue
+            except OSError:
+                blocked.append(f"{label}: unreadable, cannot compare")
+                continue
+
+        mirror_md = dst / skill_name / "SKILL.md"
+        cv, mv = last_verified(canon_md), last_verified(mirror_md)
+        if cv and mv:
+            if mv > cv:
+                blocked.append(f"{label}: mirror ({mv}) is newer than canonical ({cv})")
+            elif mv == cv:
+                if canon_ref.exists():
+                    if not is_past_canonical_state(canon_ref, mirror_ref):
+                        blocked.append(
+                            f"{label}: mirror ({mv}) is same date as, but differs from, "
+                            f"canonical ({cv}), and its content is not a past state of canonical"
+                        )
+                elif not is_removed_canonical_state(canon_ref, mirror_ref):
+                    blocked.append(
+                        f"{label}: mirror-only reference at same date ({mv}) is not a "
+                        f"deleted past state of canonical"
+                    )
+            # mv < cv: canonical is positively newer.
+        elif mv and not cv:
+            blocked.append(
+                f"{label}: mirror declares last_verified ({mv}), canonical declares none"
+            )
+        elif cv and not mv:
+            blocked.append(
+                f"{label}: mirror declares no last_verified, canonical says {cv} — "
+                "cannot show canonical is newer"
+            )
+        else:
+            blocked.append(
+                f"{label}: neither side declares last_verified and the reference differs"
+            )
+    return blocked
+
+
 def _pairs(record: dict) -> set[tuple[str, str]]:
     digests = record.get("source_digests")
     if not isinstance(digests, dict):
@@ -271,6 +355,7 @@ def attestation_regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
 def regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
     """Reasons the mirror must not be overwritten, one per drifted skill."""
     blocked: list[str] = attestation_regressions(src, dst)
+    blocked.extend(reference_regressions(src, dst))
     for mirror in sorted(dst.glob("*/SKILL.md")):
         canon = src / mirror.parent.name / "SKILL.md"
         if not canon.exists():
