@@ -229,6 +229,47 @@ class TestEnsurePool:
             assert db._pool is fresh_pool
             assert db._pool is not stale_pool
 
+    @pytest.mark.asyncio
+    async def test_ensure_pool_refreshes_an_orphaned_executor_pool(self):
+        """A pool the backend orphaned after its close timed out must not stay
+        cached: asyncpg never marked it closed, but it refuses every call."""
+        import asyncio
+
+        import src.db.executor_pool as ep_mod
+        from src.db.executor_pool import ExecutorPool
+
+        async def hung_close():
+            await asyncio.sleep(3600)
+
+        raw_pool = MagicMock()
+        raw_pool._closed = False
+        raw_pool.close = hung_close
+        orphaned = ExecutorPool(raw_pool)
+
+        db = DialecticDB(pool=orphaned)
+        assert db._pool_is_alive()
+
+        original_close_timeout = ep_mod.CLOSE_TIMEOUT_SECONDS
+        ep_mod.CLOSE_TIMEOUT_SECONDS = 0.5
+        try:
+            # What PostgresBackend does: bound the close, then move on.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(orphaned.close(), timeout=0.2)
+        finally:
+            ep_mod.CLOSE_TIMEOUT_SECONDS = original_close_timeout
+
+        assert raw_pool._closed is False
+        assert not db._pool_is_alive()
+
+        fresh_pool = MagicMock()
+        fresh_pool._closed = False
+        mock_db_backend = AsyncMock()
+        mock_db_backend._pool = fresh_pool
+
+        with patch("src.db.get_db", return_value=mock_db_backend):
+            await db._ensure_pool()
+            assert db._pool is fresh_pool
+
 
 # ============================================================================
 # DialecticDB.create_session
