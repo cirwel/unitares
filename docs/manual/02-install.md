@@ -29,11 +29,14 @@ with `brew info cirwel/unitares/unitares`. Older `3.5.0` revisions carried
 reviewed native backports; current releases include that lifecycle support
 upstream.
 
-Continue with the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup).
-Package installation does not create a role/database or apply bootstrap SQL.
-`unitares setup --apply` prepares missing private configuration, preserving any
-existing file. Only after the selected database is verified should you run
-`unitares start --check`, `unitares start`, and `unitares health`.
+Continue with the tap's [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
+Package installation does not create a role or database. On a fresh machine,
+`unitares setup --provision-db` prints the plan, and
+`unitares setup --provision-db --apply` creates a dedicated non-superuser
+`unitares` login and database, bootstraps them and writes the private
+configuration, with the writers left stopped. Then run `unitares start --check`,
+`unitares start`, and `unitares health`. Kegs before 4.1.0 have no
+`--provision-db`; the tap documents their manual route.
 
 The [Homebrew setup guide](../install/HOMEBREW_SETUP.md) explains readiness and
 recovery boundaries. Check and apply a native update with:
