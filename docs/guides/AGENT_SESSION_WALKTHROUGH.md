@@ -26,6 +26,24 @@ The rules behind each step are in
 when you need the compact version. Exact schemas come from `list_tools()` and
 `describe_tool()`.
 
+## Making the calls yourself
+
+Each step below is written as `tool_name {arguments}`. Any MCP client pointed
+at `http://localhost:8767/mcp/` can make them. From a terminal in the
+checkout, the bundled CLI takes the same two parts over REST:
+
+```bash
+./scripts/unitares call search_shared_memory '{"query": "flaky upload retry test", "limit": 5}'
+```
+
+`call` does not save the session, so copy `client_session_id` from the
+`start_session` response into each later call, as the steps do. Run process B
+from a second shell with its own `UNITARES_SESSION_FILE` and
+`UNITARES_AGENT`. The CLI reads the server's port from `.env`
+(`GOVERNANCE_HOST_PORT`) when `UNITARES_URL` is not set. The
+[Python SDK](../../agents/sdk/README.md) covers the same calls through its own
+method names and threads `client_session_id` for you.
+
 ## Process A
 
 ### 1. Search before doing anything

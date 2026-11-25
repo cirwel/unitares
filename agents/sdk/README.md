@@ -90,6 +90,10 @@ if __name__ == "__main__":
 UNITARES_RESIDENTS=MyResident            # comma-separated; empty by default
 ```
 
+On the Docker Compose install, put that line in the checkout's `.env` and
+recreate the server with `docker compose up -d governance-mcp`; a plain
+`restart` keeps the old environment.
+
 This is not optional bookkeeping. `persistent` and `autonomous` are
 *privileged* tags: the server grants them only at mint, and only when the
 name being minted is on that roster. An identity **cannot assign them to

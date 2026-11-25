@@ -209,6 +209,11 @@ services:
       UNITARES_POLICY_ACTUATION: ${UNITARES_POLICY_ACTUATION:-observe}
       UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS: ${UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS:-1}
       UNITARES_PER_AGENT_I_CALIBRATION: ${UNITARES_PER_AGENT_I_CALIBRATION:-1}
+      # Deployment resident roster, comma-separated (agents/sdk/README.md,
+      # "Register the name first"). Empty by default, which the server reads
+      # as no residents, the same as unset. Set it in .env and recreate this
+      # service (`docker compose up -d governance-mcp`).
+      UNITARES_RESIDENTS: ${UNITARES_RESIDENTS:-}
       # Keep Python's fallback decision aligned with the lease plane. Under
       # BEAM-control enforcement, an unavailable BEAM writer must fail closed
       # instead of bypassing request-bound identity via direct PostgreSQL.

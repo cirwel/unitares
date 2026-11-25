@@ -1884,3 +1884,49 @@ UNITARES_BACKUP_DIR="{backup_dir}" _backup_db v1.0.0
     assert oct(dumps[0].stat().st_mode & 0o777) == "0o600"
     assert oct(backup_dir.stat().st_mode & 0o777) == "0o700"
     assert oct(backup_dir.parent.stat().st_mode & 0o777) == "0o700"
+
+
+def _cli_copy_with_env_file(tmp_path, env_text):
+    """A copy of the CLI in a throwaway checkout whose .env holds env_text."""
+    repo = tmp_path / "checkout"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "unitares").write_text(CLI.read_text())
+    (repo / "scripts" / "unitares").chmod(0o755)
+    if env_text is not None:
+        (repo / ".env").write_text(env_text)
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("UNITARES_URL", "GOVERNANCE_HOST_PORT")
+    }
+    env["UNITARES_TIMEOUT"] = "2"
+    return repo / "scripts" / "unitares", env
+
+
+def _free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_every_command_uses_the_env_file_port(tmp_path):
+    # `update` already read GOVERNANCE_HOST_PORT from .env; health, diag,
+    # status and onboard fell back to 8767 and so reached whatever else held
+    # it on exactly the install the override exists for.
+    port = _free_port()
+    cli, env = _cli_copy_with_env_file(tmp_path, f"GOVERNANCE_HOST_PORT={port}\n")
+    result = subprocess.run(
+        [str(cli), "diag"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert f"UNITARES_URL    : http://localhost:{port}" in result.stdout
+
+
+def test_an_explicit_url_still_beats_the_env_file(tmp_path):
+    named, written = _free_port(), _free_port()
+    cli, env = _cli_copy_with_env_file(tmp_path, f"GOVERNANCE_HOST_PORT={written}\n")
+    env["UNITARES_URL"] = f"http://127.0.0.1:{named}/mcp/"
+    result = subprocess.run(
+        [str(cli), "diag"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert f"UNITARES_URL    : http://127.0.0.1:{named}" in result.stdout
+    assert str(written) not in result.stdout
