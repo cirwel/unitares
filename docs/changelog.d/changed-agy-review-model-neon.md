@@ -1,0 +1,1 @@
+- **Antigravity review model:** the review gate's default `agy` model is now Gemini 4 Neon (High) (`gemini-4-neon-high`), replacing Gemini 4 Argon (High), at the operator's direction. `REVIEW_AGY_MODEL` or `--agy-model` still overrides it, and earlier Argon failure records no longer count against the new default's per-diff retry budget.

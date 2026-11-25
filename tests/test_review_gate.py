@@ -3212,7 +3212,7 @@ def test_instruction_bearing_names_are_defused(repo):
 
 def test_agy_model_defaults_to_available_gemini_and_is_overridable(monkeypatch):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
-    assert rg.agy_model_args() == ["--model", "gemini-4-argon-high"]
+    assert rg.agy_model_args() == ["--model", "gemini-4-neon-high"]
     assert rg.provider_family("antigravity") == "google"
     monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
     assert rg.agy_model_args() == ["--model", "claude-opus-5-5-high"]
@@ -6361,9 +6361,9 @@ def test_agy_quota_cooldown_is_scoped_per_model_while_auth_is_provider_wide(monk
 def test_agy_failed_runs_are_counted_per_model(monkeypatch):
     k = "k" * 64
     comments = [
-        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
-        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
-        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-neon-high")),
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-neon-high")),
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-neon-high")),
     ]
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
     assert rg.failed_runs(comments, k, "antigravity") == 3
@@ -6418,8 +6418,13 @@ def test_second_family_pass_judges_printed_candidates_without_one_shot_agy_model
 def test_malformed_cooldown_state_never_raises(monkeypatch, tmp_path):
     path = tmp_path / "antigravity.json"
     monkeypatch.setattr(rg, "provider_state_path", lambda r: path)
-    for bad in ("null", "[]", "1", '{"retry_after": "bad"}', '{"models": {"gemini-4-argon-high": "bad"}}',
-                '{"models": {"gemini-4-argon-high": {"retry_after": null, "reason": "quota"}}}'):
+    # Keyed by the default model, with any override cleared, so the per-model
+    # entries are the ones provider_cooldown actually reads.
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    model = rg.AGY_DEFAULT_MODEL
+    for bad in ("null", "[]", "1", '{"retry_after": "bad"}',
+                '{"models": {"%s": "bad"}}' % model,
+                '{"models": {"%s": {"retry_after": null, "reason": "quota"}}}' % model):
         path.write_text(bad)
         assert rg.provider_cooldown("antigravity") is None
         rg.clear_provider_cooldown("antigravity")

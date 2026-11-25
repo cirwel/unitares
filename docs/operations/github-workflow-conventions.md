@@ -801,7 +801,7 @@ collisions keep the first file and list omitted files in `omitted.txt`. It also 
 a fresh temporary `HOME` (only the login keychain is linked in), so standing
 permission grants and MCP servers in `~/.gemini` never load, plus
 `--mode plan --sandbox` (without `--disable-slash-commands`, which disables plan
-mode in `agy` 1.2.11). The default model is Gemini 4 Argon (High);
+mode in `agy` 1.2.11). The default model is Gemini 4 Neon (High);
 `--agy-model <model>` or `REVIEW_AGY_MODEL` overrides it (`default` leaves the
 choice to `agy`), including Claude models served by `agy` (such as
 `claude-opus-5-5-high` or `claude-sonnet-5-5-high`, which record and count as
