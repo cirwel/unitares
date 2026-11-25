@@ -84,7 +84,9 @@ def load_build_sha_from_repo(project_root: Path) -> str:
     version string. When ``.git`` is absent (sdist/wheel install, the Docker
     image) or git is unavailable, falls back to the operator-supplied
     ``UNITARES_BUILD_SHA`` env var (#1792 — forwarded by docker-compose so a
-    containerized deployment can still self-report), then ``"unknown"``.
+    containerized deployment can still self-report), then the
+    ``UNITARES_IMAGE_BUILD_SHA`` a published image was built with, then
+    ``"unknown"``.
     Git wins when present because it cannot drift; the env var can.
     Never raises.
     """
@@ -104,5 +106,11 @@ def load_build_sha_from_repo(project_root: Path) -> str:
     env_sha = os.environ.get("UNITARES_BUILD_SHA", "").strip()
     if env_sha:
         return env_sha
+
+    # The commit a published image was built from (Dockerfile). The operator's
+    # UNITARES_BUILD_SHA wins over it, so a rebuilt image can still say so.
+    image_sha = os.environ.get("UNITARES_IMAGE_BUILD_SHA", "").strip()
+    if image_sha:
+        return image_sha
 
     return DEFAULT_BUILD_SHA_FALLBACK

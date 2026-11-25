@@ -204,7 +204,7 @@ def banner(title: str) -> None:
 
 
 def fmt_metrics(m: dict) -> str:
-    # risk_score: smoothed mean-of-10, the value make_decision gated on
+    # risk_score: the value this check-in's decision was made from
     # risk_score_latest: raw last observation (spike), shown alongside
     latest = m.get("risk_score_latest")
     latest_str = f" latest={fmt_float(latest)}" if latest is not None else ""
@@ -380,11 +380,13 @@ def main() -> int:
     banner("3. reading the output")
     print("  Two risk signals appear in each step above:")
     print()
-    print("  • risk         = smoothed mean of the last 10 observations.")
-    print("                   This is the value `make_decision` gates on, and")
-    print("                   the percentage you see in `decision.reason`.")
-    print("  • latest       = raw last observation. A single bad check-in can")
-    print("                   spike this without moving the gating signal.")
+    print("  • risk         = the value this check-in's decision was made from,")
+    print("                   and the percentage you see in `decision.reason`.")
+    print("  • latest       = the raw reading from this check-in.")
+    print()
+    print("  On the default setup the decision is made from the current")
+    print("  check-in's own assessment, so the two are the same number here.")
+    print("  Both are returned so a client can see which one a decision used.")
 
     banner("4. where to go next")
     print("  Your stack is wired. An agent onboarded, six check-ins landed over")

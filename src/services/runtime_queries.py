@@ -1170,8 +1170,10 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         if kg_status == NOT_CONFIGURED:
             checks["knowledge_graph"]["note"] = (
                 "No embedder installed, so knowledge search uses Postgres "
-                "full-text search. Install the semantic extra "
-                "(sentence-transformers) to add semantic search."
+                "full-text search, the Docker quickstart's default. To add "
+                "semantic search, start the stack with docker-compose.full.yml "
+                "(docs/manual/02-install.md section 2.4) or, on a native "
+                "install, install the semantic extra (sentence-transformers)."
             )
         elif not backend_known:
             checks["knowledge_graph"]["warning"] = (

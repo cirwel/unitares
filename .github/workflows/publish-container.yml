@@ -164,10 +164,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # The lease plane has no .git in its image; bake the release commit so
-          # its /health reports a build_sha instead of "unknown". The server
-          # Dockerfile declares no such argument, so it gets none.
-          build-args: ${{ matrix.artifact == 'lease-plane' && format('UNITARES_BUILD_SHA={0}', steps.source.outputs.sha) || '' }}
+          # Neither the server nor the lease plane has .git in its image; bake
+          # the release commit so each /health reports a build_sha instead of
+          # "unknown". The database image declares no such argument.
+          build-args: ${{ matrix.artifact != 'postgres' && format('UNITARES_BUILD_SHA={0}', steps.source.outputs.sha) || '' }}
           # Separate cache scopes so the builds do not evict each other.
           cache-from: type=gha,scope=${{ matrix.artifact }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
