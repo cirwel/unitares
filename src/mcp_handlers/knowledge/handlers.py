@@ -141,6 +141,8 @@ from .search_helpers import (
     _within_window,  # noqa: F401
     _window_kwargs,  # noqa: F401
     _tag_kwargs,  # noqa: F401
+    _filter_kwargs,
+    _has_visible_candidate,
     _authority_ranking_enabled,  # noqa: F401
     _authority_pool_size,  # noqa: F401
     _recency_weighted,  # noqa: F401
@@ -707,6 +709,8 @@ async def _retrieve_hybrid_candidates(
     fetch_limit = max(state.first_stage_limit, 50)
     fts_operator = request.operator_forced or "AND"
     tag_kwargs = _tag_kwargs(request)
+    window_kwargs = _window_kwargs(request)
+    filter_kwargs = _filter_kwargs(request)
     semantic_raw, fts_raw = await _asyncio.gather(
         state.graph.semantic_search(
             str(request.query_text),
@@ -719,14 +723,16 @@ async def _retrieve_hybrid_candidates(
             temporal_decay=False,
             status_weight=False,
             **tag_kwargs,
-            **_window_kwargs(request),
+            **window_kwargs,
+            **filter_kwargs,
         ),
         state.graph.full_text_search(
             str(request.query_text),
             limit=fetch_limit,
             operator=fts_operator,
             **tag_kwargs,
-            **_window_kwargs(request),
+            **window_kwargs,
+            **filter_kwargs,
         ),
     )
     state.fts_operator_used = fts_operator
@@ -744,7 +750,7 @@ async def _retrieve_hybrid_candidates(
     fts_results = list(fts_raw)
     fts_weight = 1.0
     if (
-        not fts_results
+        not _has_visible_candidate(fts_results, state)
         and request.operator_forced is None
         and fts_operator == "AND"
         and request.query_term_count > 1
@@ -756,10 +762,11 @@ async def _retrieve_hybrid_candidates(
                     limit=fetch_limit,
                     operator="OR",
                     **tag_kwargs,
-                    **_window_kwargs(request),
+                    **window_kwargs,
+                    **filter_kwargs,
                 )
             )
-            if or_results:
+            if _has_visible_candidate(or_results, state):
                 fts_results = or_results
                 state.fts_operator_used = "OR"
                 state.fts_fallback_used = True
@@ -817,6 +824,7 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         status_weight=False,
         **_tag_kwargs(request),
         **_window_kwargs(request),
+        **_filter_kwargs(request),
     )
     if isinstance(semantic_results, tuple) and len(semantic_results) == 2 and isinstance(semantic_results[1], dict):
         state.search_degraded_warning = (
