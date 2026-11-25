@@ -712,9 +712,24 @@ def make_handler():
     return _inner
 """,
     )
+    # 3. Sync helper nested inside an async handler returning raw `r.get(k)` coroutine is checked
+    _write(
+        tmp_path,
+        "src/mcp_handlers/nested_sync_coro.py",
+        _GR_HDR
+        + """\
+@mcp_tool("t")
+async def h(k: str):
+    r = await get_redis()
+    def _mk():
+        return r.get(k)
+    return await _mk()
+""",
+    )
     violations = guard.scan_paths(tmp_path)
     assert [(v.rel_path, v.rule, v.line) for v in violations] == [
         ("src/mcp_handlers/mod_escape.py", "P004", 7),
+        ("src/mcp_handlers/nested_sync_coro.py", "P004", 9),
         ("src/mcp_handlers/sync_factory.py", "P004", 6),
     ]
 

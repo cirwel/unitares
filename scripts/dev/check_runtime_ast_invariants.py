@@ -952,7 +952,9 @@ def _compute_func_raw_vars(
     return client_vars, pipe_vars
 
 
-def _find_bounded_coro_vars(fn: ast.AsyncFunctionDef, imports: _ModuleImports) -> set[str]:
+def _find_bounded_coro_vars(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, imports: _ModuleImports
+) -> set[str]:
     """Return local names assigned once whose every Load is a bounded coroutine slot."""
     assign_counts: Counter[str] = Counter()
     bounded_loads: set[str] = set()
@@ -1212,14 +1214,18 @@ def _check_p004_mcp_handlers(
             violations.append(Violation("P004", rel_path, getattr(node, "lineno", 1), msg))
 
         def scan_func(
-            fn: ast.AsyncFunctionDef,
+            fn: ast.FunctionDef | ast.AsyncFunctionDef,
             *,
             is_top_level: bool,
             inherited_client_vars: set[str],
             inherited_pipe_vars: set[str],
             enclosing_bounded: bool,
         ) -> None:
-            if is_top_level and (rel_path, fn.name) in caller_bounded_helpers:
+            if (
+                is_top_level
+                and isinstance(fn, ast.AsyncFunctionDef)
+                and (rel_path, fn.name) in caller_bounded_helpers
+            ):
                 enclosing_bounded = True
 
             local_getters, local_modules = _local_redis_imports(
@@ -1285,10 +1291,16 @@ def _check_p004_mcp_handlers(
                     )
                     return
                 if isinstance(node, ast.FunctionDef):
-                    scan_sync_or_class_body(node.body, client_vars, pipe_vars)
+                    scan_func(
+                        node,
+                        is_top_level=False,
+                        inherited_client_vars=client_vars,
+                        inherited_pipe_vars=pipe_vars,
+                        enclosing_bounded=False,
+                    )
                     return
                 if isinstance(node, ast.ClassDef):
-                    scan_sync_or_class_body(node.body, set(), set())
+                    scan_class_body(node.body)
                     return
 
                 names, assigned_val = _extract_assign_targets_and_value(node)
@@ -1405,26 +1417,28 @@ def _check_p004_mcp_handlers(
             for stmt in fn.body:
                 walk_node(stmt)
 
-        def scan_sync_or_class_body(
-            stmts: list[ast.stmt],
-            c_vars: set[str],
-            p_vars: set[str],
-        ) -> None:
+        def scan_class_body(stmts: list[ast.stmt]) -> None:
             sub_async, sub_sync, sub_classes = _collect_lexical_scope_defs(stmts)
             for _n, fns in sub_async.items():
                 for fn in fns:
                     scan_func(
                         fn,
                         is_top_level=False,
-                        inherited_client_vars=c_vars,
-                        inherited_pipe_vars=p_vars,
+                        inherited_client_vars=set(),
+                        inherited_pipe_vars=set(),
                         enclosing_bounded=False,
                     )
             for _s, sfns in sub_sync.items():
                 for sfn in sfns:
-                    scan_sync_or_class_body(sfn.body, c_vars, p_vars)
+                    scan_func(
+                        sfn,
+                        is_top_level=False,
+                        inherited_client_vars=set(),
+                        inherited_pipe_vars=set(),
+                        enclosing_bounded=False,
+                    )
             for cls in sub_classes:
-                scan_sync_or_class_body(cls.body, set(), set())
+                scan_class_body(cls.body)
 
         mod_async, mod_sync, mod_classes = _collect_lexical_scope_defs(tree.body)
         for _fname, fns in mod_async.items():
@@ -1438,9 +1452,15 @@ def _check_p004_mcp_handlers(
                 )
         for _sname, sfns in mod_sync.items():
             for sfn in sfns:
-                scan_sync_or_class_body(sfn.body, set(), set())
+                scan_func(
+                    sfn,
+                    is_top_level=False,
+                    inherited_client_vars=set(),
+                    inherited_pipe_vars=set(),
+                    enclosing_bounded=False,
+                )
         for cls in mod_classes:
-            scan_sync_or_class_body(cls.body, set(), set())
+            scan_class_body(cls.body)
 
     return violations
 
