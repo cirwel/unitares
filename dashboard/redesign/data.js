@@ -470,6 +470,7 @@
           byStatus: st ? st.by_status : null,
           searchMode: r.search_mode_used || null,
           lowConfidence: !!r.low_confidence,
+          moreAvailable: !!r._more_available,
         };
       }, () => {
         const d = S().discoveries || {};
@@ -480,6 +481,7 @@
           byStatus: d.byStatus,
           searchMode: null,
           lowConfidence: false,
+          moreAvailable: false,
         };
       });
     },
