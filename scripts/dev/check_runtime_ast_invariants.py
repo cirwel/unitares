@@ -673,6 +673,7 @@ def _scan_block_references(
     defined_by_module: dict[str, set[str]],
     all_by_bare_name: dict[str, set[HandlerKey]],
     enclosing_bounded: bool = False,
+    is_module_scope: bool = False,
 ) -> tuple[set[HandlerKey], set[HandlerKey], set[HandlerKey], dict[str, bool]]:
     """Single top-down pass over ``stmts`` (never double-visiting nested defs).
 
@@ -692,7 +693,12 @@ def _scan_block_references(
     awaited_calls: set[HandlerKey] = set()
     escaped_unguarded: set[HandlerKey] = set()
 
-    local_nested_async, local_nested_sync, local_classes = _collect_lexical_scope_defs(stmts)
+    if is_module_scope:
+        local_nested_async: dict[str, list[ast.AsyncFunctionDef]] = {}
+        local_nested_sync: dict[str, list[ast.FunctionDef]] = {}
+        local_classes: list[ast.ClassDef] = []
+    else:
+        local_nested_async, local_nested_sync, local_classes = _collect_lexical_scope_defs(stmts)
     nested_guarded_names: set[str] = set()
     nested_escaped_names: set[str] = set()
     nested_names = set(local_nested_async) | set(local_nested_sync)
@@ -1100,19 +1106,11 @@ def _check_p004_mcp_handlers(
             defined_by_module=defined_by_module,
             all_by_bare_name=all_by_bare_name,
             enclosing_bounded=False,
+            is_module_scope=True,
         )
-        # Note: _scan_block_references(tree.body) also recurses into mod_async/mod_sync/mod_classes;
-        # keep only module-body expression escapes by scanning non-def statements directly:
-        mod_only_stmts = [
-            s
-            for s in tree.body
-            if not isinstance(s, (ast.AsyncFunctionDef, ast.FunctionDef, ast.ClassDef))
-        ]
-        if mod_only_stmts:
-            # Strip nested defs when checking module-level statements so module-level calls are escaped
-            pass
-        for target in eu:
-            all_escaped_unguarded.add(target)
+        all_directly_guarded.update(dg)
+        all_escaped_unguarded.update(ac)
+        all_escaped_unguarded.update(eu)
 
     entrypoints: set[HandlerKey] = {
         key
@@ -1286,7 +1284,11 @@ def _check_p004_mcp_handlers(
                         enclosing_bounded=child_bounded,
                     )
                     return
-                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                if isinstance(node, ast.FunctionDef):
+                    scan_sync_or_class_body(node.body, client_vars, pipe_vars)
+                    return
+                if isinstance(node, ast.ClassDef):
+                    scan_sync_or_class_body(node.body, set(), set())
                     return
 
                 names, assigned_val = _extract_assign_targets_and_value(node)
@@ -1403,7 +1405,28 @@ def _check_p004_mcp_handlers(
             for stmt in fn.body:
                 walk_node(stmt)
 
-        mod_async, _mod_sync, _mod_classes = _collect_lexical_scope_defs(tree.body)
+        def scan_sync_or_class_body(
+            stmts: list[ast.stmt],
+            c_vars: set[str],
+            p_vars: set[str],
+        ) -> None:
+            sub_async, sub_sync, sub_classes = _collect_lexical_scope_defs(stmts)
+            for _n, fns in sub_async.items():
+                for fn in fns:
+                    scan_func(
+                        fn,
+                        is_top_level=False,
+                        inherited_client_vars=c_vars,
+                        inherited_pipe_vars=p_vars,
+                        enclosing_bounded=False,
+                    )
+            for _s, sfns in sub_sync.items():
+                for sfn in sfns:
+                    scan_sync_or_class_body(sfn.body, c_vars, p_vars)
+            for cls in sub_classes:
+                scan_sync_or_class_body(cls.body, set(), set())
+
+        mod_async, mod_sync, mod_classes = _collect_lexical_scope_defs(tree.body)
         for _fname, fns in mod_async.items():
             for top_fn in fns:
                 scan_func(
@@ -1413,20 +1436,11 @@ def _check_p004_mcp_handlers(
                     inherited_pipe_vars=set(),
                     enclosing_bounded=False,
                 )
-
-        # Also check async methods inside classes anywhere in the handler module
-        for sub in ast.walk(tree):
-            if isinstance(sub, ast.ClassDef):
-                cls_async, _, _ = _collect_lexical_scope_defs(sub.body)
-                for _mname, mfns in cls_async.items():
-                    for mfn in mfns:
-                        scan_func(
-                            mfn,
-                            is_top_level=False,
-                            inherited_client_vars=set(),
-                            inherited_pipe_vars=set(),
-                            enclosing_bounded=False,
-                        )
+        for _sname, sfns in mod_sync.items():
+            for sfn in sfns:
+                scan_sync_or_class_body(sfn.body, set(), set())
+        for cls in mod_classes:
+            scan_sync_or_class_body(cls.body, set(), set())
 
     return violations
 

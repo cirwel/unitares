@@ -679,6 +679,47 @@ async def ok_handler(k: str):
     ]
 
 
+def test_p004_module_scope_dispatch_and_async_nested_in_sync_factory(
+    tmp_path: Path,
+) -> None:
+    # 1. Module-scope DISPATCH table or decorator argument referencing `_leaf` revokes caller-boundedness
+    _write(
+        tmp_path,
+        "src/mcp_handlers/mod_escape.py",
+        _GR_HDR
+        + """\
+async def _leaf(k):
+    r = await get_redis()
+    return await r.get(k)
+
+async def warm(k):
+    return await asyncio.wait_for(_leaf(k), timeout=1)
+
+DISPATCH = {"leaf": _leaf}
+""",
+    )
+    # 2. Async function nested inside a module-level sync factory is checked for P004
+    _write(
+        tmp_path,
+        "src/mcp_handlers/sync_factory.py",
+        """\
+from src.cache.redis_client import get_redis
+
+def make_handler():
+    async def _inner(k: str):
+        r = await get_redis()
+        return await r.get(k)
+    return _inner
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/mcp_handlers/mod_escape.py", "P004", 7),
+        ("src/mcp_handlers/sync_factory.py", "P004", 6),
+    ]
+
+
+
 
 
 
