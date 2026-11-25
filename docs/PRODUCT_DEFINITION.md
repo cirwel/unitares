@@ -12,6 +12,12 @@ server and authority domain. Each runtime keeps its own models, tools, and
 execution loop, and communicates with peers through its own transport or A2A.
 Nothing in UNITARES replicates state across independent servers.
 
+“Single-operator” means one administrative root: the person or team that runs
+the server and holds its operator credentials (`UNITARES_OPERATOR_TOKENS`
+accepts several). It does not mean one user. Accountability between
+organizations that do not share that root is the cross-operator track in
+[Evidence and limits](EVIDENCE_AND_LIMITS.md#local-control-and-cross-operator-trust).
+
 The shared record answers five questions:
 
 | Question | Deployed mechanism |
