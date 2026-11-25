@@ -66,8 +66,8 @@ posture, policy recommendations never block writes. Prefer live tool output.
 
 - **Self-loops neutralized by default**: `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`
   and `UNITARES_PER_AGENT_I_CALIBRATION=1` exclude legacy controller/coherence
-  self-loops and lifetime fleet bins (`=0` restores legacy terms; explicitly
-  `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`).
+  self-loops and lifetime fleet bins (`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`
+  or `UNITARES_PER_AGENT_I_CALIBRATION=0` restores their legacy terms).
 - **Unread axes stay held** (`UNITARES_HOLD_UNREAD_AXES=1`): check
   `reading_coverage` (`measured`, `defaulted`, `v_rests_on_defaults`). A
   defaulted axis is a placeholder; after 10 unread check-ins it moves to

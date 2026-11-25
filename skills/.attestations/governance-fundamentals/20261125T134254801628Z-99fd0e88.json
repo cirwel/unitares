@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-11-25T13:38:28Z",
+  "verified_at": "2026-11-25T13:42:54Z",
   "verified_date": "2026-11-25",
-  "verifier": "Gemini 4 Neon (progressive-disclosure split + references cited in source_files + 80-line window fix)",
+  "verifier": "Gemini 4 Neon (fix P3 flag wording in governance-fundamentals 80-line window)",
   "source_digests": {
     "unitares/config/governance_config.py": "6112deea9bd0c7e9",
     "unitares/docs/EISV_COMPUTATION.md": "95d7d8a248ee2c31",
@@ -36,5 +36,5 @@
     "unitares/src/outcomes.py": "830ead978f3e2a0c",
     "unitares/src/services/runtime_queries.py": "b879a16d81ef2550"
   },
-  "skill_digest": "b400bcb2dd85f730"
+  "skill_digest": "c6b074375092ba35"
 }

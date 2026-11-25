@@ -1,13 +1,13 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-11-25T13:38:28Z",
+  "verified_at": "2026-11-25T13:42:54Z",
   "verified_date": "2026-11-25",
-  "verifier": "Gemini 4 Neon (progressive-disclosure split + references cited in source_files + 80-line window fix)",
+  "verifier": "Gemini 4 Neon (fix P3 flag wording in governance-fundamentals 80-line window)",
   "source_digests": {
     "unitares/docs/EISV_COMPUTATION.md": "95d7d8a248ee2c31",
     "unitares/skills/dialectic-reasoning/SKILL.md": "e514b9d8e1492c69",
-    "unitares/skills/governance-fundamentals/SKILL.md": "b400bcb2dd85f730",
+    "unitares/skills/governance-fundamentals/SKILL.md": "c6b074375092ba35",
     "unitares/skills/governance-lifecycle/SKILL.md": "aefa9db2fc9febcd",
     "unitares/skills/knowledge-graph/SKILL.md": "cb45ae60959e4c8e",
     "unitares/skills/unitares-dashboard/SKILL.md": "ed8c417af389aaf4",
