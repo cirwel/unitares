@@ -390,10 +390,49 @@ cmd_metrics() {
 }
 
 cmd_health() {
+    local deep=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --deep) deep=1 ;;
+            *)
+                echo "error: unknown health option '${arg}' (--deep)" >&2
+                return 2
+                ;;
+        esac
+    done
     local body
-    body=$(_curl_get "/health") || return 1
-    _check_body "$body" "/health" >/dev/null || return 1
-    printf '%s' "$body" | parse_health
+    if [ "$deep" = 0 ]; then
+        body=$(_curl_get "/health") || return 1
+        _check_body "$body" "/health" >/dev/null || return 1
+        printf '%s' "$body" | parse_health
+        return
+    fi
+    # Deep health is the install manual's readiness bar (healthy or moderate).
+    # A critical stack answers 503 with the same body, so read it on any status.
+    body=$(curl -s --max-time "$TIMEOUT" "${_base_headers[@]}" "${UNITARES_URL}/health/deep") || {
+        echo "error: could not reach ${UNITARES_URL}/health/deep" >&2
+        return 1
+    }
+    BODY="$body" python3 -c '
+import json, os, sys
+try:
+    data = json.loads(os.environ["BODY"])
+except Exception:
+    print("error: /health/deep did not return JSON", file=sys.stderr)
+    sys.exit(1)
+status = data.get("status") or "unknown"
+print(f"Deep health: {status}")
+for name, check in sorted((data.get("checks") or {}).items()):
+    if not isinstance(check, dict):
+        continue
+    state = check.get("status", "?")
+    line = f"  {name}: {state}"
+    detail = check.get("warning") or check.get("note") or check.get("error")
+    if detail and state != "healthy":
+        line += f" ({detail})"
+    print(line)
+sys.exit(0 if status in ("healthy", "moderate") else 1)
+'
 }
 
 cmd_tools() {
@@ -1632,7 +1671,8 @@ Commands:
   onboard [name] [purpose] [force]  Onboard a fresh identity without inferred
                                     lineage; legacy "force" remains accepted
   metrics                           Show EISV + summary
-  health                            Server health (GET /health)
+  health [--deep]                   Server health (GET /health); --deep shows
+                                    each check and exits 1 unless healthy/moderate
   tools                             List available tools (GET /v1/tools)
   call <tool> [args_json]           Invoke any tool by name
   session                           Show local session/identity state
@@ -1686,7 +1726,7 @@ case "${1:-help}" in
     stop)        shift; cmd_stop "$@" ;;
     logs)        shift; cmd_logs "$@" ;;
     metrics|m)   shift; cmd_metrics ;;
-    health|h)    shift; cmd_health ;;
+    health|h)    shift; cmd_health "$@" ;;
     tools|t)     shift; cmd_tools ;;
     call|c)      shift; cmd_call "$@" ;;
     session|s)   shift; cmd_session ;;

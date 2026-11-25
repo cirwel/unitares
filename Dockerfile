@@ -59,6 +59,14 @@ COPY dashboard/ dashboard/
 COPY skills/ skills/
 COPY VERSION .
 
+# The image carries no .git, so /health could not name its build ("unknown").
+# The release workflow passes the commit it built; it is stored under its own
+# name because docker-compose.yml forwards UNITARES_BUILD_SHA, empty when the
+# operator sets none, which would blank a value baked under that name. Declared
+# after the code copies so a new sha does not invalidate the layers above.
+ARG UNITARES_BUILD_SHA=
+ENV UNITARES_IMAGE_BUILD_SHA=${UNITARES_BUILD_SHA}
+
 EXPOSE 8767
 
 # Bind 0.0.0.0 inside the container so the host port mapping works. The

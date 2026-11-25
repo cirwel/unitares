@@ -62,8 +62,13 @@ def test_one_release_publishes_every_image_compose_pulls():
     # Each image keeps its own build cache instead of evicting the other's.
     assert "scope=${{ matrix.artifact }}" in push["with"]["cache-from"]
     assert "scope=${{ matrix.artifact }}" in push["with"]["cache-to"]
-    # The lease plane carries no .git; its /health build_sha comes from here.
+    # Neither the server nor the lease plane carries .git; their /health
+    # build_sha comes from here. The database image takes no such argument.
     assert "UNITARES_BUILD_SHA=" in push["with"]["build-args"]
+    assert "matrix.artifact != 'postgres'" in push["with"]["build-args"]
+    server_dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "ARG UNITARES_BUILD_SHA=" in server_dockerfile
+    assert "ENV UNITARES_IMAGE_BUILD_SHA=${UNITARES_BUILD_SHA}" in server_dockerfile
     attest = next(
         step
         for step in PUBLISH["steps"]
