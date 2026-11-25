@@ -1598,7 +1598,7 @@ Invoke one public capability omitted from the initial progressive tools/list adv
 - **Timeout:** 10s
 - **Related:** `list_tools`, `describe_tool`
 
-Returns the server-authored governance skill bundle, read fresh from disk on every call. A bare call returns an index (each skill's metadata, no markdown body); name returns one skill's full body, and since_version returns full bodies for skills verified after that date. Callable before onboarding and identity-blind: identity arguments are accepted but never vary the response. It describes governance practice, not this server's tool surface; use list_tools or describe_tool for tool names and schemas.
+Returns the server-authored governance skill bundle, read fresh from disk on every call. A bare call returns an index (each skill's metadata and any reference filenames, no markdown body); name returns one skill's full body, name+reference returns one companion file from that skill's references/ directory, and since_version returns full bodies for skills verified after that date. Callable before onboarding and identity-blind: identity arguments are accepted but never vary the response. It describes governance practice, not this server's tool surface; use list_tools or describe_tool for tool names and schemas.
 
 ### `admin`
 
