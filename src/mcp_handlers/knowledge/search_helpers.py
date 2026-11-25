@@ -648,8 +648,16 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
     )
     state.fts_operator_used = primary_operator
 
+    # Under newest-first order, a full page of AND matches whose rows were all
+    # dropped by exclude_agent_labels can still have visible exact AND matches
+    # on older pages via _continue_newest_first_pages; keep AND there.
+    more_and_pages_possible = (
+        request.sort_by == "created_at"
+        and len(state.candidates) >= candidate_limit
+    )
     if (
-        not _has_visible_candidate(state.candidates, state)
+        not more_and_pages_possible
+        and not _has_visible_candidate(state.candidates, state)
         and request.operator_forced is None
         and primary_operator == "AND"
         and request.query_term_count > 1

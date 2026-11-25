@@ -1043,52 +1043,63 @@ class KnowledgeGraphAGESearchMixin:
         # Row predicates ride a join inside the ranked query: filtering the
         # top-N afterwards drops every qualifying row that ranked below N, and
         # archived/cold rows (over half the corpus) otherwise crowd active rows
-        # out of the first-stage pool.
-        join_conditions = []
+        # out of the first-stage pool. Positive predicates use INNER JOIN;
+        # exclusion-only visibility filters (exclude_archived/exclude_cold) use
+        # LEFT JOIN so rare AGE-only embeddings without a SQL row still reach
+        # the AGE hydration fallback (NULL IS DISTINCT FROM 'archived'/'cold').
+        inner_conditions = []
         if tags:
             from src.knowledge_graph import normalize_tags
             params.append(normalize_tags(tags))
-            join_conditions.append(f"d.tags && ${len(params)}")
+            inner_conditions.append(f"d.tags && ${len(params)}")
         if created_after:
             params.append(created_after)
-            join_conditions.append(f"d.created_at > ${len(params)}")
+            inner_conditions.append(f"d.created_at > ${len(params)}")
         if created_before:
             params.append(created_before)
-            join_conditions.append(f"d.created_at < ${len(params)}")
+            inner_conditions.append(f"d.created_at < ${len(params)}")
         effective_filters = filters or {}
         effective_agent_id = effective_filters.get("agent_id") or agent_id
         if effective_agent_id:
             params.append(effective_agent_id)
-            join_conditions.append(f"d.agent_id = ${len(params)}")
+            inner_conditions.append(f"d.agent_id = ${len(params)}")
         for column in ("type", "severity", "status"):
             value = effective_filters.get(column)
             if value:
                 params.append(value)
-                join_conditions.append(f"d.{column} = ${len(params)}")
+                inner_conditions.append(f"d.{column} = ${len(params)}")
+        exclusion_conditions = []
         if not effective_filters.get("status"):
             if effective_filters.get("exclude_archived"):
-                join_conditions.append("d.status IS DISTINCT FROM 'archived'")
+                exclusion_conditions.append("d.status IS DISTINCT FROM 'archived'")
             if effective_filters.get("exclude_cold"):
-                join_conditions.append("d.status IS DISTINCT FROM 'cold'")
-        tag_join = (
-            f"JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id AND "
-            + " AND ".join(join_conditions)
-            if join_conditions
-            else ""
-        )
+                exclusion_conditions.append("d.status IS DISTINCT FROM 'cold'")
+        has_filter_join = bool(inner_conditions or exclusion_conditions)
+        extra_where = ""
+        if inner_conditions:
+            all_join = inner_conditions + exclusion_conditions
+            tag_join = (
+                f"JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id AND "
+                + " AND ".join(all_join)
+            )
+        elif exclusion_conditions:
+            tag_join = f"LEFT JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id"
+            extra_where = "\n              AND " + " AND ".join(exclusion_conditions)
+        else:
+            tag_join = ""
         params.append(limit)
         sql = f"""
             SELECT de.discovery_id, (1 - (de.embedding <=> $1::vector)) AS similarity
             FROM {table} de
             {tag_join}
             WHERE de.embedding IS NOT NULL
-              AND (1 - (de.embedding <=> $1::vector)) >= $2
+              AND (1 - (de.embedding <=> $1::vector)) >= $2{extra_where}
             ORDER BY de.embedding <=> $1::vector
             LIMIT ${len(params)}
         """
 
         async with db.acquire() as conn:
-            if join_conditions:
+            if has_filter_join:
                 # A filtered HNSW scan otherwise stops after ef_search (40)
                 # candidates, so a sparse tag, status filter, or narrow date
                 # window returns fewer rows than exist.
