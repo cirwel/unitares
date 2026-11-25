@@ -439,14 +439,18 @@
       }, () => ({ list: S().agentsList, summary: S().agentsSummary }));
     },
 
-    async discoveries(query) {
+    async discoveries(query, opts) {
+      const o = opts && typeof opts === "object" ? opts : {};
+      const q = typeof query === "string" ? query.trim() : "";
+      const searchArgs = { action: "search", include_details: true, limit: 30 };
+      if (q) searchArgs.query = q;
+      if (o.discoveryType && o.discoveryType !== "all") searchArgs.discovery_type = o.discoveryType;
+      if (o.createdAfter) searchArgs.created_after = o.createdAfter;
       return withFallback(async () => {
         // Entry list + KG aggregates (for the lifecycle bar + type legend) in parallel.
         const [r, statsR] = await Promise.all([
-          callTool("knowledge", query
-            ? { action: "search", query, include_details: true, limit: 30 }
-            : { action: "search", include_details: true, limit: 30 }), // no query → recent-first
-          callTool("knowledge", { action: "stats" }).catch(() => null),
+          callTool("knowledge", searchArgs),
+          o.skipStats ? Promise.resolve(null) : callTool("knowledge", { action: "stats" }).catch(() => null),
         ]);
         const items = r && (r.discoveries || r.results || (Array.isArray(r) ? r : null));
         if (!items) return null;
@@ -464,10 +468,19 @@
           total: st && typeof st.total_discoveries === "number" ? st.total_discoveries : r.total,
           byType: st ? st.by_type : null,
           byStatus: st ? st.by_status : null,
+          searchMode: r.search_mode_used || null,
+          lowConfidence: !!r.low_confidence,
         };
       }, () => {
         const d = S().discoveries || {};
-        return { list: d.list || [], total: d.total, byType: d.byType, byStatus: d.byStatus };
+        return {
+          list: d.list || [],
+          total: d.total,
+          byType: d.byType,
+          byStatus: d.byStatus,
+          searchMode: null,
+          lowConfidence: false,
+        };
       });
     },
 

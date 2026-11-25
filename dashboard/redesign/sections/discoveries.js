@@ -4,6 +4,11 @@
  * filter) + search/type/time filters + cards (type badge, agent, date,
  * summary w/ highlight, tags, expandable details, staleness). Composes kit;
  * reads DATA.discoveries() (live-or-snapshot).
+ *
+ * In live mode, search/type/time queries hit the server's KG search endpoint
+ * via DATA.discoveries(query, opts) so the full corpus is searchable rather
+ * than only the latest 30 entries. In snapshot/offline mode, filtering stays
+ * client-side over the bundled snapshot list.
  */
 (function () {
   "use strict";
@@ -11,6 +16,8 @@
 
   const TYPE_ORDER = ["insight", "improvement", "bug_found", "pattern", "question", "answer", "analysis", "note", "exploration"];
   const STATUS_COLOR = { open: "var(--ok)", resolved: "var(--eisv-c)", archived: "var(--faint)", superseded: "var(--warn)", closed: "var(--muted)" };
+  const TIME_WINDOW_MS = { "24h": 864e5, "7d": 6048e5, "30d": 2592e6 };
+  const SEARCH_DEBOUNCE_MS = 250;
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const label = (t) => t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -28,15 +35,34 @@
     if (isNaN(t)) return String(iso || "").slice(0, 10);
     return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
+  function createdAfterIso(tf) {
+    const ms = TIME_WINDOW_MS[tf];
+    return ms ? new Date(Date.now() - ms).toISOString() : null;
+  }
   function highlight(text, q) {
     text = esc(text);
     if (!q) return text;
-    try { return text.replace(new RegExp("(" + q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"), "<mark>$1</mark>"); }
-    catch { return text; }
+    const terms = Array.from(new Set(q.trim().split(/\s+/).filter(Boolean)))
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 8);
+    if (!terms.length) return text;
+    try {
+      const pat = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+      return text.replace(new RegExp("(" + pat + ")", "ig"), "<mark>$1</mark>");
+    } catch { return text; }
   }
 
-  let MODEL = { list: [], byType: {}, byStatus: {}, total: 0, source: "snapshot" };
+  let MODEL = { list: [], byType: {}, byStatus: {}, total: 0, source: "snapshot", searchMode: null, lowConfidence: false };
+  let baseSource = "snapshot";
+  let defaultList = [];
+  let queryText = "";
+  let serverQuery = "";
+  let serverType = "all";
+  let serverTime = "all";
   let typeFilter = "all", timeFilter = "all";
+  let searching = false;
+  let debounceTimer = null;
+  let reqSeq = 0;
   // "N new" since the last load. An explore pane stays manual, so a knowledge_write
   // doesn't refetch (that would disrupt search/filter/scroll) — it just bumps this
   // badge as a refresh nudge. Reset on load().
@@ -67,16 +93,50 @@
     </div>`;
   }
 
-  function render() {
-    const q = ($("#dsc-search") && $("#dsc-search").value || "").toLowerCase().trim();
-    let rows = MODEL.list.slice();
-    if (typeFilter !== "all") rows = rows.filter((d) => (d.type || "note") === typeFilter);
-    if (timeFilter !== "all") {
-      const cut = Date.now() - { "24h": 864e5, "7d": 6048e5, "30d": 2592e6 }[timeFilter];
-      rows = rows.filter((d) => Date.parse(d.id) >= cut);
+  function ensureShell() {
+    const mount = $("#dsc-mount");
+    if (!mount || $("#dsc-list", mount)) return;
+    mount.innerHTML =
+      `<div id="dsc-stats"></div>
+       <div id="dsc-types" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--space-4)"></div>
+       <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4)">
+         <input id="dsc-search" placeholder="search summary · details · tags" value="${esc(queryText)}"
+           style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
+         <select id="dsc-time" class="theme-toggle">${[["all", "all time"], ["24h", "24h"], ["7d", "7 days"], ["30d", "30 days"]].map(([v, t]) => `<option value="${v}" ${v === timeFilter ? "selected" : ""}>${t}</option>`).join("")}</select>
+         <button id="dsc-new" class="theme-toggle" title="New knowledge written since you loaded — click to refresh" style="display:${newCount > 0 ? "inline-flex" : "none"};border-color:var(--accent);color:var(--accent)">${newCount} new · refresh</button>
+       </div>
+       <div id="dsc-status" style="display:none;margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)"></div>
+       <div id="dsc-list" style="display:flex;flex-direction:column;gap:var(--space-3)"></div>`;
+
+    const s = $("#dsc-search", mount);
+    if (s) {
+      s.oninput = () => {
+        queryText = s.value;
+        onQueryOrFilterChange(true);
+      };
+      s.onkeydown = (e) => {
+        if (e.key === "Enter") {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+          if (baseSource === "live") runServerSearch();
+        }
+      };
     }
-    if (q) rows = rows.filter((d) => ((d.summary || "") + " " + (d.details || "") + " " + (d.tags || []).join(" ")).toLowerCase().includes(q));
-    rows.sort((a, b) => Date.parse(b.id || 0) - Date.parse(a.id || 0));
+    const t = $("#dsc-time", mount);
+    if (t) {
+      t.onchange = () => {
+        timeFilter = t.value;
+        onQueryOrFilterChange(false);
+      };
+    }
+    const n = $("#dsc-new", mount);
+    if (n) n.onclick = load;
+  }
+
+  function renderStats() {
+    const statsEl = $("#dsc-stats");
+    const typesEl = $("#dsc-types");
+    if (!statsEl || !typesEl) return;
 
     // lifecycle bar
     const bs = MODEL.byStatus || {};
@@ -95,47 +155,202 @@
       `<span><i style="background:${STATUS_COLOR[k]}"></i>${k} ${bs[k]}</span>`).join("")
       + (other ? `<span title="${otherTitle}"><i style="background:var(--line-2)"></i>other ${other}</span>` : "");
 
+    statsEl.innerHTML = Object.keys(bs).length
+      ? `<div style="margin-bottom:var(--space-4)">
+           <div class="track" style="height:10px;display:flex;gap:1px">${bar}</div>
+           <div class="legend" style="margin-top:var(--space-2)">${barLegend} <span class="src-badge ${MODEL.source}" style="margin-left:auto">${MODEL.source}</span></div>
+         </div>`
+      : `<div class="legend" style="margin-bottom:var(--space-3)"><span class="src-badge ${MODEL.source}" style="margin-left:auto">${MODEL.source}</span></div>`;
+
     // type legend
     const bt = MODEL.byType || {};
     const types = Object.keys(bt).sort((a, b) => (TYPE_ORDER.indexOf(a) + 1 || 99) - (TYPE_ORDER.indexOf(b) + 1 || 99));
-    const legend = ["all"].concat(types).map((t) => {
+    typesEl.innerHTML = ["all"].concat(types).map((t) => {
       const n = t === "all" ? MODEL.total : bt[t];
       const on = t === typeFilter;
       return `<button class="theme-toggle dsc-type" data-type="${t}" style="${on ? "border-color:var(--accent);color:var(--accent)" : ""}">${label(t)} <span style="color:var(--faint)">${n ?? ""}</span></button>`;
     }).join("");
-
-    $("#dsc-mount").innerHTML =
-      `${Object.keys(bs).length ? `<div style="margin-bottom:var(--space-4)">
-         <div class="track" style="height:10px;display:flex;gap:1px">${bar}</div>
-         <div class="legend" style="margin-top:var(--space-2)">${barLegend} <span class="src-badge ${MODEL.source}" style="margin-left:auto">${MODEL.source}</span></div>
-       </div>` : ""}
-       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--space-4)">${legend}</div>
-       <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4)">
-         <input id="dsc-search" placeholder="search summary · details · tags" value="${esc(q)}"
-           style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
-         <select id="dsc-time" class="theme-toggle">${[["all", "all time"], ["24h", "24h"], ["7d", "7 days"], ["30d", "30 days"]].map(([v, t]) => `<option value="${v}" ${v === timeFilter ? "selected" : ""}>${t}</option>`).join("")}</select>
-         <button id="dsc-new" class="theme-toggle" title="New knowledge written since you loaded — click to refresh" style="display:${newCount > 0 ? "inline-flex" : "none"};border-color:var(--accent);color:var(--accent)">${newCount} new · refresh</button>
-       </div>
-       <div style="display:flex;flex-direction:column;gap:var(--space-3)">
-         ${rows.length ? rows.map((d) => card(d, q)).join("")
-           : MODEL.source === "unavailable" ? `<p class="empty">Server not answering — discoveries unavailable.</p>`
-           : `<p class="empty">No matches. Clear filters or change search.</p>`}
-       </div>`;
-    wire();
+    typesEl.querySelectorAll(".dsc-type").forEach((b) => {
+      b.onclick = () => {
+        typeFilter = b.dataset.type;
+        renderStats();
+        onQueryOrFilterChange(false);
+      };
+    });
   }
 
-  function wire() {
-    const s = $("#dsc-search"); if (s) { s.oninput = render; if (s.value) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
-    const t = $("#dsc-time"); if (t) t.onchange = () => { timeFilter = t.value; render(); };
-    document.querySelectorAll(".dsc-type").forEach((b) => b.onclick = () => { typeFilter = b.dataset.type; render(); });
-    const n = $("#dsc-new"); if (n) n.onclick = load;
+  function renderList() {
+    const listEl = $("#dsc-list");
+    const statusEl = $("#dsc-status");
+    if (!listEl) return;
+
+    const q = queryText.trim();
+    const qLower = q.toLowerCase();
+    const isServerSearch = MODEL.source === "live" && (serverQuery !== "" || serverType !== "all" || serverTime !== "all");
+    let rows = MODEL.list.slice();
+
+    // In snapshot/offline mode (or before a live filter catches up), filter
+    // locally. Live server search results already ran hybrid/FTS/semantic
+    // matching on the full corpus, so keep their ranking and never drop
+    // semantic or non-contiguous multi-term matches via .includes(q).
+    if (MODEL.source !== "live" || typeFilter !== serverType) {
+      if (typeFilter !== "all") rows = rows.filter((d) => (d.type || "note") === typeFilter);
+    }
+    if (MODEL.source !== "live" || timeFilter !== serverTime) {
+      if (timeFilter !== "all") {
+        const cut = Date.now() - TIME_WINDOW_MS[timeFilter];
+        rows = rows.filter((d) => Date.parse(d.id) >= cut);
+      }
+    }
+    if (MODEL.source !== "live" && qLower) {
+      rows = rows.filter((d) => ((d.summary || "") + " " + (d.details || "") + " " + (d.tags || []).join(" ")).toLowerCase().includes(qLower));
+    }
+    if (!(MODEL.source === "live" && serverQuery !== "")) {
+      rows.sort((a, b) => Date.parse(b.id || 0) - Date.parse(a.id || 0));
+    }
+
+    if (statusEl) {
+      if (searching) {
+        statusEl.textContent = "Searching knowledge graph…";
+        statusEl.style.display = "block";
+      } else if (isServerSearch && serverQuery) {
+        const mode = MODEL.searchMode ? MODEL.searchMode + " · " : "";
+        const conf = MODEL.lowConfidence ? " · exploratory (semantic-only)" : "";
+        statusEl.textContent = `${mode}${rows.length} match${rows.length === 1 ? "" : "es"}${conf}`;
+        statusEl.style.display = "block";
+      } else {
+        statusEl.textContent = "";
+        statusEl.style.display = "none";
+      }
+    }
+
+    listEl.innerHTML = rows.length
+      ? rows.map((d) => card(d, q)).join("")
+      : MODEL.source === "unavailable"
+        ? `<p class="empty">Server not answering — discoveries unavailable.</p>`
+        : `<p class="empty">No matches. Clear filters or change search.</p>`;
+  }
+
+  function render() {
+    ensureShell();
+    renderStats();
+    renderList();
+  }
+
+  function onQueryOrFilterChange(fromTyping) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+
+    if (baseSource !== "live") {
+      renderList();
+      return;
+    }
+
+    const q = queryText.trim();
+    if (!q && typeFilter === "all" && timeFilter === "all") {
+      // Back to default unfiltered view: cancel any in-flight query and restore
+      // the cached recent list immediately when no refetch is needed.
+      reqSeq += 1;
+      searching = false;
+      serverQuery = "";
+      serverType = "all";
+      serverTime = "all";
+      MODEL = {
+        ...MODEL,
+        list: defaultList.slice(),
+        source: "live",
+        searchMode: null,
+        lowConfidence: false,
+      };
+      renderStats();
+      renderList();
+      return;
+    }
+
+    if (fromTyping) {
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        runServerSearch();
+      }, SEARCH_DEBOUNCE_MS);
+    } else {
+      runServerSearch();
+    }
+  }
+
+  async function runServerSearch() {
+    const seq = ++reqSeq;
+    const q = queryText.trim();
+    const tf = typeFilter;
+    const tm = timeFilter;
+    searching = true;
+    renderList();
+
+    const r = await DATA.discoveries(q || undefined, {
+      discoveryType: tf !== "all" ? tf : undefined,
+      createdAfter: createdAfterIso(tm) || undefined,
+      skipStats: true,
+    });
+    if (seq !== reqSeq) return;
+    searching = false;
+    if (r.source === "unavailable") {
+      MODEL = { ...MODEL, list: [], source: "unavailable", searchMode: null, lowConfidence: false };
+      renderStats();
+      renderList();
+      return;
+    }
+    MODEL = {
+      ...MODEL,
+      list: r.data.list || [],
+      source: r.source,
+      searchMode: r.data.searchMode || null,
+      lowConfidence: !!r.data.lowConfidence,
+    };
+    serverQuery = q;
+    serverType = tf;
+    serverTime = tm;
+    renderStats();
+    renderList();
   }
 
   async function load() {
-    const r = await DATA.discoveries();
-    MODEL = { list: r.data.list || [], byType: r.data.byType || {}, byStatus: r.data.byStatus || {}, total: r.data.total || (r.data.list || []).length, source: r.source };
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+    const seq = ++reqSeq;
+    searching = false;
+
+    const q = queryText.trim();
+    const tf = typeFilter;
+    const tm = timeFilter;
+    const hasFilter = !!(q || tf !== "all" || tm !== "all");
+    const r = hasFilter
+      ? await DATA.discoveries(q || undefined, {
+        discoveryType: tf !== "all" ? tf : undefined,
+        createdAfter: createdAfterIso(tm) || undefined,
+      })
+      : await DATA.discoveries();
+    if (seq !== reqSeq) return;
+
+    const list = r.data.list || [];
+    MODEL = {
+      list,
+      byType: r.data.byType || {},
+      byStatus: r.data.byStatus || {},
+      total: r.data.total || list.length,
+      source: r.source,
+      searchMode: r.data.searchMode || null,
+      lowConfidence: !!r.data.lowConfidence,
+    };
+    baseSource = r.source;
+    if (!hasFilter && r.source === "live") {
+      defaultList = list.slice();
+    }
+    serverQuery = r.source === "live" ? q : "";
+    serverType = r.source === "live" ? tf : "all";
+    serverTime = r.source === "live" ? tm : "all";
     newCount = 0; // freshly loaded — nothing new yet
     render();
+    const b = $("#dsc-new");
+    if (b) b.style.display = "none";
   }
 
   // A knowledge_write landed — bump the badge in place (no re-render, so a search
