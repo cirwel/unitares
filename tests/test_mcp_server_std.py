@@ -176,6 +176,22 @@ class TestLoadBuildSha:
             result = load_build_sha_from_repo(tmp_path)
         assert result == DEFAULT_BUILD_SHA_FALLBACK
 
+    def test_published_image_reports_its_build(self, tmp_path, monkeypatch):
+        # The image has no .git, and Compose forwards UNITARES_BUILD_SHA empty
+        # when the operator sets none; the sha baked into the image answers.
+        from src.versioning import load_build_sha_from_repo
+        monkeypatch.setenv("UNITARES_BUILD_SHA", "")
+        monkeypatch.setenv("UNITARES_IMAGE_BUILD_SHA", "56a674bfedc7")
+        with patch("src.versioning.subprocess.run", side_effect=Exception("no git")):
+            assert load_build_sha_from_repo(tmp_path) == "56a674bfedc7"
+
+    def test_operator_sha_beats_the_image_sha(self, tmp_path, monkeypatch):
+        from src.versioning import load_build_sha_from_repo
+        monkeypatch.setenv("UNITARES_BUILD_SHA", "abc1234")
+        monkeypatch.setenv("UNITARES_IMAGE_BUILD_SHA", "56a674bfedc7")
+        with patch("src.versioning.subprocess.run", side_effect=Exception("no git")):
+            assert load_build_sha_from_repo(tmp_path) == "abc1234"
+
 
 # ============================================================================
 # Test: AgentMetadata dataclass
