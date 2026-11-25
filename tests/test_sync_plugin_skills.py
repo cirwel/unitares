@@ -257,3 +257,45 @@ def test_a_refused_apply_does_not_compare_and_check_still_reports_the_rule(trees
     check = _sync(canon, plugin, "--check")
     assert check.returncode == 1
     assert "disagrees with canonical's attestation rule" in check.stderr
+
+
+def test_sync_propagates_reference_add_rename_and_delete(trees):
+    canon, plugin = trees
+    refs = canon / "skills" / "demo" / "references"
+    refs.mkdir()
+    (refs / "alpha.md").write_text("# Alpha\n", encoding="utf-8")
+    _git(canon, "add", "skills")
+    _git(canon, "commit", "-q", "-m", "add reference alpha")
+
+    res = _sync(canon, plugin)
+    assert res.returncode == 0, res.stderr + res.stdout
+    assert (plugin / "skills" / "demo" / "references" / "alpha.md").read_text() == "# Alpha\n"
+    assert "demo/references/alpha.md" in (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text()
+    _git(plugin, "add", "skills")
+    _git(plugin, "commit", "-q", "-m", "mirror alpha")
+
+    # Rename alpha.md -> beta.md in canonical; stale alpha.md must vanish from mirror.
+    (refs / "alpha.md").rename(refs / "beta.md")
+    _git(canon, "add", "-A", "skills")
+    _git(canon, "commit", "-q", "-m", "rename reference alpha to beta")
+
+    res2 = _sync(canon, plugin)
+    assert res2.returncode == 0, res2.stderr + res2.stdout
+    assert not (plugin / "skills" / "demo" / "references" / "alpha.md").exists()
+    assert (plugin / "skills" / "demo" / "references" / "beta.md").read_text() == "# Alpha\n"
+    manifest2 = (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text()
+    assert "demo/references/alpha.md" not in manifest2
+    assert "demo/references/beta.md" in manifest2
+    _git(plugin, "add", "-A", "skills")
+    _git(plugin, "commit", "-q", "-m", "mirror beta")
+
+    # Delete references/ in canonical; mirror must drop it too.
+    (refs / "beta.md").unlink()
+    refs.rmdir()
+    _git(canon, "add", "-A", "skills")
+    _git(canon, "commit", "-q", "-m", "remove references")
+
+    res3 = _sync(canon, plugin)
+    assert res3.returncode == 0, res3.stderr + res3.stdout
+    assert not (plugin / "skills" / "demo" / "references").exists()
+    assert "demo/references/" not in (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text()

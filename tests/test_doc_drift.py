@@ -48,6 +48,21 @@ def _read_skill(name: str) -> str:
 # Assertion registry
 # ---------------------------------------------------------------------------
 
+def _iter_skill_markdown_files() -> list[tuple[str, Path]]:
+    """Every SKILL.md and companion references/*.md under skills/."""
+    files: list[tuple[str, Path]] = []
+    for skill_dir in sorted(SKILLS_DIR.iterdir()):
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            continue
+        files.append((f"{skill_dir.name}/SKILL.md", skill_file))
+        refs_dir = skill_dir / "references"
+        if refs_dir.is_dir():
+            for ref in sorted(refs_dir.glob("*.md")):
+                files.append((f"{skill_dir.name}/references/{ref.name}", ref))
+    return files
+
+
 class TestGovernanceFundamentalsClaims:
     """Validate claims in governance-fundamentals/SKILL.md."""
 
@@ -63,24 +78,20 @@ class TestGovernanceFundamentalsClaims:
         )
 
     def test_skills_do_not_reference_config_as_agent_lookup(self):
-        """Skills should not tell agents to look at governance_config.py — it's an internal detail."""
+        """Skills and their references should not tell agents to look at governance_config.py."""
         assert SKILLS_DIR.is_dir(), f"Skills directory not found: {SKILLS_DIR}"
 
         violations = []
-        for skill_dir in sorted(SKILLS_DIR.iterdir()):
-            skill_file = skill_dir / "SKILL.md"
-            if not skill_file.exists():
-                continue
-            content = skill_file.read_text()
-            # Check for patterns that direct agents to read config files
+        for label, md_file in _iter_skill_markdown_files():
+            content = md_file.read_text()
             if re.search(r"defined in.*governance_config\.py", content):
                 violations.append(
-                    f"{skill_dir.name}: tells agents to look at governance_config.py — "
+                    f"{label}: tells agents to look at governance_config.py — "
                     f"use get_governance_metrics() thresholds field instead"
                 )
             if re.search(r"governance_config\.py\s*→", content):
                 violations.append(
-                    f"{skill_dir.name}: references governance_config.py with arrow notation — "
+                    f"{label}: references governance_config.py with arrow notation — "
                     f"use get_governance_metrics() thresholds field instead"
                 )
 
@@ -167,20 +178,17 @@ class TestNoHardcodedConfigValues:
     ]
 
     def test_no_hardcoded_thresholds_in_skills(self):
-        """Skills should not hardcode config values that can change."""
+        """Skills and their companion references should not hardcode config values that can change."""
         assert SKILLS_DIR.is_dir(), f"Skills directory not found: {SKILLS_DIR}"
 
         violations = []
-        for skill_dir in sorted(SKILLS_DIR.iterdir()):
-            skill_file = skill_dir / "SKILL.md"
-            if not skill_file.exists():
-                continue
-            content = skill_file.read_text()
+        for label, md_file in _iter_skill_markdown_files():
+            content = md_file.read_text()
             for config_attr, pattern in self.CONFIG_VALUES_TO_CHECK:
                 match = re.search(pattern, content, re.IGNORECASE)
                 if match:
                     violations.append(
-                        f"{skill_dir.name}: hardcodes {config_attr} as '{match.group()}' "
+                        f"{label}: hardcodes {config_attr} as '{match.group()}' "
                         f"— use get_governance_metrics() thresholds field instead"
                     )
 
@@ -216,3 +224,75 @@ class TestSkillFreshnessMetadata:
                 missing.append(skill_dir.name)
 
         assert not missing, f"Skills missing freshness metadata: {missing}"
+
+
+class TestSkillProgressiveDisclosure:
+    """Verify references/ link integrity and the session-start 1-80 line window."""
+
+    def test_references_links_resolve_and_are_bidirectional(self):
+        """Every references/*.md must be linked from its own SKILL.md (with MCP callable form),
+        every references/*.md pointer in SKILL.md must resolve locally, and no skill may link
+        directly into another skill's references/ directory."""
+        ref_pattern = re.compile(r"references/([A-Za-z0-9._-]+\.md)")
+        cross_skill_pattern = re.compile(r"skills/[A-Za-z0-9._-]+/references/")
+
+        for skill_dir in sorted(SKILLS_DIR.iterdir()):
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
+                continue
+            skill_name = skill_dir.name
+            skill_text = skill_file.read_text(encoding="utf-8")
+
+            assert not cross_skill_pattern.search(skill_text), (
+                f"{skill_name}/SKILL.md links directly into another skill's references/"
+            )
+
+            refs_dir = skill_dir / "references"
+            on_disk: set[str] = set()
+            if refs_dir.is_dir():
+                assert not refs_dir.is_symlink(), f"{skill_name}/references must not be a symlink"
+                for entry in sorted(refs_dir.iterdir()):
+                    assert not entry.is_symlink(), f"{entry} must not be a symlink"
+                    assert entry.is_file() and entry.suffix == ".md", (
+                        f"Unexpected non-.md entry in {refs_dir}: {entry.name}"
+                    )
+                    ref_text = entry.read_text(encoding="utf-8")
+                    assert not cross_skill_pattern.search(ref_text), (
+                        f"{skill_name}/references/{entry.name} links into another skill's references/"
+                    )
+                    on_disk.add(entry.name)
+
+            linked = set(ref_pattern.findall(skill_text))
+            missing = linked - on_disk
+            unreferenced = on_disk - linked
+            assert not missing, f"{skill_name}/SKILL.md references missing files: {sorted(missing)}"
+            assert not unreferenced, (
+                f"{skill_name}/references has files not linked from SKILL.md: {sorted(unreferenced)}"
+            )
+            for ref_name in sorted(on_disk):
+                expected_mcp = f'skills(name="{skill_name}", reference="{ref_name}")'
+                assert expected_mcp in skill_text, (
+                    f"{skill_name}/SKILL.md must include remote MCP callable form: {expected_mcp}"
+                )
+
+    def test_governance_fundamentals_session_start_80_line_window(self):
+        """The plugin session-start hook slices lines 1..80 of governance-fundamentals/SKILL.md.
+        Those 80 lines must include the full EISV table, end cleanly without cutting mid-table,
+        and leave no unclosed fenced code block."""
+        lines = _read_skill("governance-fundamentals").splitlines()
+        window = lines[:80]
+        window_text = "\n".join(window)
+
+        for row in (
+            "| **E** (Energy) | [0, 1]",
+            "| **I** (Information Integrity) | [0, 1]",
+            "| **S** (Entropy) | [0, 1]",
+            "| **V** (Valence) | [-1, 1]",
+        ):
+            assert row in window_text, f"EISV row missing from lines 1-80 window: {row}"
+
+        assert not window[-1].lstrip().startswith("|"), (
+            f"Lines 1-80 of governance-fundamentals/SKILL.md cut off mid-table: {window[-1]!r}"
+        )
+        fence_count = sum(1 for line in window if line.lstrip().startswith(("```", "~~~")))
+        assert fence_count % 2 == 0, "Lines 1-80 leave an unclosed markdown code fence"
