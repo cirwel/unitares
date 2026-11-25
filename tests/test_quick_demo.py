@@ -185,3 +185,27 @@ def test_step4_description_is_not_divergence_evidence(tool_usage_stats):
 
     assert divergence[3] == min(divergence)
     assert max(divergence) in (divergence[4], divergence[5])
+
+
+def test_governance_port_reads_the_checkout_env_file(tmp_path):
+    # A stack moved off 8767 through .env is the stack the demo must reach;
+    # before this the demo fell back to 8767 and talked to whatever held it.
+    dotenv = tmp_path / ".env"
+    dotenv.write_text('# moved\nGOVERNANCE_HOST_PORT="18767"\n')
+    assert quick_demo._governance_port({}, dotenv) == "18767"
+
+
+def test_governance_port_resolves_like_compose(tmp_path):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("GOVERNANCE_HOST_PORT=18767\n")
+    # The shell export wins over .env, as it does for Compose itself.
+    assert quick_demo._governance_port({"GOVERNANCE_HOST_PORT": "28767"}, dotenv) == "28767"
+    # The demo's own override wins over both.
+    assert (
+        quick_demo._governance_port(
+            {"UNITARES_DEMO_PORT": "38767", "GOVERNANCE_HOST_PORT": "28767"}, dotenv
+        )
+        == "38767"
+    )
+    # Nothing stated anywhere: the published default.
+    assert quick_demo._governance_port({}, tmp_path / "missing.env") == "8767"

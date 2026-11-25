@@ -3,7 +3,9 @@
 # Usage: unitares <command> [args...]
 #
 # Environment:
-#   UNITARES_URL          Base URL (default: http://localhost:8767). A trailing
+#   UNITARES_URL          Base URL (default: http://localhost:<port>, the port
+#                         being GOVERNANCE_HOST_PORT from the shell or this
+#                         checkout's .env, else 8767). A trailing
 #                         "/" or "/mcp" or "/mcp/" is stripped automatically so
 #                         accidental MCP-path suffixes don't break REST calls.
 #   UNITARES_AGENT        Stable agent name for X-Agent-Id (default:
@@ -18,8 +20,9 @@ set -o pipefail
 
 # --- config ------------------------------------------------------------------
 
-# Whether the operator named a URL; install commands otherwise read the port
-# from this checkout's .env (GOVERNANCE_HOST_PORT).
+# Whether the operator named a URL. Without one, the default is resolved again
+# just before dispatch from GOVERNANCE_HOST_PORT (shell, then this checkout's
+# .env), once the helper that reads .env is defined.
 _url_given="${UNITARES_URL:+1}"
 _raw_url="${UNITARES_URL:-http://localhost:8767}"
 # Strip trailing slash, then any trailing /mcp (common mistake when pasting
@@ -1156,12 +1159,9 @@ _migrations() {
 
 _stack_url() {
     # The server this checkout's stack serves: UNITARES_URL when given,
-    # otherwise localhost on the .env GOVERNANCE_HOST_PORT (default 8767).
-    if [ -n "${_url_given:-}" ]; then
-        printf '%s' "$UNITARES_URL"
-    else
-        printf 'http://localhost:%s' "$(_env_value GOVERNANCE_HOST_PORT 8767)"
-    fi
+    # otherwise localhost on the .env GOVERNANCE_HOST_PORT (default 8767),
+    # which is what UNITARES_URL already holds after the resolution below.
+    printf '%s' "$UNITARES_URL"
 }
 
 _deep_health_status() {
@@ -1641,7 +1641,8 @@ Commands:
   help                              Show this message
 
 Environment:
-  UNITARES_URL       Base URL (default: http://localhost:8767; /mcp suffix stripped)
+  UNITARES_URL       Base URL (default: http://localhost:8767, or the
+                     GOVERNANCE_HOST_PORT in the shell or .env; /mcp stripped)
   UNITARES_AGENT     Stable agent name for X-Agent-Id
   UNITARES_TOKEN     Optional bearer token
   UNITARES_TIMEOUT   curl --max-time seconds (default: 15)
@@ -1664,6 +1665,14 @@ EOF
 }
 
 # --- dispatch ----------------------------------------------------------------
+
+# Every command talks to the same server. Before this, only update/start used
+# the .env port, so on a stack moved off 8767 through .env (the case
+# GOVERNANCE_HOST_PORT exists for) health, diag, status and onboard reached
+# whatever else held 8767.
+if [ -z "${_url_given:-}" ]; then
+    UNITARES_URL="http://localhost:$(_env_value GOVERNANCE_HOST_PORT 8767)"
+fi
 
 case "${1:-help}" in
     status|st)   shift; cmd_status "$@" ;;
