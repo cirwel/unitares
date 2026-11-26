@@ -439,4 +439,12 @@ handle_dialectic = action_router(
         "dialectic(action='consult', session_id='abc123', reasoning='...', agrees=False, reviewer_provenance={'backend': 'codex-cli', 'consult_source': '...'})",
         "dialectic(action='reconcile_effect', session_id='abc123')",
     ],
+    # The flat schema takes all 31 parameters on every action, so a call can
+    # file `proposed_conditions` with an antithesis or `concerns` with a
+    # thesis, succeed, and record nothing from them. A successful response now
+    # names them. This router qualifies because no action forwards the
+    # caller's arguments to another's handler (request builds the thesis
+    # arguments itself) and none of its parameters is read by the response
+    # envelope instead of the handler.
+    report_unused_parameters=True,
 )

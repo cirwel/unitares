@@ -171,3 +171,53 @@ def narrow_schema_to_action(
         pinned["const"] = action
         kept["action"] = pinned
     return narrowed
+
+
+def supplied_fields_unused_by_action(
+    model: Any,
+    action: str,
+    arguments: Mapping[str, Any],
+) -> Tuple[str, ...]:
+    """Published parameters the caller set that ``action`` does not read.
+
+    The flat wire schema accepts every router parameter on every action, so
+    ``dialectic(action='antithesis', proposed_conditions=[...])`` validates,
+    runs, answers success, and records no conditions: antithesis reads
+    ``concerns``. This names such parameters so the router can say so.
+
+    A parameter counts as set when it is present, not None, and differs from
+    its schema default. Validation fills every absent field with its default
+    before dispatch, so an untouched field and one sent at its default look
+    the same here; neither changes what the action did.
+
+    Empty when the model declares no action map or does not know the action.
+    Only declared parameters are considered: a name the schema does not have
+    never reaches this function's caller over ``/mcp/`` (the typed wrapper
+    drops it before dispatch), and elsewhere it may be an undeclared argument
+    a handler still reads.
+    """
+    used = fields_for_action(model, action)
+    if used is None:
+        return ()
+    wanted = set(used)
+    unused = []
+    for name, field in (getattr(model, "model_fields", {}) or {}).items():
+        published = getattr(field, "alias", None) or name
+        if published in wanted:
+            continue
+        if published in arguments:
+            value = arguments[published]
+        elif name in arguments:
+            value = arguments[name]
+        else:
+            continue
+        if value is None:
+            continue
+        try:
+            default = field.get_default(call_default_factory=True)
+        except Exception:
+            default = None
+        if value == default:
+            continue
+        unused.append(published)
+    return tuple(unused)

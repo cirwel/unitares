@@ -764,6 +764,66 @@ def list_registered_tools(include_hidden: bool = False, include_deprecated: bool
 
 # --- Action Router ---
 
+def _unused_parameters_for(name: str, action: str, arguments: Dict[str, Any]) -> tuple:
+    """Parameters the caller set that ``name(action=...)`` does not read.
+
+    Never raises: a notice that cannot be computed is left out, and the call
+    proceeds.
+    """
+    try:
+        from src.tool_schemas import get_pydantic_schemas
+        from .schemas.router_actions import supplied_fields_unused_by_action
+
+        model = get_pydantic_schemas().get(name)
+        if model is None:
+            return ()
+        return supplied_fields_unused_by_action(model, action, arguments)
+    except Exception as exc:
+        logger.debug("unused-parameter check skipped for %s: %s", name, exc)
+        return ()
+
+
+def _attach_unused_parameters(result, name: str, action: str, unused: tuple):
+    """Name the unused parameters on a response that reports success.
+
+    A refusal already tells the caller nothing was recorded, and its shape is
+    a contract of its own, so only a success-shaped JSON object is annotated.
+    On any failure the handler's result is returned untouched.
+    """
+    if not unused:
+        return result
+    try:
+        import json
+
+        if not (isinstance(result, (list, tuple)) and result and hasattr(result[0], "text")):
+            return result
+        payload = json.loads(result[0].text)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("success") is False
+            or "error" in payload
+            or "unused_parameters" in payload
+        ):
+            return result
+        payload["unused_parameters"] = {
+            "action": action,
+            "names": list(unused),
+            "note": (
+                f"{name}(action='{action}') does not read these parameters, so "
+                "nothing was recorded from them. "
+                f"describe_tool(tool_name='{name}', action='{action}') lists "
+                "the parameters this action reads."
+            ),
+        }
+        return [
+            TextContent(type="text", text=json.dumps(payload, ensure_ascii=False)),
+            *result[1:],
+        ]
+    except Exception as exc:
+        logger.debug("unused-parameter notice skipped for %s: %s", name, exc)
+        return result
+
+
 def action_router(
     name: str,
     actions: Dict[str, Callable],
@@ -774,6 +834,7 @@ def action_router(
     param_maps: Optional[Dict[str, Dict[str, str]]] = None,
     examples: Optional[list] = None,
     pre_onboard_actions: Optional[set] = None,
+    report_unused_parameters: bool = False,
 ):
     """
     Create a consolidated MCP tool from an action→handler mapping.
@@ -798,6 +859,16 @@ def action_router(
             {"search": {"query": "search_query"}} means if action="search"
             and "query" is in arguments but "search_query" is not, copy it.
         examples: Example usage strings for error recovery messages
+        report_unused_parameters: Add ``unused_parameters`` to a successful
+            response when the caller set a parameter the router's schema
+            declares for other actions only. Off by default, and to be turned
+            on per router once its ACTION_FIELDS is known to be the whole
+            truth for a caller. Two things make it untrue today elsewhere:
+            an action that forwards its arguments to another action's handler
+            (knowledge get -> details reads five parameters get does not
+            declare), and a parameter the response envelope consumes rather
+            than the handler (knowledge response_mode on the write aliases).
+            tests/test_router_unused_parameters.py holds the opted-in set.
 
     Returns:
         The registered handler (same as @mcp_tool would return)
@@ -896,6 +967,13 @@ def action_router(
                 recovery={"valid_actions": valid_actions}
             )]
 
+        # Read before the handler runs: a handler may write into arguments.
+        unused = (
+            _unused_parameters_for(name, action, arguments)
+            if report_unused_parameters
+            else ()
+        )
+
         # Apply parameter mappings for this action
         for src_key, dst_key in _param_maps.get(action, {}).items():
             if src_key in arguments and arguments.get(src_key) is not None:
@@ -903,7 +981,8 @@ def action_router(
                 if dst_key not in arguments or arguments.get(dst_key) is None:
                     arguments[dst_key] = arguments[src_key]
 
-        return await handler(arguments)
+        result = await handler(arguments)
+        return _attach_unused_parameters(result, name, action, unused)
 
     _ROUTER_ACTION_HANDLERS[name] = dict(actions)
     return router
