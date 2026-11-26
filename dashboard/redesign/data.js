@@ -446,7 +446,19 @@
       const q = typeof query === "string" ? query.trim() : "";
       const searchArgs = { action: "search", include_details: true, limit: 30 };
       if (q) searchArgs.query = q;
-      if (o.discoveryType && o.discoveryType !== "all") searchArgs.discovery_type = o.discoveryType;
+      if (o.discoveryType && o.discoveryType !== "all") {
+        searchArgs.discovery_type = o.discoveryType;
+        if (!q) {
+          // Type-chip counts come from the canonical current-epoch corpus
+          // (including archived, cold, and imported rows), while queryless
+          // search omits archived/cold and unpromoted imports by default with
+          // no widening pass. Align the browse scope so clicking an
+          // archived-only or cold-only chip never returns "No matches".
+          searchArgs.include_archived = true;
+          searchArgs.include_cold = true;
+          searchArgs.authority_mode = "all";
+        }
+      }
       if (o.createdAfter) searchArgs.created_after = o.createdAfter;
       return withFallback(async () => {
         // Entry list + KG aggregates (for the lifecycle bar + type legend) in parallel.

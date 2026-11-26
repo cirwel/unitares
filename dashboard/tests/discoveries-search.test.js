@@ -467,10 +467,28 @@ describe("Discoveries server-side search", () => {
     // Unlisted custom types tie-break by count descending.
     expect(chipTypes.indexOf("custom_common")).toBeLessThan(chipTypes.indexOf("custom_rare"));
 
-    // Clicking a type chip from the live stats legend filters server-side.
+    // Clicking a type chip from the live stats legend filters server-side using
+    // the same full-corpus scope (including archived/cold/imported) as the badge count.
     dom.window.document.querySelector('.dsc-type[data-type="rule"]').click();
     await flushMicrotasks();
-    expect(calls.some((c) => c.body?.arguments?.discovery_type === "rule")).toBe(true);
+    const chipCall = calls.find((c) => c.body?.arguments?.discovery_type === "rule");
+    expect(chipCall).toBeTruthy();
+    expect(chipCall.body.arguments.include_archived).toBe(true);
+    expect(chipCall.body.arguments.include_cold).toBe(true);
+    expect(chipCall.body.arguments.authority_mode).toBe("all");
+
+    // Text search under the same type chip keeps default active-first ranking
+    // (server handles damped archived/cold widening when active hits < 3).
+    const input = dom.window.document.getElementById("dsc-search");
+    input.value = "canonical";
+    input.dispatchEvent(new dom.window.Event("input"));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
+    await flushMicrotasks();
+    const queryCall = calls.find((c) => c.body?.arguments?.discovery_type === "rule" && c.body?.arguments?.query === "canonical");
+    expect(queryCall).toBeTruthy();
+    expect(queryCall.body.arguments.include_archived).toBeUndefined();
+    expect(queryCall.body.arguments.include_cold).toBeUndefined();
+    expect(queryCall.body.arguments.authority_mode).toBeUndefined();
   });
 
   it("accounts for unknown statuses in the other bucket and reads raw_current_counts.by_type fallback", async () => {
