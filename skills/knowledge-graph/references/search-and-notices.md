@@ -34,7 +34,8 @@ edge cases, `staleness_warning`, `resolution_notes` offsets, or
     `exclude_agent_labels`); fallback is skipped when `operator` is explicitly
     forced, when `sort_by="created_at"` returns a full first page (so older AND
     pages can still match), or when a query exceeds 24 terms (which sets
-    `fts_fallback_skipped_reason`; pass `operator="OR"` for broad recall).
+    `fts_fallback_skipped_reason` in `compact`/`full` responses; pass
+    `operator="OR"` for broad recall).
   - `created_after` / `created_before` take exclusive ISO 8601 timestamps (UTC
     if no offset; `"2026-09-26"` = midnight UTC) and work with any order or
     search mode. Queryless `created_after` lists what is new since `T`, newest
