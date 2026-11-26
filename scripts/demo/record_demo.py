@@ -246,9 +246,31 @@ def _row_id(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+CLEAN_NON_LEASE_REASONS = frozenset({"lease_plane_unavailable", "no_live_lease"})
+
+
+def _release_ok(result: Mapping[str, Any]) -> bool:
+    if _is_error_result(result):
+        return False
+    if result.get("released") is True:
+        return True
+    return str(result.get("reason") or "") in CLEAN_NON_LEASE_REASONS
+
+
+def _release_label(result: Mapping[str, Any]) -> str:
+    if _is_error_result(result):
+        return f"error ({_error_detail(result)})"
+    if result.get("released") is True:
+        return "released"
+    reason = str(result.get("reason") or "")
+    if reason in CLEAN_NON_LEASE_REASONS:
+        return f"exited ({reason})"
+    return f"not released ({reason or 'unknown'})"
+
+
 def _all_required_checks_passed(summary: Mapping[str, Any]) -> bool:
     checks = summary["checks"]
-    age_mode = summary["agent_b"]["supersede_mode"] == "age_supersedes_edge"
+    age_graph_expected = summary["agent_b"]["supersede_mode"] != "relational_status_fallback"
     required_keys = [
         "agent_a_released",
         "agent_b_released",
@@ -260,7 +282,7 @@ def _all_required_checks_passed(summary: Mapping[str, Any]) -> bool:
         "outcome_bound_to_prediction",
         "lineage_points_to_agent_a",
     ]
-    if age_mode:
+    if age_graph_expected:
         required_keys.append("initial_claim_links_replacement")
     return all(bool(checks.get(k)) for k in required_keys)
 
@@ -358,17 +380,25 @@ def run_record_demo(
         )
         supersede_mode = "age_supersedes_edge"
         if _is_error_result(supersede_res):
-            supersede_mode = "relational_status_fallback"
-            supersede_res = call_fn(
-                "update_finding",
-                {
-                    "client_session_id": sess_b,
-                    "discovery_id": finding_a,
-                    "status": "superseded",
-                    "superseded_by": finding_b,
-                    "resolution_notes": supersede_note,
-                },
-            )
+            err_msg = _error_detail(supersede_res)
+            if "AGE" in err_msg:
+                supersede_res = call_fn(
+                    "update_finding",
+                    {
+                        "client_session_id": sess_b,
+                        "discovery_id": finding_a,
+                        "status": "superseded",
+                        "superseded_by": finding_b,
+                        "resolution_notes": supersede_note,
+                    },
+                )
+                supersede_mode = (
+                    "relational_status_fallback"
+                    if isinstance(supersede_res.get("supersession_warning"), str)
+                    else "update_finding_edge"
+                )
+            else:
+                supersede_mode = "supersede_error"
         supersede_ok = not _is_error_result(supersede_res)
         supersede_warning = (
             str(supersede_res["supersession_warning"])
@@ -460,9 +490,9 @@ def run_record_demo(
 
     superseded_link = row_a.get("superseded_by") if isinstance(row_a, dict) else None
     checks = {
-        "agent_a_released": not _is_error_result(release_a) and bool(release_a.get("released", False)),
-        "agent_b_released": not _is_error_result(release_b) and bool(release_b.get("released", False)),
-        "agent_c_released": not _is_error_result(release_c) and bool(release_c.get("released", False)),
+        "agent_a_released": _release_ok(release_a),
+        "agent_b_released": _release_ok(release_b),
+        "agent_c_released": _release_ok(release_c),
         "supersede_succeeded": supersede_ok,
         "search_found_initial_claim": row_a is not None,
         "search_found_replacement_claim": row_b is not None,
@@ -484,6 +514,7 @@ def run_record_demo(
             "uuid": uuid_a,
             "finding_id": finding_a,
             "released": checks["agent_a_released"],
+            "presence": _release_label(release_a),
         },
         "agent_b": {
             "uuid": uuid_b,
@@ -497,6 +528,7 @@ def run_record_demo(
             "prediction_binding": outcome_summary.get("prediction_binding"),
             "corroboration_grade": outcome_summary.get("corroboration_grade"),
             "released": checks["agent_b_released"],
+            "presence": _release_label(release_b),
         },
         "agent_c": {
             "uuid": uuid_c,
@@ -507,6 +539,7 @@ def run_record_demo(
             "superseded_by_seen": superseded_link,
             "replacement_status_seen": row_b.get("status") if isinstance(row_b, dict) else None,
             "released": checks["agent_c_released"],
+            "presence": _release_label(release_c),
         },
         "checks": checks,
     }
@@ -521,10 +554,10 @@ def format_report(summary: Mapping[str, Any]) -> str:
     b = summary["agent_b"]
     c = summary["agent_c"]
     checks = summary["checks"]
-    age_mode = b["supersede_mode"] == "age_supersedes_edge"
+    age_graph_expected = b["supersede_mode"] != "relational_status_fallback"
     if not b["supersede_ok"]:
         supersede_note = f"{b['supersede_mode']} (failed)"
-    elif not age_mode:
+    elif not age_graph_expected:
         supersede_note = f"{b['supersede_mode']} (status flipped; no AGE graph edge)"
     else:
         supersede_note = f"{b['supersede_mode']} (ok)"
@@ -535,7 +568,7 @@ def format_report(summary: Mapping[str, Any]) -> str:
         "1. Agent A — records initial claim and exits cleanly",
         f"   agent_uuid   = {a['uuid']}",
         f"   finding_a    = {a['finding_id']}  (bug_found: test_upload_retry appears flaky)",
-        f"   presence     = {'released' if a['released'] else 'not released'}",
+        f"   presence     = {a.get('presence') or ('released' if a['released'] else 'not released')}",
         "",
         "2. Agent B — finds root cause, supersedes A, checks in & grades outcome",
         f"   agent_uuid   = {b['uuid']}",
@@ -554,7 +587,7 @@ def format_report(summary: Mapping[str, Any]) -> str:
         _banner("Verification"),
     ]
     for label, ok in checks.items():
-        if label == "initial_claim_links_replacement" and not age_mode and not ok:
+        if label == "initial_claim_links_replacement" and not age_graph_expected and not ok:
             mark = "SKIP"
         else:
             mark = "OK  " if ok else "WARN"

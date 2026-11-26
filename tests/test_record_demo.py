@@ -55,9 +55,18 @@ class _FakeRecordServer:
         "c3333333-0000-0000-0000-000000000003",
     )
 
-    def __init__(self, *, age_enabled: bool = True, fail_sync_state: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        age_enabled: bool = True,
+        fail_sync_state: bool = False,
+        lease_plane_available: bool = True,
+        supersede_error: str | None = None,
+    ) -> None:
         self.age_enabled = age_enabled
         self.fail_sync_state = fail_sync_state
+        self.lease_plane_available = lease_plane_available
+        self.supersede_error = supersede_error
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.discoveries: dict[str, dict[str, Any]] = {}
         self.session_to_uuid: dict[str, str] = {}
@@ -109,6 +118,8 @@ class _FakeRecordServer:
         if tool == "knowledge" and args.get("action") == "supersede":
             writer = self._require_session_uuid(args)
             assert writer == self._AGENT_UUIDS[1], "only Agent B should supersede A's finding"
+            if self.supersede_error:
+                return {"success": False, "error": self.supersede_error}
             if not self.age_enabled:
                 return {"success": False, "error": "SUPERSEDES edges require AGE graph backend"}
             old = self.discoveries[args["supersedes_id"]]
@@ -169,6 +180,8 @@ class _FakeRecordServer:
         if tool == "agent" and args.get("action") == "release_presence":
             uid = self._require_session_uuid(args)
             self.released.add(uid)
+            if not self.lease_plane_available:
+                return {"action": "release_presence", "released": False, "reason": "lease_plane_unavailable"}
             return {"action": "release_presence", "released": True}
 
         raise AssertionError(f"Unexpected tool call: {tool} {args}")
@@ -212,6 +225,27 @@ def test_run_record_demo_falls_back_honestly_when_age_unavailable():
     text = record_demo.format_report(summary)
     assert "status flipped; no AGE graph edge" in text
     assert "[SKIP] initial_claim_links_replacement" in text
+
+
+def test_run_record_demo_succeeds_on_healthy_server_without_lease_plane():
+    server = _FakeRecordServer(age_enabled=True, lease_plane_available=False)
+    summary = record_demo.run_record_demo(server, run_id="nolease1")
+
+    assert record_demo._all_required_checks_passed(summary) is True
+    assert summary["checks"]["agent_a_released"] is True
+    assert summary["agent_a"]["presence"] == "exited (lease_plane_unavailable)"
+    assert "exited (lease_plane_unavailable)" in record_demo.format_report(summary)
+
+
+def test_non_age_supersede_error_is_not_mislabelled_as_missing_age():
+    server = _FakeRecordServer(age_enabled=True, supersede_error="resolution notes refused by policy")
+    summary = record_demo.run_record_demo(server, run_id="errsup01")
+
+    assert summary["agent_b"]["supersede_mode"] == "supersede_error"
+    assert summary["agent_b"]["supersede_ok"] is False
+    assert summary["checks"]["supersede_succeeded"] is False
+    assert record_demo._all_required_checks_passed(summary) is False
+    assert not any(tool == "update_finding" for tool, _ in server.calls)
 
 
 def test_demo_fails_nonzero_when_sync_state_errors_and_skips_unbound_outcome(monkeypatch, capsys):
