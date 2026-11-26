@@ -77,7 +77,10 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
 
     demo = (tmp_path / "demo.html").read_text(encoding="utf-8")
     landing = (tmp_path / "index.html").read_text(encoding="utf-8")
-    demo_text = " ".join(demo.split())
+    # Strip the embedded interactive widget (and its JSON payload) before
+    # verifying that demo.md itself renders every oracle fact and link.
+    demo_static = re.sub(r'<section class="demo-stage".*?</script>', "", demo, flags=re.S)
+    demo_text = " ".join(demo_static.split())
     fixture = json.loads(
         (PROJECT_ROOT / "tests" / "accountability_journey" / "incident-v0.json").read_text(
             encoding="utf-8"
@@ -177,20 +180,50 @@ def test_demo_link_names_must_match_the_fixture_edges():
 
 
 def test_demo_interactive_escapes_script_close_and_requires_placeholder():
+    import json
     import pytest
 
-    from scripts.dev.build_public_site import render_demo_interactive
+    from scripts.dev.build_public_site import (
+        JOURNEY_FIXTURE,
+        SITE,
+        build_demo_interactive_payload,
+        render_demo_interactive,
+        render_demo_md,
+    )
 
     rendered = render_demo_interactive(
         "<script>const X = __DEMO_DATA_JSON__;</script>",
-        {"note": "</script><script>alert(1)</script>"},
+        {"close": "</script><script>alert(1)</script>", "comment": "<!--<script>x"},
     )
     assert "</script><script>" not in rendered
-    assert "<\\/script>" in rendered
+    assert "<!--<script" not in rendered
+    assert "\\u003c/script\\u003e" in rendered
+    assert "\\u003c!--\\u003cscript" in rendered
     assert "__DEMO_DATA_JSON__" not in rendered
 
     with pytest.raises(ValueError):
         render_demo_interactive("<script>const X = {};</script>", {})
+
+    # Fail-closed validation: renaming a record id, adding an unmapped relation,
+    # or dropping a numbered step section from demo.md must fail the build.
+    base_fixture = json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8"))
+    filled_md = render_demo_md((SITE / "demo.md").read_text(encoding="utf-8"), base_fixture)
+
+    bad_record = json.loads(json.dumps(base_fixture))
+    bad_record["arms"]["unitares"]["records"][0]["record_id"] = "renamed-record"
+    with pytest.raises(ValueError, match="record mismatch"):
+        build_demo_interactive_payload(filled_md, bad_record)
+
+    bad_relation = json.loads(json.dumps(base_fixture))
+    bad_relation["oracle"]["edges"].append(
+        {"source": "a", "relation": "extra_unmapped", "target": "b"}
+    )
+    with pytest.raises(ValueError, match="never shown"):
+        build_demo_interactive_payload(filled_md, bad_relation)
+
+    bad_md = filled_md.replace("## 3. A reviewer challenges it", "### Unnumbered")
+    with pytest.raises(ValueError, match="missing section"):
+        build_demo_interactive_payload(bad_md, base_fixture)
 
 
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):

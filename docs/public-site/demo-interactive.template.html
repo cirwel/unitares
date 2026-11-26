@@ -1,11 +1,11 @@
 <!-- Interactive incident walkthrough widget embedded into demo.html by
-     scripts/dev/build_public_site.py from tests/accountability_journey/incident-v0.json.
+     scripts/dev/build_public_site.py from docs/public-site/demo.md and
+     tests/accountability_journey/incident-v0.json.
      Uses the CIRWEL house register tokens from PAGE_TEMPLATE and degrades
      cleanly to the static narrative below when JavaScript is disabled. -->
-<section class="demo-stage" aria-label="Interactive incident walkthrough">
+<section class="demo-stage" id="demo-stage" aria-label="Interactive incident walkthrough">
   <div class="demo-bar">
     <div class="demo-bar-left">
-      <span class="demo-kicker">Interactive walkthrough · no install required</span>
       <span class="demo-counter" id="demo-counter">Step 1 of 5</span>
     </div>
     <div class="demo-controls">
@@ -20,7 +20,7 @@
   <div class="demo-grid">
     <div class="demo-panel">
       <div class="demo-panel-head">
-        <span class="demo-panel-label">What happened in this step</span>
+        <span class="demo-panel-label">Step</span>
         <span class="demo-tag" id="demo-step-tag"></span>
       </div>
       <h3 class="demo-step-title" id="demo-step-title"></h3>
@@ -31,7 +31,7 @@
 
     <div class="demo-panel">
       <div class="demo-panel-head">
-        <span class="demo-panel-label">State of the shared record</span>
+        <span class="demo-panel-label">Records</span>
         <div class="demo-arm-switch" role="group" aria-label="Record representation">
           <button type="button" class="demo-arm-btn active" data-arm="unitares" aria-pressed="true">UNITARES record</button>
           <button type="button" class="demo-arm-btn" data-arm="structured_handoff" aria-pressed="false">Git + handoff</button>
@@ -43,14 +43,14 @@
 
   <div class="demo-recon" id="demo-recon" hidden>
     <div class="demo-panel-head">
-      <span class="demo-panel-label">Successor recovery — 8 questions answered from the record alone</span>
+      <span class="demo-panel-label">Reconstruction</span>
       <span class="demo-tag" id="demo-recon-count"></span>
     </div>
     <div class="demo-recon-grid" id="demo-recon-grid"></div>
   </div>
 
   <noscript>
-    <p class="demo-noscript">JavaScript is disabled — read the complete fixture-backed incident walkthrough below.</p>
+    <p class="demo-noscript">JavaScript is disabled; the complete walkthrough follows below.</p>
   </noscript>
 </section>
 
@@ -58,8 +58,7 @@
   .demo-stage{margin:24px 0 38px;border-top:2px solid rgb(var(--ink));border-bottom:1px solid rgb(var(--line));padding:18px 0 22px}
   .demo-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
   .demo-bar-left{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
-  .demo-kicker,.demo-panel-label,.demo-counter,.demo-tag{font:500 11.5px/1.3 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}
-  .demo-kicker{color:rgb(var(--acc))}
+  .demo-panel-label,.demo-counter,.demo-tag{font:500 11.5px/1.3 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}
   .demo-counter,.demo-panel-label{color:rgb(var(--dim))}
   .demo-controls{display:flex;gap:8px;flex-wrap:wrap}
   .demo-btn{appearance:none;background:transparent;color:rgb(var(--ink));border:1px solid rgb(var(--line));padding:7px 12px;font:500 12px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
@@ -88,13 +87,13 @@
   .demo-records{display:flex;flex-direction:column;gap:8px}
   .demo-rec{border:1px solid rgb(var(--line));padding:9px 11px;font-size:14px}
   .demo-rec.is-new{border-color:rgb(var(--acc));border-left-width:3px}
-  .demo-rec.is-superseded{border-style:dashed;opacity:.75}
+  .demo-rec.is-superseded{border-style:dashed;opacity:.82}
   .demo-rec-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:4px}
   .demo-rec-id{font:600 12.5px/1.3 ui-monospace,"JetBrains Mono",Menlo,monospace;color:rgb(var(--ink))}
   .demo-rec-status{font:500 10.5px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:rgb(var(--dim))}
-  .demo-rec-status.superseded{color:rgb(var(--acc))}
   .demo-rec-body{color:rgb(var(--dim));font-size:13.5px;line-height:1.45}
   .demo-rec-edges{margin-top:5px;font:400 11.5px/1.4 ui-monospace,"JetBrains Mono",Menlo,monospace;color:rgb(var(--acc))}
+  .demo-rec-sup{margin-top:4px;font:400 11px/1.4 ui-monospace,"JetBrains Mono",Menlo,monospace;color:rgb(var(--dim))}
   .demo-recon{margin-top:18px;border-top:1px solid rgb(var(--line));padding-top:14px}
   .demo-recon-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .demo-q{border-top:1px solid rgb(var(--line));padding-top:7px;font-size:13.5px}
@@ -110,9 +109,10 @@
 
 <script>
 (function () {
-  const FIXTURE = __DEMO_DATA_JSON__;
-  const facts = FIXTURE.oracle.facts;
-  const edges = FIXTURE.oracle.edges || [];
+  const DATA = __DEMO_DATA_JSON__;
+  const STEPS = DATA.steps;
+  const EDGES = DATA.oracle_edges;
+  const QUESTIONS = DATA.questions;
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -121,76 +121,14 @@
   }
 
   function findEdge(rel) {
-    return edges.find(function (e) { return e.relation === rel; });
+    return EDGES.find(function (e) { return e.relation === rel; });
   }
-
-  const STEPS = [
-    {
-      short: "Claim",
-      tag: "Step 1 · Write",
-      title: "A writer process records a claim",
-      summary: "Process " + facts.writer_process_id + " (under " + facts.writer_principal_id + ") records that the service reload succeeded, bound to its own identity.",
-      quote: facts.original_claim,
-      relations: ["authored"],
-      visibleUnitares: ["identity-writer", "finding-original"],
-      visibleHandoff: ["git-log-entry"],
-      superseded: false,
-      showRecon: false
-    },
-    {
-      short: "Evidence",
-      tag: "Step 2 · Outcome",
-      title: "Deterministic evidence disagrees",
-      summary: "A smoke test runs afterwards and records a failing result (" + facts.outcome + "). Both the claim and the contradicting test stay linked side by side.",
-      quote: facts.deterministic_evidence,
-      relations: ["contradicts", "grades"],
-      visibleUnitares: ["identity-writer", "finding-original", "outcome-evidence"],
-      visibleHandoff: ["git-log-entry", "test-output"],
-      superseded: false,
-      showRecon: false
-    },
-    {
-      short: "Challenge",
-      tag: "Step 3 · Review",
-      title: "An independent reviewer challenges it",
-      summary: "Process " + facts.reviewer_process_id + " attaches a structured objection directly to the claim so later sessions see the open challenge.",
-      quote: facts.challenge,
-      relations: ["challenged"],
-      visibleUnitares: ["identity-writer", "finding-original", "outcome-evidence", "review-challenge"],
-      visibleHandoff: ["git-log-entry", "test-output", "review-note"],
-      superseded: false,
-      showRecon: false
-    },
-    {
-      short: "Supersede",
-      tag: "Step 4 · Correction",
-      title: "A correction replaces the stale claim",
-      summary: "The original finding is never silently deleted or overwritten: it stays in the record marked superseded and links forward to the correction.",
-      quote: facts.correction,
-      relations: ["supersedes"],
-      visibleUnitares: ["identity-writer", "finding-original", "outcome-evidence", "review-challenge", "finding-correction"],
-      visibleHandoff: ["git-log-entry", "test-output", "review-note", "structured-handoff"],
-      superseded: true,
-      showRecon: false
-    },
-    {
-      short: "Reconstruct",
-      tag: "Step 5 · Handoff",
-      title: "A fresh successor reconstructs the full chain",
-      summary: "A brand-new process starts with an empty context window and recovers every fact—who claimed, what contradicted, who challenged, and what replaced it—from the record alone.",
-      quote: FIXTURE.incident.summary,
-      relations: ["authored", "contradicts", "grades", "challenged", "supersedes"],
-      visibleUnitares: ["identity-writer", "finding-original", "outcome-evidence", "review-challenge", "finding-correction"],
-      visibleHandoff: ["git-log-entry", "test-output", "review-note", "structured-handoff"],
-      superseded: true,
-      showRecon: true
-    }
-  ];
 
   let stepIdx = 0;
   let armName = "unitares";
   let timer = null;
 
+  const elStage = document.getElementById("demo-stage");
   const elSteps = document.getElementById("demo-steps");
   const elCounter = document.getElementById("demo-counter");
   const elTag = document.getElementById("demo-step-tag");
@@ -214,76 +152,101 @@
     btnPlay.textContent = "▶ Play";
   }
 
+  // Create step buttons once so activating a step never destroys keyboard focus.
+  const stepButtons = STEPS.map(function (item, idx) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "demo-step-btn";
+    btn.dataset.step = String(idx);
+    btn.innerHTML = '<span class="demo-step-n">0' + item.number + "</span>"
+      + "<span>" + esc(item.short_label) + "</span>";
+    btn.addEventListener("click", function () {
+      stopPlay();
+      stepIdx = idx;
+      render();
+    });
+    li.appendChild(btn);
+    elSteps.appendChild(li);
+    return btn;
+  });
+
   function render() {
     const s = STEPS[stepIdx];
-    elCounter.textContent = "Step " + (stepIdx + 1) + " of " + STEPS.length;
-    elTag.textContent = s.tag;
+    elCounter.textContent = "Step " + s.number + " of " + STEPS.length;
+    elTag.textContent = "0" + s.number + " · " + s.short_label;
     elTitle.textContent = s.title;
     elSummary.textContent = s.summary;
     elQuote.textContent = "“" + s.quote + "”";
 
     const edgeLines = s.relations.map(function (rel) {
       const e = findEdge(rel);
-      if (!e) return "";
       return esc(e.source) + " —<strong>" + esc(e.relation) + "</strong>→ " + esc(e.target);
-    }).filter(Boolean);
+    });
     elEdge.innerHTML = edgeLines.join("<br>");
 
-    elSteps.innerHTML = STEPS.map(function (item, idx) {
-      const cls = idx === stepIdx ? "active" : (idx < stepIdx ? "done" : "");
-      const currentAttr = idx === stepIdx ? ' aria-current="step"' : "";
-      return '<li><button type="button" class="demo-step-btn ' + cls + '" data-step="' + idx + '"' + currentAttr + ">"
-        + '<span class="demo-step-n">0' + (idx + 1) + "</span>"
-        + "<span>" + esc(item.short) + "</span></button></li>";
-    }).join("");
+    stepButtons.forEach(function (btn, idx) {
+      const isActive = idx === stepIdx;
+      btn.classList.toggle("active", isActive);
+      btn.classList.toggle("done", idx < stepIdx);
+      if (isActive) {
+        btn.setAttribute("aria-current", "step");
+      } else {
+        btn.removeAttribute("aria-current");
+      }
+    });
 
-    elSteps.querySelectorAll("[data-step]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        stopPlay();
-        stepIdx = Number(btn.dataset.step);
-        render();
+    const arm = DATA.arms[armName];
+    const visibleIds = s.visible_records[armName];
+    const prevIds = stepIdx > 0 ? STEPS[stepIdx - 1].visible_records[armName] : [];
+    const shown = arm.records.filter(function (r) { return visibleIds.indexOf(r.record_id) !== -1; });
+
+    // Derive supersession strictly from visible `supersedes` edges in this arm.
+    const supersededTargets = {};
+    shown.forEach(function (r) {
+      (r.edges || []).forEach(function (e) {
+        if (e.relation === "supersedes") {
+          supersededTargets[e.target] = e.source;
+        }
       });
     });
 
-    const arm = FIXTURE.arms[armName];
-    const visibleIds = armName === "unitares" ? s.visibleUnitares : s.visibleHandoff;
-    const prevIds = stepIdx > 0
-      ? (armName === "unitares" ? STEPS[stepIdx - 1].visibleUnitares : STEPS[stepIdx - 1].visibleHandoff)
-      : [];
-    const shown = (arm.records || []).filter(function (r) { return visibleIds.indexOf(r.record_id) !== -1; });
-
     elRecords.innerHTML = shown.map(function (r) {
       const isNew = prevIds.indexOf(r.record_id) === -1;
-      const isSup = s.superseded && (r.record_id === "finding-original" || r.record_id === "git-log-entry");
-      const statusText = isSup ? "superseded" : r.kind;
+      const authoredSup = (r.edges || []).find(function (e) {
+        return e.relation === "authored" && Object.prototype.hasOwnProperty.call(supersededTargets, e.target);
+      });
       const factLines = Object.keys(r.facts || {}).map(function (k) {
         return esc(k.replace(/_/g, " ")) + ": " + esc(r.facts[k]);
       }).join(" · ");
       const recEdges = (r.edges || []).map(function (e) {
         return esc(e.relation) + " → " + esc(e.target);
       }).join(" · ");
-      return '<div class="demo-rec' + (isNew ? " is-new" : "") + (isSup ? " is-superseded" : "") + '">'
+      const supLine = authoredSup
+        ? '<div class="demo-rec-sup">target superseded by ' + esc(supersededTargets[authoredSup.target]) + "</div>"
+        : "";
+      return '<div class="demo-rec' + (isNew ? " is-new" : "") + (authoredSup ? " is-superseded" : "") + '">'
         + '<div class="demo-rec-top">'
         + '<span class="demo-rec-id">' + esc(r.record_id) + "</span>"
-        + '<span class="demo-rec-status' + (isSup ? " superseded" : "") + '">' + esc(statusText) + "</span>"
+        + '<span class="demo-rec-status">' + esc(r.kind) + "</span>"
         + "</div>"
         + '<div class="demo-rec-body">' + factLines + "</div>"
         + (recEdges ? '<div class="demo-rec-edges">' + recEdges + "</div>" : "")
+        + supLine
         + "</div>";
     }).join("");
 
-    elRecon.hidden = !s.showRecon;
-    if (s.showRecon) {
+    elRecon.hidden = !s.show_reconstruction;
+    if (s.show_reconstruction) {
       const holders = {};
-      (arm.records || []).forEach(function (r) {
+      arm.records.forEach(function (r) {
         Object.keys(r.facts || {}).forEach(function (k) {
           if (!holders[k]) holders[k] = r;
         });
       });
-      const qs = FIXTURE.questions || [];
-      const answered = qs.filter(function (q) { return Boolean(holders[q.fact_key]); }).length;
-      elReconCount.textContent = answered + "/" + qs.length + " answered (" + arm.representation.replace(/_/g, " ") + ")";
-      elReconGrid.innerHTML = qs.map(function (q) {
+      const answered = QUESTIONS.filter(function (q) { return Boolean(holders[q.fact_key]); }).length;
+      elReconCount.textContent = answered + "/" + QUESTIONS.length + " (" + arm.representation.replace(/_/g, " ") + ")";
+      elReconGrid.innerHTML = QUESTIONS.map(function (q) {
         const rec = holders[q.fact_key];
         const label = q.question_id.replace(/_/g, " ") + "?";
         const ans = rec ? rec.facts[q.fact_key] : "—";
@@ -326,11 +289,11 @@
     }, 1800);
   });
 
-  document.addEventListener("keydown", function (e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+  elStage.addEventListener("keydown", function (e) {
+    if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT" || e.target.isContentEditable)) return;
-    if (e.key === "ArrowRight" && stepIdx < STEPS.length - 1) { stopPlay(); stepIdx++; render(); }
-    else if (e.key === "ArrowLeft" && stepIdx > 0) { stopPlay(); stepIdx--; render(); }
+    if (e.key === "ArrowRight" && stepIdx < STEPS.length - 1) { e.preventDefault(); stopPlay(); stepIdx++; render(); }
+    else if (e.key === "ArrowLeft" && stepIdx > 0) { e.preventDefault(); stopPlay(); stepIdx--; render(); }
   });
 
   render();

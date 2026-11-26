@@ -239,16 +239,231 @@ def render_demo_md(demo_md: str, fixture: dict) -> str:
     return text
 
 
-def render_demo_interactive(template: str, fixture: dict) -> str:
-    """Embed ``fixture`` into the interactive demo template safely.
+_DEMO_STEP_PROGRESSION: tuple[dict, ...] = (
+    {
+        "number": 1,
+        "short_label": "Claim",
+        "relations": ("authored",),
+        "visible_records": {
+            "unitares": ("identity-writer", "finding-original"),
+            "structured_handoff": ("git-log-entry",),
+        },
+        "show_reconstruction": False,
+    },
+    {
+        "number": 2,
+        "short_label": "Evidence",
+        "relations": ("contradicts", "grades"),
+        "visible_records": {
+            "unitares": ("identity-writer", "finding-original", "outcome-evidence"),
+            "structured_handoff": ("git-log-entry", "test-output"),
+        },
+        "show_reconstruction": False,
+    },
+    {
+        "number": 3,
+        "short_label": "Challenge",
+        "relations": ("challenged",),
+        "visible_records": {
+            "unitares": ("identity-writer", "finding-original", "outcome-evidence", "review-challenge"),
+            "structured_handoff": ("git-log-entry", "test-output", "review-note"),
+        },
+        "show_reconstruction": False,
+    },
+    {
+        "number": 4,
+        "short_label": "Supersede",
+        "relations": ("supersedes",),
+        "visible_records": {
+            "unitares": (
+                "identity-writer",
+                "finding-original",
+                "outcome-evidence",
+                "review-challenge",
+                "finding-correction",
+            ),
+            "structured_handoff": (
+                "git-log-entry",
+                "test-output",
+                "review-note",
+                "structured-handoff",
+            ),
+        },
+        "show_reconstruction": False,
+    },
+    {
+        "number": 5,
+        "short_label": "Reconstruct",
+        "relations": ("authored", "contradicts", "grades", "challenged", "supersedes"),
+        "visible_records": {
+            "unitares": (
+                "identity-writer",
+                "finding-original",
+                "outcome-evidence",
+                "review-challenge",
+                "finding-correction",
+            ),
+            "structured_handoff": (
+                "git-log-entry",
+                "test-output",
+                "review-note",
+                "structured-handoff",
+            ),
+        },
+        "show_reconstruction": True,
+    },
+)
 
-    Escapes ``</`` so fixture strings cannot terminate the inline ``<script>``
-    block, and fails the build if the data placeholder is missing.
+_NUMBERED_SECTION_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _strip_inline_code(text: str) -> str:
+    return re.sub(r"`([^`]+)`", r"\1", text)
+
+
+def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str]]:
+    """Extract numbered step sections (## 1. .. ## 5.) from filled demo.md."""
+    matches = list(_NUMBERED_SECTION_RE.finditer(demo_md))
+    sections: dict[int, tuple[str, str, str]] = {}
+    for idx, match in enumerate(matches):
+        num = int(match.group(1))
+        title = match.group(2).strip()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(demo_md)
+        body = demo_md[start:end]
+        # Stop at the next unnumbered heading (e.g. "## Working with Git...").
+        next_h2 = re.search(r"^##\s+", body, re.MULTILINE)
+        if next_h2 is not None:
+            body = body[: next_h2.start()]
+        prose_lines: list[str] = []
+        quote_lines: list[str] = []
+        for raw in body.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("|"):
+                continue
+            if line.startswith(">"):
+                quote_lines.append(line.lstrip(">").strip())
+            else:
+                prose_lines.append(line)
+        summary = _strip_inline_code(" ".join(prose_lines)).strip()
+        quote = _strip_inline_code(" ".join(quote_lines)).strip()
+        sections[num] = (title, summary, quote)
+    return sections
+
+
+def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
+    """Build and fail-closed-validate the interactive demo widget payload.
+
+    Step titles, prose, and quotes are parsed directly from the filled
+    ``demo.md`` so the widget holds no duplicate copy. Every referenced arm,
+    record id, edge relation, and question fact key is validated against
+    ``fixture`` so renames or additions fail the build.
+    """
+    sections = _parse_demo_sections(demo_md)
+    facts = fixture["oracle"]["facts"]
+    oracle_edges = fixture["oracle"].get("edges", [])
+    oracle_relations = {e["relation"] for e in oracle_edges}
+    arms = fixture.get("arms", {})
+
+    for arm_name in ("unitares", "structured_handoff"):
+        if arm_name not in arms:
+            raise ValueError(f"demo-interactive: missing arm {arm_name!r} in fixture")
+        records = arms[arm_name].get("records", [])
+        record_ids = {r["record_id"] for r in records}
+        holders: dict[str, dict] = {}
+        for rec in records:
+            for key in rec.get("facts", {}):
+                holders.setdefault(key, rec)
+        for question in fixture.get("questions", []):
+            key = question["fact_key"]
+            if key not in holders:
+                raise ValueError(
+                    f"demo-interactive: arm {arm_name!r} has no record answering {question['question_id']!r}"
+                )
+            if str(holders[key]["facts"][key]) != str(facts[key]):
+                raise ValueError(
+                    f"demo-interactive: arm {arm_name!r} disagrees with oracle on {key!r}"
+                )
+        final_visible = set(_DEMO_STEP_PROGRESSION[-1]["visible_records"][arm_name])
+        if final_visible != record_ids:
+            missing = sorted(record_ids - final_visible)
+            extra = sorted(final_visible - record_ids)
+            raise ValueError(
+                f"demo-interactive: arm {arm_name!r} record mismatch (missing={missing}, unknown={extra})"
+            )
+
+    covered_relations: set[str] = set()
+    steps: list[dict] = []
+    for spec in _DEMO_STEP_PROGRESSION:
+        num = spec["number"]
+        if num not in sections:
+            raise ValueError(f"demo-interactive: docs/public-site/demo.md is missing section '## {num}.'")
+        title, summary, quote = sections[num]
+        if not title or not summary:
+            raise ValueError(f"demo-interactive: section {num} in demo.md has empty title or summary")
+        if not quote:
+            if spec["show_reconstruction"]:
+                quote = str(fixture.get("incident", {}).get("summary", "")).strip()
+            if not quote:
+                raise ValueError(f"demo-interactive: section {num} in demo.md is missing a blockquote")
+
+        for rel in spec["relations"]:
+            if rel not in oracle_relations:
+                raise ValueError(f"demo-interactive: step {num} references unknown relation {rel!r}")
+            covered_relations.add(rel)
+
+        for arm_name, ids in spec["visible_records"].items():
+            arm_ids = {r["record_id"] for r in arms[arm_name]["records"]}
+            unknown_ids = [rid for rid in ids if rid not in arm_ids]
+            if unknown_ids:
+                raise ValueError(
+                    f"demo-interactive: step {num} references unknown {arm_name} record(s) {unknown_ids}"
+                )
+
+        steps.append(
+            {
+                "number": num,
+                "short_label": spec["short_label"],
+                "title": title,
+                "summary": summary,
+                "quote": quote,
+                "relations": list(spec["relations"]),
+                "visible_records": {k: list(v) for k, v in spec["visible_records"].items()},
+                "show_reconstruction": spec["show_reconstruction"],
+            }
+        )
+
+    uncovered = sorted(oracle_relations - covered_relations)
+    if uncovered:
+        raise ValueError(f"demo-interactive: fixture relation(s) {uncovered} are never shown in any step")
+
+    return {
+        "incident_id": fixture["incident"]["incident_id"],
+        "arms": arms,
+        "oracle_edges": oracle_edges,
+        "questions": fixture["questions"],
+        "steps": steps,
+    }
+
+
+def render_demo_interactive(template: str, payload: dict) -> str:
+    """Embed ``payload`` into the interactive demo template for an inline script.
+
+    Escapes ``<``, ``>``, ``&``, and Unicode line separators so no payload string
+    can terminate ``<script>`` or enter HTML script-data-double-escaped state
+    (e.g. ``<!--<script``), and fails the build if the placeholder is missing.
     """
     placeholder = "__DEMO_DATA_JSON__"
     if placeholder not in template:
         raise ValueError("demo: docs/public-site/demo-interactive.template.html is missing __DEMO_DATA_JSON__")
-    demo_data_json = json.dumps(fixture, ensure_ascii=False).replace("</", "<\\/")
+    demo_data_json = (
+        json.dumps(payload, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
     return template.replace(placeholder, demo_data_json)
 
 
@@ -288,7 +503,7 @@ def build(out_dir: Path, cname: str | None) -> None:
     demo_body = render(demo_md, source_dir=SITE)
     demo_interactive = render_demo_interactive(
         (SITE / "demo-interactive.template.html").read_text(encoding="utf-8"),
-        journey_fixture,
+        build_demo_interactive_payload(demo_md, journey_fixture),
     )
     # Place the interactive step-through explorer right below the opening heading
     # and intro paragraph, keeping the full rendered markdown narrative below it
