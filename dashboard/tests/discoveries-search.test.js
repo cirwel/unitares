@@ -477,8 +477,26 @@ describe("Discoveries server-side search", () => {
     expect(chipCall.body.arguments.include_cold).toBe(true);
     expect(chipCall.body.arguments.authority_mode).toBe("all");
 
-    // Text search under the same type chip keeps default active-first ranking
+    // Time-window filtering under "All" uses the same widened corpus scope so
+    // "All + 30d" stays a superset of "<Type> + 30d".
+    dom.window.document.querySelector('.dsc-type[data-type="all"]').click();
+    await flushMicrotasks();
+    const timeSelect = dom.window.document.getElementById("dsc-time");
+    timeSelect.value = "30d";
+    timeSelect.dispatchEvent(new dom.window.Event("change"));
+    await flushMicrotasks();
+    const timeOnlyCall = calls.find(
+      (c) => !c.body?.arguments?.discovery_type && !c.body?.arguments?.query && c.body?.arguments?.created_after,
+    );
+    expect(timeOnlyCall).toBeTruthy();
+    expect(timeOnlyCall.body.arguments.include_archived).toBe(true);
+    expect(timeOnlyCall.body.arguments.include_cold).toBe(true);
+    expect(timeOnlyCall.body.arguments.authority_mode).toBe("all");
+
+    // Text search under a type chip keeps default active-first ranking
     // (server handles damped archived/cold widening when active hits < 3).
+    dom.window.document.querySelector('.dsc-type[data-type="rule"]').click();
+    await flushMicrotasks();
     const input = dom.window.document.getElementById("dsc-search");
     input.value = "canonical";
     input.dispatchEvent(new dom.window.Event("input"));

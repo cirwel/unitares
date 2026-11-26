@@ -445,21 +445,22 @@
       const o = opts && typeof opts === "object" ? opts : {};
       const q = typeof query === "string" ? query.trim() : "";
       const searchArgs = { action: "search", include_details: true, limit: 30 };
+      const hasTypeFilter = !!(o.discoveryType && o.discoveryType !== "all");
+      const hasTimeFilter = !!o.createdAfter;
       if (q) searchArgs.query = q;
-      if (o.discoveryType && o.discoveryType !== "all") {
-        searchArgs.discovery_type = o.discoveryType;
-        if (!q) {
-          // Type-chip counts come from the canonical current-epoch corpus
-          // (including archived, cold, and imported rows), while queryless
-          // search omits archived/cold and unpromoted imports by default with
-          // no widening pass. Align the browse scope so clicking an
-          // archived-only or cold-only chip never returns "No matches".
-          searchArgs.include_archived = true;
-          searchArgs.include_cold = true;
-          searchArgs.authority_mode = "all";
-        }
+      if (hasTypeFilter) searchArgs.discovery_type = o.discoveryType;
+      if (hasTimeFilter) searchArgs.created_after = o.createdAfter;
+      if (!q && (hasTypeFilter || hasTimeFilter)) {
+        // Chip counts and the lifecycle bar come from the canonical current-epoch
+        // corpus (including archived, cold, and imported rows), while queryless
+        // search omits archived/cold and unpromoted imports by default with no
+        // widening pass. Align every queryless filtered listing so clicking an
+        // archived-only chip never returns "No matches" and "All + 30d" stays a
+        // superset of "<Type> + 30d".
+        searchArgs.include_archived = true;
+        searchArgs.include_cold = true;
+        searchArgs.authority_mode = "all";
       }
-      if (o.createdAfter) searchArgs.created_after = o.createdAfter;
       return withFallback(async () => {
         // Entry list + KG aggregates (for the lifecycle bar + type legend) in parallel.
         const [r, statsR] = await Promise.all([
