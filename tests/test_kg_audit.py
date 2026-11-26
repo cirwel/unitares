@@ -153,7 +153,7 @@ class TestScoreDiscovery:
         assert result["bucket"] == "healthy"
 
     def test_long_summary_is_bounded_and_marked_truncated(self):
-        """Historical multi-KB summaries are bounded at a word boundary."""
+        """Historical multi-KB summaries are bounded at a whitespace boundary."""
         from src.knowledge_graph_lifecycle import (
             AUDIT_SUMMARY_MAX_CHARS,
             KnowledgeGraphLifecycle,
@@ -165,6 +165,41 @@ class TestScoreDiscovery:
         assert len(result["summary"]) <= AUDIT_SUMMARY_MAX_CHARS
         assert result["summary"].endswith("…")
         assert result["summary_truncated"] is True
+
+    def test_long_summary_hard_cuts_when_no_late_whitespace_exists(self):
+        """Long unbroken tokens (URLs/hashes) fall back to a hard cut at limit - 1 + ellipsis."""
+        from src.knowledge_graph_lifecycle import (
+            AUDIT_SUMMARY_MAX_CHARS,
+            KnowledgeGraphLifecycle,
+            _score_discovery,
+        )
+        # Early space at index 10 (< limit // 2), followed by a 300-char unbroken token.
+        unbroken = "prefixword " + ("a" * 300)
+        d = _make_discovery(age_days=45, summary=unbroken)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert len(result["summary"]) == AUDIT_SUMMARY_MAX_CHARS
+        assert result["summary"] == unbroken[: AUDIT_SUMMARY_MAX_CHARS - 1] + "…"
+        assert result["summary_truncated"] is True
+
+    def test_long_summary_cuts_at_newline_or_unicode_whitespace_boundary(self):
+        """Newlines and Unicode whitespace in the second half act as cut boundaries."""
+        from src.knowledge_graph_lifecycle import (
+            AUDIT_SUMMARY_MAX_CHARS,
+            KnowledgeGraphLifecycle,
+            _score_discovery,
+        )
+        summary = ("a" * 180) + "\n" + ("b" * 100)
+        d = _make_discovery(age_days=45, summary=summary)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert result["summary"] == ("a" * 180) + "…"
+        assert result["summary_truncated"] is True
+
+        nbsp_summary = ("c" * 190) + "\u00a0" + ("d" * 100)
+        d2 = _make_discovery(age_days=45, summary=nbsp_summary)
+        result2 = _score_discovery(d2, KnowledgeGraphLifecycle())
+        assert len(result2["summary"]) <= AUDIT_SUMMARY_MAX_CHARS
+        assert result2["summary"] == ("c" * 190) + "…"
+        assert result2["summary_truncated"] is True
 
     def test_short_summary_is_verbatim_including_whitespace(self):
         """Short summaries stay byte-for-byte verbatim (including newlines/double spaces) without a marker."""
@@ -293,6 +328,27 @@ class TestRunKgAudit:
         prompt = mock_llm.call_args.kwargs["prompt"]
         assert long_summary not in prompt
         assert result["top_stale"][0]["summary"] in prompt
+
+    @pytest.mark.asyncio
+    async def test_audit_use_model_caps_prompt_entries_when_top_n_exceeds_serializer_cap(self):
+        """Optional local-LLM prompt inspects at most AUDIT_MODEL_MAX_ENTRIES rows."""
+        from src.knowledge_graph_lifecycle import AUDIT_MODEL_MAX_ENTRIES, run_kg_audit
+
+        discoveries = [
+            _make_discovery(id=f"entry-{i:03d}-id", age_days=40 + i, summary=f"Item {i}")
+            for i in range(AUDIT_MODEL_MAX_ENTRIES + 20)
+        ]
+        graph = _make_mock_graph({"open": discoveries})
+
+        with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph), \
+             patch("src.mcp_handlers.support.llm_delegation.call_local_llm",
+                   new_callable=AsyncMock, return_value="OK") as mock_llm:
+            result = await run_kg_audit(scope="open", top_n=AUDIT_MODEL_MAX_ENTRIES + 20, use_model=True)
+
+        assert len(result["top_stale"]) == AUDIT_MODEL_MAX_ENTRIES + 20
+        prompt = mock_llm.call_args.kwargs["prompt"]
+        bullet_lines = [line for line in prompt.splitlines() if line.startswith("- [")]
+        assert len(bullet_lines) == AUDIT_MODEL_MAX_ENTRIES
 
     @pytest.mark.asyncio
     async def test_audit_scope_all(self):

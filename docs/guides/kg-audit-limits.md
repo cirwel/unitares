@@ -17,9 +17,12 @@ There are three distinct bounds:
   every possible status, such as cold or superseded.
 - Each `top_stale` entry bounds `summary` to **240 characters**
   (`AUDIT_SUMMARY_MAX_CHARS`). Short summaries stay verbatim; entries over 240
-  characters are cut at a whitespace boundary with `…` and carry
-  `summary_truncated: true` (open the row with
+  characters are cut at the last whitespace boundary in the second half of the
+  budget (or hard-cut at 239 characters if none exists), end with `…`, and
+  carry `summary_truncated: true` (open the row with
   `knowledge(action="details", discovery_id=...)` to read the full summary).
+  When `use_model=true`, the optional local-LLM prompt inspects at most the
+  first 100 `top_stale` entries (`AUDIT_MODEL_MAX_ENTRIES`).
 - The shared MCP response serializer keeps the first **100 list entries** and
   appends a string such as `"... (6 more items)"` when more were selected.
   This also applies to `audit.top_stale`. `top_n=120` cannot deliver 120 row

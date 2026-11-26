@@ -714,26 +714,32 @@ AUDIT_HEALTHY_DAYS = 7
 AUDIT_AGING_DAYS = 14
 AUDIT_STALE_DAYS = 30
 AUDIT_SUMMARY_MAX_CHARS = 240
+# Match the shared MCP serializer's 100-item list cap so the optional local-LLM
+# prompt never exceeds ~100 entries or assesses rows the caller cannot see.
+AUDIT_MODEL_MAX_ENTRIES = 100
 
 
 def _bound_audit_summary(summary: Any, limit: int = AUDIT_SUMMARY_MAX_CHARS) -> tuple[str, bool]:
-    """Bound an oversized audit summary at a whitespace boundary.
+    """Bound an oversized audit summary to at most ``limit`` characters.
 
     Summaries at or under ``limit`` characters are returned verbatim so
     ``summary_truncated`` is set if and only if the stored summary was cut.
-    Historical entries written before write-time summary limits can hold
-    multi-kilobyte summaries; bounding them here keeps ``top_stale`` and the
-    optional local-LLM assessment prompt compact while signaling callers to
-    open ``knowledge(action='details')`` when ``summary_truncated`` is true.
+    Oversized summaries cut at the last whitespace character in the second half
+    of the budget (or hard-cut at ``limit - 1`` characters when none exists)
+    and append ``…``. Bounding keeps ``top_stale`` entries and the optional
+    local-LLM assessment prompt compact while signaling callers to open
+    ``knowledge(action='details')`` when ``summary_truncated`` is true.
     """
     if not isinstance(summary, str):
         return "", False
     if len(summary) <= limit:
         return summary, False
     prefix = summary[: limit - 1]
-    cutoff = max(prefix.rfind(" "), prefix.rfind("\n"), prefix.rfind("\t"))
-    if cutoff >= limit // 2:
-        prefix = prefix[:cutoff]
+    min_cutoff = limit // 2
+    for idx in range(len(prefix) - 1, min_cutoff - 1, -1):
+        if prefix[idx].isspace():
+            prefix = prefix[:idx]
+            break
     return prefix.rstrip() + "…", True
 
 
@@ -862,7 +868,7 @@ async def run_kg_audit(
             from src.mcp_handlers.support.llm_delegation import call_local_llm
 
             prompt_lines = ["Given these knowledge graph entries, which are still relevant and which should be archived?\n"]
-            for entry in top_stale:
+            for entry in top_stale[:AUDIT_MODEL_MAX_ENTRIES]:
                 prompt_lines.append(
                     f"- [{entry['id'][:8]}] {entry['summary']} "
                     f"(age: {entry['age_days']}d, type: {entry['type']}, "

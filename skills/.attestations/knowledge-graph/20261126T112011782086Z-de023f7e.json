@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-11-26T11:17:33Z",
+  "verified_at": "2026-11-26T11:20:11Z",
   "verified_date": "2026-11-26",
-  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (verified knowledge-graph SKILL.md and updated references/search-and-notices.md for audit top_stale summary_truncated bound and non-positive top_n handling)",
+  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (verified knowledge-graph SKILL.md and references/search-and-notices.md after capping audit local-LLM prompt entries at 100 and handling Unicode whitespace/hard-cut fallback)",
   "source_digests": {
     "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
     "unitares/skills/knowledge-graph/references/authority-and-synthesis.md": "0476d1f5cf606699",
@@ -12,7 +12,7 @@
     "unitares/src/db/mixins/knowledge_graph.py": "2679d31a7e247f3b",
     "unitares/src/knowledge_authority.py": "e265e82153d9d911",
     "unitares/src/knowledge_graph.py": "d76c1b4a5da778c2",
-    "unitares/src/knowledge_graph_lifecycle.py": "e5c8d843a522ee0d",
+    "unitares/src/knowledge_graph_lifecycle.py": "863f18d447fdd6c2",
     "unitares/src/knowledge_notices.py": "604b6ec9cced9334",
     "unitares/src/mcp_handlers/consolidated.py": "7fb614d8e4d8bf4f",
     "unitares/src/mcp_handlers/knowledge/handlers.py": "3588df6d73fe9f1d",
