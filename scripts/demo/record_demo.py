@@ -102,10 +102,17 @@ def _rest_url(
 
 
 def _dashboard_url(
+    rest_url: str | None = None,
     environ: Mapping[str, str] | None = None,
     dotenv_path: Path | None = None,
 ) -> str:
-    return f"http://localhost:{_governance_port(environ, dotenv_path)}/dashboard"
+    env = os.environ if environ is None else environ
+    explicit = rest_url or env.get("UNITARES_DEMO_URL")
+    if explicit:
+        parsed = urllib.parse.urlsplit(explicit)
+        if parsed.scheme and parsed.netloc:
+            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/dashboard", "", ""))
+    return f"http://localhost:{_governance_port(env, dotenv_path)}/dashboard"
 
 
 def _health_url(rest_url: str) -> str:
@@ -246,7 +253,19 @@ def _row_id(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _superseded_by_ids(row: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(row, Mapping):
+        return []
+    raw = row.get("superseded_by")
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    if isinstance(raw, list):
+        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    return []
+
+
 CLEAN_NON_LEASE_REASONS = frozenset({"lease_plane_unavailable", "no_live_lease"})
+ACCEPTED_LINEAGE_STATES = frozenset({"declared", "provisional", "confirmed"})
 # Exact substrings from src/mcp_handlers/knowledge/mutation_helpers.py
 # (_handle_supersede_discovery and _record_supersession_edge); pinned by
 # tests/test_record_demo.py so drift is caught immediately.
@@ -497,7 +516,8 @@ def run_record_demo(
             except Exception:
                 pass
 
-    superseded_link = row_a.get("superseded_by") if isinstance(row_a, dict) else None
+    superseded_links = _superseded_by_ids(row_a)
+    superseded_link_display = finding_b if finding_b in superseded_links else (superseded_links[0] if superseded_links else None)
     checks = {
         "agent_a_released": _release_ok(release_a),
         "agent_b_released": _release_ok(release_b),
@@ -506,13 +526,16 @@ def run_record_demo(
         "search_found_initial_claim": row_a is not None,
         "search_found_replacement_claim": row_b is not None,
         "initial_claim_marked_superseded": isinstance(row_a, dict) and row_a.get("status") == "superseded",
-        "initial_claim_links_replacement": superseded_link == finding_b,
+        "initial_claim_links_replacement": finding_b in superseded_links,
         "outcome_bound_to_prediction": (
             outcome_ok
             and bool(prediction_id)
             and outcome_summary.get("prediction_binding") == "registry"
         ),
-        "lineage_points_to_agent_a": c_state.get("predecessor_uuid") == uuid_a,
+        "lineage_points_to_agent_a": (
+            c_state.get("predecessor_uuid") == uuid_a
+            and str(c_state.get("lineage_state") or "") in ACCEPTED_LINEAGE_STATES
+        ),
     }
 
     return {
@@ -547,7 +570,7 @@ def run_record_demo(
             "lineage_state": c_state.get("lineage_state"),
             "search_count": len(rows),
             "initial_status_seen": row_a.get("status") if isinstance(row_a, dict) else None,
-            "superseded_by_seen": superseded_link,
+            "superseded_by_seen": superseded_link_display,
             "replacement_status_seen": row_b.get("status") if isinstance(row_b, dict) else None,
             "released": bool(release_c.get("released", False)),
             "exited_cleanly": checks["agent_c_released"],
@@ -566,6 +589,7 @@ def format_report(summary: Mapping[str, Any]) -> str:
     b = summary["agent_b"]
     c = summary["agent_c"]
     checks = summary["checks"]
+    passed = _all_required_checks_passed(summary)
     age_graph_expected = b["supersede_mode"] != "relational_status_fallback"
     if not b["supersede_ok"]:
         supersede_note = f"{b['supersede_mode']} (failed)"
@@ -596,14 +620,16 @@ def format_report(summary: Mapping[str, Any]) -> str:
         f"     • finding_b status={c.get('replacement_status_seen') or '-'}",
         f"   agent_uuid   = {c['uuid']}",
         f"   lineage      = predecessor={c.get('predecessor_uuid') or '-'}  state={c.get('lineage_state') or '-'}",
-        _banner("Verification"),
+        _banner("Verification — PASSED" if passed else "Verification — FAILED"),
     ]
     for label, ok in checks.items():
         if label == "initial_claim_links_replacement" and not age_graph_expected and not ok:
             mark = "SKIP"
         else:
-            mark = "OK  " if ok else "WARN"
+            mark = "OK  " if ok else "FAIL"
         lines.append(f"  [{mark}] {label}")
+    if not passed:
+        lines.append("\n  One or more required demo checks failed; exiting with status 1.")
     lines.extend(
         [
             "",
@@ -649,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
         summary = run_record_demo(
             _call,
             run_id=run_id,
-            dashboard_url=_dashboard_url(),
+            dashboard_url=_dashboard_url(rest_url),
         )
     except DemoCallError as exc:
         print(f"record_demo error: {exc}", file=sys.stderr)

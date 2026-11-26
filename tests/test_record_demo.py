@@ -35,6 +35,14 @@ def test_governance_port_precedence(tmp_path: Path):
         == "17767"
     )
     assert record_demo._governance_port({}, tmp_path / "missing.env") == "8767"
+    assert (
+        record_demo._dashboard_url(environ={"UNITARES_DEMO_URL": "http://127.0.0.1:18767/v1/tools/call"})
+        == "http://127.0.0.1:18767/dashboard"
+    )
+    assert (
+        record_demo._dashboard_url(environ={"UNITARES_DEMO_PORT": "17767"})
+        == "http://localhost:17767/dashboard"
+    )
 
 
 def test_auth_headers_refuse_non_loopback_http():
@@ -63,12 +71,16 @@ class _FakeRecordServer:
         lease_plane_available: bool = True,
         supersede_error: str | None = None,
         update_supersession_warning: str | None = None,
+        lineage_state: str = "provisional",
+        canonical_search_shape: bool = False,
     ) -> None:
         self.age_enabled = age_enabled
         self.fail_sync_state = fail_sync_state
         self.lease_plane_available = lease_plane_available
         self.supersede_error = supersede_error
         self.update_supersession_warning = update_supersession_warning
+        self.lineage_state = lineage_state
+        self.canonical_search_shape = canonical_search_shape
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.discoveries: dict[str, dict[str, Any]] = {}
         self.session_to_uuid: dict[str, str] = {}
@@ -97,7 +109,7 @@ class _FakeRecordServer:
             if args.get("parent_agent_id"):
                 assert args["parent_agent_id"] in self.released, "predecessor must have released presence"
                 res["state_summary"] = {
-                    "lineage_state": "provisional",
+                    "lineage_state": self.lineage_state,
                     "episode_fork_kind": "identity_lineage",
                     "predecessor_uuid": args["parent_agent_id"],
                 }
@@ -183,6 +195,11 @@ class _FakeRecordServer:
                 for row in self.discoveries.values()
                 if not wanted or wanted.intersection(row["tags"])
             ]
+            if self.canonical_search_shape:
+                for row in matches:
+                    if isinstance(row.get("superseded_by"), str):
+                        row["superseded_by"] = [row["superseded_by"]]
+                return {"success": True, "discoveries": matches}
             return {"success": True, "memory_suggestions": matches}
 
         if tool == "agent" and args.get("action") == "release_presence":
@@ -309,6 +326,22 @@ def test_non_age_supersede_error_is_not_mislabelled_as_missing_age():
     assert summary["checks"]["supersede_succeeded"] is False
     assert record_demo._all_required_checks_passed(summary) is False
     assert not any(tool == "update_finding" for tool, _ in server.calls)
+
+
+def test_rejected_lineage_and_canonical_list_superseded_by_and_fail_banner():
+    rejected_server = _FakeRecordServer(age_enabled=True, lineage_state="rejected_coincidental")
+    rejected_summary = record_demo.run_record_demo(rejected_server, run_id="rejlin01")
+    assert rejected_summary["checks"]["lineage_points_to_agent_a"] is False
+    assert record_demo._all_required_checks_passed(rejected_summary) is False
+    text = record_demo.format_report(rejected_summary)
+    assert "Verification — FAILED" in text
+    assert "[FAIL] lineage_points_to_agent_a" in text
+
+    list_server = _FakeRecordServer(age_enabled=True, canonical_search_shape=True)
+    list_summary = record_demo.run_record_demo(list_server, run_id="listsh01")
+    assert list_summary["checks"]["initial_claim_links_replacement"] is True
+    assert list_summary["agent_c"]["superseded_by_seen"] == list_summary["agent_b"]["finding_id"]
+    assert record_demo._all_required_checks_passed(list_summary) is True
 
 
 def test_demo_fails_nonzero_when_sync_state_errors_and_skips_unbound_outcome(monkeypatch, capsys):
