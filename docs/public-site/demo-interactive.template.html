@@ -33,11 +33,8 @@
 
     <div class="demo-panel">
       <div class="demo-panel-head">
-        <span class="demo-panel-label">Records</span>
-        <div class="demo-arm-switch" role="group" aria-label="Record representation">
-          <button type="button" class="demo-arm-btn active" data-arm="unitares" aria-pressed="true">UNITARES record</button>
-          <button type="button" class="demo-arm-btn" data-arm="structured_handoff" aria-pressed="false">Git + handoff</button>
-        </div>
+        <span class="demo-panel-label">UNITARES records</span>
+        <span class="demo-tag" id="demo-rec-count"></span>
       </div>
       <div id="demo-records" class="demo-records"></div>
     </div>
@@ -45,7 +42,7 @@
 
   <div class="demo-recon" id="demo-recon" hidden>
     <div class="demo-panel-head">
-      <span class="demo-panel-label">Reconstruction</span>
+      <span class="demo-panel-label">Successor reconstruction</span>
       <span class="demo-tag" id="demo-recon-count"></span>
     </div>
     <div class="demo-recon-grid" id="demo-recon-grid"></div>
@@ -82,9 +79,6 @@
   .demo-quote{margin:10px 0 12px;border-left:2px solid rgb(var(--acc));padding:6px 14px;font-style:italic;color:rgb(var(--ink))}
   .demo-edge-line{font:400 12.5px/1.5 ui-monospace,"JetBrains Mono",Menlo,monospace;color:rgb(var(--dim));border-top:1px dashed rgb(var(--line));padding-top:8px}
   .demo-edge-line strong{color:rgb(var(--acc));font-weight:600}
-  .demo-arm-switch{display:inline-flex;border:1px solid rgb(var(--line))}
-  .demo-arm-btn{appearance:none;background:transparent;border:0;color:rgb(var(--dim));padding:4px 9px;font:500 11px/1.2 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
-  .demo-arm-btn.active{background:rgb(var(--acc));color:rgb(var(--bg))}
   .demo-records{display:flex;flex-direction:column;gap:8px}
   .demo-rec{border:1px solid rgb(var(--line));padding:9px 11px;font-size:14px}
   .demo-rec.is-new{border-color:rgb(var(--acc));border-left-width:3px}
@@ -112,6 +106,7 @@
 (function () {
   const DATA = __DEMO_DATA_JSON__;
   const STEPS = DATA.steps;
+  const RECORDS = DATA.records;
   const EDGES = DATA.oracle_edges;
   const QUESTIONS = DATA.questions;
 
@@ -126,7 +121,6 @@
   }
 
   let stepIdx = 0;
-  let armName = "unitares";
   let timer = null;
 
   const elStage = document.getElementById("demo-stage");
@@ -138,6 +132,7 @@
   const elQuote = document.getElementById("demo-step-quote");
   const elDetail = document.getElementById("demo-step-detail");
   const elEdge = document.getElementById("demo-step-edge");
+  const elRecCount = document.getElementById("demo-rec-count");
   const elRecords = document.getElementById("demo-records");
   const elRecon = document.getElementById("demo-recon");
   const elReconCount = document.getElementById("demo-recon-count");
@@ -213,12 +208,12 @@
       }
     });
 
-    const arm = DATA.arms[armName];
-    const visibleIds = s.visible_records[armName];
-    const prevIds = stepIdx > 0 ? STEPS[stepIdx - 1].visible_records[armName] : [];
-    const shown = arm.records.filter(function (r) { return visibleIds.indexOf(r.record_id) !== -1; });
+    const visibleIds = s.visible_records;
+    const prevIds = stepIdx > 0 ? STEPS[stepIdx - 1].visible_records : [];
+    const shown = RECORDS.filter(function (r) { return visibleIds.indexOf(r.record_id) !== -1; });
+    elRecCount.textContent = shown.length + " of " + RECORDS.length;
 
-    // Derive supersession strictly from visible `supersedes` edges in this arm.
+    // Derive supersession strictly from visible `supersedes` edges.
     const supersededTargets = {};
     shown.forEach(function (r) {
       (r.edges || []).forEach(function (e) {
@@ -256,15 +251,13 @@
     elRecon.hidden = !s.show_reconstruction;
     if (s.show_reconstruction) {
       const holders = {};
-      arm.records.forEach(function (r) {
+      RECORDS.forEach(function (r) {
         Object.keys(r.facts || {}).forEach(function (k) {
           if (!holders[k]) holders[k] = r;
         });
       });
       const answered = QUESTIONS.filter(function (q) { return Boolean(holders[q.fact_key]); }).length;
-      elReconCount.textContent = answered + "/" + QUESTIONS.length + " facts · "
-        + arm.representation.replace(/_/g, " ")
-        + " (" + DATA.evaluation_stage.replace(/_/g, " ") + ")";
+      elReconCount.textContent = answered + "/" + QUESTIONS.length + " questions";
       elReconGrid.innerHTML = QUESTIONS.map(function (q) {
         const rec = holders[q.fact_key];
         const label = q.question_id.replace(/_/g, " ") + "?";
@@ -281,18 +274,6 @@
     btnPrev.disabled = stepIdx === 0;
     btnNext.disabled = stepIdx === STEPS.length - 1;
   }
-
-  document.querySelectorAll(".demo-arm-btn").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      armName = btn.dataset.arm;
-      document.querySelectorAll(".demo-arm-btn").forEach(function (b) {
-        const isActive = b === btn;
-        b.classList.toggle("active", isActive);
-        b.setAttribute("aria-pressed", String(isActive));
-      });
-      render();
-    });
-  });
 
   btnPrev.addEventListener("click", function () { stopPlay(); if (stepIdx > 0) { stepIdx--; render(); } });
   btnNext.addEventListener("click", function () { stopPlay(); if (stepIdx < STEPS.length - 1) { stepIdx++; render(); } });

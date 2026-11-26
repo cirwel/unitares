@@ -244,77 +244,53 @@ _DEMO_STEP_PROGRESSION: tuple[dict, ...] = (
         "number": 1,
         "short_label": "Claim",
         "relations": ("authored",),
-        "visible_records": {
-            "unitares": ("identity-writer", "finding-original"),
-            "structured_handoff": ("git-log-entry",),
-        },
+        "visible_records": ("identity-writer", "finding-original"),
         "show_reconstruction": False,
     },
     {
         "number": 2,
         "short_label": "Evidence",
         "relations": ("contradicts", "grades"),
-        "visible_records": {
-            "unitares": ("identity-writer", "finding-original", "outcome-evidence"),
-            "structured_handoff": ("git-log-entry", "test-output"),
-        },
+        "visible_records": ("identity-writer", "finding-original", "outcome-evidence"),
         "show_reconstruction": False,
     },
     {
         "number": 3,
         "short_label": "Challenge",
         "relations": ("challenged",),
-        "visible_records": {
-            "unitares": ("identity-writer", "finding-original", "outcome-evidence", "review-challenge"),
-            "structured_handoff": ("git-log-entry", "test-output", "review-note"),
-        },
+        "visible_records": ("identity-writer", "finding-original", "outcome-evidence", "review-challenge"),
         "show_reconstruction": False,
     },
     {
         "number": 4,
         "short_label": "Supersede",
         "relations": ("supersedes",),
-        "visible_records": {
-            "unitares": (
-                "identity-writer",
-                "finding-original",
-                "outcome-evidence",
-                "review-challenge",
-                "finding-correction",
-            ),
-            "structured_handoff": (
-                "git-log-entry",
-                "test-output",
-                "review-note",
-                "structured-handoff",
-            ),
-        },
+        "visible_records": (
+            "identity-writer",
+            "finding-original",
+            "outcome-evidence",
+            "review-challenge",
+            "finding-correction",
+        ),
         "show_reconstruction": False,
     },
     {
         "number": 5,
         "short_label": "Reconstruct",
         "relations": ("authored", "contradicts", "grades", "challenged", "supersedes"),
-        "visible_records": {
-            "unitares": (
-                "identity-writer",
-                "finding-original",
-                "outcome-evidence",
-                "review-challenge",
-                "finding-correction",
-            ),
-            "structured_handoff": (
-                "git-log-entry",
-                "test-output",
-                "review-note",
-                "structured-handoff",
-            ),
-        },
+        "visible_records": (
+            "identity-writer",
+            "finding-original",
+            "outcome-evidence",
+            "review-challenge",
+            "finding-correction",
+        ),
         "show_reconstruction": True,
     },
 )
 
 _NUMBERED_SECTION_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$", re.MULTILINE)
+_UNSUPPORTED_MD_RE = re.compile(r"\[[^\]]+\]\([^)]+\)|\*\*|__|^\s*[-*+]\s+", re.MULTILINE)
 
 
 def _strip_inline_code(text: str) -> str:
@@ -325,10 +301,10 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
     """Extract numbered step sections (## 1. .. ## 5.) from filled demo.md.
 
     Returns ``{number: (title, lead_in, quote, detail)}`` where ``lead_in`` is
-    the prose before any blockquote, ``quote`` is the blockquote text (empty
-    when a section has none, such as step 5), and ``detail`` is the prose after
-    the blockquote. Splitting around the blockquote keeps lead-in colons intact
-    instead of splicing them into the following paragraph.
+    the prose before any blockquote, ``quote`` is the verbatim blockquote text
+    (empty when a section has none, such as step 5), and ``detail`` is the prose
+    after the blockquote. Fails closed if prose lines contain markdown
+    constructs (links, bold, lists) that ``textContent`` would show literally.
     """
     matches = list(_NUMBERED_SECTION_RE.finditer(demo_md))
     sections: dict[int, tuple[str, str, str, str]] = {}
@@ -353,12 +329,18 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
             if line.startswith(">"):
                 seen_quote = True
                 quote_lines.append(line.lstrip(">").strip())
-            elif seen_quote:
-                detail_lines.append(line)
             else:
-                lead_lines.append(line)
+                if _UNSUPPORTED_MD_RE.search(line):
+                    raise ValueError(
+                        f"demo-interactive: section {num} contains markdown syntax "
+                        f"unsupported by textContent: {line!r}"
+                    )
+                if seen_quote:
+                    detail_lines.append(line)
+                else:
+                    lead_lines.append(line)
         lead_in = _strip_inline_code(" ".join(lead_lines)).strip()
-        quote = _strip_inline_code(" ".join(quote_lines)).strip()
+        quote = " ".join(quote_lines).strip()
         detail = _strip_inline_code(" ".join(detail_lines)).strip()
         sections[num] = (title, lead_in, quote, detail)
     return sections
@@ -367,10 +349,11 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
 def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
     """Build and fail-closed-validate the interactive demo widget payload.
 
-    Step titles, lead-ins, blockquotes, and follow-up prose are parsed directly
-    from the filled ``demo.md``; compact step-strip labels and record/relation
-    progressions are declared in ``_DEMO_STEP_PROGRESSION`` and validated
-    against ``fixture`` so renames, duplicates, or uncovered items fail the build.
+    Shows the UNITARES arm narrated by ``demo.md``: step titles, lead-ins,
+    blockquotes, and follow-up prose are parsed directly from the filled
+    ``demo.md``; compact step-strip labels and record/relation progressions are
+    declared in ``_DEMO_STEP_PROGRESSION`` and validated against ``fixture`` so
+    duplicate record ids, renames, or uncovered records/relations fail the build.
     """
     sections = _parse_demo_sections(demo_md)
     facts = fixture["oracle"]["facts"]
@@ -378,34 +361,31 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
     oracle_relations = {e["relation"] for e in oracle_edges}
     arms = fixture.get("arms", {})
 
-    for arm_name in ("unitares", "structured_handoff"):
-        if arm_name not in arms:
-            raise ValueError(f"demo-interactive: missing arm {arm_name!r} in fixture")
-        records = arms[arm_name].get("records", [])
-        record_ids = {r["record_id"] for r in records}
-        holders: dict[str, dict] = {}
-        for rec in records:
-            for key in rec.get("facts", {}):
-                holders.setdefault(key, rec)
-        for question in fixture.get("questions", []):
-            key = question["fact_key"]
-            if key not in holders:
-                raise ValueError(
-                    f"demo-interactive: arm {arm_name!r} has no record answering {question['question_id']!r}"
-                )
-            if str(holders[key]["facts"][key]) != str(facts[key]):
-                raise ValueError(
-                    f"demo-interactive: arm {arm_name!r} disagrees with oracle on {key!r}"
-                )
-        final_visible = set(_DEMO_STEP_PROGRESSION[-1]["visible_records"][arm_name])
-        if final_visible != record_ids:
-            missing = sorted(record_ids - final_visible)
-            extra = sorted(final_visible - record_ids)
+    if "unitares" not in arms:
+        raise ValueError("demo-interactive: missing 'unitares' arm in fixture")
+    records = arms["unitares"].get("records", [])
+    raw_ids = [r["record_id"] for r in records]
+    record_ids = set(raw_ids)
+    if len(record_ids) != len(raw_ids):
+        raise ValueError("demo-interactive: duplicate record_id in 'unitares' arm")
+
+    holders: dict[str, dict] = {}
+    for rec in records:
+        for key in rec.get("facts", {}):
+            holders.setdefault(key, rec)
+    for question in fixture.get("questions", []):
+        key = question["fact_key"]
+        if key not in holders:
             raise ValueError(
-                f"demo-interactive: arm {arm_name!r} record mismatch (missing={missing}, unknown={extra})"
+                f"demo-interactive: no UNITARES record answers {question['question_id']!r}"
+            )
+        if str(holders[key]["facts"][key]) != str(facts[key]):
+            raise ValueError(
+                f"demo-interactive: UNITARES record disagrees with oracle on {key!r}"
             )
 
     covered_relations: set[str] = set()
+    covered_records: set[str] = set()
     steps: list[dict] = []
     for spec in _DEMO_STEP_PROGRESSION:
         num = spec["number"]
@@ -422,13 +402,13 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
                 raise ValueError(f"demo-interactive: step {num} references unknown relation {rel!r}")
             covered_relations.add(rel)
 
-        for arm_name, ids in spec["visible_records"].items():
-            arm_ids = {r["record_id"] for r in arms[arm_name]["records"]}
-            unknown_ids = [rid for rid in ids if rid not in arm_ids]
-            if unknown_ids:
-                raise ValueError(
-                    f"demo-interactive: step {num} references unknown {arm_name} record(s) {unknown_ids}"
-                )
+        step_ids = list(spec["visible_records"])
+        unknown_ids = [rid for rid in step_ids if rid not in record_ids]
+        if unknown_ids:
+            raise ValueError(
+                f"demo-interactive: step {num} references unknown record(s) {unknown_ids}"
+            )
+        covered_records.update(step_ids)
 
         steps.append(
             {
@@ -439,23 +419,24 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
                 "quote": quote,
                 "detail": detail,
                 "relations": list(spec["relations"]),
-                "visible_records": {k: list(v) for k, v in spec["visible_records"].items()},
+                "visible_records": step_ids,
                 "show_reconstruction": spec["show_reconstruction"],
             }
+        )
+
+    missing_records = sorted(record_ids - covered_records)
+    if missing_records:
+        raise ValueError(
+            f"demo-interactive: fixture record(s) {missing_records} are never shown in any step"
         )
 
     uncovered = sorted(oracle_relations - covered_relations)
     if uncovered:
         raise ValueError(f"demo-interactive: fixture relation(s) {uncovered} are never shown in any step")
 
-    evaluation_stage = str(fixture.get("classification", {}).get("evaluation_stage", "")).strip()
-    if not evaluation_stage:
-        raise ValueError("demo-interactive: fixture is missing classification.evaluation_stage")
-
     return {
         "incident_id": fixture["incident"]["incident_id"],
-        "evaluation_stage": evaluation_stage,
-        "arms": arms,
+        "records": records,
         "oracle_edges": oracle_edges,
         "questions": fixture["questions"],
         "steps": steps,

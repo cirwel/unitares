@@ -131,8 +131,7 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert "</section>\n<noscript>" in demo
     assert "__DEMO_DATA_JSON__" not in demo
     assert '"incident_id": "reload-claim-contradiction-v0"' in demo
-    assert 'data-arm="unitares"' in demo
-    assert 'data-arm="structured_handoff"' in demo
+    assert 'id="demo-records"' in demo
 
 
 def test_demo_build_fails_on_unfilled_placeholder():
@@ -218,12 +217,21 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
     assert payload["steps"][0]["quote"] == base_fixture["oracle"]["facts"]["original_claim"]
     assert payload["steps"][0]["detail"].startswith("The record binds")
     assert payload["steps"][4]["quote"] == ""
-    assert payload["evaluation_stage"] == "retrieval_control"
 
     bad_record = json.loads(json.dumps(base_fixture))
     bad_record["arms"]["unitares"]["records"][0]["record_id"] = "renamed-record"
-    with pytest.raises(ValueError, match="record mismatch"):
+    with pytest.raises(ValueError, match="unknown record"):
         build_demo_interactive_payload(filled_md, bad_record)
+
+    dup_record = json.loads(json.dumps(base_fixture))
+    dup_record["arms"]["unitares"]["records"].append(dup_record["arms"]["unitares"]["records"][0])
+    with pytest.raises(ValueError, match="duplicate record_id"):
+        build_demo_interactive_payload(filled_md, dup_record)
+
+    extra_record = json.loads(json.dumps(base_fixture))
+    extra_record["arms"]["unitares"]["records"].append({"record_id": "extra-record", "kind": "note", "facts": {}})
+    with pytest.raises(ValueError, match="never shown"):
+        build_demo_interactive_payload(filled_md, extra_record)
 
     bad_relation = json.loads(json.dumps(base_fixture))
     bad_relation["oracle"]["edges"].append(
@@ -235,6 +243,10 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
     bad_md = filled_md.replace("## 3. A reviewer challenges it", "### Unnumbered")
     with pytest.raises(ValueError, match="missing section"):
         build_demo_interactive_payload(bad_md, base_fixture)
+
+    bad_md_syntax = filled_md.replace("The record binds", "The **record** binds")
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(bad_md_syntax, base_fixture)
 
     with pytest.raises(ValueError, match="<h2>"):
         inject_demo_interactive("<h1>Title</h1><p>No section heading</p>", "<section/>")
