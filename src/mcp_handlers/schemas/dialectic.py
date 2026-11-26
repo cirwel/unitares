@@ -206,8 +206,11 @@ class DialecticParams(AgentIdentityMixin):
                 "reasoning", "root_cause", "proposed_conditions",
                 "reviewed_work_author_agent_ids",
         ),
+        # `position` was listed here until 2026-11-26 and no thesis code path
+        # reads it: the thesis is root_cause, reasoning and conditions. It is
+        # quick's parameter, as its own description says.
         "thesis": (
-                "session_id", "position", "reasoning", "root_cause",
+                "session_id", "reasoning", "root_cause",
                 "proposed_conditions", "conditions", "use_brief_as_thesis",
         ),
         "antithesis": (
@@ -239,9 +242,22 @@ class DialecticParams(AgentIdentityMixin):
     # wire schema cannot mark required for one action (see
     # KnowledgeParams.ACTION_REQUIRED_FIELDS). handle_quick_dialectic refuses
     # a call with no issue_description ('reason' is accepted in its place).
+    #
+    # Every action that writes to one session refuses a call with no
+    # session_id. thesis, antithesis, synthesis and reassign were missing here
+    # until 2026-11-26, so describe_tool showed session_id as optional on the
+    # four calls that cannot run without it. The guard that should have caught
+    # it walked the handler's own module only, and these handlers delegate to
+    # phase_submission and resolution_helpers
+    # (tests/test_describe_lite_action_parameters.py now follows the package).
+    # `get` is not listed: it takes session_id or agent_id.
     ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "quick": ("issue_description",),
+        "thesis": ("session_id",),
+        "antithesis": ("session_id",),
+        "synthesis": ("session_id",),
         "consult": ("session_id", "reasoning", "reviewer_provenance"),
+        "reassign": ("session_id",),
         "reconcile_effect": ("session_id",),
     }
     # default mirrors action_router's default_action="list" — the schema
@@ -249,8 +265,30 @@ class DialecticParams(AgentIdentityMixin):
     # dialectic({}) error despite the router's fallback (PR #611 council
     # live battery, probe 3g).
     action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "consult", "reassign", "reconcile_effect"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, consult (file an outside verdict as a record with no authority; needs no reviewer slot), reassign, reconcile_effect (operator-only durable effect recovery)")
-    session_id: Optional[str] = Field(None, description="Dialectic session ID")
-    agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
+    session_id: Optional[str] = Field(
+        None,
+        description=(
+            "Dialectic session ID. Required for action=thesis, antithesis, "
+            "synthesis, consult, reassign and reconcile_effect; action=get "
+            "takes this or agent_id; request, quick and list do not use it."
+        ),
+        json_schema_extra={
+            "brief": "Session ID; required to write to a session (get: this or agent_id)."
+        },
+    )
+    agent_id: Optional[str] = Field(
+        None,
+        description=(
+            "Agent UUID. For action=get or list it filters sessions to those "
+            "the agent takes part in (paused agent or reviewer); a bound "
+            "caller may name only itself there. On every other action it "
+            "names the caller, which the bound session already supplies: "
+            "leave it unset."
+        ),
+        json_schema_extra={
+            "brief": "get/list: filter to an agent's sessions. Otherwise leave unset."
+        },
+    )
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")
     limit: Optional[int] = Field(None, description="Max sessions to return (for action=list, default 50, min 1, values above 200 are capped)")
     include_transcript: Optional[bool] = Field(None, description="Include full transcript (for action=list, default false)")
@@ -293,7 +331,20 @@ class DialecticParams(AgentIdentityMixin):
             "or root_cause is supplied; raw dialectic calls default to false."
         ),
     )
-    observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
+    observed_metrics: Optional[dict] = Field(
+        None,
+        description=(
+            "Metrics observed about the paused agent, stored with the "
+            "submitted message (for action=antithesis/synthesis). A "
+            "reviewer_backend key is read as the reviewer's provenance; an "
+            "explicit reviewer_provenance replaces it. For action=quick, "
+            "risk_score and coherence are read as triage context and nothing "
+            "is stored."
+        ),
+        json_schema_extra={
+            "brief": "Observed metrics, stored with an antithesis/synthesis; quick reads risk_score, coherence."
+        },
+    )
     reviewer_provenance: Optional[dict] = Field(
         None,
         description="Reviewer/model provenance for the verdict. action=consult (required): where an outside verdict came from, at least one of backend, model_used or consult_source; the kind is always recorded as external_consult. action=antithesis/synthesis: the assigned reviewer's own backend",

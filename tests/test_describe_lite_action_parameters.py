@@ -24,6 +24,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import re
 import textwrap
 from unittest.mock import AsyncMock, patch
 
@@ -72,60 +73,62 @@ def _action_handler(alias_name: str):
     return inspect.unwrap(get_tool_registry()[tool_name])
 
 
-def _required_by_source(handler, *, stop_at=()) -> set[str]:
-    """Every parameter a `require_argument` on the handler's code path names.
+# A refusal written by hand rather than through require_argument:
+# error_response("session_id is required", ...). The dialectic write actions
+# all refuse this way.
+_HAND_WRITTEN_REQUIREMENT = re.compile(r"^(\w+) is required\b")
 
-    Follows calls into functions of the handler's own module. It does not
-    follow into `stop_at`: a handler that hands off to ANOTHER action's
-    handler (knowledge get -> details when discovery_id is present) is
-    routing, and the other handler's requirements are that action's.
+
+def _walk_handler(handler, *, stop_at=()) -> tuple[set[str], set[str]]:
+    """(reads, required): what the handler's code path reads and refuses without.
+
+    Follows calls into functions of the handler's own package, resolving each
+    name in the module of the function that makes the call. It does not follow
+    into `stop_at`: a handler that hands off to ANOTHER action's handler
+    (knowledge get -> details when discovery_id is present) is routing, and
+    the other handler's requirements are that action's.
+
+    Until 2026-11-26 the walk stopped at the handler's own module. Every
+    dialectic handler is a thin wrapper around a function in
+    phase_submission, resolution_helpers or llm_assisted, so for that router
+    the walk saw one line per action, found nothing, and both guards below
+    passed without checking anything: session_id went undeclared as a
+    requirement of four actions, and thesis declared a parameter it never
+    reads. test_the_walk_reaches_the_dialectic_implementations holds the
+    reach.
+
+    reads: `arguments.get("x")`, `arguments.pop("x")`, `arguments["x"]` and
+    `require_argument(arguments, "x")`.
+    required: `require_argument(arguments, "x")` and a hand-written
+    `error_response("x is required ...")`. The second is a static match on the
+    message, so a refusal that only some calls reach is found too; those are
+    listed with their reasons in _CONDITIONAL_REQUIREMENTS.
     """
-    module = importlib.import_module(handler.__module__)
-    stop = {inspect.unwrap(fn) for fn in stop_at} - {inspect.unwrap(handler)}
-    pending, seen, required = [inspect.unwrap(handler)], set(), set()
+    start = inspect.unwrap(handler)
+    package = start.__module__.rpartition(".")[0]
+    stop = {inspect.unwrap(fn) for fn in stop_at} - {start}
+    pending, seen = [start], set()
+    reads: set[str] = set()
+    required: set[str] = set()
     while pending:
         fn = pending.pop()
         if fn in seen:
             continue
         seen.add(fn)
-        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        module = importlib.import_module(fn.__module__)
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        except (OSError, TypeError, SyntaxError):
+            continue
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
-                continue
-            if (
-                node.func.id == "require_argument"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-            ):
-                required.add(node.args[1].value)
-            helper = getattr(module, node.func.id, None)
-            if inspect.isfunction(helper):
-                helper = inspect.unwrap(helper)
-                if helper.__module__ == module.__name__ and helper not in stop:
-                    pending.append(helper)
-    return required
-
-
-def _read_by_source(handler, *, stop_at=()) -> set[str]:
-    """Every argument name the handler's code path reads.
-
-    Same traversal as `_required_by_source`; counts `arguments.get("x")`,
-    `arguments.pop("x")`, `arguments["x"]` and `require_argument(arguments, "x")`.
-    """
-    module = importlib.import_module(handler.__module__)
-    stop = {inspect.unwrap(fn) for fn in stop_at} - {inspect.unwrap(handler)}
-    pending, seen, reads = [inspect.unwrap(handler)], set(), set()
-    while pending:
-        fn = pending.pop()
-        if fn in seen:
-            continue
-        seen.add(fn)
-        for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn)))):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 helper = getattr(module, node.func.id, None)
                 if inspect.isfunction(helper):
                     helper = inspect.unwrap(helper)
-                    if helper.__module__ == module.__name__ and helper not in stop:
+                    home = helper.__module__
+                    if (
+                        home == package or home.startswith(package + ".")
+                    ) and helper not in stop:
                         pending.append(helper)
                 if (
                     node.func.id == "require_argument"
@@ -133,6 +136,16 @@ def _read_by_source(handler, *, stop_at=()) -> set[str]:
                     and isinstance(node.args[1], ast.Constant)
                 ):
                     reads.add(node.args[1].value)
+                    required.add(node.args[1].value)
+                if (
+                    node.func.id == "error_response"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    named = _HAND_WRITTEN_REQUIREMENT.match(node.args[0].value)
+                    if named:
+                        required.add(named.group(1))
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -148,13 +161,75 @@ def _read_by_source(handler, *, stop_at=()) -> set[str]:
                 and isinstance(node.slice, ast.Constant)
             ):
                 reads.add(node.slice.value)
-    return reads
+    return reads, required
+
+
+def _required_by_source(handler, *, stop_at=()) -> set[str]:
+    """Every parameter the handler's code path refuses to run without."""
+    return _walk_handler(handler, stop_at=stop_at)[1]
+
+
+def _read_by_source(handler, *, stop_at=()) -> set[str]:
+    """Every argument name the handler's code path reads."""
+    return _walk_handler(handler, stop_at=stop_at)[0]
+
+
+# Refusals the static walk finds that a caller of the action is never, or not
+# always, asked to satisfy. (router, action) -> {parameter: why}. Each entry
+# must still be found by the walk, so one that outlives its refusal fails
+# (test_every_conditional_requirement_is_still_found).
+_CONDITIONAL_REQUIREMENTS = {
+    ("dialectic", "request"): {
+        "root_cause": (
+            "refused by the llm-assisted reviewer, which request reaches only "
+            "with reviewer_mode='llm' and always hands a root_cause built from "
+            "reason or issue_description, falling back to a fixed string"
+        ),
+    },
+    ("dialectic", "reconcile_effect"): {
+        "reason": (
+            "refused only when effect_disposition is mark_uncertain or "
+            "mark_applied, which the reason field's description states"
+        ),
+    },
+}
+
+
+def _call_time_required(router, action, handler, *, stop_at=()) -> set[str]:
+    """What `router(action=...)` refuses to run without, on every call."""
+    conditional = _CONDITIONAL_REQUIREMENTS.get((router, action), {})
+    return _required_by_source(handler, stop_at=stop_at) - set(conditional)
 
 
 def test_the_source_derivation_finds_the_known_requirements():
     """Guard the fixture: an empty derivation passes every check below."""
     assert _required_by_source(_action_handler("update_finding")) == {"discovery_id"}
     assert _required_by_source(_action_handler("store_finding")) == {"summary"}
+
+
+@pytest.mark.parametrize("action", ["thesis", "antithesis", "synthesis", "reassign"])
+def test_the_walk_reaches_the_dialectic_implementations(action):
+    """The same guard for a router whose handlers delegate to another module.
+
+    Each of these is a one-line wrapper in dialectic/handlers.py. A walk that
+    stays in that module reads nothing and requires nothing, which is what it
+    did while session_id went undeclared here.
+    """
+    handlers = _router_actions("dialectic")
+    reads, required = _walk_handler(handlers[action], stop_at=handlers.values())
+    assert "session_id" in reads, sorted(reads)
+    assert "session_id" in required, sorted(required)
+
+
+def test_every_conditional_requirement_is_still_found():
+    for (router, action), names in _CONDITIONAL_REQUIREMENTS.items():
+        handlers = _router_actions(router)
+        found = _required_by_source(handlers[action], stop_at=handlers.values())
+        stale = sorted(set(names) - found)
+        assert not stale, (
+            f"{router} action={action}: {stale} is listed as a conditional "
+            "requirement but no refusal for it is reachable any more"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -164,14 +239,16 @@ def test_the_source_derivation_finds_the_known_requirements():
 
 @pytest.mark.parametrize("alias_name", AGENT_WORKFLOW_ALIASES)
 def test_lite_view_names_every_call_time_required_parameter(alias_name):
+    router, alias = resolve_tool_alias(alias_name)
     router_handlers = (
-        _router_actions(resolve_tool_alias(alias_name)[0]).values()
-        if resolve_tool_alias(alias_name)[1].inject_action
-        else ()
+        _router_actions(router).values() if alias.inject_action else ()
     )
     required = set(_wire_schema(alias_name).get("required") or ())
-    required |= _required_by_source(
-        _action_handler(alias_name), stop_at=router_handlers
+    required |= _call_time_required(
+        router,
+        alias.inject_action,
+        _action_handler(alias_name),
+        stop_at=router_handlers,
     )
 
     lite = _lite(alias_name)
@@ -253,7 +330,9 @@ def test_pinned_alias_lite_view_stays_inside_its_action(
     stray = sorted(lite - own - wire_required)
     assert not stray, f"{alias_name} ({router} action={action}) lists {stray}"
 
-    needed = _required_by_source(
+    needed = _call_time_required(
+        router,
+        action,
         _router_actions(router)[action],
         stop_at=_router_actions(router).values(),
     )
@@ -351,9 +430,9 @@ def test_every_action_declares_the_parameters_its_handler_reads(router, model):
     tags, observe anomalies' and aggregate's agent_ids, and dialectic quick's
     issue_description were read by their handlers and missing from it.
 
-    The walk follows helpers in the handler's own module only: a read made
-    through another module (observe bridge hands its arguments to
-    src/bridge_events.py) is not seen here.
+    The walk follows helpers across the handler's own package: a read made
+    outside it (observe bridge hands its arguments to src/bridge_events.py)
+    is not seen here.
     """
     from src.mcp_handlers.schemas.router_actions import (
         COMMON_ROUTER_FIELDS,
@@ -374,14 +453,22 @@ def test_every_action_declares_the_parameters_its_handler_reads(router, model):
 
 @pytest.mark.parametrize("router,model", _WALKED, ids=[n for n, _ in _WALKED])
 def test_declaration_names_every_requirement_its_handlers_reach(router, model):
+    from src.mcp_handlers.schemas.router_actions import wire_field_names
+
     handlers = _router_actions(router)
     declared = getattr(model, "ACTION_REQUIRED_FIELDS", {})
+    fields = set(wire_field_names(model))
     for action, handler in sorted(handlers.items()):
-        found = _required_by_source(handler, stop_at=handlers.values())
+        # Only the router's own parameters: a refusal naming something else
+        # (an internal value, a nested key) is not a wire requirement.
+        found = fields & _call_time_required(
+            router, action, handler, stop_at=handlers.values()
+        )
         missing = sorted(found - set(declared.get(action, ())))
         assert not missing, (
-            f"{router} action={action} requires {missing} (require_argument in "
-            "its handler) but ACTION_REQUIRED_FIELDS does not declare it"
+            f"{router} action={action} requires {missing} (a require_argument "
+            "or a hand-written 'is required' refusal on its code path) but "
+            "ACTION_REQUIRED_FIELDS does not declare it"
         )
 
 
@@ -452,6 +539,43 @@ def test_quick_dialectic_refuses_a_call_without_a_declared_requirement(name):
     refused = run({k: v for k, v in _DIALECTIC_QUICK_PROBE.items() if k != name})
     assert refused.get("success") is False, refused
     assert name in refused.get("error", ""), refused
+
+
+_DIALECTIC_SESSION_WRITES = sorted(
+    action
+    for action, names in DialecticParams.ACTION_REQUIRED_FIELDS.items()
+    if "session_id" in names
+)
+
+
+def test_the_survey_found_the_dialectic_session_writes():
+    assert _DIALECTIC_SESSION_WRITES == [
+        "antithesis", "consult", "reassign", "reconcile_effect", "synthesis", "thesis",
+    ]
+
+
+@pytest.mark.parametrize("action", _DIALECTIC_SESSION_WRITES)
+def test_a_dialectic_session_write_refuses_a_call_without_session_id(action):
+    """Soundness for the session_id declarations.
+
+    Each of these checks session_id before it resolves the caller or loads
+    anything, so the refusal is reachable unwrapped. reconcile_effect refuses
+    a caller with no operator credential first, which is still a refusal
+    before any session read.
+    """
+    handler = inspect.unwrap(_router_actions("dialectic")[action])
+    load = AsyncMock(side_effect=AssertionError("loaded a session"))
+    with (
+        patch("src.mcp_handlers.dialectic.phase_submission.load_session", load),
+        patch("src.mcp_handlers.dialectic.resolution_helpers.load_session", load),
+        patch("src.mcp_handlers.dialectic.llm_assisted.load_session", load),
+    ):
+        refused = json.loads(
+            asyncio.run(handler({"reasoning": "a probe", "reviewer_provenance": {"backend": "probe"}}))[0].text
+        )
+    assert refused.get("success") is False, refused
+    if action != "reconcile_effect":
+        assert "session_id" in refused.get("error", ""), refused
 
 
 # One plausible value per declared parameter, so each probe removes exactly one.

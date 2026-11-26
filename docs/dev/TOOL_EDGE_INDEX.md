@@ -67,7 +67,7 @@ note for why the raw rendering is not.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:e98aac66989d2ec35f3967d026e28574c41b03ac1362e8095849da9b2a034870` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 10 | — | `sha256:b88e3593adb25ece4f6f03cb867f19adcdddfcc02ebf8dfd6366f216096ee6cb` |
+| `request_review` | `dialectic` | 10 | — | `sha256:2185ccef6571c592baa0b22ed643a6bb43458a22ce5b7562f7ed3c289ce2e6ac` |
 | `search_shared_memory` | `knowledge` | 25 | — | `sha256:dc157ccf4a395b292fe2a22c53edc8b1e13d0aca350023c2b71d1f9309a09e68` |
 | `start_session` | `onboard` | 20 | — | `sha256:3e8ebeeba42dad2a4dece5a4a12f0a2b65d71c0f3a7917779a97e1bea7792501` |
 | `store_finding` | `knowledge` | 14 | — | `sha256:b3a9aa69163a8de894934425a679a921617579bb7c41c5fadc95d598959a5a6a` |
