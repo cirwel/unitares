@@ -1,14 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-dashboard",
-  "verified_at": "2026-11-26T01:50:57Z",
+  "verified_at": "2026-11-26T01:53:21Z",
   "verified_date": "2026-11-26",
-  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (verified unitares-dashboard SKILL.md claims unchanged after aligning all queryless filtered Discoveries listings in data.js)",
+  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (verified unitares-dashboard SKILL.md claims unchanged after unifying queryless Discoveries listing scope in data.js)",
   "source_digests": {
     "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
     "unitares/dashboard/package.json": "8fe1598b043d548e",
     "unitares/dashboard/redesign/app.html": "aaa47bf0c9727a5a",
-    "unitares/dashboard/redesign/data.js": "86796a3d32d4c8cd",
+    "unitares/dashboard/redesign/data.js": "1a2778a1b90a3449",
     "unitares/dashboard/redesign/sections/connectors.js": "541c5fa3dba14b3d",
     "unitares/dashboard/redesign/sections/discoveries.js": "e07da5da6d4bd28c",
     "unitares/dashboard/redesign/sections/eisv.js": "a7a678c31726f94f",

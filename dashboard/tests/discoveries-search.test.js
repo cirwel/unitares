@@ -467,6 +467,16 @@ describe("Discoveries server-side search", () => {
     // Unlisted custom types tie-break by count descending.
     expect(chipTypes.indexOf("custom_common")).toBeLessThan(chipTypes.indexOf("custom_rare"));
 
+    // Initial unfiltered load ("All / all time") uses the same canonical corpus
+    // scope as the lifecycle bar, type chips, and windowed listings.
+    const defaultCall = calls.find(
+      (c) => c.body?.arguments?.action === "search" && !c.body?.arguments?.discovery_type && !c.body?.arguments?.created_after && !c.body?.arguments?.query,
+    );
+    expect(defaultCall).toBeTruthy();
+    expect(defaultCall.body.arguments.include_archived).toBe(true);
+    expect(defaultCall.body.arguments.include_cold).toBe(true);
+    expect(defaultCall.body.arguments.authority_mode).toBe("all");
+
     // Clicking a type chip from the live stats legend filters server-side using
     // the same full-corpus scope (including archived/cold/imported) as the badge count.
     dom.window.document.querySelector('.dsc-type[data-type="rule"]').click();
