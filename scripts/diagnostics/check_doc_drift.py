@@ -370,6 +370,17 @@ def eisv_framing_failures(root: Path) -> list[str]:
             if not linked:
                 failures.append(f"{rel_path}: missing link to EISV framing owner {expected_owner}")
 
+    for ref_path in sorted(root.glob("skills/*/references/*.md")):
+        if not ref_path.is_file():
+            continue
+        rel_ref = ref_path.relative_to(root).as_posix()
+        normalized_ref = _eisv_framing_text(ref_path.read_text(encoding="utf-8"))
+        for label, pattern in EISV_FRAMING_PATTERNS:
+            if re.search(pattern, normalized_ref):
+                failures.append(
+                    f"{rel_ref}: EISV framing drift ({label}); use {EISV_FRAMING_OWNER}"
+                )
+
     descriptions_path = root / "src/tool_descriptions.json"
     if descriptions_path.exists():
         descriptions = json.loads(descriptions_path.read_text(encoding="utf-8"))

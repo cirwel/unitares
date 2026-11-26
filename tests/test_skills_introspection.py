@@ -405,3 +405,121 @@ def test_manifest_is_not_committed_in_unitares():
     assert tracked == "", f"{rel} is tracked again; it must stay generated, not committed"
     ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--no-index", rel])
     assert ignored.returncode == 0, f"{rel} must stay in .gitignore"
+
+
+# ---------------------------------------------------------------------
+# Progressive-disclosure companion references
+# ---------------------------------------------------------------------
+
+def test_index_and_fetch_list_companion_references():
+    index = _call_handler({})
+    by_name = {s["name"]: s for s in index["skills"]}
+    assert "references" in by_name["governance-lifecycle"]
+    assert "checkpoints-and-envelopes.md" in by_name["governance-lifecycle"]["references"]
+    assert "references" not in by_name["unitares-dashboard"]
+    assert all("_references_content" not in s for s in index["skills"])
+
+    fetched = _call_handler({"name": "governance-lifecycle"})["skills"][0]
+    assert fetched["references"] == by_name["governance-lifecycle"]["references"]
+    assert "_references_content" not in fetched
+
+
+def _strip_server_time(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if k != "server_time"}
+
+
+def test_fetch_reference_by_bare_name_and_prefixed_path():
+    bare = _call_handler({
+        "name": "governance-lifecycle",
+        "reference": "checkpoints-and-envelopes.md",
+    })
+    prefixed = _call_handler({
+        "name": "governance-lifecycle",
+        "reference": "references/checkpoints-and-envelopes.md",
+    })
+    assert bare["success"] is True
+    assert bare["skill"] == "governance-lifecycle"
+    assert bare["reference"] == "checkpoints-and-envelopes.md"
+    assert bare["path"] == "references/checkpoints-and-envelopes.md"
+    assert bare["content"]
+    assert bare["content_hash"].startswith("sha256:")
+    assert _strip_server_time(bare) == _strip_server_time(prefixed)
+    assert "agent_signature" not in bare
+
+
+def test_fetch_reference_is_identity_blind():
+    anon = _call_handler({
+        "name": "governance-fundamentals",
+        "reference": "verdicts-and-margin.md",
+    })
+    with_id = _call_handler({
+        "name": "governance-fundamentals",
+        "reference": "verdicts-and-margin.md",
+        "agent_uuid": "00000000-0000-0000-0000-000000000000",
+        "client_session_id": "irrelevant",
+    })
+    assert _strip_server_time(anon) == _strip_server_time(with_id)
+    assert "agent_signature" not in with_id
+
+
+@pytest.mark.parametrize("bad_ref", [
+    "../SKILL.md",
+    "references/../SKILL.md",
+    "/etc/passwd",
+    "sub/nested.md",
+    "verdicts-and-margin.txt",
+    "VERDICTS-AND-MARGIN.MD",
+    "Verdicts-And-Margin.md",  # lowercase .md passes normalization; exercises case-sensitive allowlist on macOS APFS
+    "does-not-exist.md",
+    "bad\x00name.md",
+    "references\\verdicts-and-margin.md",
+])
+def test_fetch_reference_rejects_traversal_unknown_and_wrong_case(bad_ref):
+    payload = _call_handler({
+        "name": "governance-fundamentals",
+        "reference": bad_ref,
+    })
+    assert payload["success"] is False
+    assert payload["error"]
+    assert "verdicts-and-margin.md" in payload["available_references"]
+    assert "content" not in payload
+    assert "agent_signature" not in payload
+
+
+def test_fetch_reference_requires_name():
+    payload = _call_handler({"reference": "verdicts-and-margin.md"})
+    assert payload["success"] is False
+    assert "name" in payload["error"]
+    assert "available_references" not in payload
+    assert "agent_signature" not in payload
+
+
+def test_reference_symlink_is_ignored_and_edits_move_hashes(tmp_path, monkeypatch):
+    from src.mcp_handlers.introspection import skills as mod
+
+    skill_dir = tmp_path / "demo"
+    refs_dir = skill_dir / "references"
+    refs_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        '---\nname: demo\nlast_verified: "2026-11-25"\nfreshness_days: 14\n---\n# Demo\n',
+        encoding="utf-8",
+    )
+    ref = refs_dir / "deep.md"
+    ref.write_text("# Deep v1\n", encoding="utf-8")
+    outside = tmp_path / "secret.md"
+    outside.write_text("secret\n", encoding="utf-8")
+    (refs_dir / "escape.md").symlink_to(outside)
+
+    monkeypatch.setattr(mod, "_SKILLS_ROOT", tmp_path)
+
+    p1 = _call_handler({})
+    demo1 = p1["skills"][0]
+    assert demo1["references"] == ["deep.md"]  # symlink ignored
+    denied = _call_handler({"name": "demo", "reference": "escape.md"})
+    assert denied["success"] is False
+
+    ref.write_text("# Deep v2\n", encoding="utf-8")
+    p2 = _call_handler({})
+    demo2 = p2["skills"][0]
+    assert demo2["content_hash"] != demo1["content_hash"]
+    assert p2["registry_hash"] != p1["registry_hash"]

@@ -23,3 +23,7 @@ class SkillsParams(BaseModel):
         default=None,
         description="ISO date string. Return only skills with last_verified > since_version. Used by client adapters for cheap re-poll cache invalidation.",
     )
+    reference: Optional[str] = Field(
+        default=None,
+        description="Optional reference filename under the named skill's references/ directory (e.g. 'recovery.md' or 'references/recovery.md'). Requires `name`.",
+    )
