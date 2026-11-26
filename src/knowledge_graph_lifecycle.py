@@ -713,6 +713,27 @@ async def get_kg_lifecycle_stats() -> Dict[str, Any]:
 AUDIT_HEALTHY_DAYS = 7
 AUDIT_AGING_DAYS = 14
 AUDIT_STALE_DAYS = 30
+AUDIT_SUMMARY_MAX_CHARS = 240
+AUDIT_MAX_TOP_N = 100
+
+
+def _bound_audit_summary(summary: Any, limit: int = AUDIT_SUMMARY_MAX_CHARS) -> tuple[str, bool]:
+    """Collapse whitespace and bound an audit summary at a word boundary.
+
+    Historical entries written before write-time summary limits can hold
+    multi-kilobyte summaries. Bounding them here keeps ``top_stale`` and the
+    optional local-LLM assessment prompt compact while marking truncated
+    entries explicitly so callers know to open ``knowledge(action='details')``.
+    """
+    if not isinstance(summary, str):
+        return "", False
+    compact = " ".join(summary.split())
+    if len(compact) <= limit:
+        return compact, False
+    cutoff = compact.rfind(" ", 0, limit - 1)
+    if cutoff < limit // 2:
+        cutoff = limit - 1
+    return compact[:cutoff].rstrip() + "…", True
 
 
 def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str, Any]:
@@ -760,9 +781,10 @@ def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str,
     if lifecycle.get_lifecycle_policy(discovery) == "permanent":
         bucket = "healthy"
 
-    return {
+    summary, summary_truncated = _bound_audit_summary(getattr(discovery, "summary", ""))
+    entry: Dict[str, Any] = {
         "id": discovery.id,
-        "summary": getattr(discovery, "summary", ""),
+        "summary": summary,
         "type": getattr(discovery, "type", ""),
         "agent_id": getattr(discovery, "agent_id", None),
         "age_days": age_days,
@@ -771,6 +793,9 @@ def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str,
         "bucket": bucket,
         "tags": getattr(discovery, "tags", []) or [],
     }
+    if summary_truncated:
+        entry["summary_truncated"] = True
+    return entry
 
 
 async def run_kg_audit(
@@ -825,7 +850,8 @@ async def run_kg_audit(
     # Top stale entries (stale + candidate_for_archive, sorted by last_activity_days desc)
     stale_entries = [s for s in scored if s["bucket"] in ("stale", "candidate_for_archive")]
     stale_entries.sort(key=lambda x: x["last_activity_days"], reverse=True)
-    top_stale = stale_entries[:top_n]
+    bounded_top_n = max(0, min(top_n, AUDIT_MAX_TOP_N))
+    top_stale = stale_entries[:bounded_top_n]
 
     # Optional model assessment
     model_assessment = None
