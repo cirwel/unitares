@@ -6,6 +6,12 @@ active embedding table (``src.embeddings.get_active_table_name``), and produces 
   1. Merging similar tags (co-occurrence + embedding cosine > threshold)
   2. Splitting broad tags into sub-Concepts (agglomerative clustering)
   3. Writing Concept vertices and ABOUT/RELATES_TO edges to AGE
+  4. Deleting Concept vertices that this run did not produce
+
+A concept id is a hash of its tag group, so a cluster that gains or loses one
+tag gets a new id on the next run. Step 4 keeps the graph equal to the latest
+run's output; without it every regrouping left the old vertex and all of its
+edges behind.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from src.db.age_queries import (
     create_about_edge,
     create_concept_node,
     create_concept_relates_to_edge,
+    delete_concept_node,
+    query_concept_ids,
     query_tags_with_discoveries,
 )
 from src.logging_utils import get_logger
@@ -109,7 +117,11 @@ class ConceptExtractor:
         # Phase 7: Write to graph
         written = await self._write_to_graph(concepts, tag_discoveries)
 
-        status = "completed" if not written["failures"] else "completed_with_errors"
+        # Phase 8: Remove concepts left over from earlier runs
+        pruned = await self._prune_stale_concepts(concepts, written)
+
+        failed = written["failures"] or pruned["failures"]
+        status = "completed" if not failed else "completed_with_errors"
         return {
             "status": status,
             "tags_processed": len(tag_embeddings),
@@ -118,6 +130,9 @@ class ConceptExtractor:
             "about_edges_created": written["about_edges"],
             "relates_to_edges_created": written["relates_to_edges"],
             "write_failures": written["failures"],
+            "stale_concepts_deleted": pruned["deleted"],
+            "stale_prune_skipped": pruned["skipped"],
+            "stale_prune_failures": pruned["failures"],
         }
 
     def _build_concepts_from_embeddings(
@@ -388,6 +403,56 @@ class ConceptExtractor:
             )
 
         return concepts
+
+    async def _prune_stale_concepts(
+        self,
+        concepts: List[Dict[str, Any]],
+        written: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Phase 8: Delete Concept vertices this run did not produce.
+
+        Each stale vertex goes in its own query with its edges, so no single
+        statement holds the graph for long. Nothing is deleted unless every
+        planned concept was written: a run that could not write its own output
+        must not remove the previous run's.
+        """
+        result: Dict[str, Any] = {"deleted": 0, "skipped": None, "failures": 0}
+        if not concepts:
+            result["skipped"] = "no concepts planned"
+            return result
+        if written["concepts"] != len(concepts):
+            result["skipped"] = "not every planned concept was written"
+            return result
+
+        db = get_db()
+        current = {c["concept_id"] for c in concepts}
+        try:
+            q, p = query_concept_ids()
+            rows = await db.graph_query(q, p)
+        except Exception as e:
+            logger.warning(
+                "[CONCEPT_EXTRACTION] could not list concepts to prune: "
+                f"{type(e).__name__}: {e}"
+            )
+            result["skipped"] = "could not list existing concepts"
+            result["failures"] = 1
+            return result
+
+        stale = sorted({r for r in rows if isinstance(r, str)} - current)
+        for concept_id in stale:
+            try:
+                q, p = delete_concept_node(concept_id)
+                await db.graph_query(q, p)
+                result["deleted"] += 1
+            except Exception as e:
+                if not result["failures"]:
+                    logger.warning(
+                        "[CONCEPT_EXTRACTION] stale concept delete failed for "
+                        f"{concept_id}: {type(e).__name__}: {e} "
+                        "(later failures are counted, not logged)"
+                    )
+                result["failures"] += 1
+        return result
 
     async def _write_to_graph(
         self,
