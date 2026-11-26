@@ -240,13 +240,44 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
     with pytest.raises(ValueError, match="never shown"):
         build_demo_interactive_payload(filled_md, bad_relation)
 
-    bad_md = filled_md.replace("## 3. A reviewer challenges it", "### Unnumbered")
+    bad_md = filled_md.replace("## 3. A reviewer challenges it", "## Unnumbered")
     with pytest.raises(ValueError, match="missing section"):
         build_demo_interactive_payload(bad_md, base_fixture)
+
+    subhead_md = filled_md.replace("## 3. A reviewer challenges it", "### Subheading")
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(subhead_md, base_fixture)
 
     bad_md_syntax = filled_md.replace("The record binds", "The **record** binds")
     with pytest.raises(ValueError, match="unsupported by textContent"):
         build_demo_interactive_payload(bad_md_syntax, base_fixture)
+
+    # Hard-wrapped link across lines must still be caught after joining.
+    wrapped_link_md = filled_md.replace(
+        "The record binds the finding to the process that wrote it",
+        "The [record\nbinds](https://example.org) the finding to the process that wrote it",
+    )
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(wrapped_link_md, base_fixture)
+
+    extra_section_md = filled_md.replace(
+        "## Working with Git",
+        "## 6. Extra step\n\nExtra text.\n\n## Working with Git",
+    )
+    with pytest.raises(ValueError, match="unmapped numbered section"):
+        build_demo_interactive_payload(extra_section_md, base_fixture)
+
+    dup_section_md = filled_md.replace(
+        "## 4. A correction replaces it",
+        "## 3. A correction replaces it",
+    )
+    with pytest.raises(ValueError, match="duplicate section"):
+        build_demo_interactive_payload(dup_section_md, base_fixture)
+
+    bad_record_edge = json.loads(json.dumps(base_fixture))
+    bad_record_edge["arms"]["unitares"]["records"][4]["edges"][0]["relation"] = "replaces"
+    with pytest.raises(ValueError, match="missing from visible records"):
+        build_demo_interactive_payload(filled_md, bad_record_edge)
 
     with pytest.raises(ValueError, match="<h2>"):
         inject_demo_interactive("<h1>Title</h1><p>No section heading</p>", "<section/>")

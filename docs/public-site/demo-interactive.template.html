@@ -286,6 +286,7 @@
       if (stepIdx >= STEPS.length - 1) { stopPlay(); return; }
       stepIdx++;
       render();
+      if (stepIdx >= STEPS.length - 1) { stopPlay(); }
     }, 1800);
   });
 

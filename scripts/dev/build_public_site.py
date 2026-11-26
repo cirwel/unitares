@@ -290,11 +290,23 @@ _DEMO_STEP_PROGRESSION: tuple[dict, ...] = (
 )
 
 _NUMBERED_SECTION_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$", re.MULTILINE)
-_UNSUPPORTED_MD_RE = re.compile(r"\[[^\]]+\]\([^)]+\)|\*\*|__|^\s*[-*+]\s+", re.MULTILINE)
+_UNSUPPORTED_BLOCK_MD_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+|#{1,6}\s+)")
+_UNSUPPORTED_INLINE_MD_RE = re.compile(
+    r"\[[^\]]+\]\([^)]+\)|\*\*|__|<[A-Za-z/!][^>]*>|(?<!\w)[*_](?=\S).+?(?<=\S)[*_](?!\w)"
+)
 
 
 def _strip_inline_code(text: str) -> str:
     return re.sub(r"`([^`]+)`", r"\1", text)
+
+
+def _reject_unsupported_markdown(num: int, text: str) -> None:
+    stripped = re.sub(r"`[^`]+`", "", text)
+    if _UNSUPPORTED_INLINE_MD_RE.search(stripped):
+        raise ValueError(
+            f"demo-interactive: section {num} contains markdown syntax "
+            f"unsupported by textContent: {text!r}"
+        )
 
 
 def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
@@ -303,14 +315,19 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
     Returns ``{number: (title, lead_in, quote, detail)}`` where ``lead_in`` is
     the prose before any blockquote, ``quote`` is the verbatim blockquote text
     (empty when a section has none, such as step 5), and ``detail`` is the prose
-    after the blockquote. Fails closed if prose lines contain markdown
-    constructs (links, bold, lists) that ``textContent`` would show literally.
+    after the blockquote. Fails closed on duplicate section numbers or markdown
+    constructs (links, emphasis, lists, sub-headings, inline HTML) that
+    ``textContent`` would render literally.
     """
     matches = list(_NUMBERED_SECTION_RE.finditer(demo_md))
     sections: dict[int, tuple[str, str, str, str]] = {}
     for idx, match in enumerate(matches):
         num = int(match.group(1))
-        title = match.group(2).strip()
+        if num in sections:
+            raise ValueError(f"demo-interactive: duplicate section '## {num}.' in demo.md")
+        raw_title = match.group(2).strip()
+        _reject_unsupported_markdown(num, raw_title)
+        title = _strip_inline_code(raw_title)
         start = match.end()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(demo_md)
         body = demo_md[start:end]
@@ -330,7 +347,7 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
                 seen_quote = True
                 quote_lines.append(line.lstrip(">").strip())
             else:
-                if _UNSUPPORTED_MD_RE.search(line):
+                if _UNSUPPORTED_BLOCK_MD_RE.match(line):
                     raise ValueError(
                         f"demo-interactive: section {num} contains markdown syntax "
                         f"unsupported by textContent: {line!r}"
@@ -339,9 +356,13 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
                     detail_lines.append(line)
                 else:
                     lead_lines.append(line)
-        lead_in = _strip_inline_code(" ".join(lead_lines)).strip()
+        lead_joined = " ".join(lead_lines).strip()
+        detail_joined = " ".join(detail_lines).strip()
+        _reject_unsupported_markdown(num, lead_joined)
+        _reject_unsupported_markdown(num, detail_joined)
+        lead_in = _strip_inline_code(lead_joined)
         quote = " ".join(quote_lines).strip()
-        detail = _strip_inline_code(" ".join(detail_lines)).strip()
+        detail = _strip_inline_code(detail_joined)
         sections[num] = (title, lead_in, quote, detail)
     return sections
 
@@ -384,6 +405,14 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
                 f"demo-interactive: UNITARES record disagrees with oracle on {key!r}"
             )
 
+    expected_nums = {spec["number"] for spec in _DEMO_STEP_PROGRESSION}
+    extra_sections = sorted(set(sections) - expected_nums)
+    if extra_sections:
+        raise ValueError(
+            f"demo-interactive: docs/public-site/demo.md has unmapped numbered section(s) {extra_sections}"
+        )
+
+    records_by_id = {r["record_id"]: r for r in records}
     covered_relations: set[str] = set()
     covered_records: set[str] = set()
     steps: list[dict] = []
@@ -397,11 +426,6 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
         if not spec["show_reconstruction"] and not quote:
             raise ValueError(f"demo-interactive: section {num} in demo.md is missing a blockquote")
 
-        for rel in spec["relations"]:
-            if rel not in oracle_relations:
-                raise ValueError(f"demo-interactive: step {num} references unknown relation {rel!r}")
-            covered_relations.add(rel)
-
         step_ids = list(spec["visible_records"])
         unknown_ids = [rid for rid in step_ids if rid not in record_ids]
         if unknown_ids:
@@ -409,6 +433,20 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
                 f"demo-interactive: step {num} references unknown record(s) {unknown_ids}"
             )
         covered_records.update(step_ids)
+
+        visible_record_relations = {
+            e["relation"]
+            for rid in step_ids
+            for e in records_by_id[rid].get("edges", [])
+        }
+        for rel in spec["relations"]:
+            if rel not in oracle_relations:
+                raise ValueError(f"demo-interactive: step {num} references unknown relation {rel!r}")
+            if rel not in visible_record_relations:
+                raise ValueError(
+                    f"demo-interactive: step {num} relation {rel!r} is missing from visible records' edges"
+                )
+            covered_relations.add(rel)
 
         steps.append(
             {
