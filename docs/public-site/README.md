@@ -9,6 +9,7 @@ is **generated from repository markdown**; the built HTML is never hand-edited.
 | --- | --- |
 | [`index.md`](index.md) | Repository artifacts index page source |
 | [`demo.md`](demo.md) | Read-only demo source; the build fills its facts, record ids and link names from `tests/accountability_journey/incident-v0.json` and fails on anything it cannot fill |
+| [`demo-interactive.template.html`](demo-interactive.template.html) | Interactive 5-step incident walkthrough embedded into `demo.html`; injected at build time with `tests/accountability_journey/incident-v0.json` |
 | [`glossary-viewer.template.html`](glossary-viewer.template.html) | Interactive glossary viewer template; the build injects the glossary data |
 | [`favicon.svg`](favicon.svg) | Site icon |
 | `README.md` (this file) | Maintainer notes; the build does not render it, so it is not published |
