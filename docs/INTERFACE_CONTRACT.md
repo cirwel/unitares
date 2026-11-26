@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.6.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.7.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1403,3 +1403,15 @@ A server's operator decides whether a harness may ask it for an identity, and `o
 - **Compatibility:** purely additive. Callers omitting `reference` see identical behavior for flat skills and an extra `references` metadata list for split skills.
 - **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `skills` move; no other tool's digest moves.
 - **Client action:** none required for existing callers. Remote MCP clients following a `references/<file>.md` pointer in a split skill can call `skills(name="<skill>", reference="<file>.md")`.
+
+## 2.7.0 (2026-11-26)
+
+`dialectic` says what each action requires, stores what a synthesis files, and names the parameters an action did not read. `agent(action='list')` states its defaults.
+
+- **Declared requirement:** `describe_tool(tool_name='dialectic', action=...)` marks `session_id` as required at call time for `thesis`, `antithesis`, `synthesis` and `reassign`, as it already did for `consult` and `reconcile_effect`. The handlers refused a call without it before this version; only the declaration is new. `position` is no longer listed for `thesis`, which never read it.
+- **Changed descriptions:** on `dialectic` and `request_review`, `agent_id` no longer reads as a get/list filter on every action: it filters sessions on `get` and `list` (a bound caller may name only itself) and names the caller elsewhere. `session_id` and `observed_metrics` say which actions use them. On `agent`, `limit` and `recent_days` state their defaults: 20 agents active in the last 7 days in lite mode, 100 and no window with `lite=false`.
+- **Changed storage:** `dialectic(action='synthesis')` stores a supplied `observed_metrics` on the synthesis message, as `antithesis` does; a `reviewer_backend` key inside it is kept unless `reviewer_provenance` is also sent, which replaces it. Before 2.7.0 the parameter was accepted on a synthesis and nothing was stored.
+- **New output:** a successful `dialectic` response carries `unused_parameters: {action, names, note}` when the caller set a declared parameter that the action does not read. `names` lists them in schema order. A parameter left at its schema default is not listed, and neither is a name the schema does not declare. A refusal is unchanged. `request_review` advertises only parameters `request` reads, so a call through it on `/mcp/` has nothing to report. No other tool reports the notice.
+- **Compatibility:** additive for callers that send only what an action reads; they see no difference. A caller that sent other declared parameters sees one extra top-level key on success. A reader of stored synthesis messages may find `observed_metrics` populated where it was null or held only `reviewer_backend`.
+- **Schema digests:** `surface_sha256` and the `input_schema_sha256` of `dialectic`, `request_review` and `agent` move, from description text only. No parameter is added, removed, retyped or renamed.
+- **Client action:** none required. A client that files reviews can treat a non-empty `unused_parameters.names` as a sign that part of what it sent was not recorded.

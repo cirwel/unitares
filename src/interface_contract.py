@@ -331,7 +331,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 2.4.2 (2026-11-20): Imported-memory close-contest ranking_multiplier relaxes from 0.55 to 0.85 while channel_message stays 0.55.
 # 2.5.0 (2026-11-21): onboard accepts adapter-only harness_request and spawned_under; a server may decline a harness's identity request; GET /health reports the policy
 # 2.6.0 (2026-11-25): skills lists companion references/*.md files and accepts an optional reference parameter to fetch one safely without changing flat-skill behavior.
-INTERFACE_CONTRACT_VERSION = "2.6.0"
+# 2.7.0 (2026-11-26): dialectic names session_id as a call-time requirement of thesis, antithesis, synthesis and reassign in describe_tool, stores observed_metrics filed with a synthesis, and reports parameters an action did not read under unused_parameters. The input digests of dialectic, request_review and agent and the surface digest move, from description text only.
+INTERFACE_CONTRACT_VERSION = "2.7.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
