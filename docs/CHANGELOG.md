@@ -9,9 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **knowledge graph:** concept extraction now deletes the `Concept` vertices a run did not produce, with their edges. A concept id is a hash of its tag group, so every regrouped cluster used to leave its old vertex behind; the graph had 672 vertices for 298 labels and 482,192 `ABOUT` edges where one run plans about 15,000 (#3406). The run result reports `stale_concepts_deleted`, and nothing is deleted when a run could not write all of its own concepts and edges. The first run after this deploys removes the backlog.
-
 ---
 
 ## [4.1.0] - 2026-11-22
