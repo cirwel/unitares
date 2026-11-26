@@ -228,9 +228,11 @@ class PostgresBackend(
             # closed (e.g. its executor loop exited on its own — #3393).
             # Strict `is True` avoids false positives on unconfigured MagicMocks
             # in unit tests while matching ExecutorPool._closed and asyncpg.
-            destroy_reason: Optional[str] = None
+            destroy_message: Optional[str] = None
             if getattr(pool, "_closed", False) is True:
-                destroy_reason = "pool wrapper reported closed"
+                destroy_message = (
+                    f"Pool wrapper reported closed, destroying pool (backend={id(self)})"
+                )
             else:
                 # Periodic health check (every 60s)
                 now = time.time()
@@ -249,9 +251,11 @@ class PostgresBackend(
                                 f"Consider increasing DB_POSTGRES_MAX_CONN or checking for connection leaks."
                             )
                     except Exception as e:
-                        destroy_reason = str(e)
+                        destroy_message = (
+                            f"Pool health check failed, destroying pool (backend={id(self)}): {e}"
+                        )
 
-            if destroy_reason is not None:
+            if destroy_message is not None:
                 # Health check failed (or wrapper already closed) — acquire lock,
                 # re-check pool identity, then log+destroy. The log MUST be
                 # inside the lock + after the identity re-check; otherwise N
@@ -263,7 +267,7 @@ class PostgresBackend(
                 async with self._init_lock:
                     # Only destroy if still the same pool (another task may have already replaced it)
                     if self._pool is not None and self._pool is pool:
-                        logger.warning(f"Pool health check failed, destroying pool (backend={id(self)}): {destroy_reason}")
+                        logger.warning(destroy_message)
                         # Null-before-close: drop the reference *before*
                         # awaiting close() so concurrent acquires take
                         # the slow-path create branch instead of blocking

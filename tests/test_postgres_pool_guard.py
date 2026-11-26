@@ -214,6 +214,8 @@ class TestPoolRecovery:
             assert all(r is backend._pool and r is not dead_pool for r in results)
             destroy_logs = [r for r in caplog.records if "destroying pool" in r.message]
             assert len(destroy_logs) == 1
+            assert "Pool wrapper reported closed, destroying pool" in destroy_logs[0].message
+            assert "health check failed" not in destroy_logs[0].message.lower()
         finally:
             if backend._pool is not None and backend._pool is not dead_pool:
                 await backend._pool.close()
