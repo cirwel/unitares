@@ -321,10 +321,17 @@ def _strip_inline_code(text: str) -> str:
     return re.sub(r"`([^`]+)`", r"\1", text)
 
 
-def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str]]:
-    """Extract numbered step sections (## 1. .. ## 5.) from filled demo.md."""
+def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
+    """Extract numbered step sections (## 1. .. ## 5.) from filled demo.md.
+
+    Returns ``{number: (title, lead_in, quote, detail)}`` where ``lead_in`` is
+    the prose before any blockquote, ``quote`` is the blockquote text (empty
+    when a section has none, such as step 5), and ``detail`` is the prose after
+    the blockquote. Splitting around the blockquote keeps lead-in colons intact
+    instead of splicing them into the following paragraph.
+    """
     matches = list(_NUMBERED_SECTION_RE.finditer(demo_md))
-    sections: dict[int, tuple[str, str, str]] = {}
+    sections: dict[int, tuple[str, str, str, str]] = {}
     for idx, match in enumerate(matches):
         num = int(match.group(1))
         title = match.group(2).strip()
@@ -335,29 +342,35 @@ def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str]]:
         next_h2 = re.search(r"^##\s+", body, re.MULTILINE)
         if next_h2 is not None:
             body = body[: next_h2.start()]
-        prose_lines: list[str] = []
+        lead_lines: list[str] = []
         quote_lines: list[str] = []
+        detail_lines: list[str] = []
+        seen_quote = False
         for raw in body.splitlines():
             line = raw.strip()
             if not line or line.startswith("|"):
                 continue
             if line.startswith(">"):
+                seen_quote = True
                 quote_lines.append(line.lstrip(">").strip())
+            elif seen_quote:
+                detail_lines.append(line)
             else:
-                prose_lines.append(line)
-        summary = _strip_inline_code(" ".join(prose_lines)).strip()
+                lead_lines.append(line)
+        lead_in = _strip_inline_code(" ".join(lead_lines)).strip()
         quote = _strip_inline_code(" ".join(quote_lines)).strip()
-        sections[num] = (title, summary, quote)
+        detail = _strip_inline_code(" ".join(detail_lines)).strip()
+        sections[num] = (title, lead_in, quote, detail)
     return sections
 
 
 def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
     """Build and fail-closed-validate the interactive demo widget payload.
 
-    Step titles, prose, and quotes are parsed directly from the filled
-    ``demo.md`` so the widget holds no duplicate copy. Every referenced arm,
-    record id, edge relation, and question fact key is validated against
-    ``fixture`` so renames or additions fail the build.
+    Step titles, lead-ins, blockquotes, and follow-up prose are parsed directly
+    from the filled ``demo.md``; compact step-strip labels and record/relation
+    progressions are declared in ``_DEMO_STEP_PROGRESSION`` and validated
+    against ``fixture`` so renames, duplicates, or uncovered items fail the build.
     """
     sections = _parse_demo_sections(demo_md)
     facts = fixture["oracle"]["facts"]
@@ -398,14 +411,11 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
         num = spec["number"]
         if num not in sections:
             raise ValueError(f"demo-interactive: docs/public-site/demo.md is missing section '## {num}.'")
-        title, summary, quote = sections[num]
-        if not title or not summary:
-            raise ValueError(f"demo-interactive: section {num} in demo.md has empty title or summary")
-        if not quote:
-            if spec["show_reconstruction"]:
-                quote = str(fixture.get("incident", {}).get("summary", "")).strip()
-            if not quote:
-                raise ValueError(f"demo-interactive: section {num} in demo.md is missing a blockquote")
+        title, lead_in, quote, detail = sections[num]
+        if not title or not lead_in:
+            raise ValueError(f"demo-interactive: section {num} in demo.md has empty title or lead-in")
+        if not spec["show_reconstruction"] and not quote:
+            raise ValueError(f"demo-interactive: section {num} in demo.md is missing a blockquote")
 
         for rel in spec["relations"]:
             if rel not in oracle_relations:
@@ -425,8 +435,9 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
                 "number": num,
                 "short_label": spec["short_label"],
                 "title": title,
-                "summary": summary,
+                "lead_in": lead_in,
                 "quote": quote,
+                "detail": detail,
                 "relations": list(spec["relations"]),
                 "visible_records": {k: list(v) for k, v in spec["visible_records"].items()},
                 "show_reconstruction": spec["show_reconstruction"],
@@ -437,13 +448,31 @@ def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
     if uncovered:
         raise ValueError(f"demo-interactive: fixture relation(s) {uncovered} are never shown in any step")
 
+    evaluation_stage = str(fixture.get("classification", {}).get("evaluation_stage", "")).strip()
+    if not evaluation_stage:
+        raise ValueError("demo-interactive: fixture is missing classification.evaluation_stage")
+
     return {
         "incident_id": fixture["incident"]["incident_id"],
+        "evaluation_stage": evaluation_stage,
         "arms": arms,
         "oracle_edges": oracle_edges,
         "questions": fixture["questions"],
         "steps": steps,
     }
+
+
+def inject_demo_interactive(demo_body: str, widget_html: str) -> str:
+    """Insert ``widget_html`` right before the first ``<h2>`` in ``demo_body``.
+
+    Fails closed if no ``<h2>`` heading is present rather than silently
+    prepending the widget above ``<h1>``.
+    """
+    split_marker = "\n<h2"
+    if split_marker not in demo_body:
+        raise ValueError("demo-interactive: rendered demo.html has no <h2> section heading")
+    intro_part, rest_part = demo_body.split(split_marker, 1)
+    return f"{intro_part}\n{widget_html}\n<h2{rest_part}"
 
 
 def render_demo_interactive(template: str, payload: dict) -> str:
@@ -505,15 +534,7 @@ def build(out_dir: Path, cname: str | None) -> None:
         (SITE / "demo-interactive.template.html").read_text(encoding="utf-8"),
         build_demo_interactive_payload(demo_md, journey_fixture),
     )
-    # Place the interactive step-through explorer right below the opening heading
-    # and intro paragraph, keeping the full rendered markdown narrative below it
-    # as the static/no-JS canonical reference.
-    split_marker = "\n<h2"
-    if split_marker in demo_body:
-        intro_part, rest_part = demo_body.split(split_marker, 1)
-        demo_html_body = f"{intro_part}\n{demo_interactive}\n<h2{rest_part}"
-    else:
-        demo_html_body = f"{demo_interactive}\n{demo_body}"
+    demo_html_body = inject_demo_interactive(demo_body, demo_interactive)
     out_dir.joinpath("demo.html").write_text(
         PAGE_TEMPLATE.format(
             title="UNITARES demo: one incident, as the record holds it",

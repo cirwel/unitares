@@ -125,8 +125,10 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert 'class="brand" href="https://cirwel.org"' in viewer_html
     assert 'href="index.html">Artifacts</a>' in viewer_html
     assert 'href="demo.html" class="active"' in demo
-    # Interactive explorer is embedded single-source from incident-v0.json.
-    assert 'class="demo-stage"' in demo
+    # Interactive explorer is embedded single-source from demo.md and incident-v0.json,
+    # starts hidden for clean no-JS degradation, and keeps <noscript> outside it.
+    assert '<section class="demo-stage" id="demo-stage" aria-label="Interactive incident walkthrough" hidden>' in demo
+    assert "</section>\n<noscript>" in demo
     assert "__DEMO_DATA_JSON__" not in demo
     assert '"incident_id": "reload-claim-contradiction-v0"' in demo
     assert 'data-arm="unitares"' in demo
@@ -187,6 +189,7 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
         JOURNEY_FIXTURE,
         SITE,
         build_demo_interactive_payload,
+        inject_demo_interactive,
         render_demo_interactive,
         render_demo_md,
     )
@@ -205,9 +208,17 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
         render_demo_interactive("<script>const X = {};</script>", {})
 
     # Fail-closed validation: renaming a record id, adding an unmapped relation,
-    # or dropping a numbered step section from demo.md must fail the build.
+    # dropping a numbered step section from demo.md, or missing <h2> placement
+    # must fail the build.
     base_fixture = json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8"))
     filled_md = render_demo_md((SITE / "demo.md").read_text(encoding="utf-8"), base_fixture)
+    payload = build_demo_interactive_payload(filled_md, base_fixture)
+    # Steps 1-4 preserve lead_in/quote/detail separately (no colon splicing); step 5 has no fake quote.
+    assert payload["steps"][0]["lead_in"].endswith(":")
+    assert payload["steps"][0]["quote"] == base_fixture["oracle"]["facts"]["original_claim"]
+    assert payload["steps"][0]["detail"].startswith("The record binds")
+    assert payload["steps"][4]["quote"] == ""
+    assert payload["evaluation_stage"] == "retrieval_control"
 
     bad_record = json.loads(json.dumps(base_fixture))
     bad_record["arms"]["unitares"]["records"][0]["record_id"] = "renamed-record"
@@ -224,6 +235,9 @@ def test_demo_interactive_escapes_script_close_and_requires_placeholder():
     bad_md = filled_md.replace("## 3. A reviewer challenges it", "### Unnumbered")
     with pytest.raises(ValueError, match="missing section"):
         build_demo_interactive_payload(bad_md, base_fixture)
+
+    with pytest.raises(ValueError, match="<h2>"):
+        inject_demo_interactive("<h1>Title</h1><p>No section heading</p>", "<section/>")
 
 
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):
