@@ -11,6 +11,7 @@ source_files:
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/mcp_handlers/knowledge/read_metadata.py
+  - unitares/src/mcp_handlers/knowledge/search_helpers.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
   - unitares/src/mcp_handlers/schemas/knowledge.py
   - unitares/src/alias_schema.py
@@ -27,6 +28,7 @@ source_files:
   - unitares/src/knowledge_graph.py
   - unitares/src/knowledge_graph_lifecycle.py
   - unitares/src/storage/knowledge_graph_age.py
+  - unitares/src/storage/knowledge_graph_age_search.py
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
   - unitares/skills/knowledge-graph/references/authority-and-synthesis.md
