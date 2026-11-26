@@ -166,12 +166,13 @@ class TestScoreDiscovery:
         assert result["summary"].endswith("…")
         assert result["summary_truncated"] is True
 
-    def test_short_summary_is_not_marked_truncated(self):
-        """Short summaries stay verbatim without a summary_truncated key."""
+    def test_short_summary_is_verbatim_including_whitespace(self):
+        """Short summaries stay byte-for-byte verbatim (including newlines/double spaces) without a marker."""
         from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle, _score_discovery
-        d = _make_discovery(age_days=45, summary="Concise summary")
+        raw = "Line one\nLine  two\tindented"
+        d = _make_discovery(age_days=45, summary=raw)
         result = _score_discovery(d, KnowledgeGraphLifecycle())
-        assert result["summary"] == "Concise summary"
+        assert result["summary"] == raw
         assert "summary_truncated" not in result
 
     def test_none_summary_coerces_to_empty_string(self):
@@ -252,24 +253,25 @@ class TestRunKgAudit:
         assert result["top_stale"][1]["id"] == "s3"
 
     @pytest.mark.asyncio
-    async def test_audit_top_n_clamps_negative_and_oversized_values(self):
-        """Negative top_n must not trigger Python negative slicing; oversized top_n is capped."""
-        from src.knowledge_graph_lifecycle import AUDIT_MAX_TOP_N, run_kg_audit
+    async def test_audit_top_n_clamps_negative_without_breaking_serializer_overflow(self):
+        """Negative top_n returns [] instead of Python negative slicing; top_n > 100 passes through
+        so the shared MCP serializer emits its documented truncation marker."""
+        from src.knowledge_graph_lifecycle import run_kg_audit
 
         discoveries = [
             _make_discovery(id=f"s{i}", age_days=40 + i)
-            for i in range(AUDIT_MAX_TOP_N + 15)
+            for i in range(115)
         ]
         graph = _make_mock_graph({"open": discoveries})
 
         with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph):
             neg = await run_kg_audit(scope="open", top_n=-1)
             zero = await run_kg_audit(scope="open", top_n=0)
-            huge = await run_kg_audit(scope="open", top_n=5000)
+            over = await run_kg_audit(scope="open", top_n=120)
 
         assert neg["top_stale"] == []
         assert zero["top_stale"] == []
-        assert len(huge["top_stale"]) == AUDIT_MAX_TOP_N
+        assert len(over["top_stale"]) == 115
 
     @pytest.mark.asyncio
     async def test_audit_use_model_receives_bounded_summary(self):

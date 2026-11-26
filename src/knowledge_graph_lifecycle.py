@@ -714,26 +714,27 @@ AUDIT_HEALTHY_DAYS = 7
 AUDIT_AGING_DAYS = 14
 AUDIT_STALE_DAYS = 30
 AUDIT_SUMMARY_MAX_CHARS = 240
-AUDIT_MAX_TOP_N = 100
 
 
 def _bound_audit_summary(summary: Any, limit: int = AUDIT_SUMMARY_MAX_CHARS) -> tuple[str, bool]:
-    """Collapse whitespace and bound an audit summary at a word boundary.
+    """Bound an oversized audit summary at a whitespace boundary.
 
+    Summaries at or under ``limit`` characters are returned verbatim so
+    ``summary_truncated`` is set if and only if the stored summary was cut.
     Historical entries written before write-time summary limits can hold
-    multi-kilobyte summaries. Bounding them here keeps ``top_stale`` and the
-    optional local-LLM assessment prompt compact while marking truncated
-    entries explicitly so callers know to open ``knowledge(action='details')``.
+    multi-kilobyte summaries; bounding them here keeps ``top_stale`` and the
+    optional local-LLM assessment prompt compact while signaling callers to
+    open ``knowledge(action='details')`` when ``summary_truncated`` is true.
     """
     if not isinstance(summary, str):
         return "", False
-    compact = " ".join(summary.split())
-    if len(compact) <= limit:
-        return compact, False
-    cutoff = compact.rfind(" ", 0, limit - 1)
-    if cutoff < limit // 2:
-        cutoff = limit - 1
-    return compact[:cutoff].rstrip() + "…", True
+    if len(summary) <= limit:
+        return summary, False
+    prefix = summary[: limit - 1]
+    cutoff = max(prefix.rfind(" "), prefix.rfind("\n"), prefix.rfind("\t"))
+    if cutoff >= limit // 2:
+        prefix = prefix[:cutoff]
+    return prefix.rstrip() + "…", True
 
 
 def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str, Any]:
@@ -847,11 +848,12 @@ async def run_kg_audit(
     for s in scored:
         buckets[s["bucket"]] = buckets.get(s["bucket"], 0) + 1
 
-    # Top stale entries (stale + candidate_for_archive, sorted by last_activity_days desc)
+    # Top stale entries (stale + candidate_for_archive, sorted by last_activity_days desc).
+    # Clamp only the lower bound so negative top_n never triggers Python negative slicing;
+    # upper-bound list truncation stays in the shared MCP serializer (see docs/guides/kg-audit-limits.md).
     stale_entries = [s for s in scored if s["bucket"] in ("stale", "candidate_for_archive")]
     stale_entries.sort(key=lambda x: x["last_activity_days"], reverse=True)
-    bounded_top_n = max(0, min(top_n, AUDIT_MAX_TOP_N))
-    top_stale = stale_entries[:bounded_top_n]
+    top_stale = stale_entries[: max(0, top_n)]
 
     # Optional model assessment
     model_assessment = None
