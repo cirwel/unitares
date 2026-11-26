@@ -122,6 +122,12 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert 'class="brand" href="https://cirwel.org"' in viewer_html
     assert 'href="index.html">Artifacts</a>' in viewer_html
     assert 'href="demo.html" class="active"' in demo
+    # Interactive explorer is embedded single-source from incident-v0.json.
+    assert 'class="demo-stage"' in demo
+    assert "__DEMO_DATA_JSON__" not in demo
+    assert '"incident_id": "reload-claim-contradiction-v0"' in demo
+    assert 'data-arm="unitares"' in demo
+    assert 'data-arm="structured_handoff"' in demo
 
 
 def test_demo_build_fails_on_unfilled_placeholder():
@@ -168,6 +174,23 @@ def test_demo_link_names_must_match_the_fixture_edges():
     # A fixture relation the page never names fails it too.
     with pytest.raises(ValueError):
         render_demo_md("no links here", fixture)
+
+
+def test_demo_interactive_escapes_script_close_and_requires_placeholder():
+    import pytest
+
+    from scripts.dev.build_public_site import render_demo_interactive
+
+    rendered = render_demo_interactive(
+        "<script>const X = __DEMO_DATA_JSON__;</script>",
+        {"note": "</script><script>alert(1)</script>"},
+    )
+    assert "</script><script>" not in rendered
+    assert "<\\/script>" in rendered
+    assert "__DEMO_DATA_JSON__" not in rendered
+
+    with pytest.raises(ValueError):
+        render_demo_interactive("<script>const X = {};</script>", {})
 
 
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):

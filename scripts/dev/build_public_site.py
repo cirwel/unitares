@@ -239,6 +239,19 @@ def render_demo_md(demo_md: str, fixture: dict) -> str:
     return text
 
 
+def render_demo_interactive(template: str, fixture: dict) -> str:
+    """Embed ``fixture`` into the interactive demo template safely.
+
+    Escapes ``</`` so fixture strings cannot terminate the inline ``<script>``
+    block, and fails the build if the data placeholder is missing.
+    """
+    placeholder = "__DEMO_DATA_JSON__"
+    if placeholder not in template:
+        raise ValueError("demo: docs/public-site/demo-interactive.template.html is missing __DEMO_DATA_JSON__")
+    demo_data_json = json.dumps(fixture, ensure_ascii=False).replace("</", "<\\/")
+    return template.replace(placeholder, demo_data_json)
+
+
 def latest_drift_audit() -> Path | None:
     audits = sorted(ONTOLOGY.glob("glossary-drift-audit-*.md"))
     return audits[-1] if audits else None
@@ -267,10 +280,25 @@ def build(out_dir: Path, cname: str | None) -> None:
     )
 
     # Read-only demo: one incident from the tested fixture, nothing to install.
+    journey_fixture = json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8"))
     demo_md = render_demo_md(
         (SITE / "demo.md").read_text(encoding="utf-8"),
-        json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8")),
+        journey_fixture,
     )
+    demo_body = render(demo_md, source_dir=SITE)
+    demo_interactive = render_demo_interactive(
+        (SITE / "demo-interactive.template.html").read_text(encoding="utf-8"),
+        journey_fixture,
+    )
+    # Place the interactive step-through explorer right below the opening heading
+    # and intro paragraph, keeping the full rendered markdown narrative below it
+    # as the static/no-JS canonical reference.
+    split_marker = "\n<h2"
+    if split_marker in demo_body:
+        intro_part, rest_part = demo_body.split(split_marker, 1)
+        demo_html_body = f"{intro_part}\n{demo_interactive}\n<h2{rest_part}"
+    else:
+        demo_html_body = f"{demo_interactive}\n{demo_body}"
     out_dir.joinpath("demo.html").write_text(
         PAGE_TEMPLATE.format(
             title="UNITARES demo: one incident, as the record holds it",
@@ -281,7 +309,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             repo=REPO_URL,
             source_path="docs/public-site/demo.md",
             blob=DEMO_BLOB,
-            body=render(demo_md, source_dir=SITE),
+            body=demo_html_body,
         ),
         encoding="utf-8",
     )
