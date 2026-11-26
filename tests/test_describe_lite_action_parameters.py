@@ -77,6 +77,7 @@ def _action_handler(alias_name: str):
 # error_response("session_id is required", ...). The dialectic write actions
 # all refuse this way.
 _HAND_WRITTEN_REQUIREMENT = re.compile(r"^(\w+) is required\b")
+_HANDLERS_TREE = "src.mcp_handlers"
 
 
 def _walk_handler(handler, *, stop_at=()) -> tuple[set[str], set[str]]:
@@ -105,7 +106,13 @@ def _walk_handler(handler, *, stop_at=()) -> tuple[set[str], set[str]]:
     listed with their reasons in _CONDITIONAL_REQUIREMENTS.
     """
     start = inspect.unwrap(handler)
+    # The handler's package, but never wider than the handlers tree: a handler
+    # that lives outside it (knowledge notices is src.knowledge_notices) would
+    # otherwise have `src` as its package and the walk could follow any helper
+    # in the codebase. Such a handler is walked within its own module.
     package = start.__module__.rpartition(".")[0]
+    if not (package + ".").startswith(_HANDLERS_TREE + "."):
+        package = start.__module__
     stop = {inspect.unwrap(fn) for fn in stop_at} - {start}
     pending, seen = [start], set()
     reads: set[str] = set()
@@ -116,10 +123,9 @@ def _walk_handler(handler, *, stop_at=()) -> tuple[set[str], set[str]]:
             continue
         seen.add(fn)
         module = importlib.import_module(fn.__module__)
-        try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-        except (OSError, TypeError, SyntaxError):
-            continue
+        # Not guarded: a function the walk cannot parse is a hole in the
+        # guard, and should fail here rather than be skipped.
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 helper = getattr(module, node.func.id, None)

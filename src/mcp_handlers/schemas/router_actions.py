@@ -188,7 +188,18 @@ def supplied_fields_unused_by_action(
     A parameter counts as set when it is present, not None, and differs from
     its schema default. Validation fills every absent field with its default
     before dispatch, so an untouched field and one sent at its default look
-    the same here; neither changes what the action did.
+    the same here; neither changes what the action did. Three more things
+    are not the caller filing something, and are left out:
+
+    - an empty string, list or dict, which some clients send as padding
+      (``False`` is kept: ``agrees=False`` on an antithesis is a mis-filing);
+    - a default in its string form (``judgment_formed='true'``);
+    - a default a workflow alias injected for a parameter the caller omitted.
+      ``request_review`` sets ``use_brief_as_thesis=True`` that way, and where
+      the alias keeps the router's ``action`` (REST, stdio, ``use_tool``) a
+      ``request_review(action='list')`` would otherwise be told about a
+      parameter it never sent. The params step records each injection under
+      ``_param_coercions`` as ``interpretation='alias_default'``.
 
     Empty when the model declares no action map or does not know the action.
     Only declared parameters are considered: a name the schema does not have
@@ -200,10 +211,16 @@ def supplied_fields_unused_by_action(
     if used is None:
         return ()
     wanted = set(used)
+    coercions = arguments.get("_param_coercions")
+    injected = {
+        key
+        for key, record in (coercions.items() if isinstance(coercions, Mapping) else ())
+        if isinstance(record, Mapping) and record.get("interpretation") == "alias_default"
+    }
     unused = []
     for name, field in (getattr(model, "model_fields", {}) or {}).items():
         published = getattr(field, "alias", None) or name
-        if published in wanted:
+        if published in wanted or published in injected or name in injected:
             continue
         if published in arguments:
             value = arguments[published]
@@ -213,11 +230,19 @@ def supplied_fields_unused_by_action(
             continue
         if value is None:
             continue
+        if isinstance(value, (str, list, tuple, dict)) and len(value) == 0:
+            continue
         try:
             default = field.get_default(call_default_factory=True)
         except Exception:
             default = None
         if value == default:
+            continue
+        if (
+            isinstance(value, str)
+            and default is not None
+            and value.strip().lower() == str(default).strip().lower()
+        ):
             continue
         unused.append(published)
     return tuple(unused)

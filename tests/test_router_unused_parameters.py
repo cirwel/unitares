@@ -119,6 +119,76 @@ def test_a_parameter_left_at_its_default_is_not_named():
     )
 
 
+def test_empty_placeholders_are_not_named_and_false_is():
+    """Some clients pad a call with empty values; that is not filing anything.
+
+    False is different: agrees=False sent with an antithesis is a verdict the
+    caller thinks it recorded.
+    """
+    arguments = _validated(
+        DialecticParams,
+        action="list",
+        session_id="",
+        concerns=[],
+        observed_metrics={},
+        check_timeout=False,
+    )
+    assert supplied_fields_unused_by_action(DialecticParams, "list", arguments) == (
+        "check_timeout",
+    )
+
+    arguments = _validated(
+        DialecticParams, action="antithesis", session_id="abc123", agrees=False
+    )
+    assert supplied_fields_unused_by_action(
+        DialecticParams, "antithesis", arguments
+    ) == ("agrees",)
+
+
+def test_a_default_sent_as_a_string_is_not_named():
+    assert supplied_fields_unused_by_action(
+        DialecticParams, "list", {"action": "list", "judgment_formed": "true"}
+    ) == ()
+    assert supplied_fields_unused_by_action(
+        DialecticParams, "list", {"action": "list", "judgment_formed": "false"}
+    ) == ("judgment_formed",)
+
+
+def test_a_default_the_alias_injected_is_not_named():
+    """request_review sets use_brief_as_thesis=True when the caller omits it.
+
+    Where the alias keeps the router's `action` (REST, stdio, use_tool),
+    request_review(action='list') reached the router with that injected value
+    and was told about a parameter it never sent. Found in review of #3402.
+    """
+    arguments = _validated(DialecticParams, action="list", use_brief_as_thesis=True)
+    arguments["_param_coercions"] = {
+        "use_brief_as_thesis": {
+            "from": "omitted",
+            "to": True,
+            "interpretation": "alias_default",
+        }
+    }
+    assert supplied_fields_unused_by_action(DialecticParams, "list", arguments) == ()
+
+    # The same value sent by the caller is the caller's, and is named.
+    arguments.pop("_param_coercions")
+    assert supplied_fields_unused_by_action(DialecticParams, "list", arguments) == (
+        "use_brief_as_thesis",
+    )
+
+
+def test_the_alias_injection_is_recorded_the_way_the_helper_reads_it():
+    """Hold the helper to the params step that writes the record."""
+    import inspect as _inspect
+
+    from src.mcp_handlers.middleware import params_step
+
+    source = _inspect.getsource(params_step)
+    assert '"interpretation": "alias_default"' in source
+    assert '"_param_coercions"' in source
+
+
 def test_unvalidated_arguments_name_only_what_is_present():
     """The REST fallback can reach a handler with the caller's keys alone."""
     assert supplied_fields_unused_by_action(
@@ -255,7 +325,16 @@ def _action_table(router) -> dict:
 
 def _handoffs(router) -> set[tuple[str, str]]:
     """(action, other action) wherever an action's code path calls the
-    handler of another action of the same router."""
+    handler of another action of the same router.
+
+    It recognises a call to the function the routing table holds. It does not
+    see a call to another action's implementation behind that function, or a
+    handler passed along as a value. Those are covered from the other side:
+    test_every_action_declares_the_parameters_its_handler_reads stops only at
+    the routing-table functions too, so a path that reaches another action's
+    implementation directly has that implementation's reads counted against
+    the calling action, and an undeclared one fails there.
+    """
     actions = _action_table(router)
     by_function = {inspect.unwrap(fn): action for action, fn in actions.items()}
     found = set()
