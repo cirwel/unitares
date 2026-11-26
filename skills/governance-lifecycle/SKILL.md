@@ -55,6 +55,9 @@ source_files:
   # descriptions are abridged and names describe_tool as where the full text
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
+  - unitares/skills/governance-lifecycle/references/checkpoints-and-envelopes.md
+  - unitares/skills/governance-lifecycle/references/identity-and-recovery.md
+  - unitares/skills/governance-lifecycle/references/tools-and-envelopes.md
 ---
 
 # Agent Lifecycle
@@ -102,7 +105,9 @@ for clean exit and handoff; exceptions and recovery follow.
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`).
+Use primary task-verb tools by default; each wraps a raw tool and returns a
+normalized envelope (`next_action`, `state_summary`, `risk_summary`,
+`memory_suggestions`, `recovery_hint`).
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -115,199 +120,69 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Store a durable finding | `store_finding(summary=..., discovery_type=...)` | `knowledge(action="store")` |
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
-Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
+- Routine reads, write acks, fresh `start_session`, and routine `request_review`
+  omit `raw_governance` by default (`response_shape: "routine"`); never repeat
+  `store_finding` just to see the full payload (each call mints a new finding).
+- `request_review` reuses `issue_description` as the thesis by default (one-call
+  review). For proxy reviews of another agent's work, declare known authors in
+  `reviewed_work_author_agent_ids` (never an empty list).
 
-For a proxy-filed review of another UNITARES agent's work, pass the known
-author UUIDs in `reviewed_work_author_agent_ids`; the server treats the list as
-an unverified conflict declaration and recuses those agents from independent
-review. Omit it when authorship is unknown rather than sending an empty list.
-
-### Response shapes
-
-Read aliases, bounded `sync_state` modes, and the write aliases `store_finding`, `update_finding` and `record_result` omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere, except as below for the finding writes); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it), and so does a routine `request_review`, one whose review opened and waits on a known move (`response_shape: "routine"`; `state_summary` keeps `session_id`, `phase` and `whose_move`, and `raw_governance_hint` names `dialectic(action="get", session_id=...)`, which returns the session as it stands later, not the ack). A review ack that carries the review itself (a verdict, recusal, facilitation request or reviewer-host limit) keeps `raw_governance`, with `response_shape: "full"` and a `response_shape_reason`; other state-changing aliases preserve it under `raw_governance`. Those three write acknowledgements keep the ids you need next (`discovery_id`, `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and `written_as` (the writer's `agent_id`, `display_name` and assurance tier), so check it when you bound without an explicit `client_session_id`; `record_result` names its writer only when its binding was not server-inferred, so pass `client_session_id` if you need to see it. Their `raw_governance_hint` names what is still reachable. `record_result` has no read by outcome id: for an outcome recorded with a `prediction_id`, repeating the identical call under the same identity (pass `client_session_id`) with `response_mode="full"` returns the stored outcome in full (`idempotent_replay: true`) and records no second outcome while the binding is retained (a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`); without a `prediction_id` a repeat records a second outcome, so the hint names `response_mode="full"` on a later `record_result`. For `store_finding` and `update_finding` it is a `knowledge(action="details", discovery_id=...)` read (the hint names it as `use_tool(tool_name="knowledge", ...)`, which the progressive surface can call), which returns the stored record rather than the ack's payload. No read returns the omitted payload, so these acks do not set `raw_governance_available`. Write-time warnings and a bounded `related_discoveries` snapshot are kept in the ack itself because that read does not return the warnings or the snapshot's summary previews; the snapshot's ids are the stored record's `related_to`, so a `store_finding` ack carrying the snapshot does not repeat them as `state_summary.related_to`. Do not repeat a write just to see its payload: `store_finding` mints a new finding on every call. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+When a response includes `raw_governance_hint`, `response_shape_reason`,
+`idempotent_replay`, or `episode_fork_kind`, read
+`references/checkpoints-and-envelopes.md`
+(remote MCP: `skills(name="governance-lifecycle", reference="checkpoints-and-envelopes.md")`).
 
 ## Starting a Session
 
 Choose creation, lineage, or proof-owned resume explicitly:
 
 ~~~text
-start_session(force_new=true)                                        # one fresh process identity — the default; co-location is not lineage
+start_session(force_new=true)                                        # fresh process identity (default; co-location is not lineage)
 start_session(force_new=true, parent_agent_id="<dispatcher-uuid>",
-              spawn_reason="subagent")                               # dispatched subagent (usually set automatically by the dispatcher)
+              spawn_reason="subagent")                               # dispatched subagent
 start_session(force_new=true, parent_agent_id="<prior-uuid>",
               spawn_reason="explicit")                               # deliberate handoff from an exited prior session
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
-Declaring a currently-live agent as parent for a succession is rejected (`lineage_coincidental_rejected`): a live agent is then a concurrent sibling, not a predecessor. Registered dispatched-child reasons (`subagent`, internal `dialectic_reviewer`, and `dispatch`) plus the `compaction` continuation are exempt because their parent is legitimately live; unknown reasons receive no exemption. Use `explicit` for a deliberate handoff from an exited predecessor; the older `new_session` reason remains succession-shaped but does not, by itself, prove intentional lineage. A genuine handoff stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
+- **Do not** call bare `onboard()` or bare `identity()` (no proof signal mints
+  a fresh identity or returns a refusal), do not pass `continuity_token` on
+  every call or to `onboard(continuity_token=...)`, and do not treat `name=` as
+  a resume key.
+- Pass `client_session_id` on ordinary in-process calls.
 
-Use raw `onboard(...)` instead when targeting older servers or when you
-need the unwrapped raw response.
-
-Returns:
-- **agent_uuid / UUID**: The server identity anchor for this process instance
-- **client_session_id**: The proof string for this running process; pass it on later calls, and do not treat it as cross-process selfhood
-- **continuity_token**: Short-lived ownership proof for PATH 0 anti-hijack rebinds (scope below)
-- **session diagnostics**: `session_resolution_source`, `identity_assurance`, and deprecation warnings when relevant
-
-### Creation, lineage, and resume (updated 2026-04-25)
-
-`name=` is a cosmetic label, not a resume key. Passing the same name on a later session does not prove identity.
-
-Default rules:
-
-1. Any fresh process: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
-2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a deliberate handoff from an exited prior session (`parent_agent_id="<prior-uuid>", spawn_reason="explicit"`). Declaring a currently-live succession parent is rejected.
-3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
-4. Ordinary same-process check-ins: pass `client_session_id` (adapters may inject it). Bearer-token `/mcp/` with no session header keeps no binding between calls, and an OAuth client's binding is per client, shared across its conversations, not per process. Reserve `continuity_token` for explicit proof-owned rebinds.
-
-Avoid these patterns:
-
-- Bare `identity(agent_uuid=X, resume=true)`: UUID alone is an unsigned claim. It is refused under the default `UNITARES_IDENTITY_STRICT=strict`; a server that sets `log` accepts it and emits hijack-suspected telemetry.
-- `onboard(continuity_token=...)` as cross-process resume: S1-c refuses it (`status: continuity_token_resume_rejected`); the S1-a deprecation window has closed. Declare lineage with `parent_agent_id` instead, or rebind the same live process with `identity(agent_uuid, continuity_token, resume=true)`.
-- Bare `onboard()`: older servers may still pin-resume by weak session/IP:UA evidence; current ones refuse a resume reached only that way (`resume_proof_required`). Use `force_new=true` when creating a new process identity.
-
-`continuity_token` is now intentionally narrow: 1-hour TTL, rolling, and retained as possession proof for anti-hijack gates. It does not establish process-instance continuity by itself.
+When `start_session` or `identity` returns `refused: true` (`identity_required`,
+`lineage_declaration_required`, `lineage_coincidental_rejected`,
+`resume_proof_required`, `continuity_token_resume_rejected`,
+`credentials_withheld`), or `bind_session` returns `rebind_refused` (do not
+retry or forge), read `references/identity-and-recovery.md`
+(remote MCP: `skills(name="governance-lifecycle", reference="identity-and-recovery.md")`).
 
 ## Check-ins
 
 Call `sync_state()` only at a meaningful milestone when you also hold a
-judgment the substrate cannot infer:
+judgment the substrate cannot infer (a self-correction, revised belief,
+material change in uncertainty/complexity, or handoff assessment). Completion,
+turn boundaries, and automatic hook rows do not call for one.
 
 ~~~text
 sync_state(
-  response_text: "Your judgment and the relevant work, concise and secret-free",
+  response_text: "Your judgment and relevant work, concise and secret-free (500-char excerpt retained)",
   complexity: 0.0-1.0,   # Task difficulty estimate
-  confidence: 0.0-1.0    # OPTIONAL — omit unless you are genuinely stating a
-                         # belief about your own work. Any value you pass mints
-                         # a tactical prediction that is scored into the fleet
-                         # calibration curve, so a habitual number becomes a
-                         # forecast nobody made. Omitting it mints nothing.
+  confidence: 0.0-1.0    # OPTIONAL — omit unless stating a genuine forecast; mints a prediction_id
 )
 ~~~
 
-Use raw `process_agent_update(...)` when you need the raw handler payload, or
-call `sync_state(..., response_mode="full")` to retain it under
-`raw_governance` in the primary workflow response.
+- **Retry safety**: checkpoint acceptance is idempotent **only** when you supply
+  `idempotency_key` and reuse the exact payload (`acceptance_retry_idempotent: true`);
+  the legacy `state_persistence` assessment writer is non-idempotent.
+- **Predictions**: if `sync_state` returns a `prediction_id`, thread that exact
+  ID into `record_result(..., prediction_id="...")` when the outcome lands.
+- **Identity refusals** return `refused: true`, `status`, `next_step`,
+  `safe_options`, `do_not` with `success: true` — branch on `refused`/`status`,
+  not `success is False`, and do not repeat the call.
 
-The check-in row keeps a bounded excerpt of `response_text` (500 characters
-by default, cut at a word boundary, common credential shapes redacted), so the
-check-in's record shows what you reported. Put the identifiers that matter (PR
-numbers, paths) early, and never paste secrets: redaction is best effort. The
-excerpt is your own report, not a verified claim; a durable claim still needs
-`store_finding`.
-
-### When to Check In
-
-- Check in only at a meaningful milestone when you also hold a judgment the
-  substrate cannot infer: a self-correction, revised belief, material change
-  in uncertainty or complexity, or handoff assessment after substantive work.
-- A boundary before or after high-risk or high-complexity work qualifies only
-  when it meets both conditions. One check-in may cover a coherent unit of work.
-- There is no fixed time-, turn-, or tool-count cadence. Completion, generated
-  output, reminders, session start or exit, and automatic substrate observations
-  alone do not call for a check-in. Do not manufacture a report to echo them.
-
-### What You Get Back
-
-The friendly tools return a normalized envelope. Read `action_summary` when
-present for the action, verdict, and evidence maturity, then `next_action`,
-`state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
-present. `check_working_state()` and `search_shared_memory()` omit the repeated
-canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
-`response_mode="full"`, respectively, when you need it under `raw_governance`.
-`check_working_state(verbosity="standard")` is the middle tier: basin and mode
-with their meanings, and guidance, beside the verdict, risk_score and bare EISV
-values, without the diagnostics. A
-response marked `response_shape: "routine"` was trimmed because nothing in it
-needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
-`reason` and `risk_score` and the margin with its scope, but drops the repeated
-approve/safe/healthy values, and a plain fresh `start_session` omits the onboard
-record. That includes a mint on a thread earlier sessions occupied:
-`state_summary` then carries `episode_fork_kind: "sibling_locus"` and the
-earlier node's `predecessor_uuid`, and `next_action` says co-location is not
-lineage. A named mint keeps its `resident_registration` verdict at the top
-level in compact form (`status`, `on_roster`, and for `not_on_roster` (and,
-briefly, `caller_supplied_tags`) a short `detail`: what that costs, that this
-identity cannot gain the tags, and the fix: add the name to the roster,
-restart, mint fresh). Anything unusual (a guide, a pause, a check-in
-carrying `warnings` (lifted to the top level), a resume miss, a reactivated
-identity, a declared lineage, a spawn reason other than `new_session`, a sibling whose earlier nodes were pruned, a label rename)
-keeps the full shape; on `start_session` and `request_review`,
-`response_shape_reason` then names the field that kept it.
-
-One response is deliberately **not** that envelope. When a call is refused for
-identity, you get the typed refusal contract instead: `status`
-(`identity_required` or `lineage_declaration_required`), `hint`, `next_step`,
-`safe_options`, `do_not`, `rollout_flag`, and `refused: true`. There is no `next_action` —
-read `next_step` and `safe_options`. It carries `success: true`, because it is
-a structured refusal rather than a transport error, so branching on
-`success is False` will miss it; branch on `refused`, `status` or `rollout_flag`. The target
-tool handler did not run. Treat that as a no-handler-execution receipt, not a
-blanket no-write receipt: resolver-failure paths may already have performed
-identity-resolution bookkeeping. Follow `next_step` rather than retrying the
-same call.
-
-Cold-start action summaries carry a provisional headline. A `proceed` action
-before the behavioral baseline forms is permission to continue under the current
-policy, not a validated all-clear. The default state read preserves the verdict.
-
-New servers return `checkpoint` when neutral acceptance is known. Its
-`status: accepted`, `checkpoint_id`, and per-identity `seq` acknowledge an
-immutable record committed before assessment; they are not a verdict or proof
-that later effects completed. For retry recovery, supply an `idempotency_key`
-on the original call and reuse it with the same submitted content. The reply's
-`acceptance_retry_idempotent: true` covers that identity-scoped acceptance:
-a retry returns the original receipt without repeating assessment. Changed
-content conflicts. The same key under a new identity is a different scope.
-Current identity, lifecycle and cooldown gates still apply to retries. A
-receipt-only replay carries no fresh policy action or prediction. Do not infer
-operational permission from its `success: true`.
-
-An acceptance `status: unconfirmed` may follow a committed record whose
-acknowledgement was lost. Without an explicit key, another call can create a
-new record. The checkpoint's separate `assessment.status` reports execution:
-`completed` means execution returned, not atomic durability of every effect;
-`failed` may have partial effects. A crash can leave `started` ambiguous.
-Keyed retries never restart these deliveries, including those that never
-started. Recovery of an incomplete assessment is outside this increment.
-
-On completed check-ins that reach the state writer, `state_persistence`
-describes the assessment-row acknowledgement. `status: recorded` and a positive
-`state_id` confirm that the writer acknowledged that row; they do not confirm
-every other check-in effect. `status: unconfirmed` and `state_id: null` mean no
-valid acknowledgement arrived. The row may still exist if the commit completed
-before the connection failed. Read this receipt separately from top-level
-`success`. Its legacy `checkin_retry_idempotent: false` describes the assessment
-writer, which does not deduplicate itself. Use the independent checkpoint
-acceptance contract above when available; without it, repeating the full
-check-in can duplicate estimator updates and effects. Early refusals and older servers can omit
-the receipt; absence does not establish that nothing was written. This is an
-assessment-write receipt, not a neutral checkpoint ID.
-
-If you supplied a genuine `confidence`, the response may mint a concrete
-`prediction_id`. Preserve that identifier and pass it to
-`record_result(..., prediction_id="...")` when the outcome lands; otherwise the
-outcome may grade an unrelated fallback prediction. The advertised id is the
-check-in's own mint: evidence rows passed in `recent_tool_results` bind to
-prediction ids of their own, which the reply never advertises (before
-2026-09-17 it advertised the last evidence row's already-consumed id, so a
-`record_result` with it was refused as `PREDICTION_REUSE_CONFLICT`). The `record_result`
-`state_summary` says which happened: `prediction_binding` and
-`prediction_source` name the prediction the outcome actually graded, and
-`calibration_excluded` is true when the confidence was scraped rather than
-bound, meaning the row does not train calibration. When
-`UNITARES_REVIEW_NUDGE` is enabled, a warmed session can also receive a
-once-per-session `review_suggested` nudge for low confidence, high complexity,
-or a guide verdict, pointing to `request_review` (on-record review) or
-`consult(purpose="critique")` (advisory design critique). It is optional
-guidance, not a forced review.
-
-### Your check-in is one evidence class among several
-
-Rows in your state history are not all authored by you. Every row carries an
-`epistemic_class`, and the distinction is load-bearing — it is what keeps the
-substrate's observations about you separate from your own speech.
+### Epistemic classes (`epistemic_class`)
 
 | class | who wrote it | means |
 |---|---|---|
@@ -317,37 +192,24 @@ substrate's observations about you separate from your own speech.
 | `prediction` | a forward-looking estimate | not an observation of the present |
 | `synthetic` | lazy onboarding bootstrap | initialization, not a check-in |
 
-Two rules follow, and both matter more than they look:
+Do not echo a hook's `substrate_interpretation` as an `agent_report`; only
+`agent_report` speaks in your voice.
 
-1. **Do not echo a hook's row as if it were yours.** If your harness writes a
-   `substrate_interpretation` after each turn, that is the substrate's account,
-   not a check-in you owe or should restate. Manufacturing an `agent_report` to
-   match it is the failure this taxonomy exists to prevent.
-2. **Only `agent_report` may speak in your voice.** When you *do* have something
-   to say — a belief, an uncertainty, a judgment about your own state — that is
-   the row only you can write, and it is the reason check-ins exist at all.
-
-Hosts differ in what they automate: some write a per-turn interpretation for you,
-some write almost nothing. Do not infer from a quiet history that you are being
-watched less, or from a busy one that you have already reported.
+When `sync_state` returns `checkpoint.status: unconfirmed`,
+`state_persistence.status: unconfirmed`, `PREDICTION_REUSE_CONFLICT`,
+`calibration_excluded`, or `review_suggested`, read
+`references/checkpoints-and-envelopes.md`
+(remote MCP: `skills(name="governance-lifecycle", reference="checkpoints-and-envelopes.md")`).
 
 ## Closing a session
 
 Before your final response, if you created actionable findings in this session,
-review at most three still-open bugs, questions or improvements owned by this
-process. Use `knowledge(action="search", agent_id_filter="<your UUID>",
-status="open", limit=10, include_details=false, response_mode="lean")`, then
-open details before deciding. A predecessor or similarly named agent is not
-you. Close addressed rows with the existing `update_finding`, closure class
-and evidence; a merged fix alone is not `fix_verified` until deployed and
-positively observed. Keep unresolved rows open; add a short blocker/artifact
-pointer only when useful. Insights and decisions may legitimately stay open.
-
-This reminder has no quota, automatic closure, new check-in or permission
-change. Skip the lookup when you wrote no actionable findings; if unavailable,
-continue closeout without retrying or minting an identity for it. The repository
-workflow is `commands/closeout.md`; shared-memory closure standards are in
-`skills/knowledge-graph/SKILL.md`.
+review at most three still-open bugs, questions, or improvements owned by this
+process (`knowledge(action="search", agent_id_filter="<your UUID>", status="open", limit=10, include_details=false, response_mode="lean")`).
+Close addressed rows with `update_finding`, `closure_class`, and evidence (a
+merged fix alone is not `fix_verified` until deployed and positively observed).
+Skip the lookup when you wrote no actionable findings; see `commands/closeout.md`
+and `skills/knowledge-graph/SKILL.md`.
 
 ## Reading Verdicts
 
@@ -355,126 +217,48 @@ workflow is `commands/closeout.md`; shared-memory closure standards are in
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **proceed / guide**, raw recommendation `pause`, `enforcement.applied=false` | Observation only. Inspect the policy record if useful; no lifecycle hold, permission check, or mandatory review exists |
-| **pause / reject**, `enforcement.posture=enforce`, `applied=false` | Compatibility directive only: the current path did not commit a lifecycle hold. Do not infer that writes are gated; inspect enforcement or `self_recovery(action="check")` |
-| **pause / reject**, `enforcement.applied=true` | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
-| **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
+| **proceed / guide**, raw recommendation `pause`, `enforcement.applied=false` | Observation only; no lifecycle hold, permission check, or mandatory review exists |
+| **pause / reject**, `enforcement.posture=enforce`, `applied=false` | Compatibility directive only (no lifecycle hold committed); inspect enforcement or `self_recovery(action="check")` |
+| **pause / reject**, `enforcement.applied=true` | Check-ins and new KG writes are refused before expiry; dialectic moves still work. A paused agent cannot check in to lower its own risk, and self-review cannot close its own pause — use Recovery below |
+| **margin: tight** | Inside the band around `nearest_edge` (threshold distance, not basin); be careful with next steps |
 
-A `guide` is a proprioceptive suggestion, not a threat of punishment. It may
-also carry a raw pause recommendation that the default posture declined to
-actuate.
-
-## Identity
-
-- UUID is an identity anchor, not proof that the current process owns that identity
-- Session binding can happen via a transport session signal the client sends (for example an `X-Session-ID` header set per process, never a static value shared across processes; stateless `/mcp/` issues no protocol session of its own), `client_session_id`, or short-lived continuity token
-- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. A destination that is another agent's stable `agent-...` session id (for example one sent in an `X-Session-ID` header) is refused the same way, as `rebind_refused: "foreign_stable_session_id"`, whichever transport header carried it. Your identity is unchanged; retry from a client that sends its own session identifier.
-- When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
-- Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed. Under strict identity such a guessed answer carries `client_session_id: null`, no `continuity_token`, and `credentials_withheld`: credentials go only to a call that proved ownership.
-- Inspect:
-  - `identity_status`
-  - `bound_identity`
-  - `session_resolution_source`
-  - `continuity_token_supported`
-  - `identity_assurance`
-  - `deprecations`
-
-Strong ownership proof is better than implicit continuity. If a call in a process that already called `start_session` resolved only by weak signals such as fingerprinting, pass that process's `client_session_id` on the next call; minting again would split its work across two identities. Mint a fresh identity only for a new process, and declare lineage only from a finished predecessor.
-
-## Recovery
-
-When an applied lifecycle hold pauses you, or you are stuck and want
-intervention. A paused agent cannot write
-the check-in that would lower its risk, so quick and review succeed only when
-the reading that paused it is already under their gates; otherwise the dialectic
-review opened for the pause or an operator ends it. At expiry, the next check-in
-awaits an exact-token durable resume and can then proceed. A synchronous
-shared-memory write starts that same resume but the current write stays refused;
-resubmit it after the pause lifts.
-
-A self-review may record useful reflection, but it cannot close a session bound
-to that identity's pause. An independent reviewer or operator must authorize
-the terminal decision; stale local status does not weaken that boundary.
-
-If a completed review reports `legacy_unbound_session`, it predates durable
-pause-generation binding and intentionally changed no current pause. Open a new
-review for the current pause instead of treating that result as a resume.
+## Recovery (Quick Reference)
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
 | Inspect recovery eligibility | `self_recovery(action="check")` | Read-only blockers, thresholds, and recommendations |
 | Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
-| Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
-| Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default; pass `use_brief_as_thesis=false` for a neutral two-call flow |
-| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only. Refuses an active void or risk above 0.80 ("requires human intervention"), and needs `force=true` above 0.60. Never resume your own pause through an operator path |
+| Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires genuine reflection; refuses at risk >= 0.65 |
+| Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default |
+| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only; never resume your own pause via an operator path |
 
-Recovery is not a shortcut. Its authoritative checks are risk, active void, status,
-ownership, and (for review recovery) reflection/persistence evidence. Legacy
-`C(V)` remains visible with source/role provenance but cannot authorize or deny a
-recovery. If the authoritative inputs are genuinely degraded, self-recovery will
-not force a resume.
+Authoritative recovery checks are risk, active void, status, ownership, and
+reflection/persistence evidence — never legacy `C(V)`.
 
-The read-only check separates `recovery_needed` from `eligible`. An active
-identity reports `recovery_needed=false` and `recovery_status=not_needed`, even
-before its first check-in; it does not need a recovery reflection. Inspect
-`risk_authority` to distinguish an unmeasured first state from lost risk evidence.
+When an applied pause blocks writes, expires, returns `legacy_unbound_session`,
+or `self_recovery(action="check")` reports blockers or `risk_authority`, read
+`references/identity-and-recovery.md`
+(remote MCP: `skills(name="governance-lifecycle", reference="identity-and-recovery.md")`).
 
-## MCP Tools Reference
+## MCP Tools Overview
 
-Interface contract 1.13.0 and later separates the complete negotiated catalog
-from the initial transport advertisement. MCP, REST, and stdio begin with a
-small progressive surface by default. `list_tools(lite=true)` returns the live
-interface version, surface hash, and a name-only record for every complete
-capability; `describe_tool(tool_name=..., action=...)` returns its parameters;
-`use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
-the initial listing through its normal identity, validation, authorization,
-routing, timeout, response, and telemetry paths. Here `lite` controls response
-detail, not capability reachability. Use
-`list_tools(lite=false, category=...)` to browse rich metadata.
-Operators that require every schema up front can set
-`UNITARES_TOOL_ADVERTISEMENT=full`. Legacy `GOVERNANCE_TOOL_MODE` settings are
-ignored. Prefer primary workflow names; raw implementations remain callable
-for compatibility.
+MCP, REST, and stdio start with a progressive tool surface. Use
+`list_tools(lite=true)` for the full capability index, `describe_tool(tool_name=..., action=...)`
+for full parameter text, and `use_tool(tool_name=..., arguments={...})` for
+tools omitted from the initial listing.
 
-Older servers may advertise a restricted profile. Inspect the client's actual
-tool catalog and server instructions; do not assume a name is callable merely
-because this skill mentions it. Upgrade the server for the complete catalog.
+- **Essential**: `start_session`, `sync_state`, `check_working_state`,
+  `identity`, `health_check`, `search_shared_memory`, `store_finding`,
+  `update_finding`, `knowledge(action="note")`, `self_recovery`
+- **Common**: `knowledge`, `agent`, `calibration`, `consult`, `dialectic`,
+  `export`
+- **Specialized**: `observe`, `config`, `list_tools`, `describe_tool`,
+  `use_tool` (and deprecated `call_model` — use `consult(effort="standard")`)
+- **Active-call notices**: successful calls may carry `knowledge_changes`
+  (up to 3 coalesced row pointers); read details before acting and acknowledge
+  exact revision UUIDs via `knowledge(action="notices")`.
 
-### Essential (use in every session)
-
-- `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
-- `sync_state()` — Check in with work summary and complexity. Pass `confidence` only when you are stating a real belief about your own work (see *Check-ins*).
-- `check_working_state(client_session_id=...)` — Read your current EISV state. It reads your state only on proof sent with the call (your `client_session_id`, an `X-Session-ID` header, or a verified `continuity_token`); without it the read of your own state answers `unbound`, never a state the server inferred from the connection, and its `next_action` says how to recover
-- `identity(client_session_id=...)` — Confirm who the runtime thinks you are and how continuity was resolved; never call it with no arguments (see Identity above), and include `continuity_token` for proof-owned UUID rebinds
-- `health_check()` — Check operator-facing server health when behavior seems odd; discover its schema and invoke it through `use_tool` under progressive advertisement
-- `search_shared_memory(query=...)` — Find existing knowledge before creating new entries
-- `store_finding(...)` — Store a durable discovery, root cause, or correction
-- `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
-- `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
-- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause while risk is below its gates (review refuses at risk 0.65 and above, except for the legacy cold-start trap). The check-in envelope names it for a pause below those gates and names the dialectic session above them. It is advertised by default so a schema-driven client can actually call it.
-
-### Common (use when needed)
-
-- `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
-- `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
-- `calibration()` — Check or update calibration data
-- `consult(brief=..., purpose="critique")` — Advisory model or council critique when choosing between plausible designs, before an irreversible schema/contract step, or when a key assumption is unverified (never an on-record verdict and never satisfies implementation review; use `request_review` after a diff exists). Advertised by default; requires a configured inference host (`list_inference_hosts`): `effort="standard"` queries a local host when configured, while `effort="thorough"` or `host_ids=[...]` (parallel 2–3 host council) requires `privacy="cloud_allowed"` and the deployment's opt-in CLI host-adapter extension. Cap at one consult per design decision
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`, `reconcile_effect`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. `reconcile_effect` is operator-only recovery for a durable terminal effect: inspect first, apply only untouched pending work, and never replay an applying or unknown-partial effect automatically. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
-- `export()` — Export session history
-
-### Specialized
-
-- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable until its removal, no earlier than 2026-12-02; its `temperature` and `max_tokens` controls go with it (`consult` does not take them, by design). To choose the local model, pass `consult(model=...)` with one that `list_inference_hosts` lists for `ollama:local`
-- `observe()` — Read governance observations and fleet diagnostics
-- `config()` — Read or change runtime thresholds; writes are privileged
-- `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.
-- `use_tool(tool_name=..., arguments={...})` — Invoke a complete-catalog capability omitted from the initial progressive `tools/list`; target middleware and authorization still apply
-
-### Row-change pointers during active work
-
-A successful active call can also carry `knowledge_changes`, at most three
-coalesced row pointers in a separate 2 KiB budget. Read details before acting;
-acknowledge received revision UUIDs through `knowledge(action="notices")`.
-Delivery does not wake a session, perform a model call or create a check-in.
-See the knowledge-graph skill for mute, gaps and retention. A successor does
-not inherit the predecessor's inbox merely by sharing its workspace or lineage.
+When discovering omitted tools, choosing between `consult` and `dialectic`,
+checking `check_working_state` `unbound` behavior, or handling
+`knowledge_changes`, read `references/tools-and-envelopes.md`
+(remote MCP: `skills(name="governance-lifecycle", reference="tools-and-envelopes.md")`).
