@@ -247,10 +247,11 @@ def _row_id(row: Mapping[str, Any]) -> str | None:
 
 
 CLEAN_NON_LEASE_REASONS = frozenset({"lease_plane_unavailable", "no_live_lease"})
+NO_AGE_BACKEND_MARKER = "require AGE graph backend"
 
 
 def _release_ok(result: Mapping[str, Any]) -> bool:
-    if _is_error_result(result):
+    if _is_error_result(result) or result.get("binding_retirement_failed"):
         return False
     if result.get("released") is True:
         return True
@@ -260,6 +261,8 @@ def _release_ok(result: Mapping[str, Any]) -> bool:
 def _release_label(result: Mapping[str, Any]) -> str:
     if _is_error_result(result):
         return f"error ({_error_detail(result)})"
+    if result.get("binding_retirement_failed"):
+        return "not released (binding_retirement_failed)"
     if result.get("released") is True:
         return "released"
     reason = str(result.get("reason") or "")
@@ -381,7 +384,7 @@ def run_record_demo(
         supersede_mode = "age_supersedes_edge"
         if _is_error_result(supersede_res):
             err_msg = _error_detail(supersede_res)
-            if "AGE" in err_msg:
+            if NO_AGE_BACKEND_MARKER in err_msg:
                 supersede_res = call_fn(
                     "update_finding",
                     {
@@ -392,14 +395,16 @@ def run_record_demo(
                         "resolution_notes": supersede_note,
                     },
                 )
-                supersede_mode = (
-                    "relational_status_fallback"
-                    if isinstance(supersede_res.get("supersession_warning"), str)
-                    else "update_finding_edge"
-                )
+                warn = supersede_res.get("supersession_warning")
+                if isinstance(warn, str) and NO_AGE_BACKEND_MARKER in warn:
+                    supersede_mode = "relational_status_fallback"
+                elif isinstance(warn, str):
+                    supersede_mode = "supersede_edge_warning"
+                else:
+                    supersede_mode = "update_finding_edge"
             else:
                 supersede_mode = "supersede_error"
-        supersede_ok = not _is_error_result(supersede_res)
+        supersede_ok = not _is_error_result(supersede_res) and supersede_mode != "supersede_edge_warning"
         supersede_warning = (
             str(supersede_res["supersession_warning"])
             if isinstance(supersede_res.get("supersession_warning"), str)
@@ -513,7 +518,8 @@ def run_record_demo(
         "agent_a": {
             "uuid": uuid_a,
             "finding_id": finding_a,
-            "released": checks["agent_a_released"],
+            "released": bool(release_a.get("released", False)),
+            "exited_cleanly": checks["agent_a_released"],
             "presence": _release_label(release_a),
         },
         "agent_b": {
@@ -527,7 +533,8 @@ def run_record_demo(
             "prediction_id": prediction_id,
             "prediction_binding": outcome_summary.get("prediction_binding"),
             "corroboration_grade": outcome_summary.get("corroboration_grade"),
-            "released": checks["agent_b_released"],
+            "released": bool(release_b.get("released", False)),
+            "exited_cleanly": checks["agent_b_released"],
             "presence": _release_label(release_b),
         },
         "agent_c": {
@@ -538,7 +545,8 @@ def run_record_demo(
             "initial_status_seen": row_a.get("status") if isinstance(row_a, dict) else None,
             "superseded_by_seen": superseded_link,
             "replacement_status_seen": row_b.get("status") if isinstance(row_b, dict) else None,
-            "released": checks["agent_c_released"],
+            "released": bool(release_c.get("released", False)),
+            "exited_cleanly": checks["agent_c_released"],
             "presence": _release_label(release_c),
         },
         "checks": checks,

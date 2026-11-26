@@ -233,12 +233,31 @@ def test_run_record_demo_succeeds_on_healthy_server_without_lease_plane():
 
     assert record_demo._all_required_checks_passed(summary) is True
     assert summary["checks"]["agent_a_released"] is True
+    assert summary["agent_a"]["released"] is False
+    assert summary["agent_a"]["exited_cleanly"] is True
     assert summary["agent_a"]["presence"] == "exited (lease_plane_unavailable)"
     assert "exited (lease_plane_unavailable)" in record_demo.format_report(summary)
 
 
+def test_binding_retirement_failure_is_not_treated_as_clean_exit():
+    assert (
+        record_demo._release_ok(
+            {
+                "action": "release_presence",
+                "released": False,
+                "reason": "lease_plane_unavailable",
+                "binding_retirement_failed": True,
+            }
+        )
+        is False
+    )
+    assert "binding_retirement_failed" in record_demo._release_label(
+        {"released": False, "reason": "lease_plane_unavailable", "binding_retirement_failed": True}
+    )
+
+
 def test_non_age_supersede_error_is_not_mislabelled_as_missing_age():
-    server = _FakeRecordServer(age_enabled=True, supersede_error="resolution notes refused by policy")
+    server = _FakeRecordServer(age_enabled=True, supersede_error="Failed to create SUPERSEDES edge: AGE query timeout")
     summary = record_demo.run_record_demo(server, run_id="errsup01")
 
     assert summary["agent_b"]["supersede_mode"] == "supersede_error"
