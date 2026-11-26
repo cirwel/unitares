@@ -247,7 +247,11 @@ def _row_id(row: Mapping[str, Any]) -> str | None:
 
 
 CLEAN_NON_LEASE_REASONS = frozenset({"lease_plane_unavailable", "no_live_lease"})
-NO_AGE_BACKEND_MARKER = "require AGE graph backend"
+# Exact substrings from src/mcp_handlers/knowledge/mutation_helpers.py
+# (_handle_supersede_discovery and _record_supersession_edge); pinned by
+# tests/test_record_demo.py so drift is caught immediately.
+NO_AGE_SUPERSEDE_MARKER = "SUPERSEDES edges require AGE graph backend"
+NO_AGE_UPDATE_WARNING_MARKER = "supersession link not recorded: requires the AGE graph backend"
 
 
 def _release_ok(result: Mapping[str, Any]) -> bool:
@@ -384,7 +388,7 @@ def run_record_demo(
         supersede_mode = "age_supersedes_edge"
         if _is_error_result(supersede_res):
             err_msg = _error_detail(supersede_res)
-            if NO_AGE_BACKEND_MARKER in err_msg:
+            if NO_AGE_SUPERSEDE_MARKER in err_msg:
                 supersede_res = call_fn(
                     "update_finding",
                     {
@@ -396,7 +400,7 @@ def run_record_demo(
                     },
                 )
                 warn = supersede_res.get("supersession_warning")
-                if isinstance(warn, str) and NO_AGE_BACKEND_MARKER in warn:
+                if isinstance(warn, str) and NO_AGE_UPDATE_WARNING_MARKER in warn:
                     supersede_mode = "relational_status_fallback"
                 elif isinstance(warn, str):
                     supersede_mode = "supersede_edge_warning"

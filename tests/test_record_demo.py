@@ -62,11 +62,13 @@ class _FakeRecordServer:
         fail_sync_state: bool = False,
         lease_plane_available: bool = True,
         supersede_error: str | None = None,
+        update_supersession_warning: str | None = None,
     ) -> None:
         self.age_enabled = age_enabled
         self.fail_sync_state = fail_sync_state
         self.lease_plane_available = lease_plane_available
         self.supersede_error = supersede_error
+        self.update_supersession_warning = update_supersession_warning
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.discoveries: dict[str, dict[str, Any]] = {}
         self.session_to_uuid: dict[str, str] = {}
@@ -132,6 +134,12 @@ class _FakeRecordServer:
             assert writer == self._AGENT_UUIDS[1], "only Agent B should run fallback update"
             row = self.discoveries[args["discovery_id"]]
             row["status"] = args["status"]
+            if self.update_supersession_warning is not None:
+                return {
+                    "success": True,
+                    "status": args["status"],
+                    "supersession_warning": self.update_supersession_warning,
+                }
             # Real server relational fallback flips status only; superseded_by comes
             # exclusively from the AGE edge (mutation_helpers._record_supersession_edge).
             if self.age_enabled and args.get("superseded_by"):
@@ -140,7 +148,7 @@ class _FakeRecordServer:
             return {
                 "success": True,
                 "status": args["status"],
-                "supersession_warning": "SUPERSEDES edges require AGE graph backend",
+                "supersession_warning": "supersession link not recorded: requires the AGE graph backend",
             }
 
         if tool == "sync_state":
@@ -254,6 +262,42 @@ def test_binding_retirement_failure_is_not_treated_as_clean_exit():
     assert "binding_retirement_failed" in record_demo._release_label(
         {"released": False, "reason": "lease_plane_unavailable", "binding_retirement_failed": True}
     )
+
+
+def test_no_age_markers_match_server_mutation_helpers():
+    """Pin the demo's no-AGE substrings against the live server error/warning text."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "mcp_handlers"
+        / "knowledge"
+        / "mutation_helpers.py"
+    ).read_text(encoding="utf-8")
+    assert record_demo.NO_AGE_SUPERSEDE_MARKER in source
+    assert record_demo.NO_AGE_UPDATE_WARNING_MARKER in source
+
+
+def test_update_finding_edge_and_unexpected_warning_branches():
+    # Unexpected warning during fallback update is treated as failure, not no-AGE skip.
+    warn_server = _FakeRecordServer(
+        age_enabled=False,
+        update_supersession_warning="supersession link not recorded: graph write timeout",
+    )
+    warn_summary = record_demo.run_record_demo(warn_server, run_id="warnbr01")
+    assert warn_summary["agent_b"]["supersede_mode"] == "supersede_edge_warning"
+    assert warn_summary["agent_b"]["supersede_ok"] is False
+    assert record_demo._all_required_checks_passed(warn_summary) is False
+
+    # Fallback update that succeeds without warning records update_finding_edge and requires the link.
+    edge_server = _FakeRecordServer(
+        age_enabled=True,
+        supersede_error="SUPERSEDES edges require AGE graph backend",
+    )
+    edge_summary = record_demo.run_record_demo(edge_server, run_id="edgebr01")
+    assert edge_summary["agent_b"]["supersede_mode"] == "update_finding_edge"
+    assert edge_summary["agent_b"]["supersede_ok"] is True
+    assert edge_summary["checks"]["initial_claim_links_replacement"] is True
+    assert record_demo._all_required_checks_passed(edge_summary) is True
 
 
 def test_non_age_supersede_error_is_not_mislabelled_as_missing_age():
