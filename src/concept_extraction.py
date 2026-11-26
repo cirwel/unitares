@@ -9,9 +9,11 @@ active embedding table (``src.embeddings.get_active_table_name``), and produces 
   4. Deleting Concept vertices that this run did not produce
 
 A concept id is a hash of its tag group, so a cluster that gains or loses one
-tag gets a new id on the next run. Step 4 keeps the graph equal to the latest
-run's output; without it every regrouping left the old vertex and all of its
-edges behind.
+tag gets a new id on the next run. Step 4 removes the vertices of earlier
+groupings; without it every regrouping left the old vertex and all of its
+edges behind. It does not remove edges of a concept that keeps its id: an
+ABOUT edge to a discovery that has left the tag group, or a RELATES_TO edge
+between two concepts that no longer share a discovery, stays.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from src.db.age_queries import (
     create_about_edge,
     create_concept_node,
     create_concept_relates_to_edge,
-    delete_concept_node,
+    query_delete_concept,
     query_concept_ids,
     query_tags_with_discoveries,
 )
@@ -413,8 +415,8 @@ class ConceptExtractor:
 
         Each stale vertex goes in its own query with its edges, so no single
         statement holds the graph for long. Nothing is deleted unless every
-        planned concept was written: a run that could not write its own output
-        must not remove the previous run's.
+        planned concept was written and no vertex or edge write failed: a run
+        that could not write its own output must not remove the previous run's.
         """
         result: Dict[str, Any] = {"deleted": 0, "skipped": None, "failures": 0}
         if not concepts:
@@ -422,6 +424,9 @@ class ConceptExtractor:
             return result
         if written["concepts"] != len(concepts):
             result["skipped"] = "not every planned concept was written"
+            return result
+        if written["failures"]:
+            result["skipped"] = "a write failed"
             return result
 
         db = get_db()
@@ -438,12 +443,22 @@ class ConceptExtractor:
             result["failures"] = 1
             return result
 
-        stale = sorted({r for r in rows if isinstance(r, str)} - current)
+        # ``RETURN c.id`` decodes to one bare string per row. Any other shape
+        # means the listing cannot be trusted, so nothing is deleted.
+        if any(not isinstance(r, str) for r in rows):
+            logger.warning(
+                "[CONCEPT_EXTRACTION] concept listing returned a non-string id; "
+                "stale concepts not pruned"
+            )
+            result["skipped"] = "concept listing had an unexpected shape"
+            result["failures"] = 1
+            return result
+
+        stale = sorted(set(rows) - current)
         for concept_id in stale:
             try:
-                q, p = delete_concept_node(concept_id)
-                await db.graph_query(q, p)
-                result["deleted"] += 1
+                q, p = query_delete_concept(concept_id)
+                result["deleted"] += len(await db.graph_query(q, p))
             except Exception as e:
                 if not result["failures"]:
                     logger.warning(

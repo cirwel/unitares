@@ -559,9 +559,12 @@ def query_concept_ids() -> tuple[str, Dict[str, Any]]:
     return "MATCH (c:Concept) RETURN c.id", {}
 
 
-def delete_concept_node(concept_id: str) -> tuple[str, Dict[str, Any]]:
+def query_delete_concept(concept_id: str) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query to delete one Concept vertex with all of its edges.
+
+    Returns the id of each vertex deleted, so the caller counts what was
+    removed and not what was asked for.
 
     Returns:
         (cypher_query, params_dict)
@@ -569,6 +572,7 @@ def delete_concept_node(concept_id: str) -> tuple[str, Dict[str, Any]]:
     cypher = """
         MATCH (c:Concept {id: ${concept_id}})
         DETACH DELETE c
+        RETURN c.id
     """
     return cypher, {"concept_id": concept_id}
 
