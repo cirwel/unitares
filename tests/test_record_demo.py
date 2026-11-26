@@ -49,20 +49,34 @@ def test_auth_headers_refuse_non_loopback_http():
 
 
 class _FakeRecordServer:
-    def __init__(self, *, age_enabled: bool = True) -> None:
+    _AGENT_UUIDS = (
+        "a1111111-0000-0000-0000-000000000001",
+        "b2222222-0000-0000-0000-000000000002",
+        "c3333333-0000-0000-0000-000000000003",
+    )
+
+    def __init__(self, *, age_enabled: bool = True, fail_sync_state: bool = False) -> None:
         self.age_enabled = age_enabled
+        self.fail_sync_state = fail_sync_state
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.discoveries: dict[str, dict[str, Any]] = {}
+        self.session_to_uuid: dict[str, str] = {}
         self.released: set[str] = set()
         self._agent_seq = 0
         self._disc_seq = 0
 
+    def _require_session_uuid(self, args: dict[str, Any]) -> str:
+        sid = args.get("client_session_id")
+        assert isinstance(sid, str) and sid in self.session_to_uuid, f"unknown client_session_id: {sid!r}"
+        return self.session_to_uuid[sid]
+
     def __call__(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((tool, dict(args)))
         if tool == "start_session":
+            uid = self._AGENT_UUIDS[self._agent_seq]
             self._agent_seq += 1
-            uid = f"00000000-0000-0000-0000-00000000000{self._agent_seq}"
             sid = f"agent-{uid[:8]}-sess"
+            self.session_to_uuid[sid] = uid
             res: dict[str, Any] = {
                 "agent_uuid": uid,
                 "client_session_id": sid,
@@ -79,10 +93,12 @@ class _FakeRecordServer:
             return res
 
         if tool == "store_finding":
+            writer = self._require_session_uuid(args)
             self._disc_seq += 1
             did = f"2026-11-25T16:00:0{self._disc_seq}+00:00"
             self.discoveries[did] = {
                 "discovery_id": did,
+                "agent_id": writer,
                 "summary": args["summary"],
                 "status": "open",
                 "tags": list(args.get("tags") or []),
@@ -91,6 +107,8 @@ class _FakeRecordServer:
             return {"discovery_id": did, "state_summary": {"status": "open"}}
 
         if tool == "knowledge" and args.get("action") == "supersede":
+            writer = self._require_session_uuid(args)
+            assert writer == self._AGENT_UUIDS[1], "only Agent B should supersede A's finding"
             if not self.age_enabled:
                 return {"success": False, "error": "SUPERSEDES edges require AGE graph backend"}
             old = self.discoveries[args["supersedes_id"]]
@@ -99,19 +117,34 @@ class _FakeRecordServer:
             return {"success": True, "edge_created": True}
 
         if tool == "update_finding":
+            writer = self._require_session_uuid(args)
+            assert writer == self._AGENT_UUIDS[1], "only Agent B should run fallback update"
             row = self.discoveries[args["discovery_id"]]
             row["status"] = args["status"]
-            if args.get("superseded_by"):
+            # Real server relational fallback flips status only; superseded_by comes
+            # exclusively from the AGE edge (mutation_helpers._record_supersession_edge).
+            if self.age_enabled and args.get("superseded_by"):
                 row["superseded_by"] = args["superseded_by"]
-            return {"success": True, "status": args["status"]}
+                return {"success": True, "status": args["status"]}
+            return {
+                "success": True,
+                "status": args["status"],
+                "supersession_warning": "SUPERSEDES edges require AGE graph backend",
+            }
 
         if tool == "sync_state":
+            writer = self._require_session_uuid(args)
+            assert writer == self._AGENT_UUIDS[1], "only Agent B should check in"
+            if self.fail_sync_state:
+                return {"success": False, "error": "AGENT_PAUSED"}
             return {
                 "prediction_id": "pred-demo-1234",
                 "action_summary": {"action": "proceed", "verdict_confidence": "provisional"},
             }
 
         if tool == "record_result":
+            writer = self._require_session_uuid(args)
+            assert writer == self._AGENT_UUIDS[1], "only Agent B should record outcome"
             assert args["detail"]["do_not_use_for_live_validation"] is True
             return {
                 "state_summary": {
@@ -134,13 +167,8 @@ class _FakeRecordServer:
             return {"success": True, "memory_suggestions": matches}
 
         if tool == "agent" and args.get("action") == "release_presence":
-            sid = args["client_session_id"]
-            # Map agent-<8>-sess back to full fake uuid
-            prefix = sid.split("-")[1]
-            for i in range(1, self._agent_seq + 1):
-                uid = f"00000000-0000-0000-0000-00000000000{i}"
-                if uid.startswith(prefix):
-                    self.released.add(uid)
+            uid = self._require_session_uuid(args)
+            self.released.add(uid)
             return {"action": "release_presence", "released": True}
 
         raise AssertionError(f"Unexpected tool call: {tool} {args}")
@@ -152,10 +180,12 @@ def test_run_record_demo_with_age_supersede():
 
     assert summary["agent_b"]["supersede_mode"] == "age_supersedes_edge"
     assert summary["agent_b"]["supersede_ok"] is True
+    assert record_demo._all_required_checks_passed(summary) is True
     assert summary["checks"] == {
         "agent_a_released": True,
         "agent_b_released": True,
         "agent_c_released": True,
+        "supersede_succeeded": True,
         "search_found_initial_claim": True,
         "search_found_replacement_claim": True,
         "initial_claim_marked_superseded": True,
@@ -165,18 +195,65 @@ def test_run_record_demo_with_age_supersede():
     }
     text = record_demo.format_report(summary)
     assert "run abcd1234" in text
-    assert "age_supersedes_edge" in text
+    assert "age_supersedes_edge (ok)" in text
     assert "http://localhost:8767/dashboard" in text
 
 
-def test_run_record_demo_falls_back_when_age_unavailable():
+def test_run_record_demo_falls_back_honestly_when_age_unavailable():
     server = _FakeRecordServer(age_enabled=False)
     summary = record_demo.run_record_demo(server, run_id="beef5678")
 
     assert summary["agent_b"]["supersede_mode"] == "relational_status_fallback"
+    assert summary["agent_b"]["supersede_warning"] is not None
     assert summary["checks"]["initial_claim_marked_superseded"] is True
-    assert summary["checks"]["initial_claim_links_replacement"] is True
+    assert summary["checks"]["initial_claim_links_replacement"] is False
+    assert record_demo._all_required_checks_passed(summary) is True
     assert any(tool == "update_finding" for tool, _ in server.calls)
+    text = record_demo.format_report(summary)
+    assert "status flipped; no AGE graph edge" in text
+    assert "[SKIP] initial_claim_links_replacement" in text
+
+
+def test_demo_fails_nonzero_when_sync_state_errors_and_skips_unbound_outcome(monkeypatch, capsys):
+    server = _FakeRecordServer(age_enabled=True, fail_sync_state=True)
+    monkeypatch.setattr(record_demo, "preflight", lambda _url: None)
+    monkeypatch.setattr(
+        record_demo,
+        "_http_call",
+        lambda _url, tool, args, timeout=15.0, user_agent=None: server(tool, args),
+    )
+
+    rc = record_demo.main(["--json"])
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["checks"]["outcome_bound_to_prediction"] is False
+    assert not any(tool == "record_result" for tool, _ in server.calls)
+
+
+def test_mid_run_error_releases_active_sessions_and_exits_cleanly(monkeypatch, capsys):
+    released: list[str] = []
+
+    def flaky_server(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        if tool == "start_session":
+            return {"agent_uuid": "a1111111-0000-0000-0000-000000000001", "client_session_id": "agent-a1111111-sess"}
+        if tool == "store_finding":
+            raise record_demo.DemoCallError("store_finding returned HTTP 401")
+        if tool == "agent" and args.get("action") == "release_presence":
+            released.append(args["client_session_id"])
+            return {"released": True}
+        raise AssertionError(f"unexpected {tool}")
+
+    monkeypatch.setattr(record_demo, "preflight", lambda _url: None)
+    monkeypatch.setattr(
+        record_demo,
+        "_http_call",
+        lambda _url, tool, args, timeout=15.0, user_agent=None: flaky_server(tool, args),
+    )
+
+    rc = record_demo.main([])
+    assert rc == 1
+    assert released == ["agent-a1111111-sess"]
+    assert "HTTP 401" in capsys.readouterr().err
 
 
 def test_demo_tags_use_ephemeral_non_permanent_types():
@@ -193,10 +270,18 @@ def test_demo_tags_use_ephemeral_non_permanent_types():
 
 def test_cli_json_output_via_monkeypatch(monkeypatch, capsys):
     server = _FakeRecordServer(age_enabled=True)
+    seen_uas: dict[str, str | None] = {}
+
+    def fake_http(_url, tool, args, timeout=15.0, user_agent=None):
+        seen_uas[tool] = user_agent
+        return server(tool, args)
+
     monkeypatch.setattr(record_demo, "preflight", lambda _url: None)
-    monkeypatch.setattr(record_demo, "_http_call", lambda _url, tool, args, timeout=15.0: server(tool, args))
+    monkeypatch.setattr(record_demo, "_http_call", fake_http)
 
     rc = record_demo.main(["--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["checks"]["lineage_points_to_agent_a"] is True
+    assert seen_uas["search_shared_memory"] is not None
+    assert seen_uas["search_shared_memory"].startswith("unitares-record-demo-reader/")

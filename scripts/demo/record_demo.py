@@ -8,9 +8,10 @@ Runs the README's three-agent scenario end-to-end against a live server:
      time across tests), records a replacement finding, supersedes A's claim,
      checks in with ``sync_state``, grades that check-in via ``record_result``
      with the returned ``prediction_id``, and exits cleanly.
-  3. Agent C searches shared memory *before* minting an identity (proving
-     reads need no identity), sees both findings with A marked superseded and
-     linked to B, then declares explicit lineage from A via
+  3. Agent C searches shared memory without passing any ``client_session_id``
+     (read-only search requires no bound identity), sees both findings with A
+     marked superseded and linked to B when AGE is enabled, then declares
+     explicit lineage from A via
      ``start_session(parent_agent_id=..., spawn_reason="explicit")`` and exits.
 
 Prereq: a governance server reachable at http://127.0.0.1:8767.
@@ -34,6 +35,7 @@ on the graded outcome) so analysis scripts exclude them from live cohorts.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -48,6 +50,10 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+class DemoCallError(RuntimeError):
+    """Raised when an HTTP or tool-level call fails cleanly during the demo."""
 
 
 def _dotenv_values(path: Path | None = None) -> dict[str, str]:
@@ -121,17 +127,46 @@ def _auth_headers(url: str, environ: Mapping[str, str] | None = None) -> dict[st
     return {"Authorization": f"Bearer {token}"}
 
 
-def _http_call(rest_url: str, tool: str, args: dict[str, Any], *, timeout: float = 15.0) -> dict[str, Any]:
+def _http_call(
+    rest_url: str,
+    tool: str,
+    args: dict[str, Any],
+    *,
+    timeout: float = 15.0,
+    user_agent: str | None = None,
+) -> dict[str, Any]:
     body = json.dumps({"name": tool, "arguments": args}).encode("utf-8")
-    headers = {"Content-Type": "application/json", **_auth_headers(rest_url)}
+    try:
+        headers = {"Content-Type": "application/json", **_auth_headers(rest_url)}
+    except ValueError as exc:
+        raise DemoCallError(str(exc)) from exc
+    if user_agent:
+        headers["User-Agent"] = user_agent
     req = urllib.request.Request(rest_url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise DemoCallError(
+                f"{tool} returned HTTP {exc.code}: set UNITARES_HTTP_API_TOKEN if this server requires bearer auth."
+            ) from exc
+        raise DemoCallError(f"{tool} failed with HTTP {exc.code}: {exc.reason}") from exc
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ) as exc:
+        raise DemoCallError(f"{tool} request failed ({type(exc).__name__}): {exc}") from exc
+
     if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
         return payload["result"]
     if isinstance(payload, dict):
         return payload
-    raise TypeError(f"Unexpected REST response for {tool}: {type(payload).__name__}")
+    raise DemoCallError(f"Unexpected REST response for {tool}: {type(payload).__name__}")
 
 
 def preflight(rest_url: str, *, timeout: float = 3.0) -> None:
@@ -140,7 +175,9 @@ def preflight(rest_url: str, *, timeout: float = 3.0) -> None:
         req = urllib.request.Request(health, headers=_auth_headers(health), method="GET")
         with urllib.request.urlopen(req, timeout=timeout):
             return
-    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
+    except ValueError as exc:
+        sys.exit(f"Configuration error: {exc}")
+    except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError, OSError) as exc:
         sys.exit(
             f"Governance server not reachable at {health}.\n"
             "Start it first:\n"
@@ -153,28 +190,44 @@ def preflight(rest_url: str, *, timeout: float = 3.0) -> None:
         )
 
 
-def _extract_uuid(result: Mapping[str, Any]) -> str:
+def _is_error_result(result: Mapping[str, Any]) -> bool:
+    if result.get("success") is False:
+        return True
+    if result.get("error"):
+        return True
+    return False
+
+
+def _error_detail(result: Mapping[str, Any]) -> str:
+    return str(result.get("error") or result.get("message") or "unknown tool error")
+
+
+def _extract_uuid(result: Mapping[str, Any], *, step: str) -> str:
+    if _is_error_result(result):
+        raise DemoCallError(f"{step} failed: {_error_detail(result)}")
     value = result.get("agent_uuid") or result.get("uuid")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise KeyError(f"start_session response missing agent_uuid/uuid: {sorted(result.keys())}")
+    raise DemoCallError(f"{step} response missing agent_uuid/uuid: {sorted(result.keys())}")
 
 
-def _extract_session_id(result: Mapping[str, Any]) -> str:
+def _extract_session_id(result: Mapping[str, Any], *, step: str) -> str:
     value = result.get("client_session_id")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise KeyError(f"start_session response missing client_session_id: {sorted(result.keys())}")
+    raise DemoCallError(f"{step} response missing client_session_id: {sorted(result.keys())}")
 
 
-def _extract_discovery_id(result: Mapping[str, Any]) -> str:
+def _extract_discovery_id(result: Mapping[str, Any], *, step: str) -> str:
+    if _is_error_result(result):
+        raise DemoCallError(f"{step} failed: {_error_detail(result)}")
     value = result.get("discovery_id")
     if isinstance(value, str) and value.strip():
         return value.strip()
     discovery = result.get("discovery")
     if isinstance(discovery, Mapping) and isinstance(discovery.get("id"), str) and discovery["id"].strip():
         return discovery["id"].strip()
-    raise KeyError(f"store_finding response missing discovery_id: {sorted(result.keys())}")
+    raise DemoCallError(f"{step} response missing discovery_id: {sorted(result.keys())}")
 
 
 def _extract_search_rows(result: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -193,12 +246,23 @@ def _row_id(row: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _is_error_result(result: Mapping[str, Any]) -> bool:
-    if result.get("success") is False:
-        return True
-    if result.get("error"):
-        return True
-    return False
+def _all_required_checks_passed(summary: Mapping[str, Any]) -> bool:
+    checks = summary["checks"]
+    age_mode = summary["agent_b"]["supersede_mode"] == "age_supersedes_edge"
+    required_keys = [
+        "agent_a_released",
+        "agent_b_released",
+        "agent_c_released",
+        "supersede_succeeded",
+        "search_found_initial_claim",
+        "search_found_replacement_claim",
+        "initial_claim_marked_superseded",
+        "outcome_bound_to_prediction",
+        "lineage_points_to_agent_a",
+    ]
+    if age_mode:
+        required_keys.append("initial_claim_links_replacement")
+    return all(bool(checks.get(k)) for k in required_keys)
 
 
 def run_record_demo(
@@ -211,187 +275,204 @@ def run_record_demo(
     rid = run_id or uuid.uuid4().hex[:8]
     run_tag = f"demo-run-{rid}"
     base_tags = ["demo", "ephemeral", "upload-retry", run_tag]
+    active_sessions: list[str] = []
 
-    # ── 1. Agent A: hits failing test, logs flaky claim, exits cleanly ──
-    start_a = call_fn(
-        "start_session",
-        {
-            "force_new": True,
-            "name": f"record-demo-agent-a-{rid}",
-            "model_type": "demo",
-        },
-    )
-    uuid_a = _extract_uuid(start_a)
-    sess_a = _extract_session_id(start_a)
+    def _release(session_id: str) -> dict[str, Any]:
+        res = call_fn("agent", {"action": "release_presence", "client_session_id": session_id})
+        if session_id in active_sessions:
+            active_sessions.remove(session_id)
+        return res
 
-    store_a = call_fn(
-        "store_finding",
-        {
-            "client_session_id": sess_a,
-            "discovery_type": "bug_found",
-            "summary": f"[{rid}] test_upload_retry failed in CI — appears flaky under retry backoff",
-            "content": (
-                "Observed intermittent failure in test_upload_retry during retry backoff. "
-                "Recording initial symptom before handing off investigation."
-            ),
-            "tags": base_tags,
-        },
-    )
-    finding_a = _extract_discovery_id(store_a)
+    try:
+        # ── 1. Agent A: hits failing test, logs flaky claim, exits cleanly ──
+        start_a = call_fn(
+            "start_session",
+            {
+                "force_new": True,
+                "name": f"record-demo-agent-a-{rid}",
+                "model_type": "demo",
+            },
+        )
+        uuid_a = _extract_uuid(start_a, step="agent_a.start_session")
+        sess_a = _extract_session_id(start_a, step="agent_a.start_session")
+        active_sessions.append(sess_a)
 
-    release_a = call_fn(
-        "agent",
-        {
-            "action": "release_presence",
-            "client_session_id": sess_a,
-        },
-    )
+        store_a = call_fn(
+            "store_finding",
+            {
+                "client_session_id": sess_a,
+                "discovery_type": "bug_found",
+                "summary": f"[{rid}] test_upload_retry failed in CI — appears flaky under retry backoff",
+                "content": (
+                    "Observed intermittent failure in test_upload_retry during retry backoff. "
+                    "Recording initial symptom before handing off investigation."
+                ),
+                "tags": base_tags,
+            },
+        )
+        finding_a = _extract_discovery_id(store_a, step="agent_a.store_finding")
+        release_a = _release(sess_a)
 
-    # ── 2. Agent B: finds root cause, supersedes A, checks in & grades outcome ──
-    start_b = call_fn(
-        "start_session",
-        {
-            "force_new": True,
-            "name": f"record-demo-agent-b-{rid}",
-            "model_type": "demo",
-        },
-    )
-    uuid_b = _extract_uuid(start_b)
-    sess_b = _extract_session_id(start_b)
+        # ── 2. Agent B: finds root cause, supersedes A, checks in & grades outcome ──
+        start_b = call_fn(
+            "start_session",
+            {
+                "force_new": True,
+                "name": f"record-demo-agent-b-{rid}",
+                "model_type": "demo",
+            },
+        )
+        uuid_b = _extract_uuid(start_b, step="agent_b.start_session")
+        sess_b = _extract_session_id(start_b, step="agent_b.start_session")
+        active_sessions.append(sess_b)
 
-    store_b = call_fn(
-        "store_finding",
-        {
-            "client_session_id": sess_b,
-            "discovery_type": "bug_fix",
-            "summary": f"[{rid}] test_upload_retry root cause: module-scoped fake clock leaks time",
-            "content": (
-                "Not a flaky retry: the fake clock fixture is module-scoped, so earlier "
-                "tests advance virtual time past the retry deadline. Switching the fixture "
-                "to function scope passed 50 consecutive shuffled runs."
-            ),
-            "tags": [*base_tags, "clock-skew"],
-        },
-    )
-    finding_b = _extract_discovery_id(store_b)
-
-    supersede_note = (
-        f"Superseded by root-cause finding {finding_b}: module-scoped fake clock "
-        "leaks virtual time across tests."
-    )
-    supersede_res = call_fn(
-        "knowledge",
-        {
-            "action": "supersede",
-            "client_session_id": sess_b,
-            "discovery_id": finding_b,
-            "supersedes_id": finding_a,
-            "resolution_notes": supersede_note,
-        },
-    )
-    supersede_mode = "age_supersedes_edge"
-    if _is_error_result(supersede_res):
-        supersede_mode = "relational_status_fallback"
-        supersede_res = call_fn(
-            "update_finding",
+        store_b = call_fn(
+            "store_finding",
             {
                 "client_session_id": sess_b,
-                "discovery_id": finding_a,
-                "status": "superseded",
-                "superseded_by": finding_b,
+                "discovery_type": "bug_fix",
+                "summary": f"[{rid}] test_upload_retry root cause: module-scoped fake clock leaks time",
+                "content": (
+                    "Not a flaky retry: the fake clock fixture is module-scoped, so earlier "
+                    "tests advance virtual time past the retry deadline. Switching the fixture "
+                    "to function scope passed 50 consecutive shuffled runs."
+                ),
+                "tags": [*base_tags, "clock-skew"],
+            },
+        )
+        finding_b = _extract_discovery_id(store_b, step="agent_b.store_finding")
+
+        supersede_note = (
+            f"Superseded by root-cause finding {finding_b}: module-scoped fake clock "
+            "leaks virtual time across tests."
+        )
+        supersede_res = call_fn(
+            "knowledge",
+            {
+                "action": "supersede",
+                "client_session_id": sess_b,
+                "discovery_id": finding_b,
+                "supersedes_id": finding_a,
                 "resolution_notes": supersede_note,
             },
         )
+        supersede_mode = "age_supersedes_edge"
+        if _is_error_result(supersede_res):
+            supersede_mode = "relational_status_fallback"
+            supersede_res = call_fn(
+                "update_finding",
+                {
+                    "client_session_id": sess_b,
+                    "discovery_id": finding_a,
+                    "status": "superseded",
+                    "superseded_by": finding_b,
+                    "resolution_notes": supersede_note,
+                },
+            )
+        supersede_ok = not _is_error_result(supersede_res)
+        supersede_warning = (
+            str(supersede_res["supersession_warning"])
+            if isinstance(supersede_res.get("supersession_warning"), str)
+            else None
+        )
 
-    checkin_b = call_fn(
-        "sync_state",
-        {
-            "client_session_id": sess_b,
-            "response_text": (
-                "Found module-scoped fake clock root cause for test_upload_retry, "
-                "superseded the initial flaky-test claim, and switched the fixture "
-                "to function scope."
-            ),
-            "complexity": 0.45,
-            "confidence": 0.85,
-            "task_type": "bugfix",
-        },
-    )
-    prediction_id = checkin_b.get("prediction_id")
-    action_summary = checkin_b.get("action_summary") if isinstance(checkin_b.get("action_summary"), dict) else {}
+        checkin_b = call_fn(
+            "sync_state",
+            {
+                "client_session_id": sess_b,
+                "response_text": (
+                    "Found module-scoped fake clock root cause for test_upload_retry, "
+                    "superseded the initial flaky-test claim, and switched the fixture "
+                    "to function scope."
+                ),
+                "complexity": 0.45,
+                "confidence": 0.85,
+                "task_type": "bugfix",
+            },
+        )
+        checkin_ok = not _is_error_result(checkin_b)
+        raw_pred = checkin_b.get("prediction_id") if checkin_ok else None
+        prediction_id = raw_pred.strip() if isinstance(raw_pred, str) and raw_pred.strip() else None
+        action_summary = checkin_b.get("action_summary") if isinstance(checkin_b.get("action_summary"), dict) else {}
 
-    outcome_args: dict[str, Any] = {
-        "client_session_id": sess_b,
-        "outcome_type": "test_passed",
-        "outcome_score": 1.0,
-        "detail": {
-            "test_name": "test_upload_retry",
-            "runs": 50,
-            "order": "shuffled",
-            "demo_run": rid,
-            "do_not_use_for_live_validation": True,
-        },
-    }
-    if isinstance(prediction_id, str) and prediction_id.strip():
-        outcome_args["prediction_id"] = prediction_id.strip()
+        outcome_b: dict[str, Any] = {}
+        outcome_ok = False
+        if prediction_id:
+            outcome_b = call_fn(
+                "record_result",
+                {
+                    "client_session_id": sess_b,
+                    "outcome_type": "test_passed",
+                    "outcome_score": 1.0,
+                    "prediction_id": prediction_id,
+                    "detail": {
+                        "test_name": "test_upload_retry",
+                        "runs": 50,
+                        "order": "shuffled",
+                        "demo_run": rid,
+                        "do_not_use_for_live_validation": True,
+                    },
+                },
+            )
+            outcome_ok = not _is_error_result(outcome_b)
+        outcome_summary = outcome_b.get("state_summary") if isinstance(outcome_b.get("state_summary"), dict) else {}
 
-    outcome_b = call_fn("record_result", outcome_args)
-    outcome_summary = outcome_b.get("state_summary") if isinstance(outcome_b.get("state_summary"), dict) else {}
+        release_b = _release(sess_b)
 
-    release_b = call_fn(
-        "agent",
-        {
-            "action": "release_presence",
-            "client_session_id": sess_b,
-        },
-    )
+        # ── 3. Agent C: searches without client_session_id, then declares lineage from A ──
+        search_c = call_fn(
+            "search_shared_memory",
+            {
+                "query": "test_upload_retry",
+                "tags": [run_tag],
+                "limit": 10,
+            },
+        )
+        if _is_error_result(search_c):
+            raise DemoCallError(f"agent_c.search_shared_memory failed: {_error_detail(search_c)}")
+        rows = _extract_search_rows(search_c)
+        by_id = {_row_id(r): r for r in rows if _row_id(r)}
+        row_a = by_id.get(finding_a)
+        row_b = by_id.get(finding_b)
 
-    # ── 3. Agent C: searches without identity, then declares explicit lineage from A ──
-    search_c = call_fn(
-        "search_shared_memory",
-        {
-            "query": "test_upload_retry",
-            "tags": [run_tag],
-            "limit": 10,
-        },
-    )
-    rows = _extract_search_rows(search_c)
-    by_id = {_row_id(r): r for r in rows if _row_id(r)}
-    row_a = by_id.get(finding_a)
-    row_b = by_id.get(finding_b)
+        start_c = call_fn(
+            "start_session",
+            {
+                "force_new": True,
+                "name": f"record-demo-agent-c-{rid}",
+                "model_type": "demo",
+                "parent_agent_id": uuid_a,
+                "spawn_reason": "explicit",
+            },
+        )
+        uuid_c = _extract_uuid(start_c, step="agent_c.start_session")
+        sess_c = _extract_session_id(start_c, step="agent_c.start_session")
+        active_sessions.append(sess_c)
+        c_state = start_c.get("state_summary") if isinstance(start_c.get("state_summary"), dict) else {}
 
-    start_c = call_fn(
-        "start_session",
-        {
-            "force_new": True,
-            "name": f"record-demo-agent-c-{rid}",
-            "model_type": "demo",
-            "parent_agent_id": uuid_a,
-            "spawn_reason": "explicit",
-        },
-    )
-    uuid_c = _extract_uuid(start_c)
-    sess_c = _extract_session_id(start_c)
-    c_state = start_c.get("state_summary") if isinstance(start_c.get("state_summary"), dict) else {}
-
-    release_c = call_fn(
-        "agent",
-        {
-            "action": "release_presence",
-            "client_session_id": sess_c,
-        },
-    )
+        release_c = _release(sess_c)
+    finally:
+        for dangling in list(active_sessions):
+            try:
+                call_fn("agent", {"action": "release_presence", "client_session_id": dangling})
+            except Exception:
+                pass
 
     superseded_link = row_a.get("superseded_by") if isinstance(row_a, dict) else None
     checks = {
-        "agent_a_released": bool(release_a.get("released", False)),
-        "agent_b_released": bool(release_b.get("released", False)),
-        "agent_c_released": bool(release_c.get("released", False)),
+        "agent_a_released": not _is_error_result(release_a) and bool(release_a.get("released", False)),
+        "agent_b_released": not _is_error_result(release_b) and bool(release_b.get("released", False)),
+        "agent_c_released": not _is_error_result(release_c) and bool(release_c.get("released", False)),
+        "supersede_succeeded": supersede_ok,
         "search_found_initial_claim": row_a is not None,
         "search_found_replacement_claim": row_b is not None,
         "initial_claim_marked_superseded": isinstance(row_a, dict) and row_a.get("status") == "superseded",
         "initial_claim_links_replacement": superseded_link == finding_b,
-        "outcome_bound_to_prediction": bool(prediction_id) and outcome_summary.get("prediction_binding") == "registry",
+        "outcome_bound_to_prediction": (
+            outcome_ok
+            and bool(prediction_id)
+            and outcome_summary.get("prediction_binding") == "registry"
+        ),
         "lineage_points_to_agent_a": c_state.get("predecessor_uuid") == uuid_a,
     }
 
@@ -408,7 +489,8 @@ def run_record_demo(
             "uuid": uuid_b,
             "finding_id": finding_b,
             "supersede_mode": supersede_mode,
-            "supersede_ok": not _is_error_result(supersede_res),
+            "supersede_ok": supersede_ok,
+            "supersede_warning": supersede_warning,
             "action": action_summary.get("action") or checkin_b.get("action"),
             "verdict_confidence": action_summary.get("verdict_confidence"),
             "prediction_id": prediction_id,
@@ -439,6 +521,13 @@ def format_report(summary: Mapping[str, Any]) -> str:
     b = summary["agent_b"]
     c = summary["agent_c"]
     checks = summary["checks"]
+    age_mode = b["supersede_mode"] == "age_supersedes_edge"
+    if not b["supersede_ok"]:
+        supersede_note = f"{b['supersede_mode']} (failed)"
+    elif not age_mode:
+        supersede_note = f"{b['supersede_mode']} (status flipped; no AGE graph edge)"
+    else:
+        supersede_note = f"{b['supersede_mode']} (ok)"
 
     lines = [
         _banner(f"UNITARES 3-agent shared-record demo (run {summary['run_id']})"),
@@ -451,13 +540,13 @@ def format_report(summary: Mapping[str, Any]) -> str:
         "2. Agent B — finds root cause, supersedes A, checks in & grades outcome",
         f"   agent_uuid   = {b['uuid']}",
         f"   finding_b    = {b['finding_id']}  (bug_fix: module-scoped fake clock leaks time)",
-        f"   supersede    = {b['supersede_mode']} ({'ok' if b['supersede_ok'] else 'failed'})",
+        f"   supersede    = {supersede_note}",
         f"   sync_state   = action={b.get('action') or '-'} ({b.get('verdict_confidence') or '-'})",
         f"   prediction   = {b.get('prediction_id') or '-'}",
         f"   record_result= binding={b.get('prediction_binding') or '-'}, grade={b.get('corroboration_grade') or '-'}",
         "",
-        "3. Agent C — searches without identity first, then declares lineage from A",
-        f"   unbound search ({summary['run_tag']}): {c['search_count']} finding(s) returned",
+        "3. Agent C — searches without client_session_id, then declares lineage from A",
+        f"   search ({summary['run_tag']}): {c['search_count']} finding(s) returned",
         f"     • finding_a status={c.get('initial_status_seen') or '-'}  superseded_by={c.get('superseded_by_seen') or '-'}",
         f"     • finding_b status={c.get('replacement_status_seen') or '-'}",
         f"   agent_uuid   = {c['uuid']}",
@@ -465,7 +554,10 @@ def format_report(summary: Mapping[str, Any]) -> str:
         _banner("Verification"),
     ]
     for label, ok in checks.items():
-        mark = "OK  " if ok else "WARN"
+        if label == "initial_claim_links_replacement" and not age_mode and not ok:
+            mark = "SKIP"
+        else:
+            mark = "OK  " if ok else "WARN"
         lines.append(f"  [{mark}] {label}")
     lines.extend(
         [
@@ -500,21 +592,29 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     rest_url = _rest_url()
     preflight(rest_url)
-    summary = run_record_demo(
-        lambda tool, tool_args: _http_call(rest_url, tool, tool_args, timeout=args.timeout),
-        dashboard_url=_dashboard_url(),
-    )
+    run_id = uuid.uuid4().hex[:8]
+
+    def _call(tool: str, tool_args: dict[str, Any]) -> dict[str, Any]:
+        # Use a distinct User-Agent on the identity-free search call so it does not
+        # share the transport fingerprint of Agents A and B.
+        ua = f"unitares-record-demo-reader/{run_id}" if tool == "search_shared_memory" else None
+        return _http_call(rest_url, tool, tool_args, timeout=args.timeout, user_agent=ua)
+
+    try:
+        summary = run_record_demo(
+            _call,
+            run_id=run_id,
+            dashboard_url=_dashboard_url(),
+        )
+    except DemoCallError as exc:
+        print(f"record_demo error: {exc}", file=sys.stderr)
+        return 1
+
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
         print(format_report(summary))
-    required_ok = (
-        summary["checks"]["search_found_initial_claim"]
-        and summary["checks"]["search_found_replacement_claim"]
-        and summary["checks"]["initial_claim_marked_superseded"]
-        and summary["checks"]["lineage_points_to_agent_a"]
-    )
-    return 0 if required_ok else 1
+    return 0 if _all_required_checks_passed(summary) else 1
 
 
 if __name__ == "__main__":
