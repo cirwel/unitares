@@ -345,7 +345,9 @@
         return {
           agentsActive, agentsLive, agentsPresenceUnknown, agentsPresenceUnavailable,
           agentsTotal,
-          discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
+          discoveries: kg && typeof kg.canonical_current_total === "number"
+            ? kg.canonical_current_total
+            : (kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null),
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
           // Recent-outcome context for the card: "0 open" alone reads as
@@ -463,11 +465,17 @@
           agentId: d._agent_id, session: d.session_id_at_write, version: d.system_version, created: d.created_at,
         }));
         const st = statsR ? (statsR.stats || statsR) : null;
+        const rawCounts = st && st.raw_current_counts && typeof st.raw_current_counts === "object"
+          ? st.raw_current_counts
+          : null;
+        const total = st && typeof st.canonical_current_total === "number"
+          ? st.canonical_current_total
+          : (st && typeof st.total_discoveries === "number" ? st.total_discoveries : r.total);
         return {
           list,
-          total: st && typeof st.total_discoveries === "number" ? st.total_discoveries : r.total,
-          byType: st ? st.by_type : null,
-          byStatus: st ? st.by_status : null,
+          total,
+          byType: st ? (st.by_type || (rawCounts && rawCounts.by_type) || null) : null,
+          byStatus: st ? ((rawCounts && rawCounts.by_status) || st.by_status || null) : null,
           searchMode: r.search_mode_used || null,
           lowConfidence: !!r.low_confidence,
           moreAvailable: !!r._more_available,

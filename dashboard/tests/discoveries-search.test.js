@@ -423,4 +423,107 @@ describe("Discoveries server-side search", () => {
     expect(listText).toContain("Alpha offline hit");
     expect(listText).not.toContain("Beta entry");
   });
+
+  it("renders canonical corpus total, cold/terminal lifecycle statuses, and clickable type chips from live stats", async () => {
+    const { dom, calls } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        // Real live shape returned by knowledge(action="stats"):
+        // top-level total_discoveries/by_status are lifecycle-managed only,
+        // while canonical_current_total + raw_current_counts cover the full corpus.
+        return {
+          success: true,
+          stats: {
+            total_discoveries: 2600,
+            by_status: { open: 911, resolved: 137, archived: 705, cold: 847 },
+            canonical_current_total: 2774,
+            by_type: { note: 1229, insight: 288, bug_found: 281, rule: 182, custom_rare: 1, custom_common: 50 },
+            raw_current_counts: {
+              total_discoveries: 2774,
+              by_status: { open: 911, resolved: 137, archived: 705, cold: 847, superseded: 155, closed: 19 },
+              by_type: { note: 1229, insight: 288, bug_found: 281, rule: 182, custom_rare: 1, custom_common: 50 },
+            },
+          },
+        };
+      }
+      return {
+        success: true,
+        discoveries: [{ id: "2026-11-25T12:00:00Z", type: "rule", status: "open", summary: "Canonical rule entry" }],
+      };
+    });
+
+    await dom.window.Discoveries.load();
+    const statsText = dom.window.document.getElementById("dsc-stats").textContent;
+    expect(statsText).toContain("open 911");
+    expect(statsText).toContain("cold 847");
+    expect(statsText).toContain("superseded 155");
+    expect(statsText).toContain("closed 19");
+    expect(statsText).not.toContain("other");
+
+    const chips = Array.from(dom.window.document.querySelectorAll(".dsc-type"));
+    const chipTypes = chips.map((c) => c.dataset.type);
+    expect(chipTypes[0]).toBe("all");
+    expect(chips[0].textContent).toContain("2774");
+    expect(chipTypes).toContain("rule");
+    // Unlisted custom types tie-break by count descending.
+    expect(chipTypes.indexOf("custom_common")).toBeLessThan(chipTypes.indexOf("custom_rare"));
+
+    // Clicking a type chip from the live stats legend filters server-side.
+    dom.window.document.querySelector('.dsc-type[data-type="rule"]').click();
+    await flushMicrotasks();
+    expect(calls.some((c) => c.body?.arguments?.discovery_type === "rule")).toBe(true);
+  });
+
+  it("accounts for unknown statuses in the other bucket and reads raw_current_counts.by_type fallback", async () => {
+    const { dom } = bootLive((url, body) => {
+      if (body && body.arguments && body.arguments.action === "stats") {
+        return {
+          success: true,
+          stats: {
+            total_discoveries: 10,
+            canonical_current_total: 15,
+            by_status: { open: 10 },
+            raw_current_counts: {
+              total_discoveries: 15,
+              by_status: { open: 10, draft: 5 },
+              by_type: { observation: 15 },
+            },
+          },
+        };
+      }
+      return { success: true, discoveries: [] };
+    });
+
+    await dom.window.Discoveries.load();
+    const statsText = dom.window.document.getElementById("dsc-stats").textContent;
+    expect(statsText).toContain("open 10");
+    expect(statsText).toContain("other 5");
+    expect(dom.window.document.querySelector('.dsc-type[data-type="observation"]')).toBeTruthy();
+  });
+
+  it("DATA.stats prefers canonical_current_total over lifecycle total_discoveries with fallback", async () => {
+    const { dom } = bootLive((url, body) => {
+      if (url.includes("/health")) return { status: "healthy", status_breakdown: { healthy: 1 } };
+      if (body?.name === "knowledge" && body?.arguments?.action === "stats") {
+        return {
+          success: true,
+          stats: { total_discoveries: 2600, canonical_current_total: 2774 },
+        };
+      }
+      return { success: true, sessions: [], summary: { total: 1, by_status: { active: 1 } } };
+    });
+
+    const live = await dom.window.DATA.stats();
+    expect(live.data.discoveries).toBe(2774);
+
+    // Fallback for servers that only emit total_discoveries.
+    const { dom: legacyDom } = bootLive((url, body) => {
+      if (url.includes("/health")) return { status: "healthy", status_breakdown: { healthy: 1 } };
+      if (body?.name === "knowledge" && body?.arguments?.action === "stats") {
+        return { success: true, stats: { total_discoveries: 42 } };
+      }
+      return { success: true, sessions: [], summary: { total: 1, by_status: { active: 1 } } };
+    });
+    const legacy = await legacyDom.window.DATA.stats();
+    expect(legacy.data.discoveries).toBe(42);
+  });
 });
