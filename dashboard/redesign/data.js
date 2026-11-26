@@ -448,11 +448,9 @@
       if (q) {
         searchArgs.query = q;
       } else {
-        // Queryless browsing matches the canonical current-epoch corpus scope
-        // shown in the lifecycle bar and type chips (including archived, cold,
-        // and imported rows), so archived-only chips never return "No matches"
-        // and every subset filter ("<Type>", "30d") is a true subset of
-        // "All / all time".
+        // Queryless browsing includes archived, cold, and imported rows so
+        // archived-only type chips never return "No matches" and every subset
+        // filter ("<Type>", "30d") stays a subset of "All / all time".
         searchArgs.include_archived = true;
         searchArgs.include_cold = true;
         searchArgs.authority_mode = "all";
