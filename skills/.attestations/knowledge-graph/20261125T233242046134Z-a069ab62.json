@@ -1,0 +1,38 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-11-25T23:32:42Z",
+  "verified_date": "2026-11-25",
+  "verifier": "agent:135486de-a5a1-4d97-9b0c-923b79f097b1 (re-checked knowledge-graph SKILL.md against handlers.py / search_helpers.py / knowledge_graph_age_search.py SQL visibility/metadata filter pushdown)",
+  "source_digests": {
+    "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
+    "unitares/src/alias_schema.py": "3746fd4d6b089dea",
+    "unitares/src/db/mixins/knowledge_graph.py": "2679d31a7e247f3b",
+    "unitares/src/knowledge_authority.py": "e265e82153d9d911",
+    "unitares/src/knowledge_graph.py": "d76c1b4a5da778c2",
+    "unitares/src/knowledge_graph_lifecycle.py": "9410fc5f608f4bcd",
+    "unitares/src/knowledge_notices.py": "604b6ec9cced9334",
+    "unitares/src/mcp_handlers/consolidated.py": "7fb614d8e4d8bf4f",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "3588df6d73fe9f1d",
+    "unitares/src/mcp_handlers/knowledge/read_metadata.py": "6f1961e994adbcb3",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "20e8291dd8791785",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_MEMORY_SUGGESTION_LIMIT": "2dfb81538d8a6f3a",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_SEARCH_MORE_ROW_LIMIT": "e734715e4042bb2d",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_append_more_results": "1a9771f6dc3f506a",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_enforce_search_projection_budget": "03fad7d588ebcb80",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_memory_suggestions": "010f28c7ce378c9d",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_note_stale_digests": "2a203289f280c88d",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "a0d65c33a4ca023b",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/storage/knowledge_graph_age.py": "4a2eb9853b8cdac4",
+    "unitares/src/storage/knowledge_graph_postgres.py": "b4b787a4b13bda85",
+    "unitares/src/tool_descriptions.json": "2b7175a19e0d104c"
+  },
+  "skill_digest": "f108288a9a6e0de3",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/knowledge/handlers.py": [
+      "63e2a0c76bcbd9fb"
+    ]
+  }
+}

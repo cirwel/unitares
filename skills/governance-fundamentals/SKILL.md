@@ -35,6 +35,8 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
   - unitares/src/outcomes.py
+  - unitares/skills/governance-fundamentals/references/eisv-and-calibration.md
+  - unitares/skills/governance-fundamentals/references/verdicts-and-margin.md
 ---
 
 # Governance Fundamentals
@@ -43,22 +45,11 @@ source_files:
 
 UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator federation kernel for agent identity, claims and
-evidence, review, outcomes, and reconstruction. This skill covers one instrument
-inside it, the check-in's state estimate.
-
-EISV supports digital proprioception: an inspectable account of changes in an
-agent's working process. The current check-in path runs this estimator
-synchronously, blending behavioral observations, smoothing them,
-and comparing them with thresholds and the agent's own trajectory once a
-baseline exists. These readings inform guidance and policy; their operational
-role, intended interpretations and evidence of benefit are distinct. The
-[computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence)
-owns that framing and the staged direction toward optional assessment.
+evidence, review, outcomes, and reconstruction. EISV runs synchronously on
+check-ins as digital proprioception (blending and smoothing observations); see
+the [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
 
 ## EISV State Vector
-
-The behavioral path produces four coordinates from three blended observation
-streams, updated through check-ins:
 
 | Dimension | Range | What the current computation records |
 |-----------|-------|---------|
@@ -67,81 +58,43 @@ streams, updated through check-ins:
 | **S** (Entropy) | [0, 1] | Drift, complexity divergence, and available continuity and tool features (controller regime-instability self-loop neutralized by default) |
 | **V** (Valence) | [-1, 1] | Separately EMA-smoothed gap between raw E and I observations |
 
-These are weighted indices with historical names. Productive capacity,
-information integrity and entropy are intended interpretations, not additional
-quantities directly measured by these formulas. A narrow, derived or correlated
-signal is still information that can be retained and inspected. Its definition,
-diagnostic interpretation, usefulness and policy role are separate questions.
-For the formulas and producer distinctions, see the repository's
-`docs/EISV_COMPUTATION.md`.
+These are weighted indices with historical names, not thermodynamic quantities.
+Deviation is information first, not a guilty verdict: in the default `observe`
+posture, policy recommendations never block writes. Prefer live tool output.
 
-### How the Live Path Reads Them
+## Live Readings, Defaults, and Stages
 
-- **E (Energy)** blends complexity divergence and recent recorded outcomes (renormalized to 50/50 of the base weight by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which excludes prior governance decisions and the legacy `legacy_tanh_v` coherence-level self-loop; setting `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` restores those legacy controller terms), with optional actor work-tool error rate from caller-bound `audit.tool_usage` (`UNITARES_ACTOR_WORK_TOOL_STATS=1`, era `SH1`). `continuity_E_input` is omitted by default under `UNITARES_DROP_CONTINUITY_E_BLEND=1` (`SH1`). The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
-- **I (Integrity)** blends eligible per-agent calibration accuracy (pooled with a cohort prior when supplied, or tactical calibration once five or more recent verified confidence–outcome pairs exist) and per-agent outcome-score consistency (`consistency_score`, once three or more non-echo outcomes exist in the last 24h, excluding `outcome_event` echo duplicates). Those two evidence gates are independent: when both are active their base weights renormalize to `5/7` (`calibration_accuracy`) and `2/7` (`consistency_score`); when only one gate is met, that term carries `100%` of the base; only when neither gate is met does the component arithmetic use the neutral `0.75` `uncalibrated_base_fallback` (while the axis itself holds unread under `HU1`; default under `UNITARES_PER_AGENT_I_CALIBRATION=1` and `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which exclude the legacy `legacy_tanh_v` coherence-trend self-loop and lifetime fleet-strategic bins; setting those flags to `0` restores the legacy terms), plus optional `continuity_I_input` (`unique_tools_ratio` is omitted by default under `UNITARES_DROP_UNIQUE_TOOLS_I_BLEND=1`, era `SH1`). Outcome consistency measures variance: constant success and constant failure scores both have zero variance. Outcome success enters E separately.
-- **S (Entropy / drift)** rises with an agent-local drift norm and complexity divergence (with the controller's regime-instability self-loop neutralized by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), plus optional `continuity_S_input` and actor work-tool call velocity (`UNITARES_ACTOR_WORK_TOOL_STATS=1`, era `SH1`). By default (`UNITARES_SENSOR_DRIFT_AGENT_LOCAL=1`, era `SD1`) the drift norm is built only from your supplied complexity divergence and your own tactical calibration error once ten or more recent verified pairs exist; the shared stability and fleet-calibration components are left out, and with neither present the drift term is unread rather than a fleet constant. `derivation.drift_input` records what was used.
-- **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate, stepping only when both E and I were read under `HU1`. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
+- **Self-loops neutralized by default**: `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`
+  and `UNITARES_PER_AGENT_I_CALIBRATION=1` exclude legacy controller/coherence
+  self-loops and lifetime fleet bins (`UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0`
+  or `UNITARES_PER_AGENT_I_CALIBRATION=0` restores their legacy terms).
+- **Unread axes stay held** (`UNITARES_HOLD_UNREAD_AXES=1`): check
+  `reading_coverage` (`measured`, `defaulted`, `v_rests_on_defaults`). A
+  defaulted axis is a placeholder; after 10 unread check-ins it moves to
+  `behavioral.assessment.unscored_axes`.
+- **Stages**: check-ins 1–5 use the Φ prior; 6–27 (`behavioral.confidence >= 0.3`)
+  use behavioral thresholds (else `insufficient_reading`); 28+ enable Welford
+  z-score baselines.
 
-An axis is a reading only when at least one of its base terms was supplied.
-When none was, the axis is held (default ON under `UNITARES_HOLD_UNREAD_AXES=1`, era `HU1`): the published number stays at its last
-reading, or at a bootstrap placeholder if it was never read, and the
-assessment stops scoring it once ten check-ins pass without a reading
-(`behavioral.assessment.unscored_axes` lists the axes a verdict says nothing
-about). The check-in response says which is which in `reading_coverage`: `measured` lists the axes with a supplied base term,
-`defaulted` lists the rest with the terms that were missing, and
-`v_rests_on_defaults` is true when E or I is a default, since V is derived from
-them. A defaulted axis is a placeholder, not a low or high reading. Filtered
-response modes show the account whenever the set of defaulted axes changes from
-the previous check-in, including when a reading becomes fully measured; full
-mode always carries it.
-
-The headline math is proprioceptive residuals. With unread axes held (the default), the live estimation stages count check-ins that read something: a new agent's first three check-ins read nothing, so check-ins 1–5 use the mostly server-derived Φ cold-start prior; check-ins 6–27 (or once `behavioral.confidence >= 0.3`) use the behavioral assessment against fixed universal thresholds; check-in 28 enables self-relative z-score deviation against the agent's Welford baseline (the stage boundaries derive from `BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3` over `BOOTSTRAP_UPDATES = 10`, and `is_baselined` at `baseline_confidence >= 0.8` with the confidence ramp `(evidence_count - 5) / 25` where `evidence_count` is `read_update_count` under the hold and `update_count` when `UNITARES_HOLD_UNREAD_AXES=0`, giving stages at check-ins 1–2, 3–24, and 25+ with the hold off). From check-in 6 on, an agent that has supplied too few readings gets no verdict at all: the response carries `safe` with risk 0, driver `insufficient_reading`, and a provisional grade, which means nothing was measured, not that anything was cleared. Reporting complexity with check-ins and recording outcomes (including verified confidence–outcome pairs) supplies the readings. Absolute safety floors and basin-health gates remain in force throughout for axes with a recent reading; an unscored axis raises no risk and trips no floor.
-
-The roadmap target for richer cold-start grounding (a class-anchor reference
-blend) is in `docs/ontology/eisv-proprioception-contract.md`, *Core
-mathematical posture*; it is not the live path.
-Deviation is information first, not a guilty verdict. Policy can recommend
-`guide`, `pause`, or `reject`, but EISV itself is measurement/diagnosis, not
-prosecution. In the default `observe` posture those recommendations cannot
-change lifecycle state or block writes.
-
-Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
+For per-axis formulas, era flags (`SH1`/`HU1`/`SD1`), or `outcomes_in_e`, read
+`references/eisv-and-calibration.md` (`skills(name="governance-fundamentals", reference="eisv-and-calibration.md")`).
 
 ## Basins
 
-Your state sits in a basin — a region of the EISV space:
-
-- **High basin**: The configured high-basin region: E and I are high, S is low,
-  and |V| is within its band. This is an instrument classification.
-- **Low basin**: The configured low-basin region. Inspect its contributing
-  readings and the policy record before interpreting what changed.
-- **Boundary**: Transitioning between basins. Extra attention from governance — the verdict's
-  sub-action is `guide` regardless of the headline. The basin does **not** force `margin: tight`:
-  `basin` and `margin` are two different notions of "edge", and the boundary condition is carried
-  by `basin`, the `guide` sub-action, and the guidance text, not by the margin enum.
+- **High basin**: E and I are high, S is low, and |V| is within its band.
+- **Low basin**: inspect contributing readings and the policy record before interpreting.
+- **Boundary**: transitioning between basins; sub-action is `guide` regardless of headline, and `basin` does **not** force `margin: tight`.
 
 Use `check_working_state(client_session_id=..., verbosity="standard")`
-(`get_governance_metrics()` canonically) as the source of truth for the current basin/mode labels rather
-than assuming they are constant across runtime versions; the default
-`check_working_state()` envelope leaves them out.
+(`get_governance_metrics()` canonically) as the source of truth for current
+basin/mode labels; the default envelope omits them.
 
-When a response includes `policy_evaluation.inputs.basin`, read it as the
-decision-time policy basin. Agent-facing state fields can be sourced from the
-primary EISV path for that response, so newer responses also include
-`policy_basin`, `policy_basin_source`, and `primary_eisv_source` to make that
-measurement distinction explicit (the compact formatter keeps `basin`,
-`policy_basin`, and `primary_eisv_source` and drops `policy_basin_source`).
+## Verdicts and Margin
 
-## Verdicts
-
-When a check-in returns an assessment, it distinguishes three things: `policy_evaluation.action` is the
-raw inferred recommendation; top-level `action` is the effective operational
-directive; and `enforcement.applied` says whether lifecycle authority actually
-crossed the boundary. The separate `verdict` field is a glossary wrapper
-(`{value, meaning, next_action, …}`), not any of those. Never read
-`verdict.value` as the action. A receipt-only retry or failed assessment supplies
-no fresh operational decision; use `governance-lifecycle` for checkpoint
-acceptance and retry guidance.
+Check-ins distinguish `policy_evaluation.action` (raw recommendation), top-level
+`action` (effective operational directive), and `enforcement.applied` (whether a
+lifecycle hold crossed the boundary). Never read `verdict.value` (a glossary
+wrapper) as the action.
 
 | Action | Sub-action | Meaning | What to do |
 |--------|-----------|---------|------------|
@@ -151,52 +104,27 @@ acceptance and retry guidance.
 | **pause** | named pause with `enforcement.applied=false` | Enforcement posture returned the compatibility directive, but this path did not commit a lifecycle hold | Do not infer a write gate; inspect enforcement or recovery state |
 | **pause** | `reject` or a named pause, with `enforcement.applied=true` | Explicit compatibility actuator applied a lifecycle hold | Stop and use the named recovery, optional dialectic review, or human input |
 
-Separately, `metrics.verdict` may carry an internal UNITARES verdict such as
-`safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as
-moral judgment. Under the default hold (`UNITARES_HOLD_UNREAD_AXES=1`), the Φ
-cold-start prior owns check-ins 1–5; from check-in 6 onward, the behavioral
-assessment owns the main risk/verdict path once `behavioral.confidence >= 0.3`
-(otherwise, an unread state draws `insufficient_reading` with `safe` / risk `0`;
-with `UNITARES_HOLD_UNREAD_AXES=0`, behavioral authority starts at check-in 3). Coherence, CIRS, basin, and adaptive-governor
-compatibility backstops remain part of that inference, but they actuate only
-when the operator sets `UNITARES_POLICY_ACTUATION=enforce` (see *Coherence*).
-
-On read-only metrics, headline `risk_score` and `status` use the risk that
-actually produced the last verdict when available. Inspect `risk_score_source`:
-`resolved` means that verdict risk, while `phi_history` is the honest fallback
-before an assessment exists. `current_risk` and `mean_risk` remain smoothed Φ
-telemetry and can legitimately disagree with the headline.
-
-### Margin
-
-`margin` describes how much headroom you have before the nearest state-space edge. It is a small enum, not a number:
+`margin` is distance to the nearest decision threshold (`nearest_edge` ∈ `risk`,
+`coherence`, `void`, or `oscillation` when actionable; `null` on `comfortable`/`settling`):
 
 | `margin` | Meaning | What to do |
 |----------|---------|------------|
-| `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet (a crossed edge still reports `warning` / `critical` during warmup) | Keep checking in; a real margin appears after 3+ check-ins |
-| `comfortable` | Outside the tight band for every edge that could be measured. Read `margin_scope` before interpreting its coverage | Proceed normally |
-| `tight` | Within the band around the nearest decision threshold | Be more careful with next steps; avoid increasing complexity |
-| `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
-| `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
+| `settling` | Warmup — fewer than 3 check-ins (a crossed edge still reports `warning`/`critical`) | Keep checking in |
+| `comfortable` | Outside the tight band for every **measured** edge — check `margin_scope` and `unmeasurable_edges` | Proceed normally |
+| `tight` | Within the band around `nearest_edge` | Avoid increasing complexity |
+| `warning` | Less than 0.1 past `nearest_edge` | Stop increasing complexity; reflect |
+| `critical` | 0.1 or more past `nearest_edge` | Halt current approach; recover or escalate |
 
-The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to: `risk`, `coherence`, or `void` from the margin computation, or `oscillation` when a CIRS `cirs_block` pause was driven by resonance. On `comfortable` and `settling`, `nearest_edge` is `null`.
+`comfortable` with `margin_scope: measured_edges_only` means "clear of the edges
+we could judge", not "nothing is near" (legacy `coherence` is normally in
+`unmeasurable_edges`). Do not transfer check-in `margin` into recovery
+eligibility (`recovery.margin.v2` is a separate view).
 
-`margin` is distance to a **decision threshold**, not a basin position. Two fields ride beside it and qualify what a `comfortable` reading actually covers:
-
-| Field | Values | Meaning |
-|---|---|---|
-| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them. `GovernanceConfig.compute_proprioceptive_margin` sets it only on `comfortable`/`tight`, but several decision paths in `GovernanceConfig.make_decision` and `monitor_decision.make_decision` re-emit it with a default of `all_edges`, so an `all_edges` reading beside a `settling`/`warning`/`critical` margin is that default and not a finding that every edge was judged |
-| `unmeasurable_edges` | list of edge names | The edges that had no band to judge against, so they were not assessed at all |
-
-An edge is unmeasurable when it has no threshold band for this agent. Coherence is the usual case, and the gate is provenance, not history: the coherence edge is judged only when `coherence_role` is `behavioral_update_consistency` (`GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE`), the history window carries that same role, and at least 10 samples exist. With the deployed `legacy_tanh_v` / `ode_control_feedback` producer the edge stays unmeasurable no matter how much history accumulates, so `comfortable` normally arrives as `margin_scope: measured_edges_only` with `unmeasurable_edges: ["coherence"]`. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state(client_session_id=...)` is the source of truth.
-
-Do not transfer this check-in margin into recovery eligibility. Recovery emits a
-separate `recovery.margin.v2` view whose authoritative inputs are risk and
-`void_active`; legacy coherence is explicitly listed as excluded diagnostic
-context. Its enum is its own (`unknown` / `critical` / `tight` / `comfortable`,
-with `nearest_edge` ∈ `void_active` / `risk_score` / `no_risk_authority`).
-
-The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight/warning/critical margin) — read that first. In `mirror` mode `margin`/`nearest_edge` are surfaced **only** when actionable; a `comfortable`/`settling` margin is steady-state and stays out of the response (the mirror's "No actionable signals — steady state" line covers it).
+When `policy_basin` disagrees with `basin`, `risk_score_source` differs from
+`current_risk`, `unmeasurable_edges` is non-empty, or you are interpreting
+`recovery.margin.v2` or `mirror` mode filtering, read
+`references/verdicts-and-margin.md`
+(remote MCP: `skills(name="governance-fundamentals", reference="verdicts-and-margin.md")`).
 
 ## Coherence
 
@@ -227,25 +155,30 @@ provenance.
 
 ## Calibration
 
-The system tracks whether your stated confidence matches evidence. Over time this builds a calibration curve.
+- Grounding comes from objective signals (test pass/fail, exit codes, lint, file
+  ops) via `auto_ground_truth.py` and `outcome_event`, without requiring human
+  validation for deterministic evidence.
+- Self-submitted outcomes cap at `tool_observed` (evidence weight 0.65, the
+  calibration admission floor); server/external observations grade higher
+  (0.85 / 1.00). Overconfidence lowers Integrity / raises uncertainty.
+- When an agent omits confidence, the deployed compatibility estimator still
+  gives legacy `C(V_ODE)` 55% of its base weight, exposed as
+  `confidence_reliability.coherence_dependency=ode_control_feedback` — known
+  causal debt, not independent confidence evidence. Omitted confidence does not
+  mint a tactical prediction.
 
-- Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
-- What that grounding is WORTH depends on who observed it. An outcome you submit yourself is graded `tool_observed` (evidence weight 0.65) at best, because the public path caps a caller attesting its own result — and 0.65 is exactly the calibration admission floor, so a self-described tool call is admitted at the boundary, not above it. Rows the server or an external signal observed can grade higher (0.85 / 1.00). The grade is not a score of your work; it is a statement about who checked. When a claim grades `claim_only`, the response's `corroboration_hint` names the reference keys the grader reads (they reach `self_report_with_refs`, below the calibration floor).
-- While the binding ledger is retained, prediction-bound outcomes are database-idempotent per `(agent_id, prediction_id)`: an identical retry returns the first canonical outcome, while conflicting reuse is rejected. New eligible bound outcomes create durable calibration work in that same transaction. A recovery worker delivers each sample once per configured sink using receipts committed with projection state; transient failures leave work pending. File consumers must share the actual durable files and lock. Changing destination, backend or epoch does not silently reroute pending work. Older outcomes without receipts are not automatically backfilled, and unbound submissions retain best-effort, non-idempotent semantics. After both canonical outcome and binding expire, a new canonical submission may be established. The prediction registry is a cache carried in the monitor snapshot; durable binding authority lives in the database.
-- Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
-- When an agent omits confidence, the deployed compatibility estimator still gives legacy `C(V_ODE)` 55% of its base weight. Responses expose this as `confidence_reliability.coherence_dependency=ode_control_feedback`; it is known causal debt, not independent confidence evidence. Do not reweight it without prospective outcome calibration because confidence history can feed later entropy penalties.
-- That derived estimate stays internal: omitted confidence does not mint an agent tactical prediction or become an agent-reported calibration observation. Earlier explicit predictions remain available for their eventual outcomes. Simulation restores prediction bookkeeping and does not write trajectory calibration observations.
+When `record_result` returns `claim_only`, `corroboration_hint`, or
+`PREDICTION_REUSE_CONFLICT`, or when inspecting calibration ledger delivery and
+simulation rules, read `references/eisv-and-calibration.md`
+(remote MCP: `skills(name="governance-fundamentals", reference="eisv-and-calibration.md")`).
 
 ## Diagnostics
 
-When the numbers look surprising, do not guess first. Use:
+When numbers look surprising, do not guess first:
 
-- `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it mints a fresh identity instead of answering about yours)
-- `health_check()` to verify the server and knowledge graph are healthy
-- `check_working_state(client_session_id=...)` for the current interpreted
-  state and risk provenance (without proof sent with the call, a read of your
-  own state answers `unbound`); canonical `get_governance_metrics()` also returns the
-  compatibility thresholds
+- `identity(client_session_id=...)` — verify runtime identity; trust only when `identity_assurance.caller_proven` is true (never call with no arguments: it mints a fresh identity)
+- `health_check()` — verify server and knowledge graph health
+- `check_working_state(client_session_id=...)` — read interpreted state and risk provenance (without proof it answers `unbound`); canonical `get_governance_metrics()` also returns compatibility thresholds
 
 ## What NOT to Do
 

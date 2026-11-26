@@ -155,6 +155,7 @@ def test_served_files_cover_every_served_surface():
     assert "dashboard/redesign/data.js" in rels
     assert "dashboard/redesign/tokens.css" in rels  # the redesign route serves .css
     assert any(r.startswith("skills/") and r.endswith("/SKILL.md") for r in rels)
+    assert any(r.startswith("skills/") and "/references/" in r and r.endswith(".md") for r in rels)
     # Attestation records are read by the server, not served as text.
     assert not any("/.attestations/" in r for r in rels)
 

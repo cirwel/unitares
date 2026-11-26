@@ -32,132 +32,70 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/identity/operator.py
   - unitares/src/mcp_handlers/lifecycle/query.py
+  - unitares/skills/dialectic-reasoning/references/facilitation-and-effects.md
 ---
 
 # Dialectic Reasoning
 
 ## When Dialectics Happen
 
-A dialectic session is useful when:
+Use a dialectic session for structured, evidence-backed review when:
 
-- You have an applied **pause** and choose structured review as a recovery path
+- You have an applied **pause** and choose structured review for recovery
 - You receive an observational pause recommendation and want a second perspective
 - You call `request_review()` for peer or model-assisted verification
-- You find something that contradicts the knowledge graph
-- A high-stakes decision needs structured verification before proceeding
+- You find something contradicting the knowledge graph or need verification on a high-stakes decision
 
-Dialectics are not punishment. They are a structured way to resolve disagreements using evidence and negotiation. In current UNITARES language, think of them as structured review more than "recovery court."
+Dialectics are structured review, not punishment.
 
-## Bind Before You Submit
+## Bind Before You Submit & Read Compact Progress
 
-`thesis`, `antithesis`, and `synthesis` are state-changing participant actions.
-Each requires the identity resolver to have bound the caller, and the UUID being
-submitted must equal that resolver-stamped caller. The normal flow is to bind
-with `start_session` or `identity`, then omit `agent_id`; the transport carries
-the bound UUID into the handler. Supplying an explicit `agent_id` is not
-delegation and cannot authorize acting as another participant.
-
-The gate checks that the submitted UUID equals the bound caller, so it is as
-strong as that binding and the deployment's strict-identity policy: a
-server-inferred weak binding stays weak. Read `identity_assurance` when that
-matters.
-
-## Read Progress Without Repeating the Transcript
-
-On interface contract 2.3.0 and later, use
-`dialectic(action="get", session_id="<id>", fields="compact")` to check progress.
-It preserves available turn-taking guidance, the complete resolution and its
-conditions, authorship, attestation, and effect status. It omits transcript and
-reconstruction state, previews long topic/reason text, and returns executable
-`full_session_retrieval` arguments. Read the full transcript before forming a
-judgment or responding to the other party. Omitted `fields` or `fields="full"`
-keeps the existing full read.
-
-For `action="list"`, `fields="compact"` is the smaller tally view, not the
-session progress view: it contains identifiers, phase/status, creation time,
-the requester's label and resolution-effect state when present. Use `get` for
-a particular session's verdict and next move. One active session per agent
-still applies; a `SESSION_EXISTS` refusal supplies a read call for the caller's
-sessions rather than authorizing a second review.
+- `thesis`, `antithesis`, and `synthesis` require a bound caller (`start_session`
+  or `identity`); omit `agent_id` so transport carries your bound UUID (an
+  explicit `agent_id` cannot act for another participant). Check
+  `identity_assurance` when binding strength matters.
+- Check session progress with `dialectic(action="get", session_id="<id>", fields="compact")`
+  (contract 2.3.0+): keeps turn-taking guidance, resolution, authorship,
+  attestation, and effect status while omitting the full transcript (read the
+  full transcript before forming a judgment or replying). `action="list"` with
+  `fields="compact"` returns the tally view. One active session per agent
+  applies (`SESSION_EXISTS` gives a read call, not permission for a second).
 
 ## Phase 1: Thesis
 
-The requesting agent submits their position. For a session bound to an applied
-pause, the protocol rejects a thesis from anyone else:
+`request_review` is the friendly one-call default (reuses `issue_description` as
+the thesis when no separate thesis fields are sent; pass
+`use_brief_as_thesis=false` for a neutral two-call request, which raw
+`dialectic(action="request")` uses by default):
+
+```
+request_review(issue_description="What you want verified, your position, and the evidence")
+```
+
+Or submit an explicit thesis (reusing the saved brief via `use_brief_as_thesis: true`
+when already in the thesis phase; for an applied pause only the paused agent may
+submit):
 
 ```
 dialectic(
   action: "thesis",
   session_id: "<session-id>",
   reasoning: "Why I should resume / why my position is correct",
-  root_cause: "What went wrong or what triggered this",
-  proposed_conditions: ["Concrete, measurable condition 1", "Condition 2"]
+  root_cause: "Observed facts vs. hypothesis (always required)",
+  proposed_conditions: ["Concrete, checkable condition 1"]  # required for recovery sessions
 )
 ```
 
-### One-call review (the friendly default)
+- **Proxy conflict recusal**: when filing on behalf of another UNITARES agent,
+  pass every known author UUID in `reviewed_work_author_agent_ids=["<uuid>"]`
+  (omit when unknown; empty list is refused). Declared authors are recused from
+  independent review; malformed markers fail closed. Explicit self-review never
+  counts as an independent seat and cannot close a pause-bound session.
 
-You do not have to learn the request→thesis protocol first. The friendly
-`request_review` tool reuses `issue_description` as the thesis when no separate
-thesis fields are supplied, so a complete review brief is actionable as-is:
+## Phase 2: Antithesis & Outside Consults
 
-```
-request_review(
-  issue_description: "What you want verified, your position, and the evidence"
-)
-```
-
-Pass `reasoning` (and optionally `root_cause` / `proposed_conditions`) when the
-position should be distinct from the subject. Pass `use_brief_as_thesis=false`
-for a neutral request that deliberately waits for a later thesis. The raw
-`dialectic(action="request")` path preserves that two-call default unless you
-pass thesis fields or `use_brief_as_thesis=true`.
-
-When you file the request as a proxy for work authored by another UNITARES
-agent, pass every known author UUID in
-`reviewed_work_author_agent_ids=["<canonical-agent-uuid>"]`. The declaration is
-requester-supplied, not proof of authorship, and it can only remove authority:
-those agents cannot be selected, claim the open slot, be assigned or reassigned,
-or provide the independent verdict. Omit the field when authorship is unknown;
-an explicit empty list is refused. The session response reports
-`reviewed_work_authorship.status` as `declared`, `not_supplied`, or `invalid`.
-A malformed stored marker fails closed for independent assignment. Explicit
-self-review remains visibly self-review and never counts as an independent
-seat. It may support reflection on an active agent, but a session bound to a
-pause cannot be closed by that same identity; it routes to facilitation for an
-independent reviewer or operator instead.
-
-For a session already waiting in the thesis phase, reuse what the server saved
-instead of copying it back:
-
-```
-dialectic(
-  action: "thesis",
-  session_id: "<session-id>",
-  use_brief_as_thesis: true
-)
-```
-
-`root_cause` is always required. Recovery sessions additionally require at
-least one concrete `proposed_condition`; manual review sessions may let the
-reviewer propose conditions if needed.
-
-### Writing a Good Thesis
-
-- **Reasoning**: Explain your position using the reported readings, their
-  provenance and relevant task evidence. A reading and its interpretation can
-  be disputed separately.
-- **Root cause**: State what is observed and what remains a hypothesis. For
-  example: "S rose after the task changed; the cause is not established. The
-  recorded inputs and test results support checking the complexity estimate."
-- **Proposed conditions**: Make the issue checkable, for example "rerun the
-  failing test after the fix and attach the result." If proposing a metric
-  condition, explain why its producer and threshold address this issue. A
-  favorable number alone does not establish improvement or recovery.
-
-## Phase 2: Antithesis
-
-A reviewing agent examines the thesis and raises concerns:
+An assigned reviewer submits an antithesis addressing the thesis directly with
+specific concerns and observed EISV metrics:
 
 ```
 dialectic(
@@ -169,103 +107,38 @@ dialectic(
 )
 ```
 
-### Writing a Good Antithesis
-
-- **Reasoning**: Address the thesis directly. What does the data actually show?
-- **Concerns**: Be specific about risks. "I exceeds E by 0.3, indicating integrity debt" is useful.
-- **Observed metrics**: Include the actual EISV values backing your concerns
-
-### Stamp where the verdict came from
-
-If the review was produced **outside the server** (a Codex or other-model
-consult, a subagent council seat, any reviewer that is not this MCP), file it
-with `dialectic(action="consult")` so it becomes a governed record rather than an
-untracked opinion. A consult needs no reviewer slot, so any bound agent can file
-one on any session, open or closed, the paused agent included:
+If a review came from **outside this server** (Codex, another model, a subagent
+council), record it with `dialectic(action="consult")` (no reviewer slot
+required; carries **no authority**, never advances phase or refreshes liveness):
 
 ```
 dialectic(
   action: "consult",
   session_id: "<session-id>",
-  reasoning: "<the outside reviewer's argument; required>",
-  agrees: false,                          # the position it takes; optional
-  proposed_conditions: ["<one per condition>"],
-  concerns: ["<one per finding>"],
-  reviewer_provenance: {                  # required
-    backend: "codex-cli",
-    model_used: "<model>",
-    consult_source: "<what invoked it>"
-  }
+  reasoning: "<outside reviewer's argument; required>",
+  agrees: false,
+  proposed_conditions: ["<condition>"],
+  concerns: ["<finding>"],
+  reviewer_provenance: { backend: "codex-cli", model_used: "<model>", consult_source: "<invoker>" }
 )
 ```
 
-A consult has **no authority**. It never advances the phase, never counts as a
-verdict (`agrees` stays NULL on the row; the position is kept in
-`observed_metrics.consult.position`), and never refreshes the session's
-liveness clock, so it cannot overturn a standing rejection or hold a stalled
-session open. The server stamps `reviewer_kind: "external_consult"` whatever you
-send, and records whether you filed it as the paused agent, the reviewer or a
-third party. A session keeps at most 8 consults.
+- ⛔ **Exact `reviewer_kind` spelling**: valid agent-suppliable kinds are
+  `agent_submitted`, `external_consult`, and `orchestrated` (never
+  `in_process_synthetic`). A typo silently falls back to `agent_submitted`
+  without erroring!
+- **`degraded` vs. `judgment_formed: false`**: mark backend errors/timeouts that
+  still produced a verdict as `degraded: true`. If **no judgment** was formed,
+  do not file a `consult` (`NO_JUDGMENT`); an assigned reviewer files
+  `judgment_formed: false` on `antithesis` (records abstention without claiming
+  the slot or filing a rejection). Never backfill past runs.
 
-If you ARE the assigned reviewer, your own verdict still goes through
-`antithesis` and `synthesis`, and `reviewer_provenance` there says which
-backend produced it:
-
-⛔**A misspelled `reviewer_kind` silently becomes `agent_submitted`** — the
-server falls back rather than erroring (`handlers.py`,
-`kind if kind in _REVIEWER_KINDS else "agent_submitted"`). So a typo does not
-fail loudly; it files your outside consult as if you had reviewed it yourself,
-which is the one misattribution this field exists to prevent. The agent-suppliable
-kinds are exactly `agent_submitted`, `external_consult`, and `orchestrated`
-(`in_process_synthetic` is the server's own stamp — do not send it).
-
-Unrecognised keys are dropped (the response lists them), and string values are
-truncated at 200 characters. Useful ones beyond the example: `model_requested`,
-`models_used`, `tokens_used`, `cost_usd`, `latency_ms`, `finish_reason`,
-`fallback_from`, `warnings`, `consulted_at`.
-
-**Why this matters.** The unitares README records "Benefit from review and
-coordination: **Untested**", and names `reviewer_provenance` as how outside
-review becomes countable. Measured 2026-08-28: across 669 dialectic messages, 3
-carried `agent_submitted` and **0** carried `external_consult`. That zero was
-first read as an optional field nobody filled in. It was a missing seat: the
-only documented route was an antithesis, which needs the reviewer slot, and the
-orchestrated reviewer takes it within about a minute of the request. `consult`
-(interface contract 1.24.0, 2026-09-28) is that seat.
-
-- **Stamp it, don't infer it.** The field is descriptive, not identity proof.
-  Record the backend and model that actually ran.
-- **Mark failures as failures.** Set `degraded: true` when the consult errored
-  or timed out but still reached a judgment you are filing. A failed pass filed
-  as a clean one is worse than no row at all.
-- **If no judgment was reached, do not file one.** For a `consult`, simply
-  don't call it: an outside run that returned nothing you could read as a
-  verdict is not a consult, and `consult` refuses `judgment_formed: false`
-  without recording anything (`NO_JUDGMENT`). If you are the assigned reviewer
-  and your own backend reached no judgment, pass `judgment_formed: false` on
-  the antithesis instead.
-  The server records an abstention without claiming or changing reviewer-slot
-  ownership; the slot is OPEN only when no reviewer was already assigned. It does
-  not file a rejection. `degraded` describes the BACKEND, `judgment_formed`
-  says whether a verdict exists at all, and the two are not interchangeable —
-  a model that judged and then failed its output format is degraded but HAS
-  judged, and that objection is real and must still be filed. Filing a
-  non-verdict claims the one reviewer slot and blocks the paused agent behind
-  reasoning nobody can act on (live: session `99ff6f25a310d23e`, 2026-09-19).
-- **Never backfill.** File only a review this session actually performed;
-  filing past passes after the fact fabricates governed history.
-
-If identity or session continuity looks suspect, verify with `identity(client_session_id=...)` before
-assuming the thesis belongs to the agent you think it does. An independent
-reviewer also receives server-captured pause evidence separately from the paused
-agent's narrative; the full `dialectic(action="get")` read serves it as
-`paused_agent_state`. Treat its measurement, policy, and enforcement provenance as
-context; legacy `C(V)` is diagnostic controller feedback, not independent
-evidence that the thesis is right or wrong.
+When filing `reviewer_provenance` extras, hitting the 8-consult limit, or
+inspecting server-captured `paused_agent_state`, read
+`references/facilitation-and-effects.md`
+(remote MCP: `skills(name="dialectic-reasoning", reference="facilitation-and-effects.md")`).
 
 ## Phase 3: Synthesis
-
-Both sides negotiate toward resolution:
 
 ```
 dialectic(
@@ -273,219 +146,71 @@ dialectic(
   session_id: "<session-id>",
   reasoning: "How we reconcile the thesis and antithesis",
   agrees: true/false,
-  proposed_conditions: ["Negotiated condition 1", "Condition 2"]
+  proposed_conditions: ["Negotiated condition 1"]
 )
 ```
 
 For an independent review, the reviewer owes the first synthesis verdict before
-the paused agent can answer it. Convergence happens only when the required sides
-agree on conditions. A reviewer rejection remains in force: the paused agent
-cannot clear it by repeatedly submitting `agrees=true`. The reviewer must revise
-after new evidence, or an authorized facilitator must reassign the reviewer. Once
-the reviewer has had its last word with the rejection standing, the session
-closes as `rejection_stands` (see Facilitation and Reviewer Recovery).
+the paused agent can reply. A standing reviewer rejection cannot be cleared by
+repeatedly submitting `agrees=true`: the reviewer must revise after new
+evidence, an authorized facilitator must reassign, or the session closes as
+`rejection_stands`.
 
 ## Whose Move Is It?
 
-A session waiting on *you* looks identical to a stalled session if you only read
-the phase field — on 2026-07-28 a live session awaiting the caller's own
-synthesis was read as "stalled" by two experienced operators. So status
-responses answer it directly from your seat:
+Read these fields before assuming a session is hung or late:
 
-- **`whose_move`** — plain language, for example `"YOURS — your thesis is
-  owed; the saved brief can be reused"`, `"the reviewer's — their antithesis is
-  owed"`, `"a reviewer's — the slot is OPEN, you may claim it"`, `"YOURS —
-  respond once to the reviewer's standing rejection"`, or `"nobody — session is
-  terminal"`.
-- **`next_call`** — a ready-to-use call template, present only when the move is
-  actually yours. If `next_call` is null, you are waiting on someone else.
-- **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, poll_after_s, note}`. The
-  same misreading recurs on the time axis: a session awaiting an orchestrated
-  reviewer looked identical at 72 seconds and at 72 minutes until this field
-  existed, and on 2026-09-13 that produced two wrong "the reviewer is absent"
-  calls inside one session, against a reviewer that was mid-model-call and
-  arrived at ~2m20s. `expected_by_s` is derived from the reviewer's own
-  configured ceiling (`UNITARES_DIALECTIC_CODEX_TIMEOUT_S`, plus spawn or
-  reconsider overhead).
+- **`whose_move`**: plain-language owner of the next turn (`"YOURS — ..."`,
+  `"the reviewer's — ..."`, `"a reviewer's — the slot is OPEN, ..."`, or
+  `"nobody — session is terminal"`).
+- **`next_call`**: ready-to-use call template, present only when the move is
+  yours (`null` when waiting on someone else).
+- **`wait_assessment`**: `{elapsed_s, expected_by_s, assessment, poll_after_s, note}`:
+  `too_early` is **not** proof the reviewer is alive; `null` is **not** approval
+  or health (read `note`); an OPEN slot is an unanswered invitation, not a late
+  reviewer. Only `overdue` supports investigating or requesting facilitation —
+  do not reassign on `too_early` or `null`.
 
-  `too_early` means the wait is unremarkable — **not** that the reviewer is
-  alive. A reviewer inside its budget may already be gone and merely not yet
-  late, so an absence read here is not evidence. Only `overdue` is evidence, and
-  it is evidence to look rather than to conclude. `poll_after_s` is the
-  remaining budget as a number to wait on, set only while `too_early`; it is
-  null when overdue (look, don't poll again) and whenever no budget exists.
-
-  A deadline is asserted only when somebody actually owes the move and the
-  server can say who and since when: an identified orchestrated reviewer holds
-  an outstanding obligation, and the transcript carries a usable clock.
-  Otherwise `assessment` is `null` and `note` says which condition was missing.
-  `null` therefore covers four different situations — nobody owes a reviewer
-  turn (terminal session, your own turn, or an open unclaimed slot), the
-  reviewer is a human or otherwise unmanaged and has no declared budget to
-  exceed, the transcript clock is missing or unreadable, or its entries are not
-  in causal order. None of them is a sign of health, and none of them is a sign
-  of trouble either. Read `note` rather than inferring from the `null`.
-
-  Do not read an OPEN slot as a late reviewer. No agent has taken the
-  obligation, so there is no budget to exceed and the field declines to invent
-  one; an unclaimed slot at 72 minutes is an unanswered invitation, not a
-  missing reviewer.
-
-  Do not reassign or ask for facilitation from a `too_early` or `null`
-  assessment. Wait and read `note`; only `overdue` supports investigating or
-  offering the operator a facilitation path, and even then it does not prove
-  that the reviewer is gone.
-
-Read `whose_move` before concluding a session is hung, and `wait_assessment`
-before concluding it is late. Use
-`dialectic(action="get", session_id="...", check_timeout=true)` when you need the
-latest timeout/facilitation state; note that `check_timeout` is a write (it can
-auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase
-is an invitation, not a stall — an eligible agent other than the paused agent
-may claim it, unless that agent was declared as an author of the reviewed work.
-
-## Facilitation and Reviewer Recovery
-
-If no eligible reviewer remains, the session may report
-`awaiting_facilitation`. This is a paused request for human help, not a reviewer
-verdict. A timeout sweep can eventually mark it failed, but that sweep outcome
-does not mean either side won.
-
-A session that stalls in SYNTHESIS while the move is its reviewer's (the first
-synthesis verdict is still owed, or the paused agent has
-answered its standing objection) raises the
-same request; the sweep does not reassign at that phase, because the protocol
-requires the same reviewer to revise its own verdict. Once raised, the request
-lets `dialectic(action="get", check_timeout=true)` replace a reviewer that is
-paused or missing, as it already can after a standing objection; a reviewer
-whose status still reads active waits for an operator `reassign`. A SYNTHESIS
-stall where the paused agent owes the next move when the sweep finds it raises
-no request and is failed at the stuck threshold. A request is not withdrawn
-when the reviewer later answers, so a session flagged while the reviewer owed
-the move stays on the 4h hold after the move passes back.
-
-A request raised over a standing reviewer rejection does not wait on a human
-indefinitely. Once the reviewer has had its last word (it answered the paused
-agent's reply to its own earlier verdict and still rejects, or the orchestrated
-reviewer's continuation window has ended), the dialectic sweep closes the session
-`failed` within one sweep, with `resolution_json.reason` = `rejection_stands`
-and the request cleared. That is neither a reviewer approval nor an inactivity
-reap. `verdict_acceptance` (accepted, contested, no_reply) records whether the
-paused agent replied and how, as description only: the session is not closed on
-it, and `no_reply` is not assent. The exit never resolves in the paused agent's
-favour and never reassigns. While the reviewer's window is open nothing changes,
-and a human or unmanaged reviewer (no declared window) closes the session this
-way only by answering a reply and still rejecting.
-
-Reviewer reassignment is privileged:
-
-```
-dialectic(
-  action: "reassign",
-  session_id: "<session-id>",
-  new_reviewer_id: "<agent-id>",
-  reason: "Reviewer unavailable; continue the review"
-)
-```
-
-Only an authenticated operator or the currently assigned independent reviewer
-handing off their own slot may do this. A merely bound agent identity is not
-operator authority. Reassignment can revive an `awaiting_facilitation` session,
-including one a timeout sweep already marked failed for lack of facilitation. A
-session closed as `rejection_stands` has had its request answered and is closed
-like any ordinary failed session.
-
-## Resolution Outcomes
+## Resolution Outcomes & Concurrency
 
 | Outcome | Meaning |
 |---------|---------|
 | **resume** | Converged; the agent continues with the agreed conditions |
-| **block** | The agreed resolution violated a hard safety limit; the session is marked `failed` |
-| **facilitation_required** / `awaiting_facilitation` | Standing reviewer rejection, self-review, or no eligible reviewer; an operator or replacement reviewer must act |
-| **rejection_stands** | The reviewer's rejection stands and the reviewer has had its last word; the sweep marks the session `failed`. Not an approval |
+| **block** | Agreed resolution violated a hard safety limit; session marked `failed` |
+| **facilitation_required** / `awaiting_facilitation` | Standing rejection, self-review, or no eligible reviewer; needs operator or replacement reviewer |
+| **rejection_stands** | Reviewer's rejection stands after its last word; sweep closes `failed` (not an approval) |
 
-`escalate` and `cooldown` exist in the `ResolutionAction` enum but no live path
-produces them; they survive only as recommendation labels in the model-assisted
-tool.
+- If a write returns `DIALECTIC_TRANSCRIPT_CHANGED` or
+  `SESSION_RESOLUTION_IN_PROGRESS`, reload the session before acting.
+- If a response reports an interrupted resolution effect (`pending`, `applying`,
+  `unknown_partial`), do **not** repeat participant moves or assume the pause
+  lifted — hand off to an operator (`dialectic(action="reconcile_effect")`).
 
-Each accepted thesis, antithesis, or synthesis advances a durable transcript
-revision. If a submission reports `DIALECTIC_TRANSCRIPT_CHANGED`, or a terminal
-attempt reports `SESSION_RESOLUTION_IN_PROGRESS`, reload the session before
-acting. Do not assume that a retry owns the same reviewer slot or transcript;
-these refusals mean another durable writer moved or currently owns the state.
-
-### Interrupted resolution effects (operators)
-
-A terminal decision and its runtime mutation are joined by a durable
-resolution-effect record. If a response says the effect is pending, applying,
-unknown-partial, or needs reconciliation, do not repeat participant moves or
-assume the pause was lifted. Hand the session to an authenticated operator.
-
-The operator inspects with
-`dialectic(action="reconcile_effect", session_id="...")`. `apply_pending` may
-claim an untouched pending effect. An `applying` effect is never replayed
-automatically: first confirm its worker stopped, then fence the exact
-`effect_owner_token` with `mark_uncertain`. After inspecting and repairing live
-state, use `mark_applied` with a reason and the exact `effect_updated_at` copied
-from that `unknown_partial` inspect response. An already-applied retry is
-idempotent. `mark_applied` compare-and-sets that caller-supplied row version; if
-the record changed, inspect again. The acknowledgement does not erase the
-original execution result or uncertainty evidence.
-The durable effect row is authoritative; outcome, calibration and lifecycle
-signals are best-effort, and their attempted delivery never makes an applied
-effect replayable.
-
-A session created before pause-generation binding closes with
-`legacy_unbound_session` as an applied no-op. That result never resumes the
-agent's current pause or adds conditions, because the current pause may be a
-newer generation. Open a fresh review to act on the current pause.
-
-A resolved session read also carries an `attestation` block saying what party
-signatures the record actually holds: `bilateral`, `single_signer`, `unsigned`,
-or `legacy_v1`. Read it rather than inferring from the signature fields, and do
-not read `signature_version` as a claim that anyone signed — it names the
-scheme, not the act. Party-HMAC signing of resolutions is retired (decided
-2026-09-25), so a new resolution is `unsigned` with `unsigned_by_design: true`
-(`signature_version` 3). That is expected, not a fault in your session, and it
-does not weaken the conditions you agreed to: the resolution record is governed
-by the transcript either way. Older records keep whatever state they were
-finalized with.
+When `wait_assessment` is `overdue` or `null`, `check_timeout=true`,
+`awaiting_facilitation`, `reassign`, `reconcile_effect`, `legacy_unbound_session`,
+or `attestation` (`unsigned_by_design`) appears, read
+`references/facilitation-and-effects.md`
+(remote MCP: `skills(name="dialectic-reasoning", reference="facilitation-and-effects.md")`).
 
 ## How to Participate Well
 
-- **Report readings faithfully.** Preserve the observed values and identify
-  exactly what you dispute: an input, its provenance or freshness, an
-  interpretation, or the policy response. Cite relevant external evidence and
-  an alternative hypothesis where available; mark missing evidence as unknown.
-- **Propose checkable conditions.** Tie them to the task or evidence in dispute.
-  A metric target needs a reason beyond making the displayed state favorable.
-  This guidance does not change existing recovery conditions or release an
-  applied hold; use the live recovery or resolution contract for those effects.
+- **Report readings faithfully.** Separate observed values from hypotheses and
+  identify what you dispute (input, provenance, interpretation, or policy).
+- **Propose checkable conditions** tied to the task or evidence (a favorable
+  metric number alone does not establish recovery).
 - **Do not treat the instrument as a judge.** A pause recommendation is data,
-  not permission or a moral verdict. Analyze it only to the extent it helps the
-  work.
-- **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
-- **Inspect attributed evidence when interpreting a reading.** Use
-  `check_working_state(client_session_id=...)` (`get_governance_metrics()`
-  canonically) for the current values and inspect
-  `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
-  `policy_evaluation` and `enforcement` blocks come back on an assessment-bearing
-  `sync_state()` check-in, not a receipt-only retry or the metrics call. EISV is proprioceptive
-  state estimation; the ODE lens and legacy `C(V)` do not independently
-  validate an outcome claim. The
-  [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence)
-  distinguishes the instrument's operational role, interpretations and
-  evidence of benefit. These are aids to an existing review, not an additional
-  approval gate or required diagnostic sequence.
+  not permission or a moral verdict; acknowledge valid antithesis concerns.
+- **Inspect attributed evidence**: use `check_working_state(client_session_id=...)`
+  (`get_governance_metrics()` canonically) for current values and inspect
+  `risk_score_source` / `verdict_source`; `policy_evaluation` and `enforcement`
+  come from assessment-bearing `sync_state()` check-ins. EISV is proprioceptive
+  state estimation (legacy `C(V)` does not validate outcome claims); see the
+  [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
 
 ## Common Mistakes
 
-- **Treating a reading as conclusive**: Citing E or S alone as proof that the
-  work is sound, defective, or ready to resume. Check what the reading measures
-  and how it supports the disputed claim.
-- **Proposing unsupported conditions**: Promising a metric target without a
-  reason it would resolve the issue, or agreeing to a condition you cannot meet.
-- **Assuming causality**: Reporting a task change as the cause of a later S
-  change without checking the inputs and considering other explanations.
-- **Treating dialectic as adversarial**: It is collaborative problem-solving with structure, not a trial. Both sides benefit from honest resolution.
-- **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused leaves the reading that paused you in place, so the next check-in can pause again. An unmet condition itself only guides.
+- **Treating a reading as conclusive** or assuming causality without checking inputs.
+- **Proposing unsupported conditions** or rushing synthesis to agree to
+  conditions you cannot meet (an unmet condition only guides, and the underlying
+  state can pause you again).
+- **Treating dialectic as adversarial**: it is structured collaborative problem-solving.

@@ -1025,6 +1025,7 @@ class KnowledgeGraphAGESearchMixin:
         tags: Optional[List[str]] = None,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[tuple[str, float]]:
         """
         Search using pgvector's HNSW index.
@@ -1038,43 +1039,70 @@ class KnowledgeGraphAGESearchMixin:
         # Convert list to pgvector string format: '[0.1, 0.2, ...]'
         embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
 
-        # agent_id is filtered by the caller after the fetch, so over-fetch for it.
         params: List[Any] = [embedding_str, min_similarity]
         # Row predicates ride a join inside the ranked query: filtering the
-        # top-N afterwards drops every qualifying row that ranked below N.
-        join_conditions = []
+        # top-N afterwards drops every qualifying row that ranked below N, and
+        # archived/cold rows (over half the corpus) otherwise crowd active rows
+        # out of the first-stage pool. Positive predicates use INNER JOIN;
+        # exclusion-only visibility filters (exclude_archived/exclude_cold) use
+        # LEFT JOIN so rare AGE-only embeddings without a SQL row still reach
+        # the AGE hydration fallback (NULL IS DISTINCT FROM 'archived'/'cold').
+        inner_conditions = []
         if tags:
             from src.knowledge_graph import normalize_tags
             params.append(normalize_tags(tags))
-            join_conditions.append(f"d.tags && ${len(params)}")
+            inner_conditions.append(f"d.tags && ${len(params)}")
         if created_after:
             params.append(created_after)
-            join_conditions.append(f"d.created_at > ${len(params)}")
+            inner_conditions.append(f"d.created_at > ${len(params)}")
         if created_before:
             params.append(created_before)
-            join_conditions.append(f"d.created_at < ${len(params)}")
-        tag_join = (
-            f"JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id AND "
-            + " AND ".join(join_conditions)
-            if join_conditions
-            else ""
-        )
-        params.append(limit * 3 if agent_id else limit)
+            inner_conditions.append(f"d.created_at < ${len(params)}")
+        effective_filters = filters or {}
+        effective_agent_id = effective_filters.get("agent_id") or agent_id
+        if effective_agent_id:
+            params.append(effective_agent_id)
+            inner_conditions.append(f"d.agent_id = ${len(params)}")
+        for column in ("type", "severity", "status"):
+            value = effective_filters.get(column)
+            if value:
+                params.append(value)
+                inner_conditions.append(f"d.{column} = ${len(params)}")
+        exclusion_conditions = []
+        if not effective_filters.get("status"):
+            if effective_filters.get("exclude_archived"):
+                exclusion_conditions.append("d.status IS DISTINCT FROM 'archived'")
+            if effective_filters.get("exclude_cold"):
+                exclusion_conditions.append("d.status IS DISTINCT FROM 'cold'")
+        has_filter_join = bool(inner_conditions or exclusion_conditions)
+        extra_where = ""
+        if inner_conditions:
+            all_join = inner_conditions + exclusion_conditions
+            tag_join = (
+                f"JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id AND "
+                + " AND ".join(all_join)
+            )
+        elif exclusion_conditions:
+            tag_join = f"LEFT JOIN {_DISCOVERIES_TABLE} d ON d.id = de.discovery_id"
+            extra_where = "\n              AND " + " AND ".join(exclusion_conditions)
+        else:
+            tag_join = ""
+        params.append(limit)
         sql = f"""
             SELECT de.discovery_id, (1 - (de.embedding <=> $1::vector)) AS similarity
             FROM {table} de
             {tag_join}
             WHERE de.embedding IS NOT NULL
-              AND (1 - (de.embedding <=> $1::vector)) >= $2
+              AND (1 - (de.embedding <=> $1::vector)) >= $2{extra_where}
             ORDER BY de.embedding <=> $1::vector
             LIMIT ${len(params)}
         """
 
         async with db.acquire() as conn:
-            if join_conditions:
+            if has_filter_join:
                 # A filtered HNSW scan otherwise stops after ef_search (40)
-                # candidates, so a sparse tag or a narrow date window returns
-                # fewer rows than exist.
+                # candidates, so a sparse tag, status filter, or narrow date
+                # window returns fewer rows than exist.
                 async with conn.transaction():
                     await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
                     rows = await conn.fetch(sql, *params)
@@ -1526,6 +1554,7 @@ class KnowledgeGraphAGESearchMixin:
         tags: Optional[List[str]] = None,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[tuple[DiscoveryNode, float]]:
         """
         Semantic search using sentence-transformer embeddings.
@@ -1585,20 +1614,26 @@ class KnowledgeGraphAGESearchMixin:
             logger.warning("Embedding service returned None — semantic search unavailable")
             return ([], {"error": "embeddings_failed", "message": "Embedding returned None"})
 
+        effective_filters = filters or {}
+        effective_agent_id = effective_filters.get("agent_id") or agent_id
+
         # Try pgvector first (fast, indexed)
         use_pgvector = await self._pgvector_available()
         
         if use_pgvector:
             logger.debug("Using pgvector for semantic search")
-            scored_ids = await self._pgvector_search(
-                query_embedding=query_embedding,
-                limit=limit,
-                min_similarity=min_similarity,
-                agent_id=agent_id,
-                tags=tags,
-                created_after=created_after,
-                created_before=created_before,
-            )
+            pgvector_kwargs: Dict[str, Any] = {
+                "query_embedding": query_embedding,
+                "limit": limit,
+                "min_similarity": min_similarity,
+                "agent_id": effective_agent_id,
+                "tags": tags,
+                "created_after": created_after,
+                "created_before": created_before,
+            }
+            if filters:
+                pgvector_kwargs["filters"] = filters
+            scored_ids = await self._pgvector_search(**pgvector_kwargs)
             
             if scored_ids:
                 # Fetch full discovery nodes in ONE batched query rather than an
@@ -1634,8 +1669,8 @@ class KnowledgeGraphAGESearchMixin:
                     discovery = by_id.get(discovery_id)
                     if not discovery:
                         continue
-                    # Apply agent filter if needed (pgvector doesn't filter by agent)
-                    if agent_id and discovery.agent_id != agent_id:
+                    # Defense in depth for mocked _pgvector_search callers.
+                    if effective_agent_id and discovery.agent_id != effective_agent_id:
                         continue
                     raw_results.append((discovery, similarity))
 
@@ -1662,13 +1697,24 @@ class KnowledgeGraphAGESearchMixin:
         # empty window); here that read only feeds a best-effort ranking, so a
         # failure degrades to no semantic candidates and a hybrid search keeps
         # its full-text results, as before.
+        query_filter_kwargs: Dict[str, Any] = {}
+        if effective_filters:
+            for column in ("type", "status", "severity"):
+                if effective_filters.get(column):
+                    query_filter_kwargs[column] = effective_filters[column]
+            if not effective_filters.get("status"):
+                if effective_filters.get("exclude_archived"):
+                    query_filter_kwargs["exclude_archived"] = True
+                if effective_filters.get("exclude_cold"):
+                    query_filter_kwargs["exclude_cold"] = True
         try:
             candidates = await self.query(
-                agent_id=agent_id,
+                agent_id=effective_agent_id,
                 tags=tags,
                 limit=limit * 5,
                 created_after=created_after,
                 created_before=created_before,
+                **query_filter_kwargs,
             )
         except Exception as e:
             logger.warning(f"In-memory semantic candidates unavailable: {e}")

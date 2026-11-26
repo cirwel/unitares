@@ -477,3 +477,90 @@ def test_an_older_mirror_only_record_fully_covered_by_canonical_does_not_block(p
     _record(src, "a", "20260924T000000000000Z-cccccccc.json", skill_md=md,
             digests={"unitares/x.py": "2222"})
     assert regressions(src, dst) == []
+
+
+def _ref(root: Path, skill: str, name: str, body: str) -> Path:
+    rdir = root / skill / "references"
+    rdir.mkdir(parents=True, exist_ok=True)
+    path = rdir / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_mirror_edited_reference_with_unchanged_skill_md_blocks(canonical_repo, tmp_path):
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-11-25", body="same")
+    _ref(src, "a", "deep.md", "canonical v1\n")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "v1")
+
+    _skill(dst, "a", date="2026-11-25", body="same")
+    _ref(dst, "a", "deep.md", "mirror-only edit\n")
+
+    [reason] = regressions(src, dst)
+    assert "a/references/deep.md" in reason
+    assert "not a past state" in reason
+
+
+def test_mirror_only_reference_never_in_canonical_blocks(canonical_repo, tmp_path):
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-11-25", body="same")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "v1")
+
+    _skill(dst, "a", date="2026-11-25", body="same")
+    _ref(dst, "a", "local-only.md", "mirror work\n")
+
+    [reason] = regressions(src, dst)
+    assert "a/references/local-only.md" in reason
+    assert "not a deleted past state" in reason
+
+
+def test_canonical_moved_past_reference_edit_and_delete_passes(canonical_repo, tmp_path):
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-11-25", body="same")
+    _ref(src, "a", "keep.md", "v1\n")
+    old = _ref(src, "a", "drop.md", "gone soon\n")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "v1")
+
+    _skill(dst, "a", date="2026-11-25", body="same")
+    _ref(dst, "a", "keep.md", "v1\n")
+    _ref(dst, "a", "drop.md", "gone soon\n")
+
+    _ref(src, "a", "keep.md", "v2\n")
+    old.unlink()
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "v2")
+
+    assert regressions(src, dst) == []
+
+
+def test_canonical_deleted_reference_blocks_if_mirror_modified_it(canonical_repo, tmp_path):
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-11-25", body="same")
+    old = _ref(src, "a", "drop.md", "canonical original\n")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "v1")
+
+    _skill(dst, "a", date="2026-11-25", body="same")
+    _ref(dst, "a", "drop.md", "mirror edited before canonical deleted\n")
+
+    old.unlink()
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "delete drop")
+
+    [reason] = regressions(src, dst)
+    assert "a/references/drop.md" in reason

@@ -827,7 +827,7 @@ class TestSearchKnowledgeGraph:
 
         hit = make_discovery(id="or-hit", summary="agent adoption governance answer")
 
-        async def fts(query, limit, operator):
+        async def fts(query, limit, operator, **kwargs):
             # AND matches nothing (not all 14 terms co-occur); OR recovers it.
             return [hit] if operator == "OR" else []
 
@@ -2857,7 +2857,7 @@ class TestIssue165FtsOperator:
 
         call_count = {"n": 0}
 
-        async def fts(query, limit=20, operator="AND"):
+        async def fts(query, limit=20, operator="AND", **kwargs):
             call_count["n"] += 1
             # First call (AND): empty. Second call (OR): one hit.
             if operator == "AND":
@@ -2883,7 +2883,7 @@ class TestIssue165FtsOperator:
 
         del mock_graph.semantic_search
 
-        async def fts(query, limit=20, operator="AND"):
+        async def fts(query, limit=20, operator="AND", **kwargs):
             assert operator == "OR"  # caller forced it
             return [make_discovery(id="o1")]
 
@@ -3366,3 +3366,252 @@ class TestHybridOrFallbackAndDetailsHint:
 
         res_full = parse_result(await handle_get_discovery_details({"discovery_id": "long-1", "length": 6000}))
         assert "pagination" not in res_full
+
+
+class TestVisibilityAndMetadataFilterPushdown:
+    """Visibility and metadata predicates ride in SQL filters across hybrid,
+    semantic, FTS, and semantic->FTS fallback paths so archived/cold rows do
+    not crowd candidate pools or block damped-OR fallback."""
+
+    @pytest.mark.asyncio
+    async def test_hybrid_pushes_default_visibility_filters_to_both_arms(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hit = make_discovery(id="open-1", summary="active finding")
+        mock_graph.semantic_search = AsyncMock(return_value=[(hit, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[hit])
+
+        result = await handle_search_knowledge_graph({
+            "query": "active finding",
+            "search_mode": "hybrid",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        expected = {"exclude_archived": True, "exclude_cold": True}
+        assert mock_graph.semantic_search.await_args.kwargs["filters"] == expected
+        assert mock_graph.full_text_search.await_args.kwargs["filters"] == expected
+
+    @pytest.mark.asyncio
+    async def test_hybrid_hidden_and_match_does_not_block_damped_or_fallback(self, patch_common):
+        """Regression: when FTS AND only matches hidden (cold/archived) rows,
+        hybrid search must still trigger damped-OR fallback and clear low_confidence."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hidden_cold = make_discovery(id="cold-1", status="cold", summary="old cold row")
+        active_hit = make_discovery(id="open-1", status="open", summary="TFT display triage runbook")
+        sem_neighbor = make_discovery(id="open-2", status="open", summary="Hardware sensor calibration note")
+
+        async def fts_side_effect(query, limit=50, operator="AND", **kwargs):
+            # Simulate a backend/stub ignoring filters and returning only a cold row on AND.
+            if operator == "AND":
+                return [hidden_cold]
+            assert operator == "OR"
+            assert kwargs.get("filters") == {"exclude_archived": True, "exclude_cold": True}
+            return [active_hit]
+
+        mock_graph.semantic_search = AsyncMock(return_value=[(sem_neighbor, 0.7), (active_hit, 0.68)])
+        mock_graph.full_text_search = AsyncMock(side_effect=fts_side_effect)
+
+        result = await handle_search_knowledge_graph({
+            "query": "embedded controller spi display triage",
+            "search_mode": "hybrid",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["operator_used"] == "OR"
+        assert data["fts_fallback_used"] is True
+        assert data.get("low_confidence") is not True
+        ids = [d["id"] for d in data["discoveries"]]
+        assert "cold-1" not in ids
+        assert ids[0] == "open-1"
+
+    @pytest.mark.asyncio
+    async def test_hybrid_pushes_explicit_metadata_and_status_filters(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hit = make_discovery(
+            id="arch-1",
+            agent_id="agent-x",
+            type="bug_found",
+            severity="high",
+            status="archived",
+            summary="archived high bug",
+        )
+        mock_graph.semantic_search = AsyncMock(return_value=[(hit, 0.85)])
+        mock_graph.full_text_search = AsyncMock(return_value=[hit])
+
+        result = await handle_search_knowledge_graph({
+            "query": "archived bug",
+            "search_mode": "hybrid",
+            "agent_id_filter": "agent-x",
+            "discovery_type": "bug_found",
+            "severity": "high",
+            "status": "archived",
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        expected = {
+            "agent_id": "agent-x",
+            "type": "bug_found",
+            "severity": "high",
+            "status": "archived",
+        }
+        assert mock_graph.semantic_search.await_args.kwargs["filters"] == expected
+        assert mock_graph.full_text_search.await_args.kwargs["filters"] == expected
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_include_all_omits_filters_kwarg(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hit = make_discovery(id="open-1", summary="any status")
+        mock_graph.semantic_search = AsyncMock(return_value=[(hit, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[hit])
+
+        result = await handle_search_knowledge_graph({
+            "query": "any status",
+            "search_mode": "hybrid",
+            "include_archived": True,
+            "include_cold": True,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert "filters" not in mock_graph.semantic_search.await_args.kwargs
+        assert "filters" not in mock_graph.full_text_search.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_archived_cold_second_pass_widens_pushed_filters(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        del mock_graph.semantic_search
+        seen_filters = []
+        cold_hit = make_discovery(id="cold-1", status="cold", summary="dormant note")
+
+        async def fts_side_effect(query, limit=50, operator="AND", **kwargs):
+            seen_filters.append(kwargs.get("filters"))
+            if kwargs.get("filters", {}).get("exclude_cold"):
+                return []
+            return [cold_hit]
+
+        mock_graph.full_text_search = AsyncMock(side_effect=fts_side_effect)
+
+        result = await handle_search_knowledge_graph({"query": "dormant"})
+        data = parse_result(result)
+        assert data["success"] is True
+        assert [d["id"] for d in data["discoveries"]] == ["cold-1"]
+        assert seen_filters == [{"exclude_archived": True, "exclude_cold": True}, None]
+
+    @pytest.mark.asyncio
+    async def test_semantic_mode_pushes_filters(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hit = make_discovery(id="open-1", type="insight", severity="high", summary="semantic match")
+        mock_graph.semantic_search = AsyncMock(return_value=[(hit, 0.82)])
+
+        result = await handle_search_knowledge_graph({
+            "query": "semantic match",
+            "search_mode": "semantic",
+            "discovery_type": "insight",
+            "severity": "high",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert mock_graph.semantic_search.await_args.kwargs["filters"] == {
+            "type": "insight",
+            "severity": "high",
+            "exclude_archived": True,
+            "exclude_cold": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_semantic_fts_fallback_pushes_filters_and_retries_or_past_hidden_row(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hidden_cold = make_discovery(id="cold-1", status="cold", summary="old cold row")
+        active_hit = make_discovery(id="open-1", status="open", summary="active fallback hit")
+
+        async def fts_side_effect(query, limit=50, operator="AND", **kwargs):
+            assert kwargs.get("filters") == {"exclude_archived": True, "exclude_cold": True}
+            return [hidden_cold] if operator == "AND" else [active_hit]
+
+        mock_graph.semantic_search = AsyncMock(return_value=[])
+        mock_graph.full_text_search = AsyncMock(side_effect=fts_side_effect)
+
+        result = await handle_search_knowledge_graph({
+            "query": "embedded controller triage",
+            "search_mode": "semantic",
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["search_mode_used"] == "semantic_fallback_fts"
+        assert data["fts_operator_used"] == "OR"
+        assert data["fts_fallback_used"] is True
+        assert [d["id"] for d in data["discoveries"]] == ["open-1"]
+
+    @pytest.mark.asyncio
+    async def test_newest_first_full_excluded_page_keeps_and_for_continuation(self, patch_common):
+        """Regression (PR #3395 review): under sort_by='created_at', a full
+        first page of AND matches from excluded writers must NOT downgrade to
+        OR while exact AND matches exist on older pages."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        del mock_graph.semantic_search
+        mock_mcp_server.agent_metadata = {
+            "noisy-agent": MagicMock(label="NoisyBot", display_name="NoisyBot"),
+            "good-agent": MagicMock(label="GoodAgent", display_name="GoodAgent"),
+        }
+        excluded_page = []
+        for i in range(25):
+            node = make_discovery(
+                id=f"excluded-{i:02d}",
+                agent_id="noisy-agent",
+                summary="exact terms match",
+            )
+            node.timestamp = f"2026-11-25T10:{59 - i:02d}:00+00:00"
+            excluded_page.append(node)
+        visible_older = make_discovery(
+            id="good-older",
+            agent_id="good-agent",
+            summary="exact terms match",
+        )
+        visible_older.timestamp = "2026-11-24T10:00:00+00:00"
+        seen_operators = []
+
+        async def fts_side_effect(query, limit=25, operator="AND", **kwargs):
+            seen_operators.append(operator)
+            assert operator == "AND"
+            if kwargs.get("before") is None:
+                return excluded_page[:limit]
+            return [visible_older]
+
+        mock_graph.full_text_search = AsyncMock(side_effect=fts_side_effect)
+
+        result = await handle_search_knowledge_graph({
+            "query": "exact terms",
+            "sort_by": "created_at",
+            "limit": 5,
+            "exclude_agent_labels": ["NoisyBot"],
+            "include_archived": False,
+            "include_cold": False,
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["operator_used"] == "AND"
+        assert data.get("fts_fallback_used") is not True
+        assert seen_operators == ["AND", "AND"]
+        assert [d["id"] for d in data["discoveries"]] == ["good-older"]

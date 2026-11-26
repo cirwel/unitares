@@ -103,8 +103,8 @@ and complete capability-name index, `list_tools(lite=false)` for rich metadata,
 omitted from the initial listing through its normal middleware. Operators can
 set `UNITARES_TOOL_ADVERTISEMENT=full` to advertise every schema up front; old
 `GOVERNANCE_TOOL_MODE` settings are ignored. Older servers may still advertise
-a restricted profile; inspect their actual catalog (see governance-lifecycle,
-*MCP Tools Reference*).
+a restricted profile; inspect their actual catalog (see `governance-lifecycle`,
+*MCP Tools Overview*).
 
 ### Response shapes
 
@@ -134,7 +134,7 @@ Use raw `onboard(...)` instead for older servers or raw response shape.
 
 Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only when
 rebinding the same live owner to an existing UUID (the token's scope and TTL
-are in governance-lifecycle, *Creation, lineage, and resume*). A bare `identity(agent_uuid=..., resume=true)` is an
+are covered in `governance-lifecycle`). A bare `identity(agent_uuid=..., resume=true)` is an
 unsigned UUID claim (hijack-shaped, rejected under strict identity mode). An
 argument-less `onboard()` is refused under strict identity, the default, with
 `lineage_declaration_required`: call `start_session(force_new=true)`. An
