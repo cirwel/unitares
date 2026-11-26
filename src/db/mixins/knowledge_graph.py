@@ -43,6 +43,13 @@ _PG_ENGLISH_STOPWORDS = frozenset({
 # path/URL/punctuation characters (`/`, `.`, `:`, `@`).
 _HYPHEN_COMPOUND_RE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$")
 _HAS_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+# PostgreSQL's default parser lexes standalone `^\d+[eE]\d+` as a scientific-
+# notation `float` and splits off any trailing letters (`7e3a` -> `'7e3'` + `'a'`),
+# whereas inside an indexed compound (`commit-7e3a`, UUID segment `-4e9a-`) it
+# stays one lexeme (`'7e3a'`). Likewise a leading `^\d+[eE]$` before a digit-
+# starting segment (`1e-3a-foo`) lexes as a negative-exponent float (`'1e-3'`).
+_SCI_NOTATION_PART_RE = re.compile(r"^\d+[eE]\d+")
+_SCI_EXP_HEAD_RE = re.compile(r"^\d+[eE]$")
 _QUERY_TOKEN_RE = re.compile(r'"[^"]*"|\S+')
 
 
@@ -66,6 +73,11 @@ def _normalize_hyphenated_token(token: str) -> str:
       segments like ``pr-123``, ``tier-1``, ``v1-2``, ``2026-11-25``, or
       ``agent-1234-abcd``, where Postgres emits signed-int lexemes ``'-123'``,
       stay untouched).
+    - No segment may start with scientific notation (``^\d+[eE]\d+``, e.g. hex
+      segments like ``commit-7e3a`` or UUID segments like ``agent-4e9a-beef``),
+      and the leading pair may not form a negative exponent (``1e-3a-foo``),
+      because Postgres parses those as ``float`` tokens standalone while keeping
+      them intact inside compounds.
     - At least two segments must be non-stopwords in ``english.stop`` (so
       ``in-memory``, ``read-only``, ``follow-up``, and ``check-in`` stay
       untouched instead of collapsing to a single-word match).
@@ -74,6 +86,10 @@ def _normalize_hyphenated_token(token: str) -> str:
         return token
     parts = token.split("-")
     if not all(_HAS_ASCII_LETTER_RE.search(part) for part in parts):
+        return token
+    if any(_SCI_NOTATION_PART_RE.match(part) for part in parts):
+        return token
+    if _SCI_EXP_HEAD_RE.match(parts[0]) and parts[1][0].isdigit():
         return token
     non_stopwords = sum(1 for part in parts if part.lower() not in _PG_ENGLISH_STOPWORDS)
     if non_stopwords < 2:
