@@ -571,20 +571,57 @@ def _validate_search_backend(state: _KnowledgeSearchState) -> tuple[bool, bool]:
     return has_semantic, has_fts
 
 
+def _search_filters(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    """SQL row predicates pushable into FTS and pgvector queries.
+
+    Pushing visibility and metadata predicates into SQL prevents archived/cold
+    rows (over half the corpus) from crowding active hits out of first-stage
+    candidate pools or blocking the AND->OR fallback when only hidden rows
+    match all query terms.
+    """
+    filters: dict[str, Any] = {}
+    if request.agent_id:
+        filters["agent_id"] = request.agent_id
+    if request.discovery_type:
+        filters["type"] = request.discovery_type
+    if request.severity:
+        filters["severity"] = request.severity
+    if request.status:
+        filters["status"] = request.status
+    else:
+        if not request.include_archived:
+            filters["exclude_archived"] = True
+        if not request.include_cold:
+            filters["exclude_cold"] = True
+    return filters
+
+
+def _filter_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    filters = _search_filters(request)
+    return {"filters": filters} if filters else {}
+
+
+def _has_visible_candidate(
+    candidates: Sequence[Any],
+    state: _KnowledgeSearchState,
+) -> bool:
+    """Whether at least one candidate survives post-fetch visibility filters."""
+    request = state.request
+    return any(
+        _candidate_matches_search(document, state, None)
+        and not _label_excluded(document, request)
+        for document in candidates
+    )
+
+
 def _fts_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
-    kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
+    kwargs = {
+        **_tag_kwargs(request),
+        **_window_kwargs(request),
+        **_filter_kwargs(request),
+    }
     if request.sort_by == "created_at":
         kwargs["order_by"] = "created_at"
-        # The post-LIMIT filter stays, but under time order it would leave a
-        # page of newer ineligible rows and nothing to return.
-        kwargs["filters"] = {
-            "agent_id": request.agent_id,
-            "type": request.discovery_type,
-            "severity": request.severity,
-            "status": request.status,
-            "exclude_archived": not request.include_archived,
-            "exclude_cold": not request.include_cold,
-        }
     return kwargs
 
 
@@ -611,20 +648,29 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
     )
     state.fts_operator_used = primary_operator
 
+    # Under newest-first order, a full page of AND matches whose rows were all
+    # dropped by exclude_agent_labels can still have visible exact AND matches
+    # on older pages via _continue_newest_first_pages; keep AND there.
+    more_and_pages_possible = (
+        request.sort_by == "created_at"
+        and len(state.candidates) >= candidate_limit
+    )
     if (
-        not state.candidates
+        not more_and_pages_possible
+        and not _has_visible_candidate(state.candidates, state)
         and request.operator_forced is None
         and primary_operator == "AND"
         and request.query_term_count > 1
     ):
         if request.query_term_count <= 24:
-            state.candidates = await state.graph.full_text_search(
+            or_candidates = await state.graph.full_text_search(
                 str(request.query_text),
                 limit=candidate_limit,
                 operator="OR",
                 **fts_kwargs,
             )
-            if state.candidates:
+            if _has_visible_candidate(or_candidates, state):
+                state.candidates = or_candidates
                 state.fts_operator_used = "OR"
                 state.fts_fallback_used = True
         else:
@@ -1035,30 +1081,43 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
         )
         primary_operator = request.operator_forced or "AND"
         fallback_limit = max(request.limit * 2, _authority_pool_size(request))
+        fallback_kwargs = {
+            **_tag_kwargs(request),
+            **_window_kwargs(request),
+            **_filter_kwargs(request),
+        }
         candidates = await state.graph.full_text_search(
             str(request.query_text),
             limit=fallback_limit,
             operator=primary_operator,
-            **_tag_kwargs(request),
-            **_window_kwargs(request),
+            **fallback_kwargs,
         )
         fallback_operator = primary_operator
         used_or_retry = False
+        has_visible_primary = any(
+            _candidate_matches_semantic_fallback(doc, request)
+            and not _label_excluded(doc, request)
+            for doc in candidates
+        )
         if (
-            not candidates
+            not has_visible_primary
             and request.operator_forced is None
             and primary_operator == "AND"
             and request.query_term_count > 1
         ):
             if request.query_term_count <= 24:
-                candidates = await state.graph.full_text_search(
+                or_candidates = await state.graph.full_text_search(
                     str(request.query_text),
                     limit=fallback_limit,
                     operator="OR",
-                    **_tag_kwargs(request),
-                    **_window_kwargs(request),
+                    **fallback_kwargs,
                 )
-                if candidates:
+                if any(
+                    _candidate_matches_semantic_fallback(doc, request)
+                    and not _label_excluded(doc, request)
+                    for doc in or_candidates
+                ):
+                    candidates = or_candidates
                     fallback_operator = "OR"
                     used_or_retry = True
             else:

@@ -2040,7 +2040,7 @@ class TestPgvectorSearch:
 
     @pytest.mark.asyncio
     async def test_with_agent_id_filter(self):
-        """Should use agent-filtered query when agent_id provided."""
+        """Should push agent_id into the SQL join under iterative scan."""
         kg, mock_db = make_kg_with_mock_db()
         mock_conn = mock_db._mock_conn
         mock_conn.fetch.return_value = []
@@ -2052,7 +2052,65 @@ class TestPgvectorSearch:
             agent_id="agent-1",
         )
 
-        mock_conn.fetch.assert_awaited_once()
+        mock_conn.execute.assert_awaited_once_with("SET LOCAL hnsw.iterative_scan = relaxed_order")
+        sql, *params = mock_conn.fetch.await_args.args
+        assert "JOIN knowledge.discoveries d ON d.id = de.discovery_id AND d.agent_id = $3" in sql
+        assert "LIMIT $4" in sql
+        assert params[2] == "agent-1"
+        assert params[3] == 5
+
+    @pytest.mark.asyncio
+    async def test_visibility_filters_left_join_discoveries_under_iterative_scan(self):
+        """Exclusion-only visibility filters use LEFT JOIN + WHERE IS DISTINCT FROM
+        so rare AGE-only embeddings without a SQL row stay reachable."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.fetch.return_value = [{"discovery_id": "d1", "similarity": 0.88}]
+
+        result = await kg._pgvector_search(
+            query_embedding=[0.1, 0.2],
+            limit=5,
+            min_similarity=0.3,
+            filters={"exclude_archived": True, "exclude_cold": True},
+        )
+
+        assert result == [("d1", 0.88)]
+        mock_conn.execute.assert_awaited_once_with("SET LOCAL hnsw.iterative_scan = relaxed_order")
+        sql, *params = mock_conn.fetch.await_args.args
+        assert "LEFT JOIN knowledge.discoveries d ON d.id = de.discovery_id" in sql
+        assert "d.status IS DISTINCT FROM 'archived'" in sql
+        assert "d.status IS DISTINCT FROM 'cold'" in sql
+        assert "LIMIT $3" in sql
+        assert params[2] == 5
+
+    @pytest.mark.asyncio
+    async def test_explicit_status_and_metadata_filters_in_pgvector(self):
+        """Explicit status skips exclude_archived/cold and pushes type/severity/agent_id."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.fetch.return_value = []
+
+        await kg._pgvector_search(
+            query_embedding=[0.1, 0.2],
+            limit=10,
+            min_similarity=0.3,
+            filters={
+                "agent_id": "agent-9",
+                "type": "bug_found",
+                "severity": "high",
+                "status": "archived",
+                "exclude_archived": True,
+                "exclude_cold": True,
+            },
+        )
+
+        sql, *params = mock_conn.fetch.await_args.args
+        assert "d.agent_id = $3" in sql
+        assert "d.type = $4" in sql
+        assert "d.severity = $5" in sql
+        assert "d.status = $6" in sql
+        assert "IS DISTINCT FROM" not in sql
+        assert params[2:7] == ["agent-9", "bug_found", "high", "archived", 10]
 
     @pytest.mark.asyncio
     async def test_tags_join_predicate_runs_under_iterative_scan(self):
@@ -2647,6 +2705,39 @@ class TestSemanticSearch:
         assert result[0][0].id == "d1"
 
     @pytest.mark.asyncio
+    async def test_semantic_search_forwards_filters_to_pgvector_search(self):
+        """semantic_search must forward filters and effective agent_id to _pgvector_search."""
+        kg, mock_db = make_kg_with_mock_db()
+
+        mock_embeddings = AsyncMock()
+        mock_embeddings.embed = AsyncMock(return_value=[0.1, 0.2])
+        mock_module = MagicMock()
+        mock_module.embeddings_available = MagicMock(return_value=True)
+        mock_module.get_embeddings_service = AsyncMock(return_value=mock_embeddings)
+
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg._pgvector_search = AsyncMock(return_value=[("d1", 0.9)])
+
+        d1 = make_discovery(discovery_id="d1", agent_id="agent-7")
+        mock_db.kg_get_discoveries_by_ids = AsyncMock(return_value={})
+        kg.get_discovery = AsyncMock(return_value=d1)
+        kg._blend_with_connectivity = AsyncMock(return_value=[(d1, 0.9)])
+
+        filters = {
+            "agent_id": "agent-7",
+            "type": "bug_found",
+            "exclude_archived": True,
+            "exclude_cold": True,
+        }
+        with patch.dict("sys.modules", {"src.embeddings": mock_module}):
+            result = await kg.semantic_search("test query", limit=5, filters=filters)
+
+        assert len(result) == 1
+        kwargs = kg._pgvector_search.await_args.kwargs
+        assert kwargs["filters"] == filters
+        assert kwargs["agent_id"] == "agent-7"
+
+    @pytest.mark.asyncio
     async def test_pgvector_agent_filter(self):
         """Should filter results by agent_id when specified."""
         kg, mock_db = make_kg_with_mock_db()
@@ -2700,6 +2791,40 @@ class TestSemanticSearch:
 
         assert len(result) == 1
         kg.query.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_forwards_filters_to_in_memory_fallback(self):
+        """In-memory semantic fallback must also honor visibility/metadata filters."""
+        kg, mock_db = make_kg_with_mock_db()
+
+        mock_embeddings = AsyncMock()
+        mock_embeddings.embed = AsyncMock(return_value=[0.1, 0.2])
+        mock_module = MagicMock()
+        mock_module.embeddings_available = MagicMock(return_value=True)
+        mock_module.get_embeddings_service = AsyncMock(return_value=mock_embeddings)
+
+        kg._pgvector_available = AsyncMock(return_value=False)
+        kg.query = AsyncMock(return_value=[])
+
+        with patch.dict("sys.modules", {"src.embeddings": mock_module}):
+            await kg.semantic_search(
+                "test query",
+                limit=5,
+                filters={
+                    "agent_id": "agent-1",
+                    "type": "bug_found",
+                    "severity": "high",
+                    "exclude_archived": True,
+                    "exclude_cold": True,
+                },
+            )
+
+        kwargs = kg.query.await_args.kwargs
+        assert kwargs["agent_id"] == "agent-1"
+        assert kwargs["type"] == "bug_found"
+        assert kwargs["severity"] == "high"
+        assert kwargs["exclude_archived"] is True
+        assert kwargs["exclude_cold"] is True
 
     @pytest.mark.asyncio
     async def test_in_memory_filters_below_min_similarity(self):
