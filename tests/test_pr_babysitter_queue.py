@@ -98,6 +98,11 @@ if [ "$1" = "api" ]; then
   esac
 fi
 printf '%s\n' "${*//$'\n'/ }" >> "$d/calls.log"
+if [ -f "$d/refuse" ]; then
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && { echo "fake gh wrapper refused: $pattern" >&2; exit 2; }
+  done < "$d/refuse"
+fi
 if [ -f "$d/fail" ]; then
   while IFS= read -r pattern; do
     [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && { echo "fake gh refused: $pattern" >&2; exit 1; }
@@ -222,6 +227,7 @@ def _run(
     base_idle_min: float = 1,
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
+    refuse: tuple[str, ...] = (),
     compares: dict[str, dict | None] | None = None,
     rollups: dict[int, list[dict] | None] | None = None,
     timeline_fails: tuple[int, ...] = (),
@@ -241,6 +247,7 @@ def _run(
     (d / "base_date").write_text(_iso(base_idle_min) + "\n")
     (d / "calls.log").write_text("")
     (d / "fail").write_text("\n".join(fail) + "\n")
+    (d / "refuse").write_text("\n".join(refuse) + "\n")
     timelines = timelines or {}
     for pr in prs:
         (d / f"timeline_{pr['number']}.json").write_text(json.dumps(timelines.get(pr["number"], _timeline())))
@@ -721,6 +728,108 @@ def test_a_failed_arm_stops_the_tick(tmp_path: Path) -> None:
     )
     assert calls == [_arm(1)]
     assert "#1 arm failed" in out
+
+
+def _arm_refusals(tmp_path: Path) -> list[str]:
+    f = tmp_path / "state" / "approvals.arm-refusals"
+    return f.read_text().split("\n")[:-1] if f.exists() else []
+
+
+def test_a_refused_arm_keeps_its_place_at_first(tmp_path: Path) -> None:
+    # The wrapper's pre-arm refusal is usually a check still running.
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "#1 arm refused before reaching GitHub (1 of 12 on sha1)" in out
+    assert _arm_refusals(tmp_path) == ["1 sha1"]
+
+
+def _seed_refusals(tmp_path: Path, line: str, count: int) -> None:
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    (state / "approvals.arm-refusals").write_text(f"{line}\n" * count)
+
+
+def test_a_head_refused_tick_after_tick_stops_holding_the_queue(tmp_path: Path) -> None:
+    # One stale check on a head held nine labelled PRs for 31 hours (2026-11-26).
+    _seed_refusals(tmp_path, "1 sha1", 11)
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2", PR_QUEUE_NOTIFY="0",
+    )
+    # Still tried first, then the next PR is armed in the same tick.
+    assert calls == [_arm(1), _arm(2)]
+    assert "#1 arm refused before reaching GitHub (12 times on sha1); no longer holding the queue" in out
+
+
+def test_a_long_refused_head_arms_by_itself_once_its_checks_recover(tmp_path: Path) -> None:
+    # Re-running the stuck job does not change the head; nothing has to clear the count.
+    _seed_refusals(tmp_path, "1 sha1", 40)
+    calls, _ = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}, PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert _arm_refusals(tmp_path) == []
+
+
+def test_an_ordinary_failed_arm_clears_the_refusal_count(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 sha1", 11)
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        fail=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "#1 arm failed" in out
+    assert _arm_refusals(tmp_path) == []
+
+
+def test_refusals_on_an_older_head_do_not_count(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 old", 30)
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "(1 of 12 on sha1)" in out
+
+
+def test_an_unreadable_refusal_record_holds_rather_than_skips(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "approvals.arm-refusals").mkdir()  # not a file: nothing can be read or written
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "the refusal could not be recorded" in out
+    assert "of 12 on sha1" not in out
+
+
+def test_an_unwritable_record_holds_even_past_the_threshold(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 sha1", 12)
+    record = tmp_path / "state" / "approvals.arm-refusals"
+    record.chmod(0o444)
+    try:
+        calls, out = _run(
+            tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+            refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+        )
+    finally:
+        record.chmod(0o644)
+    assert calls == [_arm(1)]
+    assert "the refusal could not be recorded" in out
+
+
+def test_without_the_refusal_exit_a_wrapper_refusal_is_an_ordinary_failed_arm(tmp_path: Path) -> None:
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}, refuse=("pr merge 1",),
+    )
+    assert calls == [_arm(1)]
+    assert "#1 arm failed" in out
+    assert _arm_refusals(tmp_path) == []
 
 
 # --- the slot -------------------------------------------------------------------
