@@ -61,8 +61,13 @@ class KnowledgeGraphPostgres:
         self._initialized = True
         logger.info("PostgreSQL knowledge graph backend initialized")
 
-    async def add_discovery(self, discovery: DiscoveryNode) -> None:
+    async def add_discovery(
+        self, discovery: DiscoveryNode, *, must_be_new: bool = False
+    ) -> None:
         """Add a discovery to the knowledge graph.
+
+        ``must_be_new=True`` refuses an id that already exists and raises
+        ``DiscoveryIdCollision`` instead of updating the row in place.
 
         Charges the agent's hourly store budget first. Unlike the AGE backend,
         the write here is not wrapped in a transaction, so a failure between
@@ -76,7 +81,7 @@ class KnowledgeGraphPostgres:
             db=db,
             limit=self.rate_limit_stores_per_hour,
         )
-        await db.kg_add_discovery(discovery)
+        await db.kg_add_discovery(discovery, must_be_new=must_be_new)
 
     async def query(
         self,

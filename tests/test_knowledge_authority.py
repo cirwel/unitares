@@ -211,6 +211,9 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
     assert result["transition_receipt"]["stance"] == "descriptive"
     assert result["transition_receipt"]["authorizes"] == []
     graph.add_discovery.assert_awaited_once()
+    # The claim id is the promotion timestamp in the receipt, so the write
+    # must refuse an id already in use rather than replace that entry.
+    assert graph.add_discovery.await_args.kwargs == {"must_be_new": True}
     stored = graph.add_discovery.await_args.args[0]
     assert stored.related_to == ["memory-1", "evidence-1"]
     assert stored.provenance["source"] == "explicit_promotion"

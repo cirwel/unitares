@@ -333,3 +333,48 @@ class TestAgeFullTextSearchHydratesWithoutNPlusOne:
         sql, *params = conn.execute.call_args.args
         assert "provenance_chain" in sql
         assert json.dumps(chain) in params
+
+    @pytest.mark.asyncio
+    async def test_persist_discovery_row_must_be_new_inserts_without_the_upsert(self):
+        from datetime import datetime, timezone
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        backend._sync_discovery_tags = AsyncMock()
+        backend._sync_discovery_edges = AsyncMock()
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value="d-new")
+        node = DiscoveryNode(id="d-new", agent_id="a1", type="note", summary="fresh")
+
+        await backend._persist_discovery_row(
+            conn, node, created_at=datetime.now(timezone.utc), resolved_at=None, must_be_new=True
+        )
+
+        sql = conn.fetchval.await_args.args[0]
+        assert "ON CONFLICT (id) DO NOTHING" in sql and "RETURNING id" in sql
+        assert "DO UPDATE" not in sql
+        conn.execute.assert_not_awaited()
+        backend._sync_discovery_tags.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_persist_discovery_row_must_be_new_raises_before_any_other_write(self):
+        from datetime import datetime, timezone
+        from src.knowledge_graph import DiscoveryIdCollision
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        backend = KnowledgeGraphAGE()
+        backend._sync_discovery_tags = AsyncMock()
+        backend._sync_discovery_edges = AsyncMock()
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=None)
+        node = DiscoveryNode(id="d-taken", agent_id="a2", type="note", summary="newer")
+
+        with pytest.raises(DiscoveryIdCollision):
+            await backend._persist_discovery_row(
+                conn, node, created_at=datetime.now(timezone.utc), resolved_at=None, must_be_new=True
+            )
+
+        # The existing entry's row, tags and edges are all left as they were.
+        conn.execute.assert_not_awaited()
+        backend._sync_discovery_tags.assert_not_awaited()
+        backend._sync_discovery_edges.assert_not_awaited()

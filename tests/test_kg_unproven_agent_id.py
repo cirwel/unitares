@@ -66,7 +66,7 @@ def mock_graph(budget):
     """Mock KG backend whose add_discovery charges the store budget first."""
     import src.storage.kg_write_budget as kg_write_budget
 
-    async def add_discovery(discovery):
+    async def add_discovery(discovery, **kwargs):
         await kg_write_budget.check_store_budget(discovery.agent_id, db=None)
         return True
 
