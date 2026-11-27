@@ -742,32 +742,69 @@ def test_a_refused_arm_keeps_its_place_at_first(tmp_path: Path) -> None:
         refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
     )
     assert calls == [_arm(1)]
-    assert "#1 arm refused before reaching GitHub (1 of 6 on sha1)" in out
+    assert "#1 arm refused before reaching GitHub (1 of 12 on sha1)" in out
     assert _arm_refusals(tmp_path) == ["1 sha1"]
+
+
+def _seed_refusals(tmp_path: Path, line: str, count: int) -> None:
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    (state / "approvals.arm-refusals").write_text(f"{line}\n" * count)
 
 
 def test_a_head_refused_tick_after_tick_stops_holding_the_queue(tmp_path: Path) -> None:
     # One stale check on a head held nine labelled PRs for 31 hours (2026-11-26).
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / "approvals.arm-refusals").write_text("1 sha1\n" * 6)
+    _seed_refusals(tmp_path, "1 sha1", 11)
     calls, out = _run(
         tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
         refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2", PR_QUEUE_NOTIFY="0",
     )
-    assert calls == [_arm(2)]
-    assert "#1: its arm was refused 6 ticks running on sha1; skipped" in out
+    # Still tried first, then the next PR is armed in the same tick.
+    assert calls == [_arm(1), _arm(2)]
+    assert "#1 arm refused before reaching GitHub (12 times on sha1); no longer holding the queue" in out
 
 
-def test_refusals_on_an_older_head_do_not_count(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / "approvals.arm-refusals").write_text("1 old\n" * 6)
+def test_a_long_refused_head_arms_by_itself_once_its_checks_recover(tmp_path: Path) -> None:
+    # Re-running the stuck job does not change the head; nothing has to clear the count.
+    _seed_refusals(tmp_path, "1 sha1", 40)
     calls, _ = _run(
         tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}, PR_QUEUE_ARM_REFUSAL_EXIT="2",
     )
     assert calls == [_arm(1)]
     assert _arm_refusals(tmp_path) == []
+
+
+def test_an_ordinary_failed_arm_clears_the_refusal_count(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 sha1", 11)
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        fail=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "#1 arm failed" in out
+    assert _arm_refusals(tmp_path) == []
+
+
+def test_refusals_on_an_older_head_do_not_count(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 old", 30)
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "(1 of 12 on sha1)" in out
+
+
+def test_an_unreadable_refusal_record_holds_rather_than_skips(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "approvals.arm-refusals").mkdir()  # not a file: nothing can be read or written
+    calls, out = _run(
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+        refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+    )
+    assert calls == [_arm(1)]
+    assert "the refusal could not be recorded" in out
 
 
 def test_without_the_refusal_exit_a_wrapper_refusal_is_an_ordinary_failed_arm(tmp_path: Path) -> None:
