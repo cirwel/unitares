@@ -8,6 +8,8 @@ Two measurement-only shadows persisted on every server-computed behavioral check
 
 Rows are split strictly by `sensor_eisv_source` (`behavioral`, `physical`, `unrecorded`); the script reads all `synthetic IS NOT TRUE` rows in each era (no unsettled-verdict exclusion). `RR1` is a config-hash population boundary (`config_hash = 92a47c19ddf301d8`) under code era `RK1`, so its rows carry stamp prefix `RK1:92a47c19ddf301d8`. Shadows are written only on server-computed `behavioral` check-ins (`0` present on `physical` or `unrecorded` in any era).
 
+**Added 2026-11-27.** The `RR1` window below runs to `SN1` and so spans the `TD1` input boundary (`2026-11-03T23:06:02Z`, registered after this read): from that deploy, automatic check-ins no longer feed template complexity divergence to the sensor. `7,936` is a count across both sides of it. Rerunning the script now ends `RR1` at `TD1`.
+
 | Era (disjoint UTC window) | Window (UTC) | Instrument stamp (`id`) | `behavioral` rows (identities) | `physical` / `unrecorded` | `decision` eligible (`delta_E` `p50` / `p90`) | `regime` eligible (`delta_S` `p50` / `p90`) |
 |---|---|---|---|---|---|---|
 | `RK1` (pre-`SN1`) | `2026-10-16T02:59:50` .. `2026-10-22T14:27:20` | `RK1:a2579740d3bea62a` | `5155` (`48`) | `2848` (`1`) / `270` (`120`) | `n = 5155` (`-0.0381` / `-0.0381`) | `n = 5155` (`+0.0336` / `+0.0336`) |
