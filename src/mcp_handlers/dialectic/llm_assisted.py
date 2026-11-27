@@ -1245,7 +1245,7 @@ async def _handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[
             }, indent=2),
             provenance=tag_provenance_source(None, "dialectic_synthesis"),
         )
-        await graph.add_discovery(discovery)
+        await graph.add_discovery(discovery, must_be_new=True)
         response_data["discovery_stored"] = True
     except Exception as e:
         logger.debug(f"Could not store dialectic discovery: {e}")

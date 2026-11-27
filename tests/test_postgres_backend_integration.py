@@ -1091,6 +1091,40 @@ class TestKnowledgeGraphOperations:
         assert result["summary"] == "Test discovery"
 
     @pytest.mark.asyncio
+    async def test_kg_add_discovery_must_be_new_inserts(self, backend):
+        d = self._make_discovery()
+        await backend.kg_add_discovery(d, must_be_new=True)
+        result = await backend.kg_get_discovery(d.id)
+        assert result is not None
+        assert result["summary"] == "Test discovery"
+
+    @pytest.mark.asyncio
+    async def test_kg_add_discovery_must_be_new_refuses_a_taken_id(self, backend):
+        """Against a real database: the second writer of an id is refused and
+        the first writer's row is left exactly as it was."""
+        from src.knowledge_graph import DiscoveryIdCollision
+
+        first = self._make_discovery(summary="First writer", agent_id="a1")
+        await backend.kg_add_discovery(first, must_be_new=True)
+        second = self._make_discovery(id=first.id, summary="Second writer", agent_id="a2")
+
+        with pytest.raises(DiscoveryIdCollision):
+            await backend.kg_add_discovery(second, must_be_new=True)
+
+        stored = await backend.kg_get_discovery(first.id)
+        assert stored["summary"] == "First writer"
+        assert stored["agent_id"] == "a1"
+
+    @pytest.mark.asyncio
+    async def test_kg_add_discovery_default_still_updates_in_place(self, backend):
+        """The default mode stays an upsert, which deterministic ids rely on."""
+        first = self._make_discovery(summary="Rollup v1")
+        await backend.kg_add_discovery(first)
+        await backend.kg_add_discovery(self._make_discovery(id=first.id, summary="Rollup v2"))
+        stored = await backend.kg_get_discovery(first.id)
+        assert stored["summary"] == "Rollup v2"
+
+    @pytest.mark.asyncio
     async def test_kg_get_discovery_not_found(self, backend):
         result = await backend.kg_get_discovery("nonexistent")
         assert result is None

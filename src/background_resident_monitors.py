@@ -389,7 +389,7 @@ async def _log_resident_silence_finding(
             severity="critical",
             status="open",
         )
-        await graph.add_discovery(note)
+        await graph.add_discovery(note, must_be_new=True)
         record_success("silence_finding_write", log=logger)
     except Exception as e:
         record_failure("silence_finding_write", e, log=logger)

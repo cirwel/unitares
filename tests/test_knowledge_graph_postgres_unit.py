@@ -106,6 +106,64 @@ async def test_kg_add_discovery_persists_provenance_chain():
     assert captured["args"][16:] == (None, None)
 
 
+@pytest.mark.asyncio
+async def test_kg_add_discovery_default_is_still_an_upsert():
+    """Deterministic-id writers (topic rollups) rely on update-in-place."""
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    conn.fetchval = AsyncMock()
+    backend = _FakeKgBackend(conn)
+
+    await backend.kg_add_discovery(
+        DiscoveryNode(id="rollup::auth", agent_id="agent-1", type="topic_rollup", summary="s")
+    )
+
+    query = conn.execute.await_args.args[0]
+    assert "ON CONFLICT (id) DO UPDATE" in query
+    conn.fetchval.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kg_add_discovery_must_be_new_inserts_without_the_upsert():
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    conn.fetchval = AsyncMock(return_value="2026-11-27T00:00:00.000001+00:00")
+    backend = _FakeKgBackend(conn)
+
+    await backend.kg_add_discovery(
+        DiscoveryNode(
+            id="2026-11-27T00:00:00.000001+00:00", agent_id="agent-1", type="note", summary="s"
+        ),
+        must_be_new=True,
+    )
+
+    query, *args = conn.fetchval.await_args.args
+    assert "ON CONFLICT (id) DO NOTHING" in query and "RETURNING id" in query
+    assert "DO UPDATE" not in query
+    assert len(args) == 18 and args[0] == "2026-11-27T00:00:00.000001+00:00"
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kg_add_discovery_must_be_new_raises_when_the_id_is_taken():
+    """ON CONFLICT DO NOTHING returns no row: the existing entry is untouched."""
+    from src.knowledge_graph import DiscoveryIdCollision
+
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
+    backend = _FakeKgBackend(conn)
+
+    with pytest.raises(DiscoveryIdCollision) as excinfo:
+        await backend.kg_add_discovery(
+            DiscoveryNode(id="taken-id", agent_id="agent-2", type="note", summary="newer"),
+            must_be_new=True,
+        )
+
+    assert excinfo.value.discovery_id == "taken-id"
+    conn.execute.assert_not_awaited()
+
+
 def test_row_to_discovery_dict_decodes_provenance_chain_json():
     backend = _FakeKgBackend(MagicMock())
     row = {

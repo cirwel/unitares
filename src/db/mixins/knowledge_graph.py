@@ -168,10 +168,21 @@ class KnowledgeGraphMixin:
                 )
         return dict(prefs), [dict(row) for row in rows]
 
-    async def kg_add_discovery(self, discovery) -> None:
-        """Add a discovery to the knowledge graph."""
+    async def kg_add_discovery(self, discovery, *, must_be_new: bool = False) -> None:
+        """Add a discovery to the knowledge graph.
+
+        By default this is an upsert: a row with the same id is updated in
+        place, which deterministic-id writers (topic rollups) rely on. With
+        ``must_be_new=True`` the insert refuses an id that already exists and
+        raises ``DiscoveryIdCollision`` without writing, so a freshly minted
+        timestamp id can never replace another entry.
+        """
         from datetime import datetime as dt
-        from src.knowledge_graph import closure_evidence_to_json, normalize_tags
+        from src.knowledge_graph import (
+            DiscoveryIdCollision,
+            closure_evidence_to_json,
+            normalize_tags,
+        )
 
         if hasattr(discovery, 'tags') and discovery.tags:
             discovery.tags = normalize_tags(discovery.tags)
@@ -197,13 +208,15 @@ class KnowledgeGraphMixin:
                     created_at = dt.now()
 
             from config.governance_config import GovernanceConfig
-            await conn.execute("""
+            insert_sql = """
                 INSERT INTO knowledge.discoveries (
                     id, agent_id, type, summary, details, tags, severity, status,
                     references_files, related_to, response_to_id, response_type,
                     provenance, provenance_chain, created_at, epoch,
                     closure_class, closure_evidence
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            """
+            upsert_sql = insert_sql + """
                 ON CONFLICT (id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     details = EXCLUDED.details,
@@ -213,7 +226,12 @@ class KnowledgeGraphMixin:
                     closure_class = EXCLUDED.closure_class,
                     closure_evidence = EXCLUDED.closure_evidence,
                     updated_at = now()
-            """,
+            """
+            insert_only_sql = insert_sql + """
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+            """
+            args = (
                 discovery.id,
                 discovery.agent_id,
                 discovery.type,
@@ -235,6 +253,14 @@ class KnowledgeGraphMixin:
                 getattr(discovery, 'closure_class', None),
                 closure_evidence_to_json(getattr(discovery, 'closure_evidence', None)),
             )
+            if must_be_new:
+                # RETURNING yields no row when ON CONFLICT DO NOTHING skipped
+                # the insert, which makes the collision check atomic with
+                # the write.
+                if await conn.fetchval(insert_only_sql, *args) is None:
+                    raise DiscoveryIdCollision(discovery.id)
+            else:
+                await conn.execute(upsert_sql, *args)
 
     async def kg_query(
         self,

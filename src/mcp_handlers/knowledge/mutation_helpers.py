@@ -23,6 +23,7 @@ from ..utils import (
 from ..identity.stable_session import audit_reference
 from src.knowledge_graph import (
     get_knowledge_graph,
+    DiscoveryIdCollision,
     DiscoveryNode,
     ResponseTo,
     normalize_tags,
@@ -117,10 +118,11 @@ def _new_discovery_id() -> str:
     guarantees uniqueness within this process while preserving the
     ISO-timestamp contract and chronological ordering.
 
-    Residual: two *separate* processes can still mint the same microsecond
-    id; closing that requires moving the primary key off a bare timestamp,
-    which is a contract change (docs + tests treat ids as parseable ISO
-    timestamps) and is out of scope here.
+    This guard is per-process and forgets its last id on restart, so two
+    separate processes can still mint the same microsecond id, and so can one
+    process whose clock stepped back across a restart. ``_add_new_discovery``
+    covers that case at the write: the insert refuses an id already in use
+    and a later id is minted, so the collision can no longer overwrite.
     """
     global _last_discovery_id_dt
     with _discovery_id_lock:
@@ -129,6 +131,43 @@ def _new_discovery_id() -> str:
             now = _last_discovery_id_dt + timedelta(microseconds=1)
         _last_discovery_id_dt = now
         return now.isoformat()
+
+
+_NEW_DISCOVERY_ATTEMPTS = 3
+
+
+async def _add_new_discovery(graph: Any, discovery: DiscoveryNode) -> None:
+    """Write a freshly minted discovery so it cannot replace an existing one.
+
+    The storage write is an upsert by default, which deterministic-id writers
+    rely on. For a timestamp id minted a moment ago, an existing row with the
+    same id is a different entry, so this asks storage for an insert that
+    refuses it (``must_be_new=True``). On a collision it mints a later id and
+    tries again; ``discovery.id`` holds the id that was actually stored, so
+    callers must read it after this returns, not before.
+
+    Each attempt is a separate storage call. On the plain PostgreSQL backend
+    the hourly store budget is charged per call and not refunded, so a write
+    that collides is charged once per attempt (see
+    ``KnowledgeGraphPostgres.add_discovery``).
+    """
+    for attempt in range(1, _NEW_DISCOVERY_ATTEMPTS + 1):
+        try:
+            await graph.add_discovery(discovery, must_be_new=True)
+            return
+        except DiscoveryIdCollision:
+            if attempt == _NEW_DISCOVERY_ATTEMPTS:
+                raise
+            taken = discovery.id
+            discovery.id = _new_discovery_id()
+            logger.warning(
+                "[KNOWLEDGE] discovery id %s already in use; retrying as %s "
+                "(attempt %d of %d)",
+                taken,
+                discovery.id,
+                attempt + 1,
+                _NEW_DISCOVERY_ATTEMPTS,
+            )
 
 
 async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
@@ -1124,7 +1163,7 @@ async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
 async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
     request = state.request
     discovery = state.discovery
-    await state.graph.add_discovery(discovery)
+    await _add_new_discovery(state.graph, discovery)
     await _broadcast_knowledge_write(discovery, request.agent_id)
     if request.supersedes_id and state.supersedes_target is not None:
         await state.graph.update_discovery(
@@ -1460,7 +1499,7 @@ async def _persist_batch_discovery(
     if oversized:
         raise _BatchItemError(" ".join(oversized))
 
-    await graph.add_discovery(discovery)
+    await _add_new_discovery(graph, discovery)
     await _broadcast_knowledge_write(discovery, agent_id)
     stored_item = {
         "discovery_id": discovery.id,
@@ -1624,7 +1663,7 @@ def _build_note_discovery(
     tags = normalize_tags(request.arguments.get("tags", []))
     summary, details = _split_note_text(text)
     return DiscoveryNode(
-        id=_utc_now_iso(),
+        id=_new_discovery_id(),
         agent_id=request.agent_id,
         type="note",
         summary=summary,
@@ -1649,7 +1688,7 @@ async def _persist_note_discovery(
     oversized = _oversized_metadata(note)
     if oversized:
         raise _NoteResponseError(_write_bound_refusal(*oversized))
-    await graph.add_discovery(note)
+    await _add_new_discovery(graph, note)
     await _broadcast_knowledge_write(note, agent_id)
 
 
@@ -2270,7 +2309,9 @@ async def _handle_promote_memory_claim(
         ) or _oversized_metadata(claim)
         if oversized:
             return [_write_bound_refusal(*oversized)]
-        await graph.add_discovery(claim)
+        # The claim id is also the promotion timestamp inside the receipt,
+        # so a collision is refused outright here, never re-minted.
+        await graph.add_discovery(claim, must_be_new=True)
         await _broadcast_knowledge_write(claim, agent_id)
 
         return success_response(
@@ -2379,4 +2420,4 @@ async def store_discovery_internal(
         severity=normalized_severity,
         provenance=provenance,
     )
-    await graph.add_discovery(node)
+    await _add_new_discovery(graph, node)
