@@ -549,6 +549,34 @@ def create_concept_relates_to_edge(
     return cypher, params
 
 
+def query_concept_ids() -> tuple[str, Dict[str, Any]]:
+    """
+    Build Cypher query to return the id of every Concept vertex.
+
+    Returns:
+        (cypher_query, params_dict)
+    """
+    return "MATCH (c:Concept) RETURN c.id", {}
+
+
+def query_delete_concept(concept_id: str) -> tuple[str, Dict[str, Any]]:
+    """
+    Build Cypher query to delete one Concept vertex with all of its edges.
+
+    Returns the id of each vertex deleted, so the caller counts what was
+    removed and not what was asked for.
+
+    Returns:
+        (cypher_query, params_dict)
+    """
+    cypher = """
+        MATCH (c:Concept {id: ${concept_id}})
+        DETACH DELETE c
+        RETURN c.id
+    """
+    return cypher, {"concept_id": concept_id}
+
+
 def create_temporally_near_edge(
     from_discovery_id: str,
     to_discovery_id: str,

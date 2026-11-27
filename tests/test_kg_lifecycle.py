@@ -1022,6 +1022,7 @@ class TestGetLifecycleStats:
         mock_graph.get_stats = AsyncMock(return_value={
             "total_discoveries": 12,
             "by_status": {"open": 7, "resolved": 5},
+            "by_type": {"insight": 8, "bug_found": 4},
             "scope": {"kind": "raw_status_aggregate", "epoch_scope": "current"},
         })
         import src.knowledge_graph_lifecycle as lifecycle_mod
@@ -1035,9 +1036,37 @@ class TestGetLifecycleStats:
         assert "stats" in data
         assert data["stats"]["by_status"]["open"] == 10
         assert data["stats"]["raw_current_counts"]["by_status"]["open"] == 7
+        assert data["stats"]["raw_current_counts"]["by_type"] == {"insight": 8, "bug_found": 4}
+        assert data["stats"]["by_type"] == {"insight": 8, "bug_found": 4}
         assert data["stats"]["canonical_current_total"] == 12
         assert data["stats"]["lifecycle_managed_counts"]["total_discoveries"] == 17
         assert "count_scope_warning" in data["stats"]
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_stats_omits_by_type_when_backend_omits_it(self, patch_common):
+        """Backends that do not emit by_type should not receive a fabricated dict."""
+        mock_mcp_server, mock_graph = patch_common
+
+        stats_data = {
+            "by_status": {"open": 3},
+            "by_policy": {"standard": 3},
+            "total_discoveries": 3,
+        }
+        mock_graph.get_stats = AsyncMock(return_value={
+            "total_discoveries": 3,
+            "by_status": {"open": 3},
+            "scope": {"kind": "raw_status_aggregate", "epoch_scope": "current"},
+        })
+        import src.knowledge_graph_lifecycle as lifecycle_mod
+        with patch.object(lifecycle_mod, "get_kg_lifecycle_stats",
+                          AsyncMock(return_value=stats_data)):
+            from src.mcp_handlers.knowledge.handlers import handle_get_lifecycle_stats
+            result = await handle_get_lifecycle_stats({})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert "by_type" not in data["stats"]
+        assert "by_type" not in data["stats"]["raw_current_counts"]
 
     @pytest.mark.asyncio
     async def test_lifecycle_stats_exception_handling(self, patch_common):
