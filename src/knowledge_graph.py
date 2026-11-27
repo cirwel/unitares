@@ -189,6 +189,21 @@ class ResponseTo:
     discovery_id: str
     response_type: ResponseType
 
+class DiscoveryIdCollision(Exception):
+    """A write that must create a new discovery found its id already in use.
+
+    Discovery ids are timestamps, so two writers can mint the same one: two
+    processes in the same microsecond, or one process after its clock stepped
+    back. A write path that upserts would then replace the existing entry
+    without an error. Fresh-mint writers pass ``must_be_new=True`` and get
+    this exception instead; nothing is written.
+    """
+
+    def __init__(self, discovery_id: str) -> None:
+        super().__init__(f"discovery id {discovery_id!r} already exists")
+        self.discovery_id = discovery_id
+
+
 @dataclass
 class DiscoveryNode:
     """Node in knowledge graph representing a single discovery"""

@@ -482,7 +482,7 @@ async def test_a_store_that_supersedes_names_the_second_write_its_list_does_not_
         async def find_similar(self, discovery, limit=3):
             return []
 
-        async def add_discovery(self, discovery):
+        async def add_discovery(self, discovery, **kwargs):
             saved.append(discovery.id)
 
         async def update_discovery(self, discovery_id, updates):
@@ -673,7 +673,7 @@ async def test_a_batch_that_times_out_between_items_is_half_saved():
         async def find_similar(self, discovery, limit=3):
             return []
 
-        async def add_discovery(self, discovery):
+        async def add_discovery(self, discovery, **kwargs):
             if saved:
                 await asyncio.sleep(5)
             saved.append(discovery.summary)

@@ -693,6 +693,7 @@ class _FakeKG:
     def __init__(self):
         self.rows: list = []
         self.add_calls = 0
+        self.add_kwargs: list = []
         self.fail_adds = False
 
     async def query(self, status=None, agent_id=None, tags=None, limit=100, **_kw):
@@ -704,8 +705,9 @@ class _FakeKG:
         ]
         return rows[:limit]
 
-    async def add_discovery(self, note):
+    async def add_discovery(self, note, **kwargs):
         self.add_calls += 1
+        self.add_kwargs.append(kwargs)
         if self.fail_adds:
             raise RuntimeError("kg down")
         self.rows.append(note)
@@ -749,6 +751,8 @@ async def test_restart_does_not_realert_same_silence_episode(audit_store, fake_k
     # Each adopting restart re-ensures the finding; the open row dedupes it.
     assert len(_silence_rows(fake_kg, "sentinel-uuid")) == 1
     assert fake_kg.add_calls == 1
+    # A minted timestamp id must never replace an existing finding.
+    assert fake_kg.add_kwargs == [{"must_be_new": True}]
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from src.logging_utils import get_logger
 from src.knowledge_graph import (
+    DiscoveryIdCollision,
     DiscoveryNode,
     ResponseTo,  # noqa: F401
     apply_closure_reopen_rule,
@@ -169,8 +170,14 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
         *,
         created_at: datetime,
         resolved_at: Optional[datetime],
+        must_be_new: bool = False,
     ) -> None:
-        """Persist discovery into durable PostgreSQL knowledge tables."""
+        """Persist discovery into durable PostgreSQL knowledge tables.
+
+        ``must_be_new=True`` inserts without the upsert clause and raises
+        ``DiscoveryIdCollision`` when the id is already in use, before the
+        tag, edge and graph writes. The caller's transaction rolls back whole.
+        """
         from config.governance_config import GovernanceConfig
 
         updated_at = self._parse_optional_datetime(discovery.updated_at)
@@ -180,8 +187,7 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
             response_to_id = discovery.response_to.discovery_id
             response_type = discovery.response_to.response_type
 
-        await conn.execute(
-            """
+        insert_sql = """
             INSERT INTO knowledge.discoveries (
                 id, agent_id, type, severity, status,
                 created_at, updated_at, resolved_at,
@@ -195,6 +201,8 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
                 $14, $15, $16, $17, $18,
                 $19, $20
             )
+        """
+        upsert_sql = insert_sql + """
             ON CONFLICT (id) DO UPDATE SET
                 agent_id = EXCLUDED.agent_id,
                 type = EXCLUDED.type,
@@ -215,7 +223,12 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
                 epoch = EXCLUDED.epoch,
                 closure_class = EXCLUDED.closure_class,
                 closure_evidence = EXCLUDED.closure_evidence
-            """,
+        """
+        insert_only_sql = insert_sql + """
+            ON CONFLICT (id) DO NOTHING
+            RETURNING id
+        """
+        args = (
             discovery.id,
             discovery.agent_id,
             discovery.type,
@@ -242,6 +255,14 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
             discovery.closure_class,
             closure_evidence_to_json(discovery.closure_evidence),
         )
+        if must_be_new:
+            # RETURNING yields no row when ON CONFLICT DO NOTHING skipped the
+            # insert, so the collision check is atomic with the write. Raising
+            # here is before the tag, edge and graph writes.
+            if await conn.fetchval(insert_only_sql, *args) is None:
+                raise DiscoveryIdCollision(discovery.id)
+        else:
+            await conn.execute(upsert_sql, *args)
 
         await self._sync_discovery_tags(conn, discovery.id, discovery.tags or [])
         await self._sync_discovery_edges(conn, discovery, created_at)
@@ -631,12 +652,16 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
     async def add_discovery(
         self,
         discovery: DiscoveryNode,
+        *,
+        must_be_new: bool = False,
     ) -> None:
         """
         Add a discovery to the graph.
 
         Args:
             discovery: DiscoveryNode to add
+            must_be_new: refuse an id that already exists and raise
+                DiscoveryIdCollision, instead of updating the entry in place
 
         NOTE: Temporal/similarity linking is now query-time, not write-time.
         Use get_related_discoveries(id, temporal_window=300) or find_similar(id) at query time.
@@ -706,6 +731,7 @@ class KnowledgeGraphAGE(KnowledgeGraphAGESearchMixin):
                 discovery,
                 created_at=timestamp,
                 resolved_at=resolved_at,
+                must_be_new=must_be_new,
             )
             await db.graph_query(cypher, params, conn=conn)
 

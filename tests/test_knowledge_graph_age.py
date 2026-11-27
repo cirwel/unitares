@@ -406,6 +406,33 @@ class TestAddDiscovery:
         assert mock_db.graph_query.await_count >= 4
 
     @pytest.mark.asyncio
+    async def test_add_discovery_must_be_new_collision_writes_nothing_to_the_graph(self):
+        """A taken id raises before the AGE node, agent and edge writes."""
+        from src.knowledge_graph import DiscoveryIdCollision
+
+        kg, mock_db = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=False)
+        kg._persist_discovery_row = AsyncMock(side_effect=DiscoveryIdCollision("disc-taken"))
+
+        with pytest.raises(DiscoveryIdCollision):
+            await kg.add_discovery(make_discovery(), must_be_new=True)
+
+        assert kg._persist_discovery_row.await_args.kwargs["must_be_new"] is True
+        mock_db.graph_query.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_add_discovery_default_does_not_request_insert_only(self):
+        kg, mock_db = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=False)
+        kg._persist_discovery_row = AsyncMock()
+
+        await kg.add_discovery(make_discovery())
+
+        assert kg._persist_discovery_row.await_args.kwargs["must_be_new"] is False
+
+    @pytest.mark.asyncio
     async def test_add_discovery_with_related_to(self):
         """Should create RELATED_TO edges for each related discovery."""
         kg, mock_db = make_kg_with_mock_db()

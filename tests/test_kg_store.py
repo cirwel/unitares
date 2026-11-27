@@ -514,7 +514,7 @@ class TestStoreKnowledgeGraph:
         captured = {}
         orig_add = mock_graph.add_discovery
 
-        async def _capture(node):
+        async def _capture(node, **kwargs):
             captured["related_to"] = list(node.related_to or [])
             return await orig_add(node) if orig_add else None
 
@@ -552,7 +552,7 @@ class TestStoreKnowledgeGraph:
         captured = {}
         orig_add = mock_graph.add_discovery
 
-        async def _capture(node):
+        async def _capture(node, **kwargs):
             captured["status"] = node.status
             return await orig_add(node) if orig_add else None
 
@@ -580,7 +580,7 @@ class TestStoreKnowledgeGraph:
         captured = {}
         orig_add = mock_graph.add_discovery
 
-        async def _capture(node):
+        async def _capture(node, **kwargs):
             captured["status"] = node.status
             return await orig_add(node) if orig_add else None
 
@@ -1279,7 +1279,7 @@ class TestBatchStoreAdditional:
         # First add succeeds, second raises rate limit
         call_count = 0
 
-        async def add_side_effect(disc):
+        async def add_side_effect(disc, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 2:
@@ -2071,6 +2071,93 @@ class TestMonotonicDiscoveryId:
         for value in ids:
             parsed = datetime.fromisoformat(value)
             assert parsed.tzinfo is not None and parsed.utcoffset().total_seconds() == 0
+
+    @pytest.mark.asyncio
+    async def test_add_new_discovery_requests_an_insert_only_write(self):
+        import src.mcp_handlers.knowledge.mutation_helpers as h
+
+        graph = MagicMock()
+        graph.add_discovery = AsyncMock()
+        node = make_discovery(id=h._new_discovery_id())
+        minted = node.id
+
+        await h._add_new_discovery(graph, node)
+
+        graph.add_discovery.assert_awaited_once_with(node, must_be_new=True)
+        assert node.id == minted
+
+    @pytest.mark.asyncio
+    async def test_add_new_discovery_mints_a_later_id_after_a_collision(self):
+        """Two processes (or a stepped-back clock) minted the same id: the
+        second writer keeps its entry under a new id instead of replacing the
+        first writer's."""
+        from datetime import datetime
+        from src.knowledge_graph import DiscoveryIdCollision
+        import src.mcp_handlers.knowledge.mutation_helpers as h
+
+        attempted: list[str] = []
+
+        async def add(node, **kwargs):
+            assert kwargs == {"must_be_new": True}
+            attempted.append(node.id)
+            if len(attempted) == 1:
+                raise DiscoveryIdCollision(node.id)
+
+        graph = MagicMock()
+        graph.add_discovery = AsyncMock(side_effect=add)
+        node = make_discovery(id=h._new_discovery_id())
+
+        await h._add_new_discovery(graph, node)
+
+        assert len(attempted) == 2 and attempted[0] != attempted[1]
+        assert node.id == attempted[1], "callers must see the id that was stored"
+        assert datetime.fromisoformat(attempted[1]) > datetime.fromisoformat(attempted[0])
+
+    @pytest.mark.asyncio
+    async def test_add_new_discovery_gives_up_loudly(self):
+        from src.knowledge_graph import DiscoveryIdCollision
+        import src.mcp_handlers.knowledge.mutation_helpers as h
+
+        graph = MagicMock()
+        graph.add_discovery = AsyncMock(side_effect=lambda node, **kw: (_ for _ in ()).throw(
+            DiscoveryIdCollision(node.id)
+        ))
+        node = make_discovery(id=h._new_discovery_id())
+
+        with pytest.raises(DiscoveryIdCollision):
+            await h._add_new_discovery(graph, node)
+
+        assert graph.add_discovery.await_count == h._NEW_DISCOVERY_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_store_reports_the_id_that_was_stored_after_a_collision(
+        self, patch_common, registered_agent
+    ):
+        """The response and the write must name the same, re-minted id."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.knowledge_graph import DiscoveryIdCollision
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        attempted: list[str] = []
+
+        async def add(node, **kwargs):
+            attempted.append(node.id)
+            if len(attempted) == 1:
+                raise DiscoveryIdCollision(node.id)
+
+        mock_graph.add_discovery = AsyncMock(side_effect=add)
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Written by the second of two colliding writers",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert len(attempted) == 2
+        assert attempted[0] != attempted[1]
+        assert attempted[1] in json.dumps(data)
+        assert attempted[0] not in json.dumps(data)
 
     @pytest.mark.asyncio
     async def test_batch_store_produces_unique_ids(self, patch_common, registered_agent):
