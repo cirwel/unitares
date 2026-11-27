@@ -59,13 +59,32 @@ class ListAgentOptionsMixin:
         default=0,
         description="Minimum total update/check-in count."
     )
+    # The two defaults below belong to the lite list, which is what a bare
+    # agent(action='list') runs: it answers with 20 agents active in the last
+    # 7 days, not the fleet. The response says so (shown / matching /
+    # total_all / filter); until 2026-11-26 these descriptions did not, so the
+    # schema read as an unbounded listing.
     recent_days: Optional[Union[int, str]] = Field(
         default=None,
-        description="Only include agents active in the last N days. Use 0 for all."
+        description=(
+            "Only include agents active in the last N days. Omitted: 7 in "
+            "lite mode (the default), no window with lite=false. Use 0 for all."
+        ),
+        json_schema_extra={
+            "brief": "Active in the last N days. Default 7 (lite), none (lite=false); 0 for all."
+        },
     )
     limit: Optional[Union[int, str]] = Field(
         default=None,
-        description="Maximum number of agents to return."
+        description=(
+            "Maximum number of agents to return; one response carries at "
+            "most 100. Omitted: 20 in lite mode (the default), 100 with "
+            "lite=false. Passing limit without lite=true switches the call "
+            "to full mode."
+        ),
+        json_schema_extra={
+            "brief": "Max agents; a response carries at most 100. Default 20 (lite), 100 (lite=false)."
+        },
     )
     offset: Union[int, str] = Field(
         default=0,

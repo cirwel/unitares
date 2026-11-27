@@ -257,6 +257,85 @@ async def test_synthesis_row_persists_consult_provenance(server_patch):
     assert stamp["model_used"] == "gpt-5"
 
 
+@pytest.mark.asyncio
+async def test_synthesis_row_persists_the_callers_observed_metrics(server_patch):
+    """A synthesis that files observed_metrics stores it, as an antithesis does.
+
+    The schema declares observed_metrics for action=synthesis, and the
+    abstention path reads it. The verdict path passed None instead, so the
+    call was accepted, answered success, and the field was gone.
+    """
+    from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.SYNTHESIS)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches(add_message):
+            stack.enter_context(p)
+        stack.enter_context(patch(
+            f"{PHASE}._resolve_dialectic_agent_id",
+            new=AsyncMock(return_value=("agent-reviewer", None))))
+        result = await handle_submit_synthesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-reviewer",
+            "proposed_conditions": ["gate on coherence > 0.85"],
+            "reasoning": "Coherence recovered over the last three check-ins.",
+            "agrees": False,
+            "observed_metrics": {
+                "coherence": 0.91,
+                "reviewer_backend": {
+                    "reviewer_kind": "orchestrated",
+                    "backend": "ollama:local",
+                },
+            },
+        })
+
+    assert parse_result(result)["success"] is True
+    stored = _rows_by_type(add_message)["synthesis"]["observed_metrics"]
+    assert stored["coherence"] == 0.91
+    # The orchestrated reviewer's own stamp passes through untouched.
+    assert stored["reviewer_backend"]["reviewer_kind"] == "orchestrated"
+
+
+@pytest.mark.asyncio
+async def test_explicit_provenance_replaces_a_stamp_inside_synthesis_metrics(server_patch):
+    """reviewer_provenance wins over observed_metrics.reviewer_backend, as on antithesis."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.SYNTHESIS)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches(add_message):
+            stack.enter_context(p)
+        stack.enter_context(patch(
+            f"{PHASE}._resolve_dialectic_agent_id",
+            new=AsyncMock(return_value=("agent-reviewer", None))))
+        result = await handle_submit_synthesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-reviewer",
+            "proposed_conditions": ["gate on coherence > 0.85"],
+            "reasoning": "Consulted verdict merged.",
+            "agrees": False,
+            "observed_metrics": {
+                "coherence": 0.91,
+                "reviewer_backend": {"reviewer_kind": "orchestrated"},
+            },
+            "reviewer_provenance": {
+                "reviewer_kind": "external_consult",
+                "backend": "codex-cli",
+            },
+        })
+
+    assert parse_result(result)["success"] is True
+    stored = _rows_by_type(add_message)["synthesis"]["observed_metrics"]
+    assert stored["coherence"] == 0.91
+    assert stored["reviewer_backend"]["reviewer_kind"] == "external_consult"
+
+
 # ---------------------------------------------------------------------------
 # The stamp helper's hygiene
 # ---------------------------------------------------------------------------

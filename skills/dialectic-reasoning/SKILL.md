@@ -60,6 +60,11 @@ Dialectics are structured review, not punishment.
   full transcript before forming a judgment or replying). `action="list"` with
   `fields="compact"` returns the tally view. One active session per agent
   applies (`SESSION_EXISTS` gives a read call, not permission for a second).
+- Each action reads only its own parameters, and every write to a session
+  needs `session_id`: `describe_tool(tool_name="dialectic", action="<action>")`
+  lists them. A parameter sent to an action that does not read it (`concerns`
+  on a thesis, `proposed_conditions` on an antithesis) is not recorded; a
+  successful response names it under `unused_parameters` (contract 2.7.0+).
 
 ## Phase 1: Thesis
 

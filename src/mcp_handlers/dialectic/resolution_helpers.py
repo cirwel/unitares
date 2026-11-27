@@ -1624,8 +1624,15 @@ async def _submit_and_persist_synthesis_message(
             # The synthesis row previously persisted no observed_metrics
             # at all, leaving zero provenance surface on the verdict that
             # actually decides the session — stamp it when supplied.
+            #
+            # The caller's own observed_metrics rides along, as it does on
+            # the antithesis row. Until 2026-11-26 this passed None: the
+            # schema declared observed_metrics for synthesis and the
+            # abstention path above read it, so a synthesis that filed one
+            # was accepted, answered success, and stored nothing.
             synth_observed_metrics = _merge_caller_reviewer_provenance(
-                None, arguments.get('reviewer_provenance')
+                arguments.get('observed_metrics'),
+                arguments.get('reviewer_provenance'),
             )
             await _append_protocol_message(
                 session,
