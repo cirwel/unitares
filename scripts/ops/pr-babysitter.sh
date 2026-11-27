@@ -1029,6 +1029,28 @@ refused_reruns() {  # <pr> <head> -> count
   [ -f "$RERUNS_FILE" ] || { echo 0; return 0; }
   awk -v n="$1" -v h="$2" '$1 == n && $2 == h { c++ } END { print c + 0 }' "$RERUNS_FILE"
 }
+# Arms refused before any call reached GitHub: "<pr> <head-sha>" per refused
+# tick. PR_QUEUE_ARM_REFUSAL_EXIT names the exit status a `gh` wrapper returns
+# when its own pre-arm checks refuse the arm; unset (the default), every failed
+# arm is treated as before. A head refused PR_QUEUE_ARM_REFUSAL_TICKS ticks
+# running on one commit is skipped, with a notice, so the PRs behind it are
+# not held: one stale check on a head held nine labelled PRs for 31 hours on
+# 2026-11-26. A new push, or a tick on which the arm is not refused, clears it.
+ARM_REFUSAL_EXIT="${PR_QUEUE_ARM_REFUSAL_EXIT:-}"
+ARM_REFUSAL_TICKS="${PR_QUEUE_ARM_REFUSAL_TICKS:-6}"
+ARM_REFUSALS_FILE="$STATE_FILE.arm-refusals"
+record_refused_arm() {  # <pr> <head>
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$ARM_REFUSALS_FILE")" && echo "$1 $2" >>"$ARM_REFUSALS_FILE"
+}
+refused_arms() {  # <pr> <head> -> count
+  [ -f "$ARM_REFUSALS_FILE" ] || { echo 0; return 0; }
+  awk -v n="$1" -v h="$2" '$1 == n && $2 == h { c++ } END { print c + 0 }' "$ARM_REFUSALS_FILE"
+}
+clear_refused_arms() {  # <pr>
+  [ "$DRY_RUN" = "1" ] || [ ! -f "$ARM_REFUSALS_FILE" ] && return 0
+  awk -v n="$1" '$1 != n' "$ARM_REFUSALS_FILE" >"$ARM_REFUSALS_FILE.tmp" && mv "$ARM_REFUSALS_FILE.tmp" "$ARM_REFUSALS_FILE"
+}
 armed_by_script() {  # <pr> <enabledAt>
   local at
   [ -f "$ARMS_FILE" ] && [ -n "$2" ] || return 1
@@ -1564,6 +1586,12 @@ while read -r labelled_at n head; do
     exit 0
   fi
 
+  if [ -n "$ARM_REFUSAL_EXIT" ] && [ "$(refused_arms "$n" "$head")" -ge "$ARM_REFUSAL_TICKS" ]; then
+    log "#$n: its arm was refused $ARM_REFUSAL_TICKS ticks running on ${head:0:8}; skipped so the queue behind it can move"
+    notify "$n" arm-refused "$head" "skipped: the queue's pre-arm checks refused this head $ARM_REFUSAL_TICKS ticks in a row, so PRs behind it are no longer held. The usual cause is a check that reports pending or failed after its run has finished; re-run that job, or push a new commit, and the queue tries this PR again."
+    continue
+  fi
+
   log "#$n arming (head of queue)"
   # The repo deletes merged branches itself, so no --delete-branch: gh would
   # also try to delete a local branch in whatever directory this runs from.
@@ -1585,12 +1613,20 @@ while read -r labelled_at n head; do
     fi
   fi
   merge_args+=(--match-head-commit "$head")
-  if act "${merge_args[@]}"; then
+  arm_rc=0
+  act "${merge_args[@]}" || arm_rc=$?
+  if [ "$arm_rc" -eq 0 ]; then
+    clear_refused_arms "$n"
     # Unrecorded, the arm could not be withdrawn by removing the label later.
     if ! record_arm "$n" "$subject" "$signature"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
     fi
+  elif [ -n "$ARM_REFUSAL_EXIT" ] && [ "$arm_rc" -eq "$ARM_REFUSAL_EXIT" ]; then
+    # The wrapper refused before calling GitHub, so nothing was armed. It keeps
+    # its place for now: the refusal is usually a check still running.
+    record_refused_arm "$n" "$head"
+    log "#$n arm refused before reaching GitHub ($(refused_arms "$n" "$head") of $ARM_REFUSAL_TICKS on ${head:0:8}); nothing else armed this tick"
   else
     log "#$n arm failed; nothing else armed this tick"
   fi
