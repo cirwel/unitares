@@ -220,7 +220,7 @@ class TestEndToEndMock:
             [], [], [],  # Phase 7: ABOUT edges for concept 1
             [],  # Phase 7: concept node 2
             [], [],  # Phase 7: ABOUT edges for concept 2
-            [],  # Phase 7: RELATES_TO edge (if shared discoveries)
+            [],  # Phase 8: concept id listing (the two concepts share no discovery)
         ])
 
         mock_conn = AsyncMock()
@@ -237,6 +237,8 @@ class TestEndToEndMock:
         assert result["status"] == "completed"
         assert result["concepts_created"] >= 1
         assert result["tags_processed"] >= 2
+        assert result["stale_prune_skipped"] is None
+        assert result["stale_prune_failures"] == 0
 
 
 class TestTagQueryShape:
@@ -315,6 +317,12 @@ class TestWriteFailuresAreSurfaced:
         assert result["concepts_created"] == 1
         assert result["about_edges_created"] == 1
         assert result["write_failures"] == {"about_edge": 1}
+        # A failed edge write means the run's own output is incomplete, so the
+        # previous run's concepts are left alone and the graph is not listed.
+        assert mock_db.graph_query.await_count == 4
+        assert result["stale_prune_skipped"] == "a write failed"
+        assert result["stale_prune_failures"] == 0
+        assert result["stale_concepts_deleted"] == 0
 
 
 class TestBackgroundTaskSurfacesErrors:
@@ -337,3 +345,140 @@ class TestBackgroundTaskSurfacesErrors:
         message = mock_logger.warning.call_args.args[0]
         assert "RuntimeError" in message and "column arity" in message
         mock_logger.debug.assert_not_called()
+
+
+class TestStaleConceptsArePruned:
+    """A regrouped cluster gets a new id; the run must remove the old vertex."""
+
+    @staticmethod
+    def _db(graph_side_effect, embedding_rows):
+        mock_db = MagicMock()
+        mock_db.graph_query = AsyncMock(side_effect=graph_side_effect)
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=embedding_rows)
+        mock_db.acquire = MagicMock(return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_conn),
+            __aexit__=AsyncMock(return_value=False),
+        ))
+        return mock_db
+
+    GRAPH_ROWS = [
+        {"tag_name": "python", "discovery_id": "d1"},
+        {"tag_name": "python", "discovery_id": "d2"},
+    ]
+    EMBEDDINGS = [
+        {"discovery_id": "d1", "embedding": "[1.0,0.0,0.0]"},
+        {"discovery_id": "d2", "embedding": "[0.98,0.1,0.0]"},
+    ]
+
+    @pytest.mark.asyncio
+    async def test_deletes_only_concepts_this_run_did_not_produce(self):
+        extractor = ConceptExtractor(split_min_discoveries=100)
+        current_id = extractor._build_concepts(
+            [["python"]], {"python": ["d1", "d2"]}
+        )[0]["concept_id"]
+        calls = []
+
+        async def graph_query(cypher, params=None):
+            calls.append((cypher, params))
+            if "TAGGED" in cypher:
+                return self.GRAPH_ROWS
+            if "DETACH DELETE" in cypher:
+                return [params["concept_id"]]
+            if "RETURN c.id" in cypher:
+                return [current_id, "stale-a", "stale-b"]
+            return []
+
+        mock_db = self._db(graph_query, self.EMBEDDINGS)
+        with patch("src.concept_extraction.get_db", return_value=mock_db):
+            result = await extractor.run()
+
+        deleted = [p["concept_id"] for c, p in calls if "DETACH DELETE" in c]
+        assert deleted == ["stale-a", "stale-b"]
+        assert result["status"] == "completed"
+        assert result["stale_concepts_deleted"] == 2
+        assert result["stale_prune_skipped"] is None
+
+    @pytest.mark.asyncio
+    async def test_no_delete_when_a_planned_concept_was_not_written(self):
+        extractor = ConceptExtractor(split_min_discoveries=100)
+        calls = []
+
+        async def graph_query(cypher, params=None):
+            calls.append(cypher)
+            if "TAGGED" in cypher:
+                return self.GRAPH_ROWS
+            if "MERGE (c:Concept" in cypher:
+                raise RuntimeError("graph refused")
+            return ["stale-a"]
+
+        mock_db = self._db(graph_query, self.EMBEDDINGS)
+        with patch("src.concept_extraction.get_db", return_value=mock_db):
+            result = await extractor.run()
+
+        assert not any("RETURN c.id" in c for c in calls)
+        assert result["stale_concepts_deleted"] == 0
+        assert result["stale_prune_skipped"] == "not every planned concept was written"
+
+    @pytest.mark.asyncio
+    async def test_delete_failure_is_counted_and_reported(self):
+        extractor = ConceptExtractor(split_min_discoveries=100)
+
+        async def graph_query(cypher, params=None):
+            if "TAGGED" in cypher:
+                return self.GRAPH_ROWS
+            if "DETACH DELETE" in cypher:
+                if params["concept_id"] == "stale-a":
+                    raise RuntimeError("delete refused")
+                return [params["concept_id"]]
+            if "RETURN c.id" in cypher:
+                return ["stale-a", "stale-b"]
+            return []
+
+        mock_db = self._db(graph_query, self.EMBEDDINGS)
+        with patch("src.concept_extraction.get_db", return_value=mock_db):
+            result = await extractor.run()
+
+        assert result["status"] == "completed_with_errors"
+        assert result["stale_concepts_deleted"] == 1
+        assert result["stale_prune_failures"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unexpected_listing_shape_deletes_nothing(self):
+        extractor = ConceptExtractor(split_min_discoveries=100)
+        calls = []
+
+        async def graph_query(cypher, params=None):
+            calls.append(cypher)
+            if "TAGGED" in cypher:
+                return self.GRAPH_ROWS
+            if "DETACH DELETE" in cypher:
+                return [params["concept_id"]]
+            if "RETURN c.id" in cypher:
+                return ["stale-a", {"id": "stale-b"}]
+            return []
+
+        mock_db = self._db(graph_query, self.EMBEDDINGS)
+        with patch("src.concept_extraction.get_db", return_value=mock_db):
+            result = await extractor.run()
+
+        assert not any("DETACH DELETE" in c for c in calls)
+        assert result["status"] == "completed_with_errors"
+        assert result["stale_prune_skipped"] == "concept listing had an unexpected shape"
+        assert result["stale_concepts_deleted"] == 0
+
+    def test_concept_id_listing_decodes_to_bare_strings(self):
+        """The prune compares listed ids with planned ids as plain strings."""
+        from src.db.mixins.graph import GraphMixin
+
+        decoded = GraphMixin._decode_agtype_value('"1facbd2ffe47f5ff"')
+        assert decoded == "1facbd2ffe47f5ff"
+
+    def test_delete_query_removes_the_vertex_with_its_edges(self):
+        from src.db.age_queries import query_delete_concept
+
+        cypher, params = query_delete_concept("abc")
+        assert "DETACH DELETE" in cypher
+        assert "RETURN c.id" in cypher
+        assert "${concept_id}" in cypher
+        assert params == {"concept_id": "abc"}
