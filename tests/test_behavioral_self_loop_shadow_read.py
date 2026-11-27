@@ -88,9 +88,16 @@ def test_resolve_era_window_single_eras_never_pool():
 
     rr1 = reader.resolve_era_window("RR1", as_of=as_of)
     assert rr1.start == datetime(2026, 10, 22, 14, 28, 19, tzinfo=UTC)
-    assert rr1.end == datetime(2026, 11, 5, 22, 56, 34, tzinfo=UTC)
+    # RR1 ends at the unflagged 2026-11-03 input gate (TD1), not at SN1.
+    assert rr1.end == datetime(2026, 11, 3, 23, 4, 3, tzinfo=UTC)
     assert rr1.stamp_era is None
     assert eisv_eras.boundaries_crossed(rr1.start, rr1.end, stamp_filtered=False) == []
+
+    td1 = reader.resolve_era_window("TD1", as_of=as_of)
+    assert td1.start == datetime(2026, 11, 3, 23, 6, 24, tzinfo=UTC)
+    assert td1.end == datetime(2026, 11, 5, 22, 56, 34, tzinfo=UTC)
+    assert td1.stamp_era is None
+    assert eisv_eras.boundaries_crossed(td1.start, td1.end, stamp_filtered=False) == []
 
     # HU1/SD1/SH1 are timed at the shared 2026-11-18T07:55:32Z restart, so SN1
     # now ends there and the cutover window starts after the ambiguous interval.

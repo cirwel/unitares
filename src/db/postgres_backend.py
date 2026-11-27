@@ -222,68 +222,83 @@ class PostgresBackend(
         import time
 
         # Fast path: pool exists and is healthy
-        if self._pool is not None:
-            # Periodic health check (every 60s)
-            now = time.time()
-            if now - self._last_pool_check > 60:
-                try:
-                    async with self._pool.acquire(timeout=5) as conn:
-                        await conn.fetchval("SELECT 1")
-                    self._last_pool_check = now
+        pool = self._pool
+        if pool is not None:
+            # Skip the 60s probe interval when the wrapper already reports
+            # closed (e.g. its executor loop exited on its own — #3393).
+            # Strict `is True` avoids false positives on unconfigured MagicMocks
+            # in unit tests while matching ExecutorPool._closed and asyncpg.
+            destroy_message: Optional[str] = None
+            if getattr(pool, "_closed", False) is True:
+                destroy_message = (
+                    f"Pool wrapper reported closed, destroying pool (backend={id(self)})"
+                )
+            else:
+                # Periodic health check (every 60s)
+                now = time.time()
+                if now - self._last_pool_check > 60:
+                    try:
+                        async with pool.acquire(timeout=5) as conn:
+                            await conn.fetchval("SELECT 1")
+                        self._last_pool_check = now
 
-                    # Check pool size and warn if getting full
-                    pool_size = self._pool.get_size()
-                    pool_max = self._pool.get_max_size()
-                    if pool_size >= pool_max * 0.9:  # 90% full
-                        logger.warning(
-                            f"Connection pool nearly full: {pool_size}/{pool_max}. "
-                            f"Consider increasing DB_POSTGRES_MAX_CONN or checking for connection leaks."
+                        # Check pool size and warn if getting full
+                        pool_size = pool.get_size()
+                        pool_max = pool.get_max_size()
+                        if pool_size >= pool_max * 0.9:  # 90% full
+                            logger.warning(
+                                f"Connection pool nearly full: {pool_size}/{pool_max}. "
+                                f"Consider increasing DB_POSTGRES_MAX_CONN or checking for connection leaks."
+                            )
+                    except Exception as e:
+                        destroy_message = (
+                            f"Pool health check failed, destroying pool (backend={id(self)}): {e}"
                         )
-                except Exception as e:
-                    # Health check failed — acquire lock, re-check pool identity,
-                    # then log+destroy. The log MUST be inside the lock + after
-                    # the identity re-check; otherwise N concurrent failing
-                    # health-check tasks all log "destroying pool" before
-                    # queueing on the lock, but only one actually destroys.
-                    # That fan-in inflates the apparent destroy count by the
-                    # concurrency factor and makes the recovery path look
-                    # deadlocked when it isn't.
-                    failed_pool = self._pool
-                    async with self._init_lock:
-                        # Only destroy if still the same pool (another task may have already replaced it)
-                        if self._pool is not None and self._pool is failed_pool:
-                            logger.warning(f"Pool health check failed, destroying pool (backend={id(self)}): {e}")
-                            # Null-before-close: drop the reference *before*
-                            # awaiting close() so concurrent acquires take
-                            # the slow-path create branch instead of blocking
-                            # on _init_lock for the close()'s lifetime.
-                            # close() can hang indefinitely if the executor
-                            # loop is wedged (asyncpg released connections
-                            # but DISCARD ALL responses unread, observed
-                            # 2026-04-27 → "Pool.close() is taking over 60
-                            # seconds"). Without this, _init_lock is held
-                            # forever and every subsequent acquire 5s-times
-                            # out → cascading wedge.
-                            self._pool = None
-                            try:
-                                await asyncio.wait_for(
-                                    failed_pool.close(),
-                                    timeout=POOL_CLOSE_TIMEOUT_SECONDS,
-                                )
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    f"Pool close timed out after 10s "
-                                    f"(backend={id(self)}); orphaning pool "
-                                    f"and proceeding to recreate. The "
-                                    f"executor loop is likely wedged; the "
-                                    f"daemon thread will die with the "
-                                    f"process."
-                                )
-                            except Exception as close_err:
-                                logger.debug(
-                                    f"Pool close raised (non-fatal): "
-                                    f"{close_err}"
-                                )
+
+            if destroy_message is not None:
+                # Health check failed (or wrapper already closed) — acquire lock,
+                # re-check pool identity, then log+destroy. The log MUST be
+                # inside the lock + after the identity re-check; otherwise N
+                # concurrent failing tasks all log "destroying pool" before
+                # queueing on the lock, but only one actually destroys. That
+                # fan-in inflates the apparent destroy count by the concurrency
+                # factor and makes the recovery path look deadlocked when it
+                # isn't.
+                async with self._init_lock:
+                    # Only destroy if still the same pool (another task may have already replaced it)
+                    if self._pool is not None and self._pool is pool:
+                        logger.warning(destroy_message)
+                        # Null-before-close: drop the reference *before*
+                        # awaiting close() so concurrent acquires take
+                        # the slow-path create branch instead of blocking
+                        # on _init_lock for the close()'s lifetime.
+                        # close() can hang indefinitely if the executor
+                        # loop is wedged (asyncpg released connections
+                        # but DISCARD ALL responses unread, observed
+                        # 2026-04-27 → "Pool.close() is taking over 60
+                        # seconds"). Without this, _init_lock is held
+                        # forever and every subsequent acquire 5s-times
+                        # out → cascading wedge.
+                        self._pool = None
+                        try:
+                            await asyncio.wait_for(
+                                pool.close(),
+                                timeout=POOL_CLOSE_TIMEOUT_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"Pool close timed out after 10s "
+                                f"(backend={id(self)}); orphaning pool "
+                                f"and proceeding to recreate. The "
+                                f"executor loop is likely wedged; the "
+                                f"daemon thread will die with the "
+                                f"process."
+                            )
+                        except Exception as close_err:
+                            logger.debug(
+                                f"Pool close raised (non-fatal): "
+                                f"{close_err}"
+                            )
 
         if self._pool is not None:
             return self._pool

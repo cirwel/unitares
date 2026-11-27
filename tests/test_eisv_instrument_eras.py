@@ -724,6 +724,29 @@ def test_sn1_is_timed_and_post_deploy_window_is_single_era():
     assert eisv_eras.current_era_id() == "SH1"
 
 
+def test_the_unflagged_input_gate_splits_the_rk1_window():
+    """#3185's template-divergence exclusion had no flag, so the stamp stayed RK1.
+
+    Only the time entry separates rows before and after it.
+    """
+    td1 = next(b for b in eisv_eras.load_boundaries() if b.id == "TD1")
+    assert td1.splits and td1.config_hash is None
+    assert td1.interval == (_t("2026-11-03T23:04:03"), _t("2026-11-03T23:06:24"))
+    crossed = eisv_eras.boundaries_crossed(_t("2026-10-23"), _t("2026-11-05"))
+    assert [b.id for b in crossed] == ["TD1"]
+    assert eisv_eras.boundaries_crossed(_t("2026-10-23"), _t("2026-11-03T23:00")) == []
+    assert eisv_eras.boundaries_crossed(_t("2026-11-03T23:07"), _t("2026-11-05T22:00")) == []
+    # A stamp filter cannot see it: both sides carry the same instrument id.
+    assert [b.id for b in eisv_eras.boundaries_crossed(
+        _t("2026-10-23"), _t("2026-11-05"), stamp_filtered=True)] == ["TD1"]
+    pieces = eisv_eras.era_windows(_t("2026-11-03T22:00"), _t("2026-11-04"))
+    assert pieces == [
+        ("RR1", _t("2026-11-03T22:00"), _t("2026-11-03T23:04:03")),
+        ("TD1", _t("2026-11-03T23:06:24"), _t("2026-11-04")),
+    ]
+    assert eisv_eras.current_era_id() == "SH1"
+
+
 def test_final_cutover_eras_are_timed_at_the_shared_restart():
     """HU1, SD1 and SH1 went live together at one governance-mcp restart."""
     restart = _t("2026-11-18T07:55:32")
