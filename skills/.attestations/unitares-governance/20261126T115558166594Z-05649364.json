@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-11-26T11:55:58Z",
+  "verified_date": "2026-11-26",
+  "verifier": "gemini-4-neon-xhigh (verified umbrella routing and knowledge-graph references still hold after SKILL.md source_files update)",
+  "source_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": "95d7d8a248ee2c31",
+    "unitares/skills/dialectic-reasoning/SKILL.md": "e514b9d8e1492c69",
+    "unitares/skills/governance-fundamentals/SKILL.md": "c6b074375092ba35",
+    "unitares/skills/governance-lifecycle/SKILL.md": "aefa9db2fc9febcd",
+    "unitares/skills/knowledge-graph/SKILL.md": "e671b785fcc7fbaa",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ed8c417af389aaf4",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/eisv/adapter.py": "8fb7c3a47b9271fa",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "4b908f81231708a4",
+    "unitares/src/mcp_handlers/identity/handlers.py": "0a5b4ee7972a1abd",
+    "unitares/src/mcp_handlers/identity/session.py": "69fb163b4119da47",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "f1b44e32b76a30f7",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "b29ee309a24eee2b",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "3ec16c3c9dff6797",
+    "unitares/src/mcp_handlers/schemas/identity.py": "c2e33cf58c810689",
+    "unitares/src/mcp_handlers/tool_stability.py": "fb036bb4d81ca9de",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "3748c887183ab250",
+  "superseded_digests": {
+    "unitares/skills/knowledge-graph/SKILL.md": [
+      "cb45ae60959e4c8e"
+    ]
+  }
+}

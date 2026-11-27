@@ -28,9 +28,14 @@ edge cases, `staleness_warning`, `resolution_notes` offsets, or
   `include_provenance=true` when provenance fields are needed.
 - **Newest-first and recency**:
   - `sort_by="created_at"` orders FTS matches newest first (incompatible with
-    `search_mode="semantic"`/`"hybrid"` or `semantic=true`). Multi-term queries
-    require all stemmed terms (AND), falling back to OR only when AND returns
-    nothing.
+    `search_mode="semantic"`/`"hybrid"` or `semantic=true`). Multi-term FTS
+    queries default to AND and fall back to OR only when AND yields no visible
+    candidate (including when every AND match is filtered out by
+    `exclude_agent_labels`); fallback is skipped when `operator` is explicitly
+    forced, when `sort_by="created_at"` returns a full first page (so older AND
+    pages can still match), or when a query exceeds 24 terms (which sets
+    `fts_fallback_skipped_reason` in `full` responses, or `compact` on
+    `knowledge(action="search")`; pass `operator="OR"` for broad recall).
   - `created_after` / `created_before` take exclusive ISO 8601 timestamps (UTC
     if no offset; `"2026-09-26"` = midnight UTC) and work with any order or
     search mode. Queryless `created_after` lists what is new since `T`, newest
