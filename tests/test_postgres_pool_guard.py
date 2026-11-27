@@ -126,6 +126,101 @@ class TestPoolRecovery:
         assert backend._pool is result
 
     @pytest.mark.asyncio
+    async def test_ensure_pool_replaces_dead_executor_pool_inside_probe_window(self):
+        """Regression for #3393: if the backend's current ExecutorPool loop exits
+        on its own inside the 60s probe interval, _ensure_pool() must skip the
+        interval wait and immediately replace it rather than handing out the dead
+        wrapper (which would also strand DialecticDB._ensure_pool()).
+        """
+        import time
+        from src.db.executor_pool import ExecutorPool
+        from src.db.postgres_backend import PostgresBackend
+        from src.dialectic_db import DialecticDB
+
+        dead_raw = MagicMock()
+        dead_raw._closed = False
+        dead_raw.close = AsyncMock()
+        dead_pool = ExecutorPool(dead_raw)
+
+        # Stop the executor loop directly (simulating unexpected loop exit
+        # without close()), then wait for its background thread to finish.
+        dead_pool._loop.call_soon_threadsafe(dead_pool._loop.stop)
+        dead_pool._thread.join(timeout=2.0)
+        assert not dead_pool._thread.is_alive()
+        assert dead_pool._closed is True
+
+        backend = PostgresBackend()
+        backend._pool = dead_pool
+        backend._last_pool_check = time.time()  # Inside the 60s fast-path window
+
+        fresh_raw = MagicMock()
+        fresh_raw._closed = False
+        fresh_raw.close = AsyncMock()
+
+        replacement = None
+        try:
+            with patch("asyncpg.create_pool", new_callable=AsyncMock, return_value=fresh_raw) as create:
+                replacement = await backend._ensure_pool()
+                assert create.call_count == 1
+                assert replacement is not dead_pool
+                assert isinstance(replacement, ExecutorPool)
+                assert replacement._raw_pool is fresh_raw
+                assert replacement._closed is False
+                assert backend._pool is replacement
+
+                # Verify DialecticDB holding the dead pool refreshes cleanly too.
+                dialectic = DialecticDB(pool=dead_pool)
+                dialectic._initialized = True
+                with patch("src.db.get_db", return_value=backend):
+                    await dialectic._ensure_pool()
+                assert dialectic._pool is replacement
+                assert dialectic._pool_is_alive() is True
+        finally:
+            if replacement is not None:
+                await replacement.close()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_closed_pool_triggers_destroy_once(self, caplog):
+        """Concurrent callers seeing a closed wrapper inside the 60s window
+        must serialize through _init_lock and destroy/recreate only once.
+        """
+        import logging
+        import time
+        from src.db.executor_pool import ExecutorPool
+        from src.db.postgres_backend import PostgresBackend
+
+        dead_raw = MagicMock()
+        dead_raw._closed = False
+        dead_raw.close = AsyncMock()
+        dead_pool = ExecutorPool(dead_raw)
+        dead_pool._loop.call_soon_threadsafe(dead_pool._loop.stop)
+        dead_pool._thread.join(timeout=2.0)
+        assert dead_pool._closed is True
+
+        backend = PostgresBackend()
+        backend._pool = dead_pool
+        backend._last_pool_check = time.time()
+
+        fresh_raw = MagicMock()
+        fresh_raw._closed = False
+        fresh_raw.close = AsyncMock()
+
+        results = []
+        try:
+            with caplog.at_level(logging.WARNING, logger="src.db.postgres_backend"):
+                with patch("asyncpg.create_pool", new_callable=AsyncMock, return_value=fresh_raw) as create:
+                    results = await asyncio.gather(*(backend._ensure_pool() for _ in range(5)))
+                    assert create.call_count == 1
+            assert all(r is backend._pool and r is not dead_pool for r in results)
+            destroy_logs = [r for r in caplog.records if "destroying pool" in r.message]
+            assert len(destroy_logs) == 1
+            assert "Pool wrapper reported closed, destroying pool" in destroy_logs[0].message
+            assert "health check failed" not in destroy_logs[0].message.lower()
+        finally:
+            if backend._pool is not None and backend._pool is not dead_pool:
+                await backend._pool.close()
+
+    @pytest.mark.asyncio
     async def test_concurrent_failing_health_checks_log_destroy_once(self, caplog):
         """N concurrent failing health checks must produce ONE destroy log,
         not N. The log must fire inside the lock + after a pool-identity

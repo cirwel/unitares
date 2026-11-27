@@ -1863,11 +1863,16 @@ async def _handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Tex
                     lifecycle_statuses = dict(stats.get("by_status") or {})
                     raw_total = raw_stats.get("total_discoveries")
                     raw_statuses = dict(raw_stats.get("by_status") or {})
-                    stats["raw_current_counts"] = {
+                    raw_types = raw_stats.get("by_type")
+                    raw_counts = {
                         "total_discoveries": raw_total,
                         "by_status": raw_statuses,
                         "scope": raw_stats.get("scope", {}),
                     }
+                    if isinstance(raw_types, dict):
+                        raw_counts["by_type"] = dict(raw_types)
+                        stats["by_type"] = dict(raw_types)
+                    stats["raw_current_counts"] = raw_counts
                     stats["canonical_current_total"] = raw_total
                     stats["lifecycle_managed_counts"] = {
                         "total_discoveries": lifecycle_total,

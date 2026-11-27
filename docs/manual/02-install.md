@@ -191,7 +191,10 @@ leases are enabled but would not work, the plugin says so at session start.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
-exercise self-relative scoring or establish predictive value.
+exercise self-relative scoring or establish predictive value. Run `make demo-record`
+to walk through the three-agent shared-record flow (initial finding, supersede with
+root cause, graded outcome, unbound search, and declared lineage) against the same
+live stack.
 
 The quickstart leaves several capabilities off, among them semantic search, a
 model for `consult`, and cross-family review.

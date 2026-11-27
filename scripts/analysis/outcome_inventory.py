@@ -147,6 +147,7 @@ _CONTROLLED_FIXTURE_FLAGS = frozenset(
 _IDENTITY_METADATA_DETAIL_KEY = "_identity_metadata"
 _CONTROLLED_IDENTITY_LABEL_PREFIXES = (
     "quick-demo-agent",
+    "record-demo-agent",
     "perf-profile-checkin",
 )
 _CONTROLLED_IDENTITY_PURPOSES = frozenset({"testing", "demo", "profiling", "benchmark"})
