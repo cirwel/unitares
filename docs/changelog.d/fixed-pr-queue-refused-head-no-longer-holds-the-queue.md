@@ -1,0 +1,1 @@
+- **ops/pr-queue:** A head of queue whose arm is refused by the `gh` wrapper before any call reaches GitHub (`PR_QUEUE_ARM_REFUSAL_EXIT`) is skipped, with a notice on the PR, after `PR_QUEUE_ARM_REFUSAL_TICKS` (default 6) consecutive refusals on one commit, so the PRs behind it are no longer held. Unset, the default, behaviour is unchanged.
