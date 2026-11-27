@@ -19,7 +19,11 @@ Rules it encodes:
 * Rows inside a boundary's ambiguous interval belong to neither side.
 * Rows written from 2026-10-16 carry ``state_json.eisv_instrument``; filter
   those on the stamp (``era``, or ``id`` for exact configuration) and drop the
-  restore transient with ``is_settled``. Time windows are for older rows.
+  restore transient with ``is_settled``. Time windows are for older rows, and
+  for a change that moved no stamp input: ``TD1`` (2026-11-03) had no flag, so
+  rows on both sides of it carry one instrument id and only its time boundary
+  separates them. ``boundaries_crossed`` checks timed boundaries even when
+  ``stamp_filtered`` is set.
 
 Choosing ``DEFAULT_SETTLED_UPDATES`` is a telemetry threshold, not a finding:
 after #2834 the restored ODE closed about 4% of its gap per check-in, so 50

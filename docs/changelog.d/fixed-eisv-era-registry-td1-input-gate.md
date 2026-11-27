@@ -1,0 +1,1 @@
+- **eisv/eras:** Register `TD1` (`2026-11-03T23:06:02Z`) in `config/eisv_instrument_eras.json`: the deploy of #3185's unflagged template-divergence exclusion, which changed what the behavioral sensor reads on automatic check-ins 48 hours before `SN1` while rows kept the `RK1` stamp. Era-window readers now refuse or split a window that spans it. No estimator code or flag changes.
