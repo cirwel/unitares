@@ -75,6 +75,7 @@ required path (AGENTS.md, execution-cost policy).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import fnmatch
 import hashlib
@@ -105,6 +106,10 @@ UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 #: A review passed, but a security-sensitive diff still needs a second model
 #: family (review_policy.json). Not an outage: the next step is the author's.
 NEEDS_SECOND_FAMILY = 3
+#: For the review sweep only (--budget-hold-exit): the full-review cycle budget
+#: refused the pass before any reviewer ran or any record was posted. The sweep
+#: moves on to the next PR; a direct run still exits UNREVIEWED.
+BUDGET_HELD = 4
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # GitHub-issued App ID -> bot actor ID. This is review-evidence admission
 # only, configured in the trusted gate checkout, never in a PR's marker.
@@ -1714,6 +1719,33 @@ def agy_model_name(model: str | None = None) -> str:
     else the default; "default" means agy's own default, which is a Gemini model."""
     chosen = model if model is not None else (_AGY_MODEL_OVERRIDE or os.environ.get("REVIEW_AGY_MODEL", ""))
     return chosen.strip() or AGY_DEFAULT_MODEL
+
+
+#: An Antigravity model for each family, used when a family is still missing on
+#: a sensitive diff and its own provider cannot run (Codex out of quota, say).
+#: agy serves models from several labs, and a record counts by the model it
+#: ran (record_family), so each lane supplies that family's coverage, not
+#: Google's. From `agy models` on 2026-11-24. A model agy stops serving fails
+#: like any other agy run: its failed runs bound retries on each diff, but only
+#: a quota, auth or startup failure starts a cooldown, so a retired model here
+#: needs replacing by hand.
+AGY_FAMILY_MODELS = {
+    "openai": "gpt-oss-120b-medium",
+    "anthropic": "claude-opus-5-5-high",
+    "google": AGY_DEFAULT_MODEL,
+}
+
+
+@contextlib.contextmanager
+def _agy_model(model: str):
+    """Judge agy as if it ran ``model`` (its family, cooldown, failed runs)."""
+    global _AGY_MODEL_OVERRIDE
+    prev = _AGY_MODEL_OVERRIDE
+    _AGY_MODEL_OVERRIDE = model
+    try:
+        yield
+    finally:
+        _AGY_MODEL_OVERRIDE = prev
 
 
 def marker_model(model: str) -> str:
@@ -3556,7 +3588,7 @@ def cmd_review(args) -> int:
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or pass --authorize-full-review REASON.")
-                    return UNREVIEWED
+                    return BUDGET_HELD if getattr(args, "budget_hold_exit", False) else UNREVIEWED
                 if (rounds.exhausted(joining_cycle, key, head)
                         and not missing_required_family
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
@@ -3565,7 +3597,7 @@ def cmd_review(args) -> int:
                           "pass --authorize-full-review REASON to run another full review cycle, "
                           "or escalate unresolved issues.")
                     print(cycle_grant_instructions(head, key, rounds))
-                    return UNREVIEWED
+                    return BUDGET_HELD if getattr(args, "budget_hold_exit", False) else UNREVIEWED
                 # After an ordinary findings round, verify fixes instead of
                 # automatically commissioning another full pass. A clean last
                 # round followed by new work still needs a fresh full review.
@@ -3627,6 +3659,25 @@ def second_family_candidates(branch: str, families: set[str], comments: list[dic
     return [p for p in reviewer_candidates(branch)
             if provider_family(p) not in families and provider_family(p) is not None
             and p not in exhausted and not provider_cooldown(p)]
+
+
+def agy_family_lanes(branch: str, families: set[str], authors: set[str],
+                     comments: list[dict], key: str, covered: set[str] = frozenset()) -> list[str]:
+    """Antigravity models that could supply a family still missing here, for
+    the families no other candidate (``covered``) can supply: one per eligible
+    family, skipped while that model cools down or is exhausted on this diff."""
+    if not authors or "antigravity" not in reviewer_candidates(branch):
+        return []
+    lanes = []
+    for family in eligible_families(authors, families):
+        model = AGY_FAMILY_MODELS.get(family)
+        if family in covered or not model or model_family(model) != family:
+            continue
+        with _agy_model(model):
+            if (not provider_cooldown("antigravity")
+                    and failed_runs(comments, key, "antigravity") < SWEEP_MAX_FAILED):
+                lanes.append(model)
+    return lanes
 
 
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
@@ -3702,6 +3753,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         # unknown PR authorship fails closed until a signature or branch prefix
         # identifies the authors. Judged with the same (cleared) model override.
         candidates = [c for c in candidates if authors and provider_family(c) not in authors]
+        # A family whose own provider is out can still be read through agy
+        # running that family's model.
+        lanes = agy_family_lanes(getattr(args, "branch", "") or "", independent, authors,
+                                 comments, key, {provider_family(c) for c in candidates})
     finally:
         _AGY_MODEL_OVERRIDE = prev_agy
     excluded = sorted(set(families) & set(authors)) if authors else []
@@ -3711,8 +3766,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and PR author "
               f"families are unknown ({_UNKNOWN_AUTHORS_GUIDANCE}; have: {have}).")
         return NEEDS_SECOND_FAMILY
-    if candidates:
-        runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
+    if candidates or lanes:
+        runs = "; ".join([f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates]
+                         + [f"./scripts/dev/review.sh --fresh --reviewer antigravity --agy-model {m}"
+                            for m in lanes])
         next_step = f"run one of: {runs}"
     elif not eligible_families(authors, independent):
         next_step = (f"no family outside the authors ({', '.join(sorted(authors))}) is left to "
@@ -4408,6 +4465,7 @@ def cmd_sweep(args) -> int:
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
         reviewer = None
         required_family = False
+        lane_model = None
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
         authored_by = pr_author_families(p)
         git("fetch", "--quiet", "--no-tags", "origin",
@@ -4448,8 +4506,14 @@ def cmd_sweep(args) -> int:
                         p["headRefName"], independent, comments, key))
                     selected = next((p for p in choices if p in eligible
                                      and not _skips_author_family(p, authored_by)), None)
+                    lanes = ([] if waived or selected or "antigravity" not in choices else
+                             agy_family_lanes(p["headRefName"], independent, authored_by,
+                                              comments, key))
                     if selected:
                         reviewer = selected
+                        required_family = True
+                    elif lanes:
+                        reviewer, lane_model = "antigravity", lanes[0]
                         required_family = True
                     elif waived:
                         print(f"[sweep] PR #{n}: second family covered by operator waiver")
@@ -4483,7 +4547,8 @@ def cmd_sweep(args) -> int:
             outside = " outside the author's family" if authored_by else ""
             print(f"[sweep] PR #{n}: configured reviewers{outside} unavailable; no review started")
             continue
-        reason = f"needs required family via {reviewer}" if required_family else f"needs review via {reviewer}"
+        via = f"{reviewer} ({lane_model})" if lane_model else reviewer
+        reason = f"needs required family via {via}" if required_family else f"needs review via {via}"
         print(f"[sweep] PR #{n} ({p['headRefName']}) {reason} for {key[:12]}")
         candidates += 1
         if args.dry_run:
@@ -4493,16 +4558,27 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
+        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review",
+                   "--budget-hold-exit"]
         if required_family:
             command += ["--reviewer", reviewer, "--fresh"]
-        if getattr(args, "agy_model", None):
-            command += ["--agy-model", args.agy_model]
+        if lane_model or getattr(args, "agy_model", None):
+            command += ["--agy-model", lane_model or args.agy_model]
+        if lane_model:
+            # A lane the sweep chose is not an explicit retry: a cooldown or
+            # retry exhaustion that lands after selection still stops it.
+            command += ["--respect-provider-cooldown"]
         # The chosen provider is explicit even without a CLI flag. Preserve
         # the optional native route for a first Codex pass; --reviewer pins a
         # local attempt, which the missing-family pass deliberately requests.
         rc = subprocess.run(command, cwd=wt,
                             env={**os.environ, "UNITARES_REVIEWER": reviewer}).returncode
+        if rc == BUDGET_HELD:
+            # Refused before any reviewer ran and before any record was posted:
+            # nothing changes on the PR, so stopping here would pick it again
+            # on every run and never reach the PRs after it.
+            print(f"[sweep] PR #{n}: held by the full-review cycle budget; trying the next PR")
+            continue
         if rc == NEEDS_SECOND_FAMILY:
             # Missing coverage is visible on the PR, not a runner crash.
             next_step = "requested from shared host on a later tick" if requested else "needs the author's request"
@@ -4665,6 +4741,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
     r.add_argument("--respect-provider-cooldown", action="store_true",
                    help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
+    r.add_argument("--budget-hold-exit", action="store_true", help=argparse.SUPPRESS)
 
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")
