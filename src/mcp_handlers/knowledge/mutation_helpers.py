@@ -145,6 +145,11 @@ async def _add_new_discovery(graph: Any, discovery: DiscoveryNode) -> None:
     refuses it (``must_be_new=True``). On a collision it mints a later id and
     tries again; ``discovery.id`` holds the id that was actually stored, so
     callers must read it after this returns, not before.
+
+    Each attempt is a separate storage call. On the plain PostgreSQL backend
+    the hourly store budget is charged per call and not refunded, so a write
+    that collides is charged once per attempt (see
+    ``KnowledgeGraphPostgres.add_discovery``).
     """
     for attempt in range(1, _NEW_DISCOVERY_ATTEMPTS + 1):
         try:

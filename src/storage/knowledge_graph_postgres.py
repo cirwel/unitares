@@ -67,7 +67,12 @@ class KnowledgeGraphPostgres:
         """Add a discovery to the knowledge graph.
 
         ``must_be_new=True`` refuses an id that already exists and raises
-        ``DiscoveryIdCollision`` instead of updating the row in place.
+        ``DiscoveryIdCollision`` instead of updating the row in place. That
+        refusal comes after the budget charge below, so a caller that retries
+        under a new id (``_add_new_discovery``, up to three attempts) is
+        charged once per attempt. An agent close to its hourly limit can then
+        have a recoverable collision come back as a rate-limit refusal. The
+        AGE backend charges inside its transaction and does not do this.
 
         Charges the agent's hourly store budget first. Unlike the AGE backend,
         the write here is not wrapped in a transaction, so a failure between
