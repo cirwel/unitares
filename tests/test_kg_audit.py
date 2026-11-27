@@ -152,6 +152,73 @@ class TestScoreDiscovery:
         result = _score_discovery(d, lifecycle)
         assert result["bucket"] == "healthy"
 
+    def test_long_summary_is_bounded_and_marked_truncated(self):
+        """Historical multi-KB summaries are bounded at a whitespace boundary."""
+        from src.knowledge_graph_lifecycle import (
+            AUDIT_SUMMARY_MAX_CHARS,
+            KnowledgeGraphLifecycle,
+            _score_discovery,
+        )
+        long_summary = " ".join(["verbose"] * 80)  # 639 chars
+        d = _make_discovery(age_days=45, summary=long_summary)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert len(result["summary"]) <= AUDIT_SUMMARY_MAX_CHARS
+        assert result["summary"].endswith("…")
+        assert result["summary_truncated"] is True
+
+    def test_long_summary_hard_cuts_when_no_late_whitespace_exists(self):
+        """Long unbroken tokens (URLs/hashes) fall back to a hard cut at limit - 1 + ellipsis."""
+        from src.knowledge_graph_lifecycle import (
+            AUDIT_SUMMARY_MAX_CHARS,
+            KnowledgeGraphLifecycle,
+            _score_discovery,
+        )
+        # Early space at index 10 (< limit // 2), followed by a 300-char unbroken token.
+        unbroken = "prefixword " + ("a" * 300)
+        d = _make_discovery(age_days=45, summary=unbroken)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert len(result["summary"]) == AUDIT_SUMMARY_MAX_CHARS
+        assert result["summary"] == unbroken[: AUDIT_SUMMARY_MAX_CHARS - 1] + "…"
+        assert result["summary_truncated"] is True
+
+    def test_long_summary_cuts_at_newline_or_unicode_whitespace_boundary(self):
+        """Newlines and Unicode whitespace in the second half act as cut boundaries."""
+        from src.knowledge_graph_lifecycle import (
+            AUDIT_SUMMARY_MAX_CHARS,
+            KnowledgeGraphLifecycle,
+            _score_discovery,
+        )
+        summary = ("a" * 180) + "\n" + ("b" * 100)
+        d = _make_discovery(age_days=45, summary=summary)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert result["summary"] == ("a" * 180) + "…"
+        assert result["summary_truncated"] is True
+
+        nbsp_summary = ("c" * 190) + "\u00a0" + ("d" * 100)
+        d2 = _make_discovery(age_days=45, summary=nbsp_summary)
+        result2 = _score_discovery(d2, KnowledgeGraphLifecycle())
+        assert len(result2["summary"]) <= AUDIT_SUMMARY_MAX_CHARS
+        assert result2["summary"] == ("c" * 190) + "…"
+        assert result2["summary_truncated"] is True
+
+    def test_short_summary_is_verbatim_including_whitespace(self):
+        """Short summaries stay byte-for-byte verbatim (including newlines/double spaces) without a marker."""
+        from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle, _score_discovery
+        raw = "Line one\nLine  two\tindented"
+        d = _make_discovery(age_days=45, summary=raw)
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert result["summary"] == raw
+        assert "summary_truncated" not in result
+
+    def test_none_summary_coerces_to_empty_string(self):
+        """Missing/None summary on a discovery node does not raise."""
+        from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle, _score_discovery
+        d = _make_discovery(age_days=45)
+        d.summary = None
+        result = _score_discovery(d, KnowledgeGraphLifecycle())
+        assert result["summary"] == ""
+        assert "summary_truncated" not in result
+
 
 # =============================================================================
 # Tests: run_kg_audit
@@ -219,6 +286,69 @@ class TestRunKgAudit:
         # Most stale first
         assert result["top_stale"][0]["id"] == "s2"
         assert result["top_stale"][1]["id"] == "s3"
+
+    @pytest.mark.asyncio
+    async def test_audit_top_n_clamps_negative_without_breaking_serializer_overflow(self):
+        """Negative top_n returns [] instead of Python negative slicing; top_n > 100 passes through
+        so the shared MCP serializer emits its documented truncation marker."""
+        from src.knowledge_graph_lifecycle import run_kg_audit
+
+        discoveries = [
+            _make_discovery(id=f"s{i}", age_days=40 + i)
+            for i in range(115)
+        ]
+        graph = _make_mock_graph({"open": discoveries})
+
+        with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph):
+            neg = await run_kg_audit(scope="open", top_n=-1)
+            zero = await run_kg_audit(scope="open", top_n=0)
+            over = await run_kg_audit(scope="open", top_n=120)
+
+        assert neg["top_stale"] == []
+        assert zero["top_stale"] == []
+        assert len(over["top_stale"]) == 115
+
+    @pytest.mark.asyncio
+    async def test_audit_use_model_receives_bounded_summary(self):
+        """Optional local-LLM prompt also uses the bounded summary."""
+        from src.knowledge_graph_lifecycle import AUDIT_SUMMARY_MAX_CHARS, run_kg_audit
+
+        long_summary = " ".join(["overflow"] * 100)
+        graph = _make_mock_graph({
+            "open": [_make_discovery(id="stale-long", age_days=45, summary=long_summary)],
+        })
+
+        with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph), \
+             patch("src.mcp_handlers.support.llm_delegation.call_local_llm",
+                   new_callable=AsyncMock, return_value="ARCHIVE") as mock_llm:
+            result = await run_kg_audit(use_model=True)
+
+        assert len(result["top_stale"][0]["summary"]) <= AUDIT_SUMMARY_MAX_CHARS
+        assert result["top_stale"][0]["summary_truncated"] is True
+        prompt = mock_llm.call_args.kwargs["prompt"]
+        assert long_summary not in prompt
+        assert result["top_stale"][0]["summary"] in prompt
+
+    @pytest.mark.asyncio
+    async def test_audit_use_model_caps_prompt_entries_when_top_n_exceeds_serializer_cap(self):
+        """Optional local-LLM prompt inspects at most AUDIT_MODEL_MAX_ENTRIES rows."""
+        from src.knowledge_graph_lifecycle import AUDIT_MODEL_MAX_ENTRIES, run_kg_audit
+
+        discoveries = [
+            _make_discovery(id=f"entry-{i:03d}-id", age_days=40 + i, summary=f"Item {i}")
+            for i in range(AUDIT_MODEL_MAX_ENTRIES + 20)
+        ]
+        graph = _make_mock_graph({"open": discoveries})
+
+        with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph), \
+             patch("src.mcp_handlers.support.llm_delegation.call_local_llm",
+                   new_callable=AsyncMock, return_value="OK") as mock_llm:
+            result = await run_kg_audit(scope="open", top_n=AUDIT_MODEL_MAX_ENTRIES + 20, use_model=True)
+
+        assert len(result["top_stale"]) == AUDIT_MODEL_MAX_ENTRIES + 20
+        prompt = mock_llm.call_args.kwargs["prompt"]
+        bullet_lines = [line for line in prompt.splitlines() if line.startswith("- [")]
+        assert len(bullet_lines) == AUDIT_MODEL_MAX_ENTRIES
 
     @pytest.mark.asyncio
     async def test_audit_scope_all(self):

@@ -713,6 +713,34 @@ async def get_kg_lifecycle_stats() -> Dict[str, Any]:
 AUDIT_HEALTHY_DAYS = 7
 AUDIT_AGING_DAYS = 14
 AUDIT_STALE_DAYS = 30
+AUDIT_SUMMARY_MAX_CHARS = 240
+# Match the shared MCP serializer's 100-item list cap so the optional local-LLM
+# prompt never exceeds ~100 entries or assesses rows the caller cannot see.
+AUDIT_MODEL_MAX_ENTRIES = 100
+
+
+def _bound_audit_summary(summary: Any, limit: int = AUDIT_SUMMARY_MAX_CHARS) -> tuple[str, bool]:
+    """Bound an oversized audit summary to at most ``limit`` characters.
+
+    Summaries at or under ``limit`` characters are returned verbatim so
+    ``summary_truncated`` is set if and only if the stored summary was cut.
+    Oversized summaries cut at the last whitespace character in the second half
+    of the budget (or hard-cut at ``limit - 1`` characters when none exists)
+    and append ``…``. Bounding keeps ``top_stale`` entries and the optional
+    local-LLM assessment prompt compact while signaling callers to open
+    ``knowledge(action='details')`` when ``summary_truncated`` is true.
+    """
+    if not isinstance(summary, str):
+        return "", False
+    if len(summary) <= limit:
+        return summary, False
+    prefix = summary[: limit - 1]
+    min_cutoff = limit // 2
+    for idx in range(len(prefix) - 1, min_cutoff - 1, -1):
+        if prefix[idx].isspace():
+            prefix = prefix[:idx]
+            break
+    return prefix.rstrip() + "…", True
 
 
 def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str, Any]:
@@ -760,9 +788,10 @@ def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str,
     if lifecycle.get_lifecycle_policy(discovery) == "permanent":
         bucket = "healthy"
 
-    return {
+    summary, summary_truncated = _bound_audit_summary(getattr(discovery, "summary", ""))
+    entry: Dict[str, Any] = {
         "id": discovery.id,
-        "summary": getattr(discovery, "summary", ""),
+        "summary": summary,
         "type": getattr(discovery, "type", ""),
         "agent_id": getattr(discovery, "agent_id", None),
         "age_days": age_days,
@@ -771,6 +800,9 @@ def _score_discovery(discovery, lifecycle: KnowledgeGraphLifecycle) -> Dict[str,
         "bucket": bucket,
         "tags": getattr(discovery, "tags", []) or [],
     }
+    if summary_truncated:
+        entry["summary_truncated"] = True
+    return entry
 
 
 async def run_kg_audit(
@@ -822,10 +854,12 @@ async def run_kg_audit(
     for s in scored:
         buckets[s["bucket"]] = buckets.get(s["bucket"], 0) + 1
 
-    # Top stale entries (stale + candidate_for_archive, sorted by last_activity_days desc)
+    # Top stale entries (stale + candidate_for_archive, sorted by last_activity_days desc).
+    # Clamp only the lower bound so negative top_n never triggers Python negative slicing;
+    # upper-bound list truncation stays in the shared MCP serializer (see docs/guides/kg-audit-limits.md).
     stale_entries = [s for s in scored if s["bucket"] in ("stale", "candidate_for_archive")]
     stale_entries.sort(key=lambda x: x["last_activity_days"], reverse=True)
-    top_stale = stale_entries[:top_n]
+    top_stale = stale_entries[: max(0, top_n)]
 
     # Optional model assessment
     model_assessment = None
@@ -834,7 +868,7 @@ async def run_kg_audit(
             from src.mcp_handlers.support.llm_delegation import call_local_llm
 
             prompt_lines = ["Given these knowledge graph entries, which are still relevant and which should be archived?\n"]
-            for entry in top_stale:
+            for entry in top_stale[:AUDIT_MODEL_MAX_ENTRIES]:
                 prompt_lines.append(
                     f"- [{entry['id'][:8]}] {entry['summary']} "
                     f"(age: {entry['age_days']}d, type: {entry['type']}, "

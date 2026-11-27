@@ -58,7 +58,11 @@ edge cases, `staleness_warning`, `resolution_notes` offsets, or
 - **`list` and `audit` parameters**: `knowledge(action="list")` returns raw
   status aggregates (`epoch_scope`, `including_cold`), intentionally differing
   from `stats` lifecycle buckets. `knowledge(action="audit")` accepts
-  `scope` (`open` | `all` | `by_agent`) and `top_n` (default 10).
+  `scope` (`open` | `all` | `by_agent`) and `top_n` (default 10; `<= 0` returns
+  `[]`, and the shared serializer caps lists at 100 with a trailing count
+  marker). `top_stale` entries bound `summary` at 240 characters, setting
+  `summary_truncated: true` when cut — open `knowledge(action="details", discovery_id=...)`
+  for the full entry.
 - **Superseded links on search**: on the AGE backend, `supersede` creates a
   `SUPERSEDES` edge so search digests and `details` carry `superseded_by` (the
   first successor ID). On the default Postgres backend, `update(status="superseded", superseded_by=...)`
