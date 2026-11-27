@@ -805,6 +805,22 @@ def test_an_unreadable_refusal_record_holds_rather_than_skips(tmp_path: Path) ->
     )
     assert calls == [_arm(1)]
     assert "the refusal could not be recorded" in out
+    assert "of 12 on sha1" not in out
+
+
+def test_an_unwritable_record_holds_even_past_the_threshold(tmp_path: Path) -> None:
+    _seed_refusals(tmp_path, "1 sha1", 12)
+    record = tmp_path / "state" / "approvals.arm-refusals"
+    record.chmod(0o444)
+    try:
+        calls, out = _run(
+            tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+            refuse=("pr merge 1",), PR_QUEUE_ARM_REFUSAL_EXIT="2",
+        )
+    finally:
+        record.chmod(0o644)
+    assert calls == [_arm(1)]
+    assert "the refusal could not be recorded" in out
 
 
 def test_without_the_refusal_exit_a_wrapper_refusal_is_an_ordinary_failed_arm(tmp_path: Path) -> None:

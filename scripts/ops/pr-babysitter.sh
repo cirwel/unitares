@@ -1627,7 +1627,10 @@ while read -r labelled_at n head; do
     # next PR may safely be considered once this head has been refused often
     # enough. The arm is tried again every tick, so a check that recovers
     # (a re-run, a late finish) lets this PR arm with no one clearing anything.
-    record_refused_arm "$n" "$head" || log "#$n: the refusal could not be recorded ($ARM_REFUSALS_FILE); it will keep holding the queue"
+    if ! record_refused_arm "$n" "$head"; then
+      log "#$n arm refused before reaching GitHub, and the refusal could not be recorded ($ARM_REFUSALS_FILE); nothing else armed this tick"
+      exit 0
+    fi
     refusals=$(refused_arms "$n" "$head")
     if [ "$refusals" -ge "$ARM_REFUSAL_TICKS" ]; then
       log "#$n arm refused before reaching GitHub ($refusals times on ${head:0:8}); no longer holding the queue, trying the next PR"
