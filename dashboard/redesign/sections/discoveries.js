@@ -16,8 +16,19 @@
   "use strict";
   const $ = (s, r = document) => r.querySelector(s);
 
-  const TYPE_ORDER = ["insight", "improvement", "bug_found", "pattern", "question", "answer", "analysis", "note", "exploration"];
-  const STATUS_COLOR = { open: "var(--ok)", resolved: "var(--eisv-c)", archived: "var(--faint)", superseded: "var(--warn)", closed: "var(--muted)" };
+  const TYPE_ORDER = [
+    "insight", "improvement", "bug_found", "bug_fix", "pattern", "rule",
+    "architectural_decision", "observation", "learning", "experiment",
+    "documentation", "question", "answer", "analysis", "note", "exploration",
+  ];
+  const STATUS_COLOR = {
+    open: "var(--ok)",
+    resolved: "var(--eisv-c)",
+    archived: "var(--faint)",
+    cold: "var(--eisv-e)",
+    superseded: "var(--warn)",
+    closed: "var(--muted)",
+  };
   const TIME_WINDOW_MS = { "24h": 864e5, "7d": 6048e5, "30d": 2592e6 };
   const PAGE_LIMIT = 30;
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -88,7 +99,7 @@
     const stale = d.stale ? `<span class="tag warn" title="aged / still open — verify before acting">stale</span>` : "";
     return `<div class="panel" style="padding:var(--space-5)">
       <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2)">
-        <span class="tag" style="border-color:var(--line-2)">${label(d.type)}</span>
+        <span class="tag" style="border-color:var(--line-2)">${esc(label(d.type))}</span>
         <span class="tag" style="color:${STATUS_COLOR[d.status] || "var(--muted)"}">${esc(d.status)}</span>
         ${stale}
         <span class="spring"></span>
@@ -156,14 +167,16 @@
 
     // lifecycle bar
     const bs = MODEL.byStatus || {};
-    const statusSum = Object.values(bs).reduce((a, n) => a + n, 0);
-    // Entries the status breakdown doesn't account for (statuses outside the
-    // lifecycle set, or rows past the stats read). Left implicit, the legend
-    // sums short of the "All N" chip and reads as a counting bug.
-    const other = typeof MODEL.total === "number" && MODEL.total > statusSum ? MODEL.total - statusSum : 0;
-    const totalS = statusSum + other || 1;
-    const barOrder = ["open", "resolved", "archived", "superseded", "closed"];
-    const otherTitle = "not in the status breakdown (other statuses, or beyond this stats read)";
+    const barOrder = ["open", "resolved", "archived", "cold", "superseded", "closed"];
+    const statusSum = Object.values(bs).reduce((a, n) => a + (typeof n === "number" ? n : 0), 0);
+    const knownSum = barOrder.reduce((a, k) => a + (typeof bs[k] === "number" ? bs[k] : 0), 0);
+    // Entries the named lifecycle buckets don't account for (other statuses,
+    // or rows past the stats read). Left implicit, the legend sums short of
+    // the "All N" chip and reads as a counting bug.
+    const baseline = typeof MODEL.total === "number" && MODEL.total > statusSum ? MODEL.total : statusSum;
+    const other = Math.max(0, baseline - knownSum);
+    const totalS = knownSum + other || 1;
+    const otherTitle = "not in the named status breakdown (other statuses, or beyond this stats read)";
     const bar = barOrder.filter((k) => bs[k]).map((k) =>
       `<div title="${k}: ${bs[k]}" style="width:${(bs[k] / totalS) * 100}%;background:${STATUS_COLOR[k]};height:100%"></div>`).join("")
       + (other ? `<div title="other: ${other} — ${otherTitle}" style="width:${(other / totalS) * 100}%;background:var(--line-2);height:100%"></div>` : "");
@@ -180,11 +193,15 @@
 
     // type legend
     const bt = MODEL.byType || {};
-    const types = Object.keys(bt).sort((a, b) => (TYPE_ORDER.indexOf(a) + 1 || 99) - (TYPE_ORDER.indexOf(b) + 1 || 99));
+    const types = Object.keys(bt).sort((a, b) =>
+      (TYPE_ORDER.indexOf(a) + 1 || 99) - (TYPE_ORDER.indexOf(b) + 1 || 99)
+      || (bt[b] || 0) - (bt[a] || 0)
+      || a.localeCompare(b)
+    );
     typesEl.innerHTML = ["all"].concat(types).map((t) => {
       const n = t === "all" ? MODEL.total : bt[t];
       const on = t === typeFilter;
-      return `<button class="theme-toggle dsc-type" data-type="${t}" style="${on ? "border-color:var(--accent);color:var(--accent)" : ""}">${label(t)} <span style="color:var(--faint)">${n ?? ""}</span></button>`;
+      return `<button class="theme-toggle dsc-type" data-type="${esc(t)}" style="${on ? "border-color:var(--accent);color:var(--accent)" : ""}">${esc(label(t))} <span style="color:var(--faint)">${n ?? ""}</span></button>`;
     }).join("");
     typesEl.querySelectorAll(".dsc-type").forEach((b) => {
       b.onclick = () => {
