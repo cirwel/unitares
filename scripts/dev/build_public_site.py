@@ -239,6 +239,282 @@ def render_demo_md(demo_md: str, fixture: dict) -> str:
     return text
 
 
+_DEMO_STEP_PROGRESSION: tuple[dict, ...] = (
+    {
+        "number": 1,
+        "short_label": "Claim",
+        "relations": ("authored",),
+        "visible_records": ("identity-writer", "finding-original"),
+        "show_reconstruction": False,
+    },
+    {
+        "number": 2,
+        "short_label": "Evidence",
+        "relations": ("contradicts", "grades"),
+        "visible_records": ("identity-writer", "finding-original", "outcome-evidence"),
+        "show_reconstruction": False,
+    },
+    {
+        "number": 3,
+        "short_label": "Challenge",
+        "relations": ("challenged",),
+        "visible_records": ("identity-writer", "finding-original", "outcome-evidence", "review-challenge"),
+        "show_reconstruction": False,
+    },
+    {
+        "number": 4,
+        "short_label": "Supersede",
+        "relations": ("supersedes",),
+        "visible_records": (
+            "identity-writer",
+            "finding-original",
+            "outcome-evidence",
+            "review-challenge",
+            "finding-correction",
+        ),
+        "show_reconstruction": False,
+    },
+    {
+        "number": 5,
+        "short_label": "Reconstruct",
+        "relations": ("authored", "contradicts", "grades", "challenged", "supersedes"),
+        "visible_records": (
+            "identity-writer",
+            "finding-original",
+            "outcome-evidence",
+            "review-challenge",
+            "finding-correction",
+        ),
+        "show_reconstruction": True,
+    },
+)
+
+_NUMBERED_SECTION_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$", re.MULTILINE)
+_UNSUPPORTED_BLOCK_MD_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+|#{1,6}\s+)")
+_UNSUPPORTED_INLINE_MD_RE = re.compile(
+    r"\[[^\]]+\]\([^)]+\)|\*\*|__|<[A-Za-z/!][^>]*>|(?<!\w)[*_](?=\S).+?(?<=\S)[*_](?!\w)"
+)
+
+
+def _strip_inline_code(text: str) -> str:
+    return re.sub(r"`([^`]+)`", r"\1", text)
+
+
+def _reject_unsupported_markdown(num: int, text: str) -> None:
+    stripped = re.sub(r"`[^`]+`", "", text)
+    if _UNSUPPORTED_INLINE_MD_RE.search(stripped):
+        raise ValueError(
+            f"demo-interactive: section {num} contains markdown syntax "
+            f"unsupported by textContent: {text!r}"
+        )
+
+
+def _parse_demo_sections(demo_md: str) -> dict[int, tuple[str, str, str, str]]:
+    """Extract numbered step sections (## 1. .. ## 5.) from filled demo.md.
+
+    Returns ``{number: (title, lead_in, quote, detail)}`` where ``lead_in`` is
+    the prose before any blockquote, ``quote`` is the verbatim blockquote text
+    (empty when a section has none, such as step 5), and ``detail`` is the prose
+    after the blockquote. Fails closed on duplicate section numbers or markdown
+    constructs (links, emphasis, lists, sub-headings, inline HTML) that
+    ``textContent`` would render literally.
+    """
+    matches = list(_NUMBERED_SECTION_RE.finditer(demo_md))
+    sections: dict[int, tuple[str, str, str, str]] = {}
+    for idx, match in enumerate(matches):
+        num = int(match.group(1))
+        if num in sections:
+            raise ValueError(f"demo-interactive: duplicate section '## {num}.' in demo.md")
+        raw_title = match.group(2).strip()
+        _reject_unsupported_markdown(num, raw_title)
+        title = _strip_inline_code(raw_title)
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(demo_md)
+        body = demo_md[start:end]
+        # Stop at the next unnumbered heading (e.g. "## Working with Git...").
+        next_h2 = re.search(r"^##\s+", body, re.MULTILINE)
+        if next_h2 is not None:
+            body = body[: next_h2.start()]
+        lead_lines: list[str] = []
+        quote_lines: list[str] = []
+        detail_lines: list[str] = []
+        seen_quote = False
+        for raw in body.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("|"):
+                continue
+            if line.startswith(">"):
+                seen_quote = True
+                quote_lines.append(line.lstrip(">").strip())
+            else:
+                if _UNSUPPORTED_BLOCK_MD_RE.match(line):
+                    raise ValueError(
+                        f"demo-interactive: section {num} contains markdown syntax "
+                        f"unsupported by textContent: {line!r}"
+                    )
+                if seen_quote:
+                    detail_lines.append(line)
+                else:
+                    lead_lines.append(line)
+        lead_joined = " ".join(lead_lines).strip()
+        detail_joined = " ".join(detail_lines).strip()
+        _reject_unsupported_markdown(num, lead_joined)
+        _reject_unsupported_markdown(num, detail_joined)
+        lead_in = _strip_inline_code(lead_joined)
+        quote = " ".join(quote_lines).strip()
+        detail = _strip_inline_code(detail_joined)
+        sections[num] = (title, lead_in, quote, detail)
+    return sections
+
+
+def build_demo_interactive_payload(demo_md: str, fixture: dict) -> dict:
+    """Build and fail-closed-validate the interactive demo widget payload.
+
+    Shows the UNITARES arm narrated by ``demo.md``: step titles, lead-ins,
+    blockquotes, and follow-up prose are parsed directly from the filled
+    ``demo.md``; compact step-strip labels and record/relation progressions are
+    declared in ``_DEMO_STEP_PROGRESSION`` and validated against ``fixture`` so
+    duplicate record ids, renames, or uncovered records/relations fail the build.
+    """
+    sections = _parse_demo_sections(demo_md)
+    facts = fixture["oracle"]["facts"]
+    oracle_edges = fixture["oracle"].get("edges", [])
+    oracle_relations = {e["relation"] for e in oracle_edges}
+    arms = fixture.get("arms", {})
+
+    if "unitares" not in arms:
+        raise ValueError("demo-interactive: missing 'unitares' arm in fixture")
+    records = arms["unitares"].get("records", [])
+    raw_ids = [r["record_id"] for r in records]
+    record_ids = set(raw_ids)
+    if len(record_ids) != len(raw_ids):
+        raise ValueError("demo-interactive: duplicate record_id in 'unitares' arm")
+
+    holders: dict[str, dict] = {}
+    for rec in records:
+        for key in rec.get("facts", {}):
+            holders.setdefault(key, rec)
+    for question in fixture.get("questions", []):
+        key = question["fact_key"]
+        if key not in holders:
+            raise ValueError(
+                f"demo-interactive: no UNITARES record answers {question['question_id']!r}"
+            )
+        if str(holders[key]["facts"][key]) != str(facts[key]):
+            raise ValueError(
+                f"demo-interactive: UNITARES record disagrees with oracle on {key!r}"
+            )
+
+    expected_nums = {spec["number"] for spec in _DEMO_STEP_PROGRESSION}
+    extra_sections = sorted(set(sections) - expected_nums)
+    if extra_sections:
+        raise ValueError(
+            f"demo-interactive: docs/public-site/demo.md has unmapped numbered section(s) {extra_sections}"
+        )
+
+    records_by_id = {r["record_id"]: r for r in records}
+    covered_relations: set[str] = set()
+    covered_records: set[str] = set()
+    steps: list[dict] = []
+    for spec in _DEMO_STEP_PROGRESSION:
+        num = spec["number"]
+        if num not in sections:
+            raise ValueError(f"demo-interactive: docs/public-site/demo.md is missing section '## {num}.'")
+        title, lead_in, quote, detail = sections[num]
+        if not title or not lead_in:
+            raise ValueError(f"demo-interactive: section {num} in demo.md has empty title or lead-in")
+        if not spec["show_reconstruction"] and not quote:
+            raise ValueError(f"demo-interactive: section {num} in demo.md is missing a blockquote")
+
+        step_ids = list(spec["visible_records"])
+        unknown_ids = [rid for rid in step_ids if rid not in record_ids]
+        if unknown_ids:
+            raise ValueError(
+                f"demo-interactive: step {num} references unknown record(s) {unknown_ids}"
+            )
+        covered_records.update(step_ids)
+
+        visible_record_relations = {
+            e["relation"]
+            for rid in step_ids
+            for e in records_by_id[rid].get("edges", [])
+        }
+        for rel in spec["relations"]:
+            if rel not in oracle_relations:
+                raise ValueError(f"demo-interactive: step {num} references unknown relation {rel!r}")
+            if rel not in visible_record_relations:
+                raise ValueError(
+                    f"demo-interactive: step {num} relation {rel!r} is missing from visible records' edges"
+                )
+            covered_relations.add(rel)
+
+        steps.append(
+            {
+                "number": num,
+                "short_label": spec["short_label"],
+                "title": title,
+                "lead_in": lead_in,
+                "quote": quote,
+                "detail": detail,
+                "relations": list(spec["relations"]),
+                "visible_records": step_ids,
+                "show_reconstruction": spec["show_reconstruction"],
+            }
+        )
+
+    missing_records = sorted(record_ids - covered_records)
+    if missing_records:
+        raise ValueError(
+            f"demo-interactive: fixture record(s) {missing_records} are never shown in any step"
+        )
+
+    uncovered = sorted(oracle_relations - covered_relations)
+    if uncovered:
+        raise ValueError(f"demo-interactive: fixture relation(s) {uncovered} are never shown in any step")
+
+    return {
+        "incident_id": fixture["incident"]["incident_id"],
+        "records": records,
+        "oracle_edges": oracle_edges,
+        "questions": fixture["questions"],
+        "steps": steps,
+    }
+
+
+def inject_demo_interactive(demo_body: str, widget_html: str) -> str:
+    """Insert ``widget_html`` right before the first ``<h2>`` in ``demo_body``.
+
+    Fails closed if no ``<h2>`` heading is present rather than silently
+    prepending the widget above ``<h1>``.
+    """
+    split_marker = "\n<h2"
+    if split_marker not in demo_body:
+        raise ValueError("demo-interactive: rendered demo.html has no <h2> section heading")
+    intro_part, rest_part = demo_body.split(split_marker, 1)
+    return f"{intro_part}\n{widget_html}\n<h2{rest_part}"
+
+
+def render_demo_interactive(template: str, payload: dict) -> str:
+    """Embed ``payload`` into the interactive demo template for an inline script.
+
+    Escapes ``<``, ``>``, ``&``, and Unicode line separators so no payload string
+    can terminate ``<script>`` or enter HTML script-data-double-escaped state
+    (e.g. ``<!--<script``), and fails the build if the placeholder is missing.
+    """
+    placeholder = "__DEMO_DATA_JSON__"
+    if placeholder not in template:
+        raise ValueError("demo: docs/public-site/demo-interactive.template.html is missing __DEMO_DATA_JSON__")
+    demo_data_json = (
+        json.dumps(payload, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    return template.replace(placeholder, demo_data_json)
+
+
 def latest_drift_audit() -> Path | None:
     audits = sorted(ONTOLOGY.glob("glossary-drift-audit-*.md"))
     return audits[-1] if audits else None
@@ -267,10 +543,17 @@ def build(out_dir: Path, cname: str | None) -> None:
     )
 
     # Read-only demo: one incident from the tested fixture, nothing to install.
+    journey_fixture = json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8"))
     demo_md = render_demo_md(
         (SITE / "demo.md").read_text(encoding="utf-8"),
-        json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8")),
+        journey_fixture,
     )
+    demo_body = render(demo_md, source_dir=SITE)
+    demo_interactive = render_demo_interactive(
+        (SITE / "demo-interactive.template.html").read_text(encoding="utf-8"),
+        build_demo_interactive_payload(demo_md, journey_fixture),
+    )
+    demo_html_body = inject_demo_interactive(demo_body, demo_interactive)
     out_dir.joinpath("demo.html").write_text(
         PAGE_TEMPLATE.format(
             title="UNITARES demo: one incident, as the record holds it",
@@ -281,7 +564,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             repo=REPO_URL,
             source_path="docs/public-site/demo.md",
             blob=DEMO_BLOB,
-            body=render(demo_md, source_dir=SITE),
+            body=demo_html_body,
         ),
         encoding="utf-8",
     )

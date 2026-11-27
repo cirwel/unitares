@@ -22,7 +22,7 @@ HTML artifacts built directly from canonical files in
 
 | Artifact | Source in repository | What it shows |
 |---|---|---|
-| **[Incident walkthrough (`demo.html`)](demo.html)** | [`docs/public-site/demo.md`](https://github.com/cirwel/unitares/blob/master/docs/public-site/demo.md) + [`tests/accountability_journey/incident-v0.json`](https://github.com/cirwel/unitares/blob/master/tests/accountability_journey/incident-v0.json) | Four-step browser walkthrough of one recorded incident from claim to challenge and correction, with no server install required. |
+| **[Incident walkthrough (`demo.html`)](demo.html)** | [`docs/public-site/demo.md`](https://github.com/cirwel/unitares/blob/master/docs/public-site/demo.md) + [`tests/accountability_journey/incident-v0.json`](https://github.com/cirwel/unitares/blob/master/tests/accountability_journey/incident-v0.json) | Five-step browser walkthrough of one recorded incident from claim to challenge, correction, and successor reconstruction, with no server install required. |
 | **[Public glossary (`glossary.html`)](glossary.html)** | [`docs/ontology/glossary.md`](https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary.md) | Question-keyed vocabulary glossary, homonym disambiguation, and drift corrections. |
 | **[Glossary viewer (`glossary-viewer.html`)](glossary-viewer.html)** | [`docs/ontology/glossary.md`](https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary.md) | Interactive search and filter view across homonyms, single-sense terms, the cross-register Rosetta map, and open gaps. |
 | **[Drift audit (`drift-audit.html`)](drift-audit.html)** | [`docs/ontology/`](https://github.com/cirwel/unitares/tree/master/docs/ontology) | Latest dated vocabulary drift audit report. |

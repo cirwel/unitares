@@ -77,7 +77,10 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
 
     demo = (tmp_path / "demo.html").read_text(encoding="utf-8")
     landing = (tmp_path / "index.html").read_text(encoding="utf-8")
-    demo_text = " ".join(demo.split())
+    # Strip the embedded interactive widget (and its JSON payload) before
+    # verifying that demo.md itself renders every oracle fact and link.
+    demo_static = re.sub(r'<section class="demo-stage".*?</script>', "", demo, flags=re.S)
+    demo_text = " ".join(demo_static.split())
     fixture = json.loads(
         (PROJECT_ROOT / "tests" / "accountability_journey" / "incident-v0.json").read_text(
             encoding="utf-8"
@@ -122,6 +125,13 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert 'class="brand" href="https://cirwel.org"' in viewer_html
     assert 'href="index.html">Artifacts</a>' in viewer_html
     assert 'href="demo.html" class="active"' in demo
+    # Interactive explorer is embedded single-source from demo.md and incident-v0.json,
+    # starts hidden for clean no-JS degradation, and keeps <noscript> outside it.
+    assert '<section class="demo-stage" id="demo-stage" aria-label="Interactive incident walkthrough" hidden>' in demo
+    assert "</section>\n<noscript>" in demo
+    assert "__DEMO_DATA_JSON__" not in demo
+    assert '"incident_id": "reload-claim-contradiction-v0"' in demo
+    assert 'id="demo-records"' in demo
 
 
 def test_demo_build_fails_on_unfilled_placeholder():
@@ -168,6 +178,109 @@ def test_demo_link_names_must_match_the_fixture_edges():
     # A fixture relation the page never names fails it too.
     with pytest.raises(ValueError):
         render_demo_md("no links here", fixture)
+
+
+def test_demo_interactive_escapes_script_close_and_requires_placeholder():
+    import json
+    import pytest
+
+    from scripts.dev.build_public_site import (
+        JOURNEY_FIXTURE,
+        SITE,
+        build_demo_interactive_payload,
+        inject_demo_interactive,
+        render_demo_interactive,
+        render_demo_md,
+    )
+
+    rendered = render_demo_interactive(
+        "<script>const X = __DEMO_DATA_JSON__;</script>",
+        {"close": "</script><script>alert(1)</script>", "comment": "<!--<script>x"},
+    )
+    assert "</script><script>" not in rendered
+    assert "<!--<script" not in rendered
+    assert "\\u003c/script\\u003e" in rendered
+    assert "\\u003c!--\\u003cscript" in rendered
+    assert "__DEMO_DATA_JSON__" not in rendered
+
+    with pytest.raises(ValueError):
+        render_demo_interactive("<script>const X = {};</script>", {})
+
+    # Fail-closed validation: renaming a record id, adding an unmapped relation,
+    # dropping a numbered step section from demo.md, or missing <h2> placement
+    # must fail the build.
+    base_fixture = json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8"))
+    filled_md = render_demo_md((SITE / "demo.md").read_text(encoding="utf-8"), base_fixture)
+    payload = build_demo_interactive_payload(filled_md, base_fixture)
+    # Steps 1-4 preserve lead_in/quote/detail separately (no colon splicing); step 5 has no fake quote.
+    assert payload["steps"][0]["lead_in"].endswith(":")
+    assert payload["steps"][0]["quote"] == base_fixture["oracle"]["facts"]["original_claim"]
+    assert payload["steps"][0]["detail"].startswith("The record binds")
+    assert payload["steps"][4]["quote"] == ""
+
+    bad_record = json.loads(json.dumps(base_fixture))
+    bad_record["arms"]["unitares"]["records"][0]["record_id"] = "renamed-record"
+    with pytest.raises(ValueError, match="unknown record"):
+        build_demo_interactive_payload(filled_md, bad_record)
+
+    dup_record = json.loads(json.dumps(base_fixture))
+    dup_record["arms"]["unitares"]["records"].append(dup_record["arms"]["unitares"]["records"][0])
+    with pytest.raises(ValueError, match="duplicate record_id"):
+        build_demo_interactive_payload(filled_md, dup_record)
+
+    extra_record = json.loads(json.dumps(base_fixture))
+    extra_record["arms"]["unitares"]["records"].append({"record_id": "extra-record", "kind": "note", "facts": {}})
+    with pytest.raises(ValueError, match="never shown"):
+        build_demo_interactive_payload(filled_md, extra_record)
+
+    bad_relation = json.loads(json.dumps(base_fixture))
+    bad_relation["oracle"]["edges"].append(
+        {"source": "a", "relation": "extra_unmapped", "target": "b"}
+    )
+    with pytest.raises(ValueError, match="never shown"):
+        build_demo_interactive_payload(filled_md, bad_relation)
+
+    bad_md = filled_md.replace("## 3. A reviewer challenges it", "## Unnumbered")
+    with pytest.raises(ValueError, match="missing section"):
+        build_demo_interactive_payload(bad_md, base_fixture)
+
+    subhead_md = filled_md.replace("## 3. A reviewer challenges it", "### Subheading")
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(subhead_md, base_fixture)
+
+    bad_md_syntax = filled_md.replace("The record binds", "The **record** binds")
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(bad_md_syntax, base_fixture)
+
+    # Hard-wrapped link across lines must still be caught after joining.
+    wrapped_link_md = filled_md.replace(
+        "The record binds the finding to the process that wrote it",
+        "The [record\nbinds](https://example.org) the finding to the process that wrote it",
+    )
+    with pytest.raises(ValueError, match="unsupported by textContent"):
+        build_demo_interactive_payload(wrapped_link_md, base_fixture)
+
+    extra_section_md = filled_md.replace(
+        "## Working with Git",
+        "## 6. Extra step\n\nExtra text.\n\n## Working with Git",
+    )
+    with pytest.raises(ValueError, match="unmapped numbered section"):
+        build_demo_interactive_payload(extra_section_md, base_fixture)
+
+    dup_section_md = filled_md.replace(
+        "## 4. A correction replaces it",
+        "## 3. A correction replaces it",
+    )
+    with pytest.raises(ValueError, match="duplicate section"):
+        build_demo_interactive_payload(dup_section_md, base_fixture)
+
+    bad_record_edge = json.loads(json.dumps(base_fixture))
+    bad_record_edge["arms"]["unitares"]["records"][4]["edges"][0]["relation"] = "replaces"
+    with pytest.raises(ValueError, match="missing from visible records"):
+        build_demo_interactive_payload(filled_md, bad_record_edge)
+
+    with pytest.raises(ValueError, match="<h2>"):
+        inject_demo_interactive("<h1>Title</h1><p>No section heading</p>", "<section/>")
 
 
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):
