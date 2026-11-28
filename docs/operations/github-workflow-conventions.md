@@ -1080,8 +1080,13 @@ Draft PRs cannot be queued, so mark ready first.
   touching the manifest, its checker
   (`scripts/dev/check_governance_sensitivity.sh`) or its workflow
   (`.github/workflows/governance-sensitivity.yml`) is never armed: the
-  operator merges it by hand. The same goes for anything the queue cannot
-  read (the manifest, the diff, the review policy, the label time).
+  operator merges it by hand. The same goes for a 300+-file diff, a matched
+  file with no patch, or an unreadable review policy or label time; transient
+  base-manifest or compare read blips retry once in-tick and hold briefly
+  (`PR_QUEUE_UNREADABLE_TICKS`, default 3) without posting false sensitivity
+  notices, after which a persistently unreadable manifest fails the tick and a
+  persistently unreadable PR compare posts one hand-merge notice and skips so
+  later PRs keep landing.
   `PR_QUEUE_SENSITIVE_DELEGATED=0` restores the earlier never-arm rule. The
   window works because agents follow it, not because anything enforces it:
   agents can act under the operator's GitHub login.
