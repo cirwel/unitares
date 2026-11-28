@@ -53,6 +53,14 @@ The four hints, as this file uses them:
     overwriting a threshold or a per-pair coordination record. Append-only
     writes are NOT destructive: a new check-in, a new outcome row and a new
     knowledge finding all leave every prior row intact, so they are False.
+    Moving a current-state pointer is not destructive either, when the history
+    behind it survives: ``bind_session`` re-points a session, and a resume
+    (``self_recovery``, ``operator_resume_agent``) clears ``paused_at`` and the
+    loop-cooldown stamps, but the pause and the resume each land as an
+    append-only lifecycle event (src/agent_loop_detection.py,
+    src/mcp_handlers/lifecycle/helpers.py ``_resume_with_persistence``), so
+    nothing the caller had is lost. The test is whether a record is gone or
+    replaced, not whether a field changed value.
     Meaningless when ``readOnlyHint`` is True, and left False there. A router
     is destructive when ANY of its actions is: ``config`` carries
     ``set_thresholds``' overwrite because ``action='set'`` dispatches straight
@@ -465,21 +473,24 @@ TOOL_ANNOTATIONS: Dict[str, Dict[str, Any]] = {
         "openWorldHint": False,
     },
     "self_recovery": {
-        # A resume drops the pause and cooldown timestamps, and every attempt
-        # — refused ones included — stamps a fresh recovery_attempt_at.
+        # Not idempotent: every attempt, refused ones included, stamps a fresh
+        # recovery_attempt_at. Not destructive: a resume clears the live pause
+        # and cooldown stamps, but the pause and the resume both stay in the
+        # append-only lifecycle log, and quick/review also write a KG audit note.
         "title": "Paused Agent Self-Recovery",
         "readOnlyHint": False,
-        "destructiveHint": True,
+        "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": False,
     },
     "operator_resume_agent": {
         # Clears the target's paused status and additionally writes an
         # operator_intervention row into the knowledge graph, so a repeat call
-        # is not a no-op.
+        # is not a no-op. Same resume helper as self_recovery, so the same
+        # reason it is not destructive: the pause history survives.
         "title": "Operator Resume Agent",
         "readOnlyHint": False,
-        "destructiveHint": True,
+        "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": False,
     },
