@@ -57,10 +57,14 @@ checked again on every tick and disarmed if a condition stops holding.
 `scripts/dev/check_governance_sensitivity.sh` or
 `.github/workflows/governance-sensitivity.yml` is never armed by the queue,
 whatever else holds, and whether or not the manifest still lists that file.
-The operator merges it by hand. So does anything the queue cannot read: the
-manifest, the diff (or one long enough to be truncated), the review policy,
-the label's time, or a matched file whose patch GitHub does not return. A PR
-from a fork is never armed either.
+The operator merges it by hand. So does a 300+-file diff that could be
+truncated, an unreadable review policy or label time, or a matched file whose
+patch GitHub does not return. A failure to read the base manifest or a PR's
+compare is retried once in-tick and held without posting false sensitivity
+notices for up to `PR_QUEUE_UNREADABLE_TICKS` (default 3) ticks; past that
+bound, a persistently unreadable manifest fails the queue tick, while a
+persistently unreadable PR compare posts one hand-merge notice and is skipped
+so PRs behind it continue to land. A PR from a fork is never armed either.
 
 `PR_QUEUE_SENSITIVE_DELEGATED=0` in the queue's environment restores the
 earlier rule: no governance-sensitive PR is armed.

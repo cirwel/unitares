@@ -97,10 +97,14 @@
 #     re-labelling starts the 24 hours again.
 # A PR waiting on its effect line or its window is skipped, not waited for,
 # so it never holds the slot. The manifest, its checker and its CI workflow stay hand-merge only
-# (HAND_MERGE_ONLY_PATHS), and anything the queue cannot read (the manifest,
-# the diff, the review policy, the label time, a matched file with no patch)
-# is hand-merge too. PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule:
-# never armed. Like the pin above, the veto window is a convention among
+# (HAND_MERGE_ONLY_PATHS), and a 300+-file compare, a matched file with no
+# patch, an unreadable review policy, or an unreadable label time is hand-merge
+# too. Transient base/manifest or compare read failures retry once in-tick and
+# hold without false PR notices for up to PR_QUEUE_UNREADABLE_TICKS (default 3)
+# ticks; past that bound, an unreadable manifest fails the tick (exit 1) and an
+# unreadable PR compare posts one hand-merge notice and skips so later PRs keep
+# landing. PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule: never armed.
+# Like the pin above, the veto window is a convention among
 # cooperating agents, not a boundary against one that shares the login.
 #
 # Deliberately out of scope — these stay human or session judgment:
@@ -267,9 +271,32 @@ command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
 READ_RETRY_DELAY="${PR_QUEUE_READ_RETRY_DELAY:-1}"
 gh_read_once_retry() {
-  "$@" 2>/dev/null && return 0
+  local out
+  if out=$("$@" 2>/dev/null); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
   [ "$READ_RETRY_DELAY" != "0" ] && sleep "$READ_RETRY_DELAY"
-  "$@" 2>/dev/null
+  out=$("$@" 2>/dev/null) || return 1
+  [ -z "$out" ] || printf '%s\n' "$out"
+}
+
+UNREADABLE_TICKS="${PR_QUEUE_UNREADABLE_TICKS:-3}"
+UNREADABLE_FILE="$STATE_FILE.unreadable"
+record_unreadable() {  # <slot> <head>
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$UNREADABLE_FILE")" 2>/dev/null && echo "$1 $2" >>"$UNREADABLE_FILE" 2>/dev/null
+}
+unreadable_ticks() {  # <slot> <head> -> count (0 when the record cannot be read)
+  local c
+  [ -f "$UNREADABLE_FILE" ] || { echo 0; return 0; }
+  c=$(awk -v s="$1" -v h="$2" '$1 == s && $2 == h { c++ } END { print c + 0 }' "$UNREADABLE_FILE" 2>/dev/null) || c=""
+  case "$c" in ''|*[!0-9]*) echo 0 ;; *) echo "$c" ;; esac
+}
+clear_unreadable() {  # <slot>
+  [ "$DRY_RUN" = "1" ] && return 0
+  [ -f "$UNREADABLE_FILE" ] || return 0
+  awk -v s="$1" '$1 != s' "$UNREADABLE_FILE" >"$UNREADABLE_FILE.tmp" 2>/dev/null && mv "$UNREADABLE_FILE.tmp" "$UNREADABLE_FILE" 2>/dev/null || true
 }
 
 # Pin the base before reading the PRs, so the rules, the diffs and the PRs'
@@ -585,7 +612,7 @@ auth_path() {  # <head-sha> -> prints the auth path it touches; fails when none
   [ "$auth_state" = "off" ] && return 1
   [ "$auth_state" = "ok" ] || { echo "the review policy could not be read"; return 0; }
   local cmp
-  cmp=$(gh api "repos/$REPO/compare/${tick_base_sha:-$BASE}...$1" 2>/dev/null) \
+  cmp=$(gh_read_once_retry gh api "repos/$REPO/compare/${tick_base_sha:-$BASE}...$1") \
     && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
     || { echo "its diff could not be checked"; return 0; }
   second_family_file "$cmp"
@@ -606,9 +633,10 @@ second_family_file() {  # <compare-json> -> prints the first file on the policy'
 # The label is best-effort (CI tolerates failing to apply it), so before
 # arming, the queue checks the diff itself against the same manifest CI uses
 # (scripts/dev/check_governance_sensitivity.sh's --diff rules), read from
-# GitHub's compare of base...<head>. It fails closed: no manifest, an
-# unreadable or possibly truncated compare, or a matched file with no patch to
-# inspect all count as sensitive, and as hand-merge only.
+# GitHub's compare of base...<head>. It fails closed: a 300+-file compare or a
+# matched file with no patch counts as hand-merge only, while an unreadable
+# manifest or compare holds briefly without posting false sensitivity notices
+# and escalates after PR_QUEUE_UNREADABLE_TICKS ticks.
 # The manifest is read from the base branch through GitHub, not from this
 # script's checkout: the deploy tree can lag master, and CI judges against
 # master's manifest. PR_QUEUE_SENSITIVITY_MANIFEST names a local file instead
@@ -636,14 +664,15 @@ load_manifest() {
   fi
 }
 # <pr-json> -> "<class><TAB><why>"; fails when the PR is not sensitive.
-#   unreadable  the manifest or compare could not be read this tick; fail
-#               closed without posting a false sensitivity notice on the PR
-#   hand        the operator merges it by hand: delegation is off, or a
-#               300+-file compare / omitted patch prevents full inspection
-#   reserved    it touches a HAND_MERGE_ONLY_PATHS file
-#   unreviewed  the review policy does not put this diff under two-family
-#               review, so a passing `review` would not show two families
-#   delegable   the queue may land it once delegation_blocker clears
+#   unreadable-manifest  the base manifest could not be read this tick
+#   unreadable-diff      the PR compare could not be read this tick
+#   hand                 the operator merges it by hand: delegation is off, or
+#                        a 300+-file compare / omitted patch prevents inspection
+#   reserved             it touches a HAND_MERGE_ONLY_PATHS file
+#   unreviewed           the review policy does not put this diff under
+#                        two-family review, so a passing `review` would not show
+#                        two families
+#   delegable            the queue may land it once delegation_blocker clears
 # Every manifest row is read before deciding, so one matched file with no
 # patch fails the whole diff closed even when another row matched first.
 sensitive_verdict() {
@@ -658,11 +687,11 @@ sensitive_verdict() {
     # judge; with it on, the label and the hand-merge-only files still count.
     [ "$SENSITIVE_DELEGATED" = "0" ] && return 1
   elif [ "$manifest_state" != "ok" ]; then
-    printf 'unreadable\tthe sensitivity manifest could not be read\n'; return 0
+    printf 'unreadable-manifest\tthe sensitivity manifest could not be read\n'; return 0
   fi
   cmp=$(gh_read_once_retry gh api "repos/$REPO/compare/${base_sha:-$BASE}...$(jq -r .headRefOid <<<"$1")") \
     && jq -e '(.files | type) == "array"' <<<"$cmp" >/dev/null 2>&1 \
-    || { printf 'unreadable\tits diff could not be checked\n'; return 0; }
+    || { printf 'unreadable-diff\tits diff could not be checked\n'; return 0; }
   jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
     || { printf 'hand\tits diff has 300+ files and could not be checked in full\n'; return 0; }
   if [ "$manifest_state" = "ok" ]; then
@@ -767,6 +796,18 @@ review_waived() {
 }
 
 load_manifest  # once per tick, in this shell (sensitive_verdict runs in subshells)
+if [ "$manifest_state" = "ok" ] || [ "$manifest_state" = "off" ]; then
+  clear_unreadable "manifest"
+elif ! record_unreadable "manifest" "base"; then
+  log "sensitivity manifest could not be read, and state could not be recorded ($UNREADABLE_FILE)"
+  ATTENTION_RC=1
+else
+  manifest_tries=$(unreadable_ticks "manifest" "base")
+  if [ "$manifest_tries" -ge "$UNREADABLE_TICKS" ]; then
+    log "sensitivity manifest could not be read across $manifest_tries consecutive ticks; failing tick"
+    ATTENTION_RC=1
+  fi
+fi
 load_review_policy  # likewise for auth_path
 
 # --- 0. declared readiness ------------------------------------------------------
@@ -822,14 +863,30 @@ while read -r pr; do
   if verdict=$(sensitive_verdict "$pr"); then
     class="${verdict%%$'\t'*}"
     why="${verdict#*$'\t'}"
-    if [ "$class" = "unreadable" ]; then
+    if [ "$class" = "unreadable-manifest" ]; then
       log "#$n declared ready, but $why; declaration skipped this tick"
       continue
     fi
+    if [ "$class" = "unreadable-diff" ]; then
+      if ! record_unreadable "declared-$n" "$head"; then
+        log "#$n declared ready, $why, and state could not be recorded ($UNREADABLE_FILE); declaration skipped this tick"
+        continue
+      fi
+      tries=$(unreadable_ticks "declared-$n" "$head")
+      if [ "$tries" -ge "$UNREADABLE_TICKS" ]; then
+        log "#$n declared ready, but $why ($tries times on ${head:0:8}); skipped"
+        notify "$n" declared-unreadable "$head" "not promoted: $why across $tries checks, so governance sensitivity could not be verified and \`$READY_LABEL\` cannot promote this head automatically. Its owner marks it ready and applies \`$LABEL\` once validation has passed, or merges by hand (docs/dev/GOVERNANCE_SENSITIVITY.md)."
+      else
+        log "#$n declared ready, but $why ($tries of $UNREADABLE_TICKS on ${head:0:8}); declaration skipped this tick"
+      fi
+      continue
+    fi
+    clear_unreadable "declared-$n"
     log "#$n declared ready but touches a governance-sensitive surface ($why); skipped"
     notify "$n" declared-sensitive "$head" "not promoted: this diff touches a governance-sensitive surface (\`$why\`), so \`$READY_LABEL\` does not apply to it. Its owner marks it ready and applies \`$LABEL\` once validation has passed (docs/dev/GOVERNANCE_SENSITIVITY.md)."
     continue
   fi
+  clear_unreadable "declared-$n"
   hold=""
   for l in $READY_HOLD_LABELS; do
     q -e --arg l "$l" 'labelled($l)' <<<"$pr" >/dev/null && { hold="$l"; break; }
@@ -1091,7 +1148,7 @@ armed_sensitive_reason() {
   local class="${3%%$'\t'*}" why="${3#*$'\t'}" at blocker
   case "$class" in
     delegable) ;;
-    unreadable) echo "sensitivity check could not run ($why)"; return 0 ;;
+    unreadable-manifest|unreadable-diff) echo "sensitivity check could not run ($why)"; return 0 ;;
     reserved) echo "it touches $why, which stays hand-merge only"; return 0 ;;
     unreviewed) echo "it touches a governance-sensitive surface ($why) outside two-family review, which only the operator merges"; return 0 ;;
     *) echo "it touches a governance-sensitive surface ($why), which only the operator merges"; return 0 ;;
@@ -1371,16 +1428,31 @@ while read -r labelled_at n head; do
   fi
 
   # Before any wait (mergeability, review): a sensitive PR the queue will not
-  # take yet is skipped, so it never holds the order. That covers a hand-merge
-  # PR, one whose body lacks its effect line, and one inside its veto window.
+  # take yet is skipped, so it never holds the order. An unreadable manifest or
+  # compare holds briefly without false notices, then fails the tick (manifest)
+  # or posts a hand-merge notice and skips (compare) after UNREADABLE_TICKS.
   delegated=""
   if verdict=$(sensitive_verdict "$pr"); then
     class="${verdict%%$'\t'*}"
     why="${verdict#*$'\t'}"
+    [ "$class" = "unreadable-manifest" ] || [ "$class" = "unreadable-diff" ] || clear_unreadable "queue-$n"
     case "$class" in
       delegable) ;;
-      unreadable)
+      unreadable-manifest)
         log "#$n queued, but $why; nothing armed this tick"
+        exit 0 ;;
+      unreadable-diff)
+        if ! record_unreadable "queue-$n" "$head"; then
+          log "#$n queued, $why, and state could not be recorded ($UNREADABLE_FILE); nothing armed this tick"
+          exit 0
+        fi
+        tries=$(unreadable_ticks "queue-$n" "$head")
+        if [ "$tries" -ge "$UNREADABLE_TICKS" ]; then
+          log "#$n queued, but $why ($tries times on ${head:0:8}); the operator merges it by hand; no longer holding the queue, trying the next PR"
+          notify "$n" sensitive-unreadable "$head" "not armed: $why across $tries checks, so governance sensitivity could not be verified and the operator merges it by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR, and retries this check on later ticks."
+          continue
+        fi
+        log "#$n queued, but $why ($tries of $UNREADABLE_TICKS on ${head:0:8}); nothing armed this tick"
         exit 0 ;;
       reserved)
         log "#$n touches $why, which stays hand-merge only; the operator merges it by hand; skipped"
@@ -1412,6 +1484,8 @@ while read -r labelled_at n head; do
       continue
     fi
     delegated=" review"
+  else
+    clear_unreadable "queue-$n"
   fi
 
   if dep=$(dependency_open "$pr"); then

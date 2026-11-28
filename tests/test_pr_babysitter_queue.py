@@ -1625,45 +1625,125 @@ def test_unreadable_manifest_or_diff_posts_no_false_sensitive_notices_and_preser
     assert "touches a governance-sensitive surface" not in out
 
     # Likewise when #1 is already pinned in the queue and its compare transiently
-    # fails on a later tick: neither #1 nor #2 is armed, and no false sensitive
-    # notice is posted.
+    # fails on a later tick: neither #1 nor #2 is armed on ticks 1..2, and no
+    # false sensitive notice is posted; at PR_QUEUE_UNREADABLE_TICKS (3), #1
+    # gets an accurate unreadable-diff hand-merge notice and #2 arms behind it;
+    # and if #1's compare recovers on a later tick, #1 clears its streak and arms.
     d2 = tmp_path / "cmp_fail"
     d2.mkdir()
     t1 = _timeline(12)
+    t2 = _timeline(8)
     (d2 / "state").mkdir()
-    (d2 / "state" / "approvals").write_text(f"1 aaa {t1[-1]['created_at']} fp1\n")
-    calls2, out2 = _run(
+    (d2 / "state" / "approvals").write_text(
+        f"1 aaa {t1[-1]['created_at']} fp1\n2 bbb {t2[-1]['created_at']} fp2\n"
+    )
+    for tick in (1, 2):
+        calls2, out2 = _run(
+            d2,
+            [_pr(1, head="aaa"), _pr(2, head="bbb")],
+            timelines={1: t1, 2: t2},
+            compares={"aaa": None, "bbb": PLAIN},
+            PR_QUEUE_NOTIFY="1",
+        )
+        assert calls2 == []
+        assert _notices(calls2) == []
+        assert f"#1 queued, but its diff could not be checked ({tick} of 3 on aaa); nothing armed this tick" in out2
+
+    calls3, out3 = _run(
         d2,
         [_pr(1, head="aaa"), _pr(2, head="bbb")],
-        timelines={1: t1, 2: _timeline(8)},
+        timelines={1: t1, 2: t2},
         compares={"aaa": None, "bbb": PLAIN},
         PR_QUEUE_NOTIFY="1",
     )
-    assert calls2 == []
-    assert _notices(calls2) == []
-    assert "#1 queued, but its diff could not be checked; nothing armed this tick" in out2
+    notices3 = _notices(calls3)
+    assert len(notices3) == 1
+    assert "sensitive-unreadable aaa" in notices3[0]
+    assert "touches a governance-sensitive surface" not in notices3[0]
+    assert _arm(2, "bbb") in calls3
+    assert "#1 queued, but its diff could not be checked (3 times on aaa)" in out3
+
+    # Once #2 has merged and #1's compare recovers, #1 arms on its own.
+    calls4, _ = _run(
+        d2,
+        [_pr(1, head="aaa")],
+        timelines={1: t1},
+        compares={"aaa": PLAIN},
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert calls4 == [_arm(1, "aaa")]
+
+
+def test_persistently_unreadable_manifest_fails_tick_without_spamming_prs(tmp_path: Path) -> None:
+    declared = _declared(10, head="ddd")
+    for tick in (1, 2):
+        calls, out = _run(
+            tmp_path,
+            [declared, _pr(1, head="aaa")],
+            timelines={10: _declaration(), 1: _timeline(12)},
+            PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1",
+            PR_QUEUE_NOTIFY="1",
+        )
+        assert calls == []
+        assert _notices(calls) == []
+
+    # Third consecutive unreadable-manifest tick exits non-zero (rc=1) for
+    # automation alerting, still without commenting on individual PRs.
+    d = tmp_path / "gh"
+    (d / "calls.log").write_text("")
+    res = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
+            "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_DIR": str(d),
+            "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_BASE": "master",
+            "PR_QUEUE_STATE_FILE": str(tmp_path / "state" / "approvals"),
+            "PR_QUEUE_NOTIFY": "1",
+            "PR_QUEUE_READ_RETRY_DELAY": "0",
+            "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert res.returncode == 1
+    assert "across 3 consecutive ticks; failing tick" in res.stdout
+    assert (d / "calls.log").read_text().strip() == ""
 
 
 def test_manifest_read_recovers_on_single_transient_api_blip(tmp_path: Path) -> None:
     d = tmp_path / "gh"
     d.mkdir(parents=True)
-    # Fail the first /contents/ read, then populate manifest_remote.tsv on retry.
+    # Emit HTTP error JSON to stdout on the first /commits/ and /contents/ reads
+    # so gh_read_once_retry must discard failed stdout instead of concatenating it.
     orig_fake_gh = FAKE_GH.replace(
+        '    */commits/*)\n',
+        '    */commits/*)\n'
+        '      if [ ! -f "$d/base_tried_once" ]; then\n'
+        '        : > "$d/base_tried_once"\n'
+        '        echo \'{"message":"Bad Gateway"}\'\n'
+        '        exit 1\n'
+        '      fi\n',
+    ).replace(
         '      [ -f "$d/manifest_remote.tsv" ] || exit 1\n',
         '      if [ ! -f "$d/manifest_tried_once" ]; then\n'
         '        : > "$d/manifest_tried_once"\n'
+        '        echo \'{"message":"Service Unavailable"}\'\n'
         '        exit 1\n'
         '      fi\n'
         '      [ -f "$d/manifest_remote.tsv" ] || exit 1\n',
     )
-    (d / "manifest_remote.tsv").write_text("# rules\n")
-    calls, out = _run(
+    (d / "manifest_remote.tsv").write_text("# rules\nf\t-\tanti-gaming test\n")
+    _run(
         tmp_path,
         [_pr(1, head="aaa")],
         compares={"aaa": PLAIN},
         PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1",
     )
-    # _run writes FAKE_GH fresh; patch gh script and re-invoke once to verify retry.
+    # _run writes FAKE_GH fresh; patch gh script and re-invoke once to verify retry
+    # neither concatenates error JSON onto base_sha nor corrupts decoded manifest_rows.
     (d / "gh").write_text(orig_fake_gh)
     (d / "gh").chmod(0o755)
     (d / "calls.log").write_text("")
@@ -1688,6 +1768,34 @@ def test_manifest_read_recovers_on_single_transient_api_blip(tmp_path: Path) -> 
     assert res.returncode == 0, res.stdout + res.stderr
     retry_calls = [line for line in (d / "calls.log").read_text().splitlines() if line]
     assert retry_calls == [_arm(1, "aaa")]
+
+    # Also verify a sensitive diff on `f` is still caught after retry (not decoded as garbage).
+    (d / "base_tried_once").unlink()
+    (d / "manifest_tried_once").unlink()
+    (d / "prs.json").write_text(json.dumps([_pr(2, head="ccc")]))
+    (d / "timeline_2.json").write_text(json.dumps(_timeline(10)))
+    (d / "compare_ccc.json").write_text(json.dumps(CHANGE_A))
+    (d / "calls.log").write_text("")
+    res_sens = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
+            "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_DIR": str(d),
+            "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_BASE": "master",
+            "PR_QUEUE_STATE_FILE": str(tmp_path / "state_retry_sens" / "approvals"),
+            "PR_QUEUE_NOTIFY": "0",
+            "PR_QUEUE_READ_RETRY_DELAY": "0",
+            "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert res_sens.returncode == 0, res_sens.stdout + res_sens.stderr
+    assert (d / "calls.log").read_text().strip() == ""
+    assert "governance-sensitive surface (f)" in res_sens.stdout
 
 
 def test_a_fresh_operator_armed_label_reserves_the_slot(tmp_path: Path) -> None:
