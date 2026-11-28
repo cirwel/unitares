@@ -797,6 +797,36 @@ class AuditLogger:
         )
         self._schedule_postgres_write(asdict(entry))
 
+    def log_threshold_modification(
+        self,
+        *,
+        agent_id: str,
+        event_type: str,
+        details: Dict,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """Record an administrative runtime threshold modification attempt or result.
+
+        ``event_type`` is ``"threshold_modification_attempt"`` or
+        ``"threshold_modification_success"``. ``confidence=0.0`` keeps JSONL and
+        Postgres confidence-before-outcome readers from treating an operator
+        threshold write as an agent forecast.
+        """
+        if event_type not in (
+            "threshold_modification_attempt",
+            "threshold_modification_success",
+        ):
+            raise ValueError(f"Unsupported threshold audit event_type: {event_type}")
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            session_id=session_id,
+            event_type=event_type,
+            confidence=0.0,
+            details=dict(details or {}),
+        )
+        self._write_entry(entry)
+
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
 

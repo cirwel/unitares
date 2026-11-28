@@ -161,21 +161,101 @@ class TestThresholdRouteRemoved:
             assert "admin" in json.dumps(data).lower()
 
     @pytest.mark.asyncio
-    async def test_admin_tag_still_permitted(self):
+    async def test_admin_tag_still_permitted(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, get_thresholds
+
         server = make_mock_server()
         meta = make_agent_meta(tags=["admin"], total_updates=1)
         server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
 
-        with patch("src.mcp_handlers.admin.config.mcp_server", server), \
-             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
-            from src.mcp_handlers.admin.config import handle_set_thresholds
-            result = await handle_set_thresholds({
-                "agent_id": "agent-1",
-                "thresholds": {},
-            })
-            data = _parse(result)
-            # Reaches the threshold-writing path rather than the auth rejection.
-            assert "admin-only" not in json.dumps(data)
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                keyed_csid = "agent-11111111-222-aaaaaaaaaaaaaaaaaaaa"
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "client_session_id": keyed_csid,
+                    "thresholds": {"void_threshold_initial": 0.22},
+                })
+                body = _parse(result)
+                assert body["success"] is True
+                data = body.get("data", body)
+                assert data["success"] is True
+                assert data["updated"] == ["void_threshold_initial"]
+                assert data["errors"] == []
+                assert data["persistence"] == "process_memory_only"
+                assert data["survives_restart"] is False
+                assert "process" in data["persistence_note"]
+                assert get_thresholds()["void_threshold_initial"] == 0.22
+
+                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                assert [r["event_type"] for r in rows] == [
+                    "threshold_modification_attempt",
+                    "threshold_modification_success",
+                ]
+                for row in rows:
+                    assert row["agent_id"] == "agent-1"
+                    assert row["confidence"] == 0.0
+                    assert row["session_id"].startswith("csid:")
+                    assert row["session_id"] != keyed_csid
+                assert rows[0]["details"] == {
+                    "thresholds": {"void_threshold_initial": 0.22},
+                    "validate": True,
+                }
+                assert rows[1]["details"] == {"updated": ["void_threshold_initial"]}
+        finally:
+            clear_overrides()
+
+    @pytest.mark.asyncio
+    async def test_admin_invalid_threshold_logs_attempt_only_and_leaves_overrides_unchanged(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, describe_thresholds
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {
+                        "unknown_threshold": 0.5,
+                        "risk_approve_threshold": True,
+                        "void_threshold_initial": float("nan"),
+                    },
+                })
+                body = _parse(result)
+                data = body.get("data", body)
+                assert data["success"] is False
+                assert data["updated"] == []
+                assert len(data["errors"]) == 3
+                assert data["persistence"] == "process_memory_only"
+                assert data["survives_restart"] is False
+                assert all(
+                    d["source"] == "class_default"
+                    for d in describe_thresholds().values()
+                )
+
+                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                assert [r["event_type"] for r in rows] == ["threshold_modification_attempt"]
+                assert rows[0]["confidence"] == 0.0
+        finally:
+            clear_overrides()
 
     def test_reputation_route_not_reintroduced(self):
         """Source guard: the escalation was a single boolean. If someone

@@ -5,6 +5,7 @@ Allows runtime access and modification of governance thresholds
 without requiring code changes or redeployment.
 """
 
+import math
 from typing import Dict, Optional, Any
 
 # Ensure project root is in path for imports
@@ -107,24 +108,41 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
         if name not in valid_ranges:
             errors.append(f"Unknown threshold: {name}")
             continue
-        
+
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            errors.append(f"{name}={value!r} must be a finite number")
+            continue
+
+        numeric_value = float(value)
         if validate:
             min_val, max_val = valid_ranges[name]
-            if not (min_val <= value <= max_val):
+            if not (min_val <= numeric_value <= max_val):
                 errors.append(f"{name}={value} out of range [{min_val}, {max_val}]")
                 continue
-        
+
         # Additional logical validation: enforce APPROVE < REVISE < REJECT invariant.
         # Reject is not writable (see comment at line 38) — always the class default.
         if name in ("risk_approve_threshold", "risk_revise_threshold"):
-            effective_approve = thresholds.get(
+            raw_approve = thresholds.get(
                 "risk_approve_threshold",
                 _runtime_overrides.get("risk_approve_threshold", config.RISK_APPROVE_THRESHOLD),
             )
-            effective_revise = thresholds.get(
+            raw_revise = thresholds.get(
                 "risk_revise_threshold",
                 _runtime_overrides.get("risk_revise_threshold", config.RISK_REVISE_THRESHOLD),
             )
+            if (
+                isinstance(raw_approve, bool)
+                or not isinstance(raw_approve, (int, float))
+                or not math.isfinite(float(raw_approve))
+                or isinstance(raw_revise, bool)
+                or not isinstance(raw_revise, (int, float))
+                or not math.isfinite(float(raw_revise))
+            ):
+                errors.append("risk_approve_threshold and risk_revise_threshold must be finite numbers")
+                continue
+            effective_approve = float(raw_approve)
+            effective_revise = float(raw_revise)
             effective_reject = config.RISK_REJECT_THRESHOLD
 
             if not (effective_approve < effective_revise < effective_reject):
@@ -134,8 +152,8 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
                     f"< REJECT({effective_reject}) must hold"
                 )
                 continue
-        
-        _runtime_overrides[name] = float(value)
+
+        _runtime_overrides[name] = numeric_value
         updated.append(name)
     
     return {
