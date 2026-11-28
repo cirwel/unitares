@@ -265,9 +265,16 @@ minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | f
 
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
+READ_RETRY_DELAY="${PR_QUEUE_READ_RETRY_DELAY:-1}"
+gh_read_once_retry() {
+  "$@" 2>/dev/null && return 0
+  [ "$READ_RETRY_DELAY" != "0" ] && sleep "$READ_RETRY_DELAY"
+  "$@" 2>/dev/null
+}
+
 # Pin the base before reading the PRs, so the rules, the diffs and the PRs'
 # merge states all describe the same base commit; arming re-checks it.
-tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tick_base_sha=""
+tick_base_sha=$(gh_read_once_retry gh api "repos/$REPO/commits/$BASE" --jq .sha) || tick_base_sha=""
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
@@ -562,12 +569,14 @@ auth_globs=""
 auth_state=""  # "", "ok", "off" or "unreadable"
 load_review_policy() {
   [ -n "$auth_state" ] && return 0
-  local raw=""
+  local raw="" encoded=""
   if [ -n "${PR_QUEUE_REVIEW_POLICY+set}" ]; then
     if [ -z "$PR_QUEUE_REVIEW_POLICY" ]; then auth_state="off"; return 0; fi
     raw=$(cat "$PR_QUEUE_REVIEW_POLICY" 2>/dev/null)
   elif [ -n "$tick_base_sha" ]; then
-    raw=$(gh api "repos/$REPO/contents/$REVIEW_POLICY_PATH_IN_REPO?ref=$tick_base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null)
+    encoded=$(gh_read_once_retry gh api "repos/$REPO/contents/$REVIEW_POLICY_PATH_IN_REPO?ref=$tick_base_sha" --jq .content) \
+      && [ -n "$encoded" ] \
+      && raw=$(base64 -d <<<"$encoded" 2>/dev/null) || raw=""
   fi
   auth_globs=$(jq -er '.second_family_paths | if length > 0 then .[] else error end' <<<"$raw" 2>/dev/null) \
     && auth_state="ok" || auth_state="unreadable"
@@ -611,6 +620,7 @@ manifest_state=""  # "", "ok" or "unreadable"
 base_sha=""        # the base's commit this tick judges against, for rules and diff alike
 load_manifest() {
   [ -n "$manifest_state" ] && return 0
+  local encoded=""
   if [ -n "${PR_QUEUE_SENSITIVITY_MANIFEST+set}" ]; then
     if [ -z "$PR_QUEUE_SENSITIVITY_MANIFEST" ]; then manifest_state="off"; return 0; fi
     manifest_rows=$(cat "$PR_QUEUE_SENSITIVITY_MANIFEST" 2>/dev/null) && manifest_state="ok" || manifest_state="unreadable"
@@ -619,13 +629,17 @@ load_manifest() {
     # old diff or the reverse.
     base_sha="$tick_base_sha"
     [ -n "$base_sha" ] \
-      && manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
+      && encoded=$(gh_read_once_retry gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$base_sha" --jq .content) \
+      && [ -n "$encoded" ] \
+      && manifest_rows=$(base64 -d <<<"$encoded" 2>/dev/null) \
       && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
   fi
 }
 # <pr-json> -> "<class><TAB><why>"; fails when the PR is not sensitive.
-#   hand        the operator merges it by hand: delegation is off, or something
-#               could not be read
+#   unreadable  the manifest or compare could not be read this tick; fail
+#               closed without posting a false sensitivity notice on the PR
+#   hand        the operator merges it by hand: delegation is off, or a
+#               300+-file compare / omitted patch prevents full inspection
 #   reserved    it touches a HAND_MERGE_ONLY_PATHS file
 #   unreviewed  the review policy does not put this diff under two-family
 #               review, so a passing `review` would not show two families
@@ -644,11 +658,13 @@ sensitive_verdict() {
     # judge; with it on, the label and the hand-merge-only files still count.
     [ "$SENSITIVE_DELEGATED" = "0" ] && return 1
   elif [ "$manifest_state" != "ok" ]; then
-    printf 'hand\tthe sensitivity manifest could not be read\n'; return 0
+    printf 'unreadable\tthe sensitivity manifest could not be read\n'; return 0
   fi
-  cmp=$(gh api "repos/$REPO/compare/${base_sha:-$BASE}...$(jq -r .headRefOid <<<"$1")" 2>/dev/null) \
-    && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
-    || { printf 'hand\tits diff could not be checked\n'; return 0; }
+  cmp=$(gh_read_once_retry gh api "repos/$REPO/compare/${base_sha:-$BASE}...$(jq -r .headRefOid <<<"$1")") \
+    && jq -e '(.files | type) == "array"' <<<"$cmp" >/dev/null 2>&1 \
+    || { printf 'unreadable\tits diff could not be checked\n'; return 0; }
+  jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
+    || { printf 'hand\tits diff has 300+ files and could not be checked in full\n'; return 0; }
   if [ "$manifest_state" = "ok" ]; then
     while IFS=$'\t' read -r path symbol why; do
       [ -n "$path" ] || continue
@@ -804,7 +820,12 @@ while read -r pr; do
   # only when its owner, present to see validation pass, marks it ready and
   # applies the approval; an advance declaration is never promoted into it.
   if verdict=$(sensitive_verdict "$pr"); then
+    class="${verdict%%$'\t'*}"
     why="${verdict#*$'\t'}"
+    if [ "$class" = "unreadable" ]; then
+      log "#$n declared ready, but $why; declaration skipped this tick"
+      continue
+    fi
     log "#$n declared ready but touches a governance-sensitive surface ($why); skipped"
     notify "$n" declared-sensitive "$head" "not promoted: this diff touches a governance-sensitive surface (\`$why\`), so \`$READY_LABEL\` does not apply to it. Its owner marks it ready and applies \`$LABEL\` once validation has passed (docs/dev/GOVERNANCE_SENSITIVITY.md)."
     continue
@@ -1070,6 +1091,7 @@ armed_sensitive_reason() {
   local class="${3%%$'\t'*}" why="${3#*$'\t'}" at blocker
   case "$class" in
     delegable) ;;
+    unreadable) echo "sensitivity check could not run ($why)"; return 0 ;;
     reserved) echo "it touches $why, which stays hand-merge only"; return 0 ;;
     unreviewed) echo "it touches a governance-sensitive surface ($why) outside two-family review, which only the operator merges"; return 0 ;;
     *) echo "it touches a governance-sensitive surface ($why), which only the operator merges"; return 0 ;;
@@ -1357,6 +1379,9 @@ while read -r labelled_at n head; do
     why="${verdict#*$'\t'}"
     case "$class" in
       delegable) ;;
+      unreadable)
+        log "#$n queued, but $why; nothing armed this tick"
+        exit 0 ;;
       reserved)
         log "#$n touches $why, which stays hand-merge only; the operator merges it by hand; skipped"
         notify "$n" sensitive-reserved "$head" "not armed: this diff touches \`$why\`. The sensitivity manifest, its checker and its CI workflow stay hand-merge only, so the operator merges it by hand (docs/dev/GOVERNANCE_SENSITIVITY.md). The queue has moved on to the next PR."

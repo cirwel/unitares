@@ -286,6 +286,7 @@ def _run(
             "PR_QUEUE_BASE": "master",
             "PR_QUEUE_STATE_FILE": str(state_file),
             "PR_QUEUE_NOTIFY": "0",
+            "PR_QUEUE_READ_RETRY_DELAY": "0",
             "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
             "PR_QUEUE_SENSITIVITY_MANIFEST": str(_empty_manifest(tmp_path)),
             # The queue's default is no extra required check (review is
@@ -299,7 +300,8 @@ def _run(
             "PR_BABYSITTER_REPO": "o/r",
             "PR_QUEUE_BASE": "master",
             "PR_QUEUE_STATE_FILE": str(state_file),
-            "PR_QUEUE_NOTIFY": "0",
+            "PR_QUEUE_NOTIFY": env.get("PR_QUEUE_NOTIFY", "0"),
+            "PR_QUEUE_READ_RETRY_DELAY": "0",
             "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
         },
         text=True,
@@ -1600,6 +1602,92 @@ def test_an_unreadable_remote_manifest_fails_closed(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1")
     assert calls == []
     assert "manifest could not be read" in out
+
+
+def test_unreadable_manifest_or_diff_posts_no_false_sensitive_notices_and_preserves_order(tmp_path: Path) -> None:
+    # Regression for cirwel/unitares#3385, #3384, #3409: a transient failure to
+    # read the base manifest or a PR compare must still fail closed (neither
+    # promoting declared drafts nor arming queued PRs), without posting
+    # permanent comments claiming those diffs touch a governance-sensitive
+    # surface, and without letting #3 jump ahead of #2 in FIFO order.
+    declared = _declared(10, head="ddd")
+    calls, out = _run(
+        tmp_path,
+        [declared, _pr(1, head="aaa"), _pr(2, head="bbb")],
+        timelines={10: _declaration(), 1: _timeline(12), 2: _timeline(8)},
+        PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1",
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert calls == []
+    assert _notices(calls) == []
+    assert "#10 declared ready, but the sensitivity manifest could not be read" in out
+    assert "#1 queued, but the sensitivity manifest could not be read" in out
+    assert "touches a governance-sensitive surface" not in out
+
+    # Likewise when #1 is already pinned in the queue and its compare transiently
+    # fails on a later tick: neither #1 nor #2 is armed, and no false sensitive
+    # notice is posted.
+    d2 = tmp_path / "cmp_fail"
+    d2.mkdir()
+    t1 = _timeline(12)
+    (d2 / "state").mkdir()
+    (d2 / "state" / "approvals").write_text(f"1 aaa {t1[-1]['created_at']} fp1\n")
+    calls2, out2 = _run(
+        d2,
+        [_pr(1, head="aaa"), _pr(2, head="bbb")],
+        timelines={1: t1, 2: _timeline(8)},
+        compares={"aaa": None, "bbb": PLAIN},
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert calls2 == []
+    assert _notices(calls2) == []
+    assert "#1 queued, but its diff could not be checked; nothing armed this tick" in out2
+
+
+def test_manifest_read_recovers_on_single_transient_api_blip(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    # Fail the first /contents/ read, then populate manifest_remote.tsv on retry.
+    orig_fake_gh = FAKE_GH.replace(
+        '      [ -f "$d/manifest_remote.tsv" ] || exit 1\n',
+        '      if [ ! -f "$d/manifest_tried_once" ]; then\n'
+        '        : > "$d/manifest_tried_once"\n'
+        '        exit 1\n'
+        '      fi\n'
+        '      [ -f "$d/manifest_remote.tsv" ] || exit 1\n',
+    )
+    (d / "manifest_remote.tsv").write_text("# rules\n")
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, head="aaa")],
+        compares={"aaa": PLAIN},
+        PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1",
+    )
+    # _run writes FAKE_GH fresh; patch gh script and re-invoke once to verify retry.
+    (d / "gh").write_text(orig_fake_gh)
+    (d / "gh").chmod(0o755)
+    (d / "calls.log").write_text("")
+    state_file = tmp_path / "state_retry" / "approvals"
+    res = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
+            "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_DIR": str(d),
+            "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_BASE": "master",
+            "PR_QUEUE_STATE_FILE": str(state_file),
+            "PR_QUEUE_NOTIFY": "1",
+            "PR_QUEUE_READ_RETRY_DELAY": "0",
+            "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    retry_calls = [line for line in (d / "calls.log").read_text().splitlines() if line]
+    assert retry_calls == [_arm(1, "aaa")]
 
 
 def test_a_fresh_operator_armed_label_reserves_the_slot(tmp_path: Path) -> None:
