@@ -848,6 +848,69 @@ def _scan_block_references(
     for stmt in stmts:
         walk_scope_stmt(stmt)
 
+    if nested_names:
+        def _fn_shadowed_names(fn_node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+            bound = {
+                *(a.arg for a in fn_node.args.posonlyargs),
+                *(a.arg for a in fn_node.args.args),
+                *(a.arg for a in fn_node.args.kwonlyargs),
+            }
+            if fn_node.args.vararg is not None:
+                bound.add(fn_node.args.vararg.arg)
+            if fn_node.args.kwarg is not None:
+                bound.add(fn_node.args.kwarg.arg)
+            sub_a, sub_s, sub_c = _collect_lexical_scope_defs(fn_node.body)
+            bound.update(sub_a)
+            bound.update(sub_s)
+            bound.update(c.name for c in sub_c)
+            return bound
+
+        def _mark_descendant_closure_loads(node: ast.AST, active: set[str]) -> None:
+            if not active:
+                return
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in node.decorator_list:
+                    _mark_descendant_closure_loads(dec, active)
+                for dflt in node.args.defaults:
+                    _mark_descendant_closure_loads(dflt, active)
+                for kdflt in node.args.kw_defaults:
+                    if kdflt is not None:
+                        _mark_descendant_closure_loads(kdflt, active)
+                inner_active = active - _fn_shadowed_names(node)
+                if inner_active:
+                    for body_stmt in node.body:
+                        _mark_descendant_closure_loads(body_stmt, inner_active)
+                return
+            if isinstance(node, ast.ClassDef):
+                for dec in node.decorator_list:
+                    _mark_descendant_closure_loads(dec, active)
+                for base in node.bases:
+                    _mark_descendant_closure_loads(base, active)
+                for kw in node.keywords:
+                    _mark_descendant_closure_loads(kw.value, active)
+                for body_stmt in node.body:
+                    _mark_descendant_closure_loads(body_stmt, active)
+                return
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in active:
+                nested_escaped_names.add(node.id)
+                return
+            for child in ast.iter_child_nodes(node):
+                _mark_descendant_closure_loads(child, active)
+
+        for nfns in local_nested_async.values():
+            for nfn in nfns:
+                child_active = nested_names - _fn_shadowed_names(nfn)
+                for body_stmt in nfn.body:
+                    _mark_descendant_closure_loads(body_stmt, child_active)
+        for sfns in local_nested_sync.values():
+            for sfn in sfns:
+                child_active = nested_names - _fn_shadowed_names(sfn)
+                for body_stmt in sfn.body:
+                    _mark_descendant_closure_loads(body_stmt, child_active)
+        for cls in local_classes:
+            for body_stmt in cls.body:
+                _mark_descendant_closure_loads(body_stmt, nested_names)
+
     nested_bounded_map: dict[str, bool] = {}
     for nname, nfns in local_nested_async.items():
         is_b = (
@@ -1047,6 +1110,9 @@ def _check_p004_mcp_handlers(
     defined_by_module: dict[str, set[str]] = {}
     all_by_bare_name: dict[str, set[HandlerKey]] = {}
     async_funcs_by_key: dict[HandlerKey, list[ast.AsyncFunctionDef]] = {}
+    callable_defined_by_module: dict[str, set[str]] = {}
+    callable_by_bare_name: dict[str, set[HandlerKey]] = {}
+    callable_funcs_by_key: dict[HandlerKey, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
     ambiguous_keys: set[HandlerKey] = set()
     imports_by_module: dict[str, _ModuleImports] = {}
     raw_getters_by_module: dict[str, set[str]] = {}
@@ -1054,14 +1120,22 @@ def _check_p004_mcp_handlers(
     for rel_path, tree, _allowed, imports in handler_trees:
         imports_by_module[rel_path] = imports
         async_funcs, mod_getters = _collect_p004_module_facts(tree, imports)
+        _, sync_funcs, _ = _collect_lexical_scope_defs(tree.body)
         raw_getters_by_module[rel_path] = mod_getters
         defined_by_module[rel_path] = set(async_funcs)
+        callable_defined_by_module[rel_path] = set(async_funcs) | set(sync_funcs)
         for fname, fns in async_funcs.items():
             key = (rel_path, fname)
             async_funcs_by_key[key] = fns
+            callable_funcs_by_key.setdefault(key, []).extend(fns)
             if len(fns) > 1:
                 ambiguous_keys.add(key)
             all_by_bare_name.setdefault(fname, set()).add(key)
+            callable_by_bare_name.setdefault(fname, set()).add(key)
+        for sname, sfns in sync_funcs.items():
+            skey = (rel_path, sname)
+            callable_funcs_by_key.setdefault(skey, []).extend(sfns)
+            callable_by_bare_name.setdefault(sname, set()).add(skey)
 
     def is_mcp_entrypoint(fn: ast.AsyncFunctionDef) -> bool:
         for dec in fn.decorator_list:
@@ -1164,16 +1238,13 @@ def _check_p004_mcp_handlers(
             break
 
     # Propagate raw-Redis client and pipeline variables across positional & keyword arguments
-    client_seeds: dict[HandlerKey, set[str]] = {k: set() for k in async_funcs_by_key}
-    pipe_seeds: dict[HandlerKey, set[str]] = {k: set() for k in async_funcs_by_key}
-    raw_vars_by_key: dict[HandlerKey, tuple[set[str], set[str]]] = {}
+    client_seeds: dict[HandlerKey, set[str]] = {k: set() for k in callable_funcs_by_key}
+    pipe_seeds: dict[HandlerKey, set[str]] = {k: set() for k in callable_funcs_by_key}
     for _ in range(4):
         changed_params = False
-        for key, fns in async_funcs_by_key.items():
+        for key, fns in callable_funcs_by_key.items():
             rel_path, _fname = key
             imports = imports_by_module[rel_path]
-            agg_clients: set[str] = set()
-            agg_pipes: set[str] = set()
             for fn in fns:
                 local_getters, local_modules = _local_redis_imports(
                     fn, raw_getters_by_module[rel_path], imports.raw_redis_modules
@@ -1181,8 +1252,6 @@ def _check_p004_mcp_handlers(
                 cvars, pvars = _compute_func_raw_vars(
                     fn, client_seeds[key], pipe_seeds[key], local_getters, local_modules
                 )
-                agg_clients.update(cvars)
-                agg_pipes.update(pvars)
                 if not cvars and not pvars:
                     continue
                 for sub in ast.walk(fn):
@@ -1190,12 +1259,17 @@ def _check_p004_mcp_handlers(
                         continue
                     recv, cname = _call_func_name(sub)
                     targets, exact = _resolve_callee_targets(
-                        rel_path, recv, cname, imports, defined_by_module, all_by_bare_name
+                        rel_path,
+                        recv,
+                        cname,
+                        imports,
+                        callable_defined_by_module,
+                        callable_by_bare_name,
                     )
                     if not exact or len(targets) != 1:
                         continue
                     t_key = next(iter(targets))
-                    target_fns = async_funcs_by_key.get(t_key)
+                    target_fns = callable_funcs_by_key.get(t_key)
                     if not target_fns or len(target_fns) != 1:
                         continue
                     target_fn = target_fns[0]
@@ -1220,7 +1294,6 @@ def _check_p004_mcp_handlers(
                             if kw.value.id in pvars and kw.arg not in pipe_seeds[t_key]:
                                 pipe_seeds[t_key].add(kw.arg)
                                 changed_params = True
-            raw_vars_by_key[key] = (agg_clients, agg_pipes)
         if not changed_params:
             break
 
@@ -1253,7 +1326,8 @@ def _check_p004_mcp_handlers(
                 fn, module_raw_getters, imports.raw_redis_modules
             )
             if is_top_level:
-                c_seed, p_seed = raw_vars_by_key.get((rel_path, fn.name), (set(), set()))
+                c_seed = client_seeds.get((rel_path, fn.name), set())
+                p_seed = pipe_seeds.get((rel_path, fn.name), set())
             else:
                 c_seed, p_seed = inherited_client_vars, inherited_pipe_vars
             client_vars, pipe_vars = _compute_func_raw_vars(
@@ -1544,7 +1618,7 @@ def _check_p004_mcp_handlers(
             for sfn in sfns:
                 scan_func(
                     sfn,
-                    is_top_level=False,
+                    is_top_level=True,
                     inherited_client_vars=set(),
                     inherited_pipe_vars=set(),
                     enclosing_bounded=False,

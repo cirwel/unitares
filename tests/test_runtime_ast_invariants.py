@@ -790,7 +790,68 @@ async def spawn_lost(coro):
     ]
 
 
+def test_claude_followup_sibling_closure_escape_and_module_sync_param(tmp_path: Path) -> None:
+    # 1. Closure called unguarded from sibling closure (even if also guarded once in outer scope)
+    _write(
+        tmp_path,
+        "src/mcp_handlers/sibling_closure.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
 
+async def handler(k):
+    r = await get_redis()
+    async def _fetch():
+        return await r.get(k)
+    async def _retry():
+        return await _fetch()
+    def _shadowed(_fetch):
+        return _fetch
+    await asyncio.wait_for(_fetch(), timeout=1.0)
+    _shadowed(1)
+    return await _retry()
+""",
+    )
+    # 2. Closure escaped via inner sync def even when also guarded once in factory
+    _write(
+        tmp_path,
+        "src/mcp_handlers/inner_escape.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
 
+async def leaf():
+    r = await get_redis()
+    return await r.get("k")
 
+async def factory():
+    async def _closure():
+        return await leaf()
+    def get_cb():
+        return _closure
+    await asyncio.wait_for(_closure(), timeout=1.0)
+    return get_cb
+""",
+    )
+    # 3. Module-level sync helper receiving raw Redis client as parameter
+    _write(
+        tmp_path,
+        "src/mcp_handlers/mod_sync_param.py",
+        """\
+from src.cache.redis_client import get_redis
+
+def _cmd(client, k):
+    return client.get(k)
+
+async def handler(k):
+    r = await get_redis()
+    return await _cmd(r, k)
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/mcp_handlers/inner_escape.py", "P004", 6),
+        ("src/mcp_handlers/mod_sync_param.py", "P004", 4),
+        ("src/mcp_handlers/sibling_closure.py", "P004", 7),
+    ]
 
