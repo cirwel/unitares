@@ -103,6 +103,11 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
         complexity_discrepancy = None
         
         for entry in audit_entries:
+            # Match the check-in attestation (`auto_attest`), skipping other
+            # audit rows (shadow/threshold 0.0 rows, lifecycle/anomaly 1.0 rows,
+            # or `lambda1_skip` entries) when looking up pause-time confidence.
+            if entry.get('event_type') not in (None, 'auto_attest'):
+                continue
             # Match by discovery_id if available
             if session.discovery_id and entry.get('discovery_id') == session.discovery_id:
                 confidence = entry.get('confidence')
@@ -192,6 +197,8 @@ async def update_calibration_from_dialectic_disagreement(session: DialecticSessi
         complexity_discrepancy = None
         
         for entry in audit_entries:
+            if entry.get('event_type') not in (None, 'auto_attest'):
+                continue
             if session.discovery_id and entry.get('discovery_id') == session.discovery_id:
                 confidence = entry.get('confidence')
                 complexity_discrepancy = entry.get('complexity_discrepancy')

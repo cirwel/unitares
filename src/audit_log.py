@@ -6,6 +6,7 @@ JSONL is the raw truth log. PostgreSQL provides queryable indexing.
 """
 
 import json
+import math
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Iterator, List, Optional
@@ -113,6 +114,25 @@ def gap_suppressed_sub_action_class(sub_action: Optional[str]) -> str:
 # Module-level so the test suite can redirect it (tests/conftest.py); the
 # env var does the same for subprocess-spawned servers.
 DEFAULT_LOG_FILE = Path(os.environ.get("UNITARES_AUDIT_LOG") or Path(__file__).parent.parent / "data" / "audit_log.jsonl")
+
+
+def _sanitize_strict_json(value):
+    """Replace non-finite floats and float-overflowing ints so JSONL stays RFC 8259 strict JSON and Postgres jsonb succeeds."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        try:
+            float(value)
+            return value
+        except OverflowError:
+            return "<oversized int>"
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {str(k): _sanitize_strict_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_strict_json(v) for v in value]
+    return value
 
 
 class AuditLogger:
@@ -797,6 +817,38 @@ class AuditLogger:
         )
         self._schedule_postgres_write(asdict(entry))
 
+    def log_threshold_modification(
+        self,
+        *,
+        agent_id: str,
+        event_type: str,
+        details: Dict,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """Record an administrative runtime threshold modification attempt or result.
+
+        ``event_type`` is ``"threshold_modification_attempt"`` or
+        ``"threshold_modification_success"``. Written to both JSONL and Postgres
+        (with non-finite floats sanitized so strict JSONL parsers and Postgres
+        ``jsonb`` inserts never drop a rejected ``NaN``/``Infinity`` attempt).
+        ``confidence=0.0`` keeps Postgres ``confidence > 0`` readers out, and
+        dialectic calibration filters JSONL entries to ``auto_attest``.
+        """
+        if event_type not in (
+            "threshold_modification_attempt",
+            "threshold_modification_success",
+        ):
+            raise ValueError(f"Unsupported threshold audit event_type: {event_type}")
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            session_id=session_id,
+            event_type=event_type,
+            confidence=0.0,
+            details=_sanitize_strict_json(dict(details or {})),
+        )
+        self._write_entry(entry)
+
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
 
@@ -811,14 +863,14 @@ class AuditLogger:
 
         entry_dict["session_id"] = audit_reference(entry_dict.get("session_id"))
         try:
-            # Raw truth: JSONL append
+            # Raw truth: JSONL append (serialize before write so a failure cannot leave a partial line)
             if self._jsonl_enabled:
+                serialized = json.dumps(entry_dict)
                 with open(self.log_file, 'a') as f:
                     # Acquire exclusive lock
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                     try:
-                        json.dump(entry_dict, f)
-                        f.write('\n')
+                        f.write(serialized + '\n')
                         f.flush()
                         os.fsync(f.fileno())
                     finally:

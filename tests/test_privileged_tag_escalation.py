@@ -161,21 +161,273 @@ class TestThresholdRouteRemoved:
             assert "admin" in json.dumps(data).lower()
 
     @pytest.mark.asyncio
-    async def test_admin_tag_still_permitted(self):
+    async def test_admin_tag_still_permitted(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, get_thresholds
+
         server = make_mock_server()
         meta = make_agent_meta(tags=["admin"], total_updates=1)
         server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                keyed_csid = "agent-11111111-222-aaaaaaaaaaaaaaaaaaaa"
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "client_session_id": keyed_csid,
+                    "thresholds": {"void_threshold_initial": 0.22},
+                })
+                body = _parse(result)
+                assert body["success"] is True
+                data = body.get("data", body)
+                assert data["success"] is True
+                assert data["updated"] == ["void_threshold_initial"]
+                assert data["errors"] == []
+                assert data["persistence"] == "process_memory_only"
+                assert data["survives_restart"] is False
+                assert "process" in data["persistence_note"]
+                assert get_thresholds()["void_threshold_initial"] == 0.22
+
+                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                assert [r["event_type"] for r in rows] == [
+                    "threshold_modification_attempt",
+                    "threshold_modification_success",
+                ]
+                for row in rows:
+                    assert row["agent_id"] == "agent-1"
+                    assert row["confidence"] == 0.0
+                    assert row["session_id"].startswith("csid:")
+                    assert row["session_id"] != keyed_csid
+                assert rows[0]["details"] == {
+                    "thresholds": {"void_threshold_initial": 0.22},
+                    "validate": True,
+                }
+                assert rows[1]["details"] == {"updated": ["void_threshold_initial"]}
+        finally:
+            clear_overrides()
+
+    @pytest.mark.asyncio
+    async def test_admin_invalid_threshold_logs_attempt_only_and_leaves_overrides_unchanged(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, describe_thresholds
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {
+                        "unknown_threshold": 0.5,
+                        "risk_approve_threshold": True,
+                        "void_threshold_initial": float("nan"),
+                        "coherence_critical_threshold": float("inf"),
+                        "tight_band_fraction": 10**5000,
+                        "risk_revise_threshold": [10**5000],
+                    },
+                })
+                body = _parse(result)
+                data = body.get("data", body)
+                assert data["success"] is False
+                assert data["updated"] == []
+                assert len(data["errors"]) == 6
+                assert data["persistence"] == "process_memory_only"
+                assert data["survives_restart"] is False
+                assert all(
+                    d["source"] == "class_default"
+                    for d in describe_thresholds().values()
+                )
+
+                def _reject_non_strict(constant: str):
+                    raise ValueError(f"Non-strict JSON constant emitted: {constant}")
+
+                rows = [
+                    json.loads(line, parse_constant=_reject_non_strict)
+                    for line in log_file.read_text().splitlines()
+                    if line.strip()
+                ]
+                assert [r["event_type"] for r in rows] == ["threshold_modification_attempt"]
+                assert rows[0]["confidence"] == 0.0
+                assert rows[0]["details"]["thresholds"]["void_threshold_initial"] == "nan"
+                assert rows[0]["details"]["thresholds"]["coherence_critical_threshold"] == "inf"
+                assert rows[0]["details"]["thresholds"]["tight_band_fraction"] == "<oversized int>"
+                assert rows[0]["details"]["thresholds"]["risk_revise_threshold"] == ["<oversized int>"]
+        finally:
+            clear_overrides()
+
+    def test_audit_write_entry_does_not_leave_partial_line_on_serialization_error(self, tmp_path):
+        from src.audit_log import AuditEntry, AuditLogger
+
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+        with patch.object(test_logger, "_schedule_postgres_write"):
+            # json.dump(entry_dict, f) streams {"timestamp": ... before hitting object(),
+            # leaving a partial line without a newline; json.dumps-before-write writes nothing.
+            test_logger._write_entry(
+                AuditEntry(
+                    timestamp="2026-11-28T00:00:00",
+                    agent_id="agent-1",
+                    event_type="auto_attest",
+                    confidence=0.8,
+                    details={"unserializable": object()},
+                )
+            )
+            test_logger._write_entry(
+                AuditEntry(
+                    timestamp="2026-11-28T00:00:01",
+                    agent_id="agent-1",
+                    event_type="auto_attest",
+                    confidence=0.9,
+                    details={"ok": True},
+                )
+            )
+
+        lines = log_file.read_text().splitlines()
+        assert len(lines) == 1
+        parsed = json.loads(lines[0])
+        assert parsed["details"] == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_admin_non_dict_thresholds_returns_invalid_param(self, tmp_path):
+        from src.audit_log import AuditLogger
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
 
         with patch("src.mcp_handlers.admin.config.mcp_server", server), \
-             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
+             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+             patch("src.audit_log.audit_logger", test_logger), \
+             patch.object(test_logger, "_schedule_postgres_write"):
             from src.mcp_handlers.admin.config import handle_set_thresholds
             result = await handle_set_thresholds({
                 "agent_id": "agent-1",
-                "thresholds": {},
+                "thresholds": ["not", "a", "dict"],
             })
-            data = _parse(result)
-            # Reaches the threshold-writing path rather than the auth rejection.
-            assert "admin-only" not in json.dumps(data)
+            body = _parse(result)
+            assert body.get("success") is not True
+            assert body.get("error_code") == "INVALID_PARAM"
+            assert not log_file.exists() or log_file.read_text().strip() == ""
+
+    @pytest.mark.asyncio
+    async def test_admin_partial_batch_logs_applied_override_and_errors(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, get_thresholds
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {
+                        "void_threshold_initial": 0.25,
+                        "unknown_threshold": 0.5,
+                    },
+                })
+                body = _parse(result)
+                data = body.get("data", body)
+                assert data["success"] is False
+                assert data["updated"] == ["void_threshold_initial"]
+                assert len(data["errors"]) == 1
+                assert data["current_thresholds"]["void_threshold_initial"] == 0.25
+                assert get_thresholds()["void_threshold_initial"] == 0.25
+
+                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                assert [r["event_type"] for r in rows] == [
+                    "threshold_modification_attempt",
+                    "threshold_modification_success",
+                ]
+                assert rows[1]["details"]["updated"] == ["void_threshold_initial"]
+                assert len(rows[1]["details"]["errors"]) == 1
+        finally:
+            clear_overrides()
+
+    @pytest.mark.asyncio
+    async def test_threshold_audit_rows_ignored_by_dialectic_calibration(self, tmp_path):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides
+        from src.mcp_handlers.dialectic.calibration import (
+            update_calibration_from_dialectic,
+            update_calibration_from_dialectic_disagreement,
+        )
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                set_res = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {"void_threshold_initial": 0.21},
+                })
+                assert _parse(set_res)["success"] is True
+
+            assert [r["event_type"] for r in test_logger.query_audit_log(agent_id="agent-1")] == [
+                "threshold_modification_success",
+                "threshold_modification_attempt",
+            ]
+
+            fake_session = SimpleNamespace(
+                session_id="sess-cal-1",
+                dispute_type="verification",
+                paused_agent_id="agent-1",
+                reviewer_agent_id="reviewer-2",
+                discovery_id=None,
+                created_at=datetime.now(),
+            )
+            fake_resolution = SimpleNamespace(action="resume", timestamp=datetime.now())
+            fake_authorship = SimpleNamespace(is_invalid=False, recuses=lambda *_a, **_kw: False)
+            mock_cal = MagicMock()
+
+            with patch("src.mcp_handlers.dialectic.calibration.audit_logger", test_logger), \
+                 patch("src.mcp_handlers.dialectic.calibration.calibration_checker", mock_cal), \
+                 patch("src.mcp_handlers.dialectic.calibration.read_reviewed_work_authorship", return_value=fake_authorship):
+                updated = await update_calibration_from_dialectic(fake_session, fake_resolution)
+                assert updated is False
+                mock_cal.record_prediction.assert_not_called()
+                disagreement_logged = await update_calibration_from_dialectic_disagreement(fake_session)
+                assert disagreement_logged is False
+        finally:
+            clear_overrides()
 
     def test_reputation_route_not_reintroduced(self):
         """Source guard: the escalation was a single boolean. If someone

@@ -5,6 +5,7 @@ Allows runtime access and modification of governance thresholds
 without requiring code changes or redeployment.
 """
 
+import math
 from typing import Dict, Optional, Any
 
 # Ensure project root is in path for imports
@@ -103,39 +104,61 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
         name: rng for name, (_attr, rng) in OVERRIDABLE_THRESHOLDS.items()
     }
 
+    # Validate type, finiteness, and range into `candidates` before checking
+    # cross-key ordering so a rejected sibling in the same batch can never
+    # validate an invalid APPROVE < REVISE < REJECT ordering.
+    candidates: Dict[str, float] = {}
     for name, value in thresholds.items():
         if name not in valid_ranges:
             errors.append(f"Unknown threshold: {name}")
             continue
-        
+
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            errors.append(f"{name} must be a finite number (got {type(value).__name__})")
+            continue
+
+        try:
+            numeric_value = float(value)
+        except OverflowError:
+            errors.append(f"{name} must be a finite number (integer out of float range)")
+            continue
+
+        if not math.isfinite(numeric_value):
+            errors.append(f"{name}={value!r} must be a finite number")
+            continue
         if validate:
             min_val, max_val = valid_ranges[name]
-            if not (min_val <= value <= max_val):
+            if not (min_val <= numeric_value <= max_val):
                 errors.append(f"{name}={value} out of range [{min_val}, {max_val}]")
                 continue
-        
-        # Additional logical validation: enforce APPROVE < REVISE < REJECT invariant.
-        # Reject is not writable (see comment at line 38) — always the class default.
-        if name in ("risk_approve_threshold", "risk_revise_threshold"):
-            effective_approve = thresholds.get(
-                "risk_approve_threshold",
-                _runtime_overrides.get("risk_approve_threshold", config.RISK_APPROVE_THRESHOLD),
-            )
-            effective_revise = thresholds.get(
-                "risk_revise_threshold",
-                _runtime_overrides.get("risk_revise_threshold", config.RISK_REVISE_THRESHOLD),
-            )
-            effective_reject = config.RISK_REJECT_THRESHOLD
 
-            if not (effective_approve < effective_revise < effective_reject):
-                errors.append(
-                    f"Ordering violated: APPROVE({effective_approve}) "
-                    f"< REVISE({effective_revise}) "
-                    f"< REJECT({effective_reject}) must hold"
-                )
-                continue
-        
-        _runtime_overrides[name] = float(value)
+        candidates[name] = numeric_value
+
+    # Additional logical validation: enforce APPROVE < REVISE < REJECT invariant
+    # against accepted candidates merged over surviving overrides/defaults.
+    # Reject is not writable (see comment at line 33) — always the class default.
+    if "risk_approve_threshold" in candidates or "risk_revise_threshold" in candidates:
+        effective_approve = candidates.get(
+            "risk_approve_threshold",
+            _runtime_overrides.get("risk_approve_threshold", config.RISK_APPROVE_THRESHOLD),
+        )
+        effective_revise = candidates.get(
+            "risk_revise_threshold",
+            _runtime_overrides.get("risk_revise_threshold", config.RISK_REVISE_THRESHOLD),
+        )
+        effective_reject = config.RISK_REJECT_THRESHOLD
+
+        if not (effective_approve < effective_revise < effective_reject):
+            errors.append(
+                f"Ordering violated: APPROVE({effective_approve}) "
+                f"< REVISE({effective_revise}) "
+                f"< REJECT({effective_reject}) must hold"
+            )
+            candidates.pop("risk_approve_threshold", None)
+            candidates.pop("risk_revise_threshold", None)
+
+    for name, numeric_value in candidates.items():
+        _runtime_overrides[name] = numeric_value
         updated.append(name)
     
     return {

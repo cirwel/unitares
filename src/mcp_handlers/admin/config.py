@@ -90,8 +90,10 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
     # constrain it in practice: the basin gate zeroes EISV risk components
     # inside the basin, so 99.85% of fleet check-ins score below 0.3 risk.
     #
-    # No threshold change has ever been recorded (audit.events, 0 rows), so
-    # this removes an unused escalation path, not a working workflow.
+    # audit.events previously had 0 threshold-modification rows because this
+    # handler called nonexistent audit_logger.log() before set_thresholds ran
+    # (KG 2026-11-26T11:22:07.698340+00:00); the count-based route remained a
+    # latent privilege-escalation path regardless.
     is_admin = "admin" in meta.tags
 
     if not is_admin:
@@ -111,34 +113,62 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
     # EISV would reintroduce the same farmable-input problem this change closes.
 
     thresholds = arguments.get("thresholds", {})
+    if not isinstance(thresholds, dict):
+        return [error_response(
+            "thresholds must be a dictionary mapping threshold names to numeric values.",
+            error_code="INVALID_PARAM",
+            recovery={
+                "action": "Pass thresholds as an object of threshold_name -> number",
+                "related_tools": ["get_thresholds"],
+            },
+        )]
     validate = arguments.get("validate", True)
-    
+    session_id = arguments.get("client_session_id")
+
     # AUDIT: Log threshold modification attempt
-    audit_logger.log("threshold_modification_attempt", {
-        "agent_id": agent_id,
-        "thresholds": thresholds,
-        "validate": validate
-    })
-    
+    audit_logger.log_threshold_modification(
+        agent_id=agent_id,
+        event_type="threshold_modification_attempt",
+        session_id=session_id,
+        details={
+            "thresholds": thresholds,
+            "validate": validate,
+        },
+    )
+
     result = set_thresholds(thresholds, validate=validate)
-    
-    # AUDIT: Log successful modification
-    if result["success"]:
-        audit_logger.log("threshold_modification_success", {
-            "agent_id": agent_id,
-            "updated": result["updated"]
-        })
-    
-    current_thresholds = get_thresholds() if result["success"] else None
-    
+
+    # AUDIT: Log any applied runtime override (including partial updates when
+    # one key in a batch succeeded and another was rejected).
+    if result["success"] or result["updated"]:
+        audit_logger.log_threshold_modification(
+            agent_id=agent_id,
+            event_type="threshold_modification_success",
+            session_id=session_id,
+            details={
+                "updated": result["updated"],
+                **({"errors": result["errors"]} if result["errors"] else {}),
+            },
+        )
+
+    current_thresholds = (
+        get_thresholds() if (result["success"] or result["updated"]) else None
+    )
+
     response_data = {
         "success": result["success"],
         "updated": result["updated"],
         "errors": result["errors"],
-        "warning": "Threshold modifications are logged and may affect system behavior"
+        "persistence": "process_memory_only",
+        "survives_restart": False,
+        "persistence_note": (
+            "Runtime threshold overrides apply only in this server process and "
+            "do not survive a restart."
+        ),
+        "warning": "Threshold modifications are logged and may affect system behavior",
     }
-    
+
     if current_thresholds:
         response_data["current_thresholds"] = current_thresholds
-    
+
     return success_response(response_data)
