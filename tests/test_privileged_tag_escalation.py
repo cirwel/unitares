@@ -238,13 +238,15 @@ class TestThresholdRouteRemoved:
                         "risk_approve_threshold": True,
                         "void_threshold_initial": float("nan"),
                         "coherence_critical_threshold": float("inf"),
+                        "tight_band_fraction": 10**5000,
+                        "risk_revise_threshold": [10**5000],
                     },
                 })
                 body = _parse(result)
                 data = body.get("data", body)
                 assert data["success"] is False
                 assert data["updated"] == []
-                assert len(data["errors"]) == 4
+                assert len(data["errors"]) == 6
                 assert data["persistence"] == "process_memory_only"
                 assert data["survives_restart"] is False
                 assert all(
@@ -264,8 +266,42 @@ class TestThresholdRouteRemoved:
                 assert rows[0]["confidence"] == 0.0
                 assert rows[0]["details"]["thresholds"]["void_threshold_initial"] == "nan"
                 assert rows[0]["details"]["thresholds"]["coherence_critical_threshold"] == "inf"
+                assert rows[0]["details"]["thresholds"]["tight_band_fraction"] == "<oversized int>"
+                assert rows[0]["details"]["thresholds"]["risk_revise_threshold"] == ["<oversized int>"]
         finally:
             clear_overrides()
+
+    def test_audit_write_entry_does_not_leave_partial_line_on_serialization_error(self, tmp_path):
+        from src.audit_log import AuditEntry, AuditLogger
+
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+        with patch.object(test_logger, "_schedule_postgres_write"):
+            # json.dump(entry_dict, f) streams {"timestamp": ... before hitting object(),
+            # leaving a partial line without a newline; json.dumps-before-write writes nothing.
+            test_logger._write_entry(
+                AuditEntry(
+                    timestamp="2026-11-28T00:00:00",
+                    agent_id="agent-1",
+                    event_type="auto_attest",
+                    confidence=0.8,
+                    details={"unserializable": object()},
+                )
+            )
+            test_logger._write_entry(
+                AuditEntry(
+                    timestamp="2026-11-28T00:00:01",
+                    agent_id="agent-1",
+                    event_type="auto_attest",
+                    confidence=0.9,
+                    details={"ok": True},
+                )
+            )
+
+        lines = log_file.read_text().splitlines()
+        assert len(lines) == 1
+        parsed = json.loads(lines[0])
+        assert parsed["details"] == {"ok": True}
 
     @pytest.mark.asyncio
     async def test_admin_non_dict_thresholds_returns_invalid_param(self, tmp_path):

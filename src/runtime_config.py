@@ -114,7 +114,7 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
             continue
 
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            errors.append(f"{name}={value!r} must be a finite number")
+            errors.append(f"{name} must be a finite number (got {type(value).__name__})")
             continue
 
         try:
