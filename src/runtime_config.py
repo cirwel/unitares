@@ -113,11 +113,19 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
             errors.append(f"Unknown threshold: {name}")
             continue
 
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             errors.append(f"{name}={value!r} must be a finite number")
             continue
 
-        numeric_value = float(value)
+        try:
+            numeric_value = float(value)
+        except OverflowError:
+            errors.append(f"{name}={value!r} must be a finite number")
+            continue
+
+        if not math.isfinite(numeric_value):
+            errors.append(f"{name}={value!r} must be a finite number")
+            continue
         if validate:
             min_val, max_val = valid_ranges[name]
             if not (min_val <= numeric_value <= max_val):

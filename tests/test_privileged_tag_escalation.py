@@ -341,7 +341,10 @@ class TestThresholdRouteRemoved:
         from unittest.mock import MagicMock
         from src.audit_log import AuditLogger
         from src.runtime_config import clear_overrides
-        from src.mcp_handlers.dialectic.calibration import update_calibration_from_dialectic
+        from src.mcp_handlers.dialectic.calibration import (
+            update_calibration_from_dialectic,
+            update_calibration_from_dialectic_disagreement,
+        )
 
         server = make_mock_server()
         meta = make_agent_meta(tags=["admin"], total_updates=1)
@@ -379,6 +382,8 @@ class TestThresholdRouteRemoved:
                 updated = await update_calibration_from_dialectic(fake_session, fake_resolution)
                 assert updated is False
                 mock_cal.record_prediction.assert_not_called()
+                disagreement_logged = await update_calibration_from_dialectic_disagreement(fake_session)
+                assert disagreement_logged is False
         finally:
             clear_overrides()
 
