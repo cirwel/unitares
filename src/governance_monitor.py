@@ -1594,7 +1594,7 @@ class UNITARESMonitor:
         insufficient_reading = reading_insufficient(
             hold_unread=self._behavioral_state.hold_unread,
             behavioral_confidence=self._behavioral_state.confidence,
-            attainable_confidence=self._behavioral_state.attainable_confidence,
+            checkin_confidence=self._behavioral_state.checkin_confidence,
             behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
             phi_telemetry=phi_telemetry_only(),
         )

@@ -253,7 +253,7 @@ identity of EISV itself.
   without supplying sensor inputs never reaches behavioral authority, and for
   it the prior would decide indefinitely. Cold start ends where an agent that
   supplied everything would have reached authority, which is check-in 6
-  (`BehavioralEISV.attainable_confidence` at 0.3). From there, while the
+  (`BehavioralEISV.checkin_confidence` at 0.3). From there, while the
   behavioral state still has less than 0.3 confidence, no verdict is drawn: the published verdict is `safe` with risk 0, the driver
   is `insufficient_reading`, the Φ-derived fast trip does not apply, and the
   verdict is graded provisional. `safe` there means nothing was measured. The
