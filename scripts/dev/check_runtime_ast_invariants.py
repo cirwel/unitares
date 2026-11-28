@@ -404,6 +404,12 @@ def _iter_discarded_calls(expr: ast.expr) -> Iterable[ast.Call]:
     elif isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
         for elt in expr.elts:
             yield from _iter_discarded_calls(elt)
+    elif isinstance(expr, ast.Dict):
+        for k in expr.keys:
+            if k is not None:
+                yield from _iter_discarded_calls(k)
+        for v in expr.values:
+            yield from _iter_discarded_calls(v)
     elif isinstance(expr, ast.BoolOp):
         for val in expr.values:
             yield from _iter_discarded_calls(val)
@@ -700,6 +706,7 @@ def _scan_block_references(
     else:
         local_nested_async, local_nested_sync, local_classes = _collect_lexical_scope_defs(stmts)
     nested_guarded_names: set[str] = set()
+    nested_awaited_names: set[str] = set()
     nested_escaped_names: set[str] = set()
     nested_names = set(local_nested_async) | set(local_nested_sync)
 
@@ -717,10 +724,13 @@ def _scan_block_references(
         """Record ``call`` with ``mode`` in ``{'guarded', 'awaited', 'escaped'}``."""
         recv, cname = _call_func_name(call)
         if recv is None and cname in nested_names:
-            if cname in local_nested_async and (
-                mode == "guarded" or (mode == "awaited" and enclosing_bounded)
-            ):
-                nested_guarded_names.add(cname)
+            if cname in local_nested_async:
+                if mode == "guarded" or (mode == "awaited" and enclosing_bounded):
+                    nested_guarded_names.add(cname)
+                elif mode == "awaited":
+                    nested_awaited_names.add(cname)
+                else:
+                    nested_escaped_names.add(cname)
             else:
                 nested_escaped_names.add(cname)
         else:
@@ -840,8 +850,16 @@ def _scan_block_references(
 
     nested_bounded_map: dict[str, bool] = {}
     for nname, nfns in local_nested_async.items():
-        is_b = nname in nested_guarded_names and nname not in nested_escaped_names
+        is_b = (
+            nname in nested_guarded_names
+            and nname not in nested_awaited_names
+            and nname not in nested_escaped_names
+        )
         nested_bounded_map[nname] = is_b
+        can_inherit_outer = (
+            (nname in nested_guarded_names or nname in nested_awaited_names)
+            and nname not in nested_escaped_names
+        )
         for nfn in nfns:
             cg, ca, ce, _ = _scan_block_references(
                 nfn.body,
@@ -852,7 +870,10 @@ def _scan_block_references(
                 enclosing_bounded=is_b,
             )
             directly_guarded.update(cg)
-            awaited_calls.update(ca)
+            if can_inherit_outer:
+                awaited_calls.update(ca)
+            else:
+                escaped_unguarded.update(ca)
             escaped_unguarded.update(ce)
 
     for _sname, sfns in local_nested_sync.items():
@@ -1250,6 +1271,75 @@ def _check_p004_mcp_handlers(
                 enclosing_bounded=enclosing_bounded,
             )
 
+            # Propagate raw-Redis client and pipeline arguments into nested helpers
+            local_nested_async_defs, local_nested_sync_defs, _ = _collect_lexical_scope_defs(fn.body)
+            local_nested_all: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+            for k_n, v_n in local_nested_async_defs.items():
+                local_nested_all.setdefault(k_n, []).extend(v_n)
+            for k_n, v_n in local_nested_sync_defs.items():
+                local_nested_all.setdefault(k_n, []).extend(v_n)
+
+            nested_client_seeds: dict[str, set[str]] = {n: set(client_vars) for n in local_nested_all}
+            nested_pipe_seeds: dict[str, set[str]] = {n: set(pipe_vars) for n in local_nested_all}
+            if local_nested_all:
+                def _seed_nested_calls_from_scope(
+                    scope_node: ast.AST, src_cvars: set[str], src_pvars: set[str]
+                ) -> bool:
+                    if not src_cvars and not src_pvars:
+                        return False
+                    seeded = False
+                    for sub in ast.walk(scope_node):
+                        if not isinstance(sub, ast.Call):
+                            continue
+                        recv, cname = _call_func_name(sub)
+                        if recv is not None or cname not in local_nested_all:
+                            continue
+                        nfns = local_nested_all[cname]
+                        if len(nfns) != 1:
+                            continue
+                        target_nfn = nfns[0]
+                        pos_params = [a.arg for a in target_nfn.args.posonlyargs] + [
+                            a.arg for a in target_nfn.args.args
+                        ]
+                        named_params = set(pos_params) | {a.arg for a in target_nfn.args.kwonlyargs}
+                        for idx, arg in enumerate(sub.args):
+                            if isinstance(arg, ast.Name) and idx < len(pos_params):
+                                pname = pos_params[idx]
+                                if arg.id in src_cvars and pname not in nested_client_seeds[cname]:
+                                    nested_client_seeds[cname].add(pname)
+                                    seeded = True
+                                if arg.id in src_pvars and pname not in nested_pipe_seeds[cname]:
+                                    nested_pipe_seeds[cname].add(pname)
+                                    seeded = True
+                        for kw in sub.keywords:
+                            if kw.arg and kw.arg in named_params and isinstance(kw.value, ast.Name):
+                                if kw.value.id in src_cvars and kw.arg not in nested_client_seeds[cname]:
+                                    nested_client_seeds[cname].add(kw.arg)
+                                    seeded = True
+                                if kw.value.id in src_pvars and kw.arg not in nested_pipe_seeds[cname]:
+                                    nested_pipe_seeds[cname].add(kw.arg)
+                                    seeded = True
+                    return seeded
+
+                for _ in range(4):
+                    changed_nested = _seed_nested_calls_from_scope(fn, client_vars, pipe_vars)
+                    for nname, nfns in local_nested_all.items():
+                        for nfn in nfns:
+                            n_getters, n_mods = _local_redis_imports(
+                                nfn, module_raw_getters, imports.raw_redis_modules
+                            )
+                            ncv, npv = _compute_func_raw_vars(
+                                nfn,
+                                nested_client_seeds[nname],
+                                nested_pipe_seeds[nname],
+                                n_getters,
+                                n_mods,
+                            )
+                            if _seed_nested_calls_from_scope(nfn, ncv, npv):
+                                changed_nested = True
+                    if not changed_nested:
+                        break
+
             def _raw_redis_call_info(call: ast.Call) -> tuple[str, bool] | None:
                 """Return ``(desc, is_async_coro_when_unawaited)`` if ``call`` is on raw Redis."""
                 if not isinstance(call.func, ast.Attribute):
@@ -1285,8 +1375,8 @@ def _check_p004_mcp_handlers(
                     scan_func(
                         node,
                         is_top_level=False,
-                        inherited_client_vars=client_vars,
-                        inherited_pipe_vars=pipe_vars,
+                        inherited_client_vars=nested_client_seeds.get(node.name, client_vars),
+                        inherited_pipe_vars=nested_pipe_seeds.get(node.name, pipe_vars),
                         enclosing_bounded=child_bounded,
                     )
                     return
@@ -1294,8 +1384,8 @@ def _check_p004_mcp_handlers(
                     scan_func(
                         node,
                         is_top_level=False,
-                        inherited_client_vars=client_vars,
-                        inherited_pipe_vars=pipe_vars,
+                        inherited_client_vars=nested_client_seeds.get(node.name, client_vars),
+                        inherited_pipe_vars=nested_pipe_seeds.get(node.name, pipe_vars),
                         enclosing_bounded=False,
                     )
                     return

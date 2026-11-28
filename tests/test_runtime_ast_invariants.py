@@ -734,6 +734,62 @@ async def h(k: str):
     ]
 
 
+def test_codex_review_regressions_escaped_closure_nested_params_and_dict_literal(tmp_path: Path) -> None:
+    # 1. Escaped async closure returned from a wait_for-bounded factory does not make leaf bounded
+    _write(
+        tmp_path,
+        "src/mcp_handlers/escaped_closure.py",
+        """\
+import asyncio
+from src.cache.redis_client import get_redis
+
+async def leaf():
+    r = await get_redis()
+    return await r.get("k")
+
+async def factory():
+    async def _closure():
+        return await leaf()
+    return _closure
+
+async def caller():
+    cb = await asyncio.wait_for(factory(), timeout=1.0)
+    return await cb()
+""",
+    )
+    # 2. Nested helper receiving raw Redis via renamed parameter is flagged when unguarded
+    _write(
+        tmp_path,
+        "src/mcp_handlers/nested_param.py",
+        """\
+from src.cache.redis_client import get_redis
+
+async def handler():
+    r = await get_redis()
+    async def use(client):
+        return await client.get("k")
+    return await use(r)
+""",
+    )
+    # 3. Discarded dictionary literal containing create_task is flagged for P001
+    _write(
+        tmp_path,
+        "src/discarded_dict.py",
+        """\
+import asyncio
+
+async def spawn_lost(coro):
+    {"task": asyncio.create_task(coro())}
+""",
+    )
+    violations = guard.scan_paths(tmp_path)
+    assert [(v.rel_path, v.rule, v.line) for v in violations] == [
+        ("src/discarded_dict.py", "P001", 4),
+        ("src/mcp_handlers/escaped_closure.py", "P004", 6),
+        ("src/mcp_handlers/nested_param.py", "P004", 6),
+    ]
+
+
 
 
 
