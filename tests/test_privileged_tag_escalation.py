@@ -359,10 +359,16 @@ class TestThresholdRouteRemoved:
                  patch("src.audit_log.audit_logger", test_logger), \
                  patch.object(test_logger, "_schedule_postgres_write"):
                 from src.mcp_handlers.admin.config import handle_set_thresholds
-                await handle_set_thresholds({
+                set_res = await handle_set_thresholds({
                     "agent_id": "agent-1",
                     "thresholds": {"void_threshold_initial": 0.21},
                 })
+                assert _parse(set_res)["success"] is True
+
+            assert [r["event_type"] for r in test_logger.query_audit_log(agent_id="agent-1")] == [
+                "threshold_modification_success",
+                "threshold_modification_attempt",
+            ]
 
             fake_session = SimpleNamespace(
                 session_id="sess-cal-1",

@@ -117,7 +117,15 @@ DEFAULT_LOG_FILE = Path(os.environ.get("UNITARES_AUDIT_LOG") or Path(__file__).p
 
 
 def _sanitize_strict_json(value):
-    """Replace non-finite floats so JSONL stays RFC 8259 strict JSON and Postgres jsonb succeeds."""
+    """Replace non-finite floats and float-overflowing ints so JSONL stays RFC 8259 strict JSON and Postgres jsonb succeeds."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        try:
+            float(value)
+            return value
+        except OverflowError:
+            return "<oversized int>"
     if isinstance(value, float) and not math.isfinite(value):
         return repr(value)
     if isinstance(value, dict):
@@ -855,14 +863,14 @@ class AuditLogger:
 
         entry_dict["session_id"] = audit_reference(entry_dict.get("session_id"))
         try:
-            # Raw truth: JSONL append
+            # Raw truth: JSONL append (serialize before write so a failure cannot leave a partial line)
             if self._jsonl_enabled:
+                serialized = json.dumps(entry_dict)
                 with open(self.log_file, 'a') as f:
                     # Acquire exclusive lock
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                     try:
-                        json.dump(entry_dict, f)
-                        f.write('\n')
+                        f.write(serialized + '\n')
                         f.flush()
                         os.fsync(f.fileno())
                     finally:

@@ -120,7 +120,7 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
         try:
             numeric_value = float(value)
         except OverflowError:
-            errors.append(f"{name}={value!r} must be a finite number")
+            errors.append(f"{name} must be a finite number (integer out of float range)")
             continue
 
         if not math.isfinite(numeric_value):

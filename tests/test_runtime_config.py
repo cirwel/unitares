@@ -130,7 +130,18 @@ class TestSetThresholds:
     @pytest.mark.parametrize("validate", [True, False])
     @pytest.mark.parametrize(
         "bad_value",
-        [True, False, "0.2", None, float("nan"), float("inf"), float("-inf"), 10**400, -(10**400)],
+        [
+            True,
+            False,
+            "0.2",
+            None,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            10**400,
+            -(10**400),
+            pytest.param(10**5000, id="int_5001_digits"),
+        ],
     )
     def test_rejects_non_finite_and_non_numeric_values(self, bad_value, validate):
         """Booleans, strings, None, NaN, and Infinity must be rejected even with validate=False."""
