@@ -1674,6 +1674,19 @@ def test_unreadable_manifest_or_diff_posts_no_false_sensitive_notices_and_preser
     assert calls4 == [_arm(1, "aaa")]
 
 
+def test_an_armed_pr_whose_compare_fails_disarms_and_keeps_its_slot(tmp_path: Path) -> None:
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, head="aaa", armed_min_ago=20), _pr(2, head="bbb")],
+        arms={1: 20},
+        timelines={1: _timeline(25), 2: _timeline(10)},
+        compares={"aaa": None, "bbb": PLAIN},
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert calls == ["pr merge 1 -R o/r --disable-auto"]
+    assert "a disarmed PR's sensitivity check could not run; nothing else armed this tick" in out
+
+
 def test_persistently_unreadable_manifest_fails_tick_without_spamming_prs(tmp_path: Path) -> None:
     declared = _declared(10, head="ddd")
     for tick in (1, 2):

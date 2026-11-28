@@ -100,10 +100,11 @@
 # (HAND_MERGE_ONLY_PATHS), and a 300+-file compare, a matched file with no
 # patch, an unreadable review policy, or an unreadable label time is hand-merge
 # too. Transient base/manifest or compare read failures retry once in-tick and
-# hold without false PR notices for up to PR_QUEUE_UNREADABLE_TICKS (default 3)
-# ticks; past that bound, an unreadable manifest fails the tick (exit 1) and an
-# unreadable PR compare posts one hand-merge notice and skips so later PRs keep
-# landing. PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule: never armed.
+# hold quietly (disarming an armed PR without letting another jump it) until the
+# PR_QUEUE_UNREADABLE_TICKS-th consecutive failing tick (default 3), when an
+# unreadable manifest fails the tick (exit 1) and an unreadable PR compare posts
+# one hand-merge notice and skips so later PRs keep landing.
+# PR_QUEUE_SENSITIVE_DELEGATED=0 restores the old rule: never armed.
 # Like the pin above, the veto window is a convention among
 # cooperating agents, not a boundary against one that shares the login.
 #
@@ -1204,6 +1205,10 @@ while read -r pr; do
     # A delegated arm that still meets its conditions falls through with
     # $verdict set, which makes `review` a required check below.
     reason="$sens_reason"
+    case "${verdict%%$'\t'*}" in
+      unreadable-manifest|unreadable-diff)
+        hold_reason="a disarmed PR's sensitivity check could not run" ;;
+    esac
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif subject_issue=$(arm_subject_issue "$n" "$pr"); then

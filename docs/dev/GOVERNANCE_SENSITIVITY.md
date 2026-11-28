@@ -60,11 +60,12 @@ whatever else holds, and whether or not the manifest still lists that file.
 The operator merges it by hand. So does a 300+-file diff that could be
 truncated, an unreadable review policy or label time, or a matched file whose
 patch GitHub does not return. A failure to read the base manifest or a PR's
-compare is retried once in-tick and held without posting false sensitivity
-notices for up to `PR_QUEUE_UNREADABLE_TICKS` (default 3) ticks; past that
-bound, a persistently unreadable manifest fails the queue tick, while a
-persistently unreadable PR compare posts one hand-merge notice and is skipped
-so PRs behind it continue to land. A PR from a fork is never armed either.
+compare is retried once in-tick and held quietly (disarming an armed PR without
+arming another) until the `PR_QUEUE_UNREADABLE_TICKS`-th consecutive failing
+tick (default 3), when a persistently unreadable manifest fails the queue tick
+and a persistently unreadable PR compare posts one hand-merge notice and is
+skipped so PRs behind it continue to land. A PR from a fork is never armed
+either.
 
 `PR_QUEUE_SENSITIVE_DELEGATED=0` in the queue's environment restores the
 earlier rule: no governance-sensitive PR is armed.
