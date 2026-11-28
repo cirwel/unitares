@@ -340,13 +340,32 @@ def _project_checkpoint_receipt(value: Any) -> Optional[Dict[str, Any]]:
     projected["prev_checkpoint_id"] = previous
     assessment = value.get("assessment")
     if isinstance(assessment, dict):
+        # These annotations describe this delivery, never the original
+        # request's assessor selection (which the checkpoint does not store).
+        if value["idempotent_replay"]:
+            if assessment.get("automatic_replay") is False and assessment == {
+                "status": "not_repeated", "automatic_replay": False,
+            }:
+                projected["assessment"] = {
+                    "status": "not_repeated", "automatic_replay": False,
+                }
+            return projected
+        if assessment.get("automatic_replay") is False and assessment == {
+            "status": "not_requested", "reason": "disabled_by_operator",
+            "automatic_replay": False,
+        }:
+            projected["assessment"] = {
+                "status": "not_requested", "reason": "disabled_by_operator",
+                "automatic_replay": False,
+            }
+            return projected
         assessor = assessment.get("assessor")
         status = assessment.get("status")
         if (
             isinstance(assessor, str)
             and re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", assessor)
             and isinstance(status, str)
-            and status in {"started", "completed", "failed", "unconfirmed", "not_repeated"}
+            and status in {"started", "completed", "failed", "unconfirmed"}
             and assessment.get("automatic_replay") is False
         ):
             projected["assessment"] = {
@@ -358,6 +377,14 @@ def _project_checkpoint_receipt(value: Any) -> Optional[Dict[str, Any]]:
     return projected
 
 
+def _assessorless_checkpoint_annotation(value: Any) -> bool:
+    """Even a malformed no-assessment marker cannot justify stale advice."""
+    assessment = value.get("assessment") if isinstance(value, dict) else None
+    return isinstance(assessment, dict) and assessment.get("status") in (
+        "not_requested", "not_repeated",
+    )
+
+
 def _checkpoint_receipt_only(payload: Dict[str, Any], receipt) -> bool:
     """Capture acknowledgement does not supply a new operational decision."""
     if "checkpoint" not in payload:
@@ -366,6 +393,7 @@ def _checkpoint_receipt_only(payload: Dict[str, Any], receipt) -> bool:
         payload.get("success") is False
         or "error" in payload
         or payload.get("assessment_repeated") is False
+        or _assessorless_checkpoint_annotation(payload.get("checkpoint"))
         or (receipt is not None and (
             receipt["status"] == "unconfirmed" or receipt.get("idempotent_replay") is True
         ))
@@ -399,8 +427,10 @@ def _checkpoint_only_envelope(friendly_name, source, receipt, arguments):
     if type(source.get("assessment_repeated")) is bool:
         envelope["assessment_repeated"] = source["assessment_repeated"]
     # Preserve an explicit assessment-write acknowledgement independently;
-    # replay never carries a new assessment acknowledgement.
-    if receipt is None or receipt.get("idempotent_replay") is not True:
+    # replay and a disabled assessor cannot supply a new assessment write.
+    if not _assessorless_checkpoint_annotation(source.get("checkpoint")) and (
+        receipt is None or receipt.get("idempotent_replay") is not True
+    ):
         persistence = project_state_persistence(source.get("state_persistence"))
         if persistence is not None:
             envelope["state_persistence"] = persistence
@@ -2921,6 +2951,10 @@ def build_experience_envelope(
     if not (isinstance(prediction_id, str) and prediction_id):
         prediction_id = None
     coherence, risk = _coherence_and_risk(source_payload)
+    unassessed_metrics = (
+        canonical_name == "get_governance_metrics"
+        and source_payload.get("latest_checkin_assessed") is False
+    )
     include_raw, raw_hint = _raw_governance_policy(
         friendly_name,
         arguments,
@@ -2943,7 +2977,7 @@ def build_experience_envelope(
         retrieval_options = _lift(retrieval_options, *_RETRIEVAL_KEPT_FOR_ATTRIBUTION)
 
     if canonical_name in {"process_agent_update", "get_governance_metrics"}:
-        summary = _action_summary(source_payload, risk)
+        summary = None if unassessed_metrics else _action_summary(source_payload, risk)
         if summary:
             envelope["action_summary"] = summary
         legacy = _legacy_diagnostics(source_payload)
@@ -3197,6 +3231,9 @@ def build_experience_envelope(
         # mode can omit the repeated canonical payload without making the state
         # tool useless.
         state_summary = _metrics_state_summary(payload)
+        if unassessed_metrics:
+            envelope.update(_lift(source_payload, "latest_checkin_assessed", "eisv_scope"))
+            state_summary["assessment_scope"] = source_payload.get("eisv_scope")
         write_gate = payload.get("write_gate")
         if isinstance(write_gate, dict) and "writes_held" in write_gate:
             # The first read answers "am I paused, will my writes be held"
@@ -3570,7 +3607,7 @@ def build_experience_envelope(
 
     risk_text = _risk_summary(coherence, risk)
     if risk_text:
-        envelope["risk_summary"] = risk_text
+        envelope["risk_summary"] = f"Historical assessment: {risk_text}" if unassessed_metrics else risk_text
 
     # Provisional-verdict caveat: pull the cold-start / non-discriminative
     # self-disclosure out of risk_attribution so a reader of state_summary
@@ -3630,7 +3667,7 @@ def build_experience_envelope(
             # reachable on the progressive surface only through use_tool).
             envelope[key] = _friendly_action_hint(value) if isinstance(value, str) else value
 
-    hint = _recovery_hint(source_payload, coherence, risk)
+    hint = None if unassessed_metrics else _recovery_hint(source_payload, coherence, risk)
     if hint:
         envelope["recovery_hint"] = hint
 

@@ -150,6 +150,7 @@ async def _load_metadata_from_postgres_async() -> dict:
             recent_update_timestamps=agent.metadata.get("recent_update_timestamps", []),
             recent_decisions=agent.metadata.get("recent_decisions", []),
             total_updates=agent.metadata.get("total_updates", 0),
+            neutral_updates=agent.metadata.get("neutral_updates", 0),
             # Runtime state fields — see agent_storage.persist_runtime_state().
             # Without these, the in-memory mutations in lifecycle/operations.py
             # are clobbered on every force-reload (Watcher P011).

@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {

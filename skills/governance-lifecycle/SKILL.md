@@ -9,6 +9,7 @@ freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
   - unitares/src/agent_loop_detection.py
+  - unitares/src/checkin_assessment.py
   - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
@@ -28,6 +29,7 @@ source_files:
   - unitares/src/checkpoints.py
   - unitares/src/db/mixins/checkpoint.py
   - unitares/src/services/checkpoint_service.py
+  - unitares/src/services/update_workflow_service.py
   - unitares/src/services/update_response_service.py
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
@@ -59,26 +61,27 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-10-26
+**Last Updated:** 2026-11-03
 
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `2.2.0` on 2026-10-26.
+contract `2.5.0` on 2026-11-03.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
    mint fresh, and proof-rebind is for the same live owner. Declare lineage only
    for a real dispatch or handoff from an exited predecessor.
 2. **Branch on control flow, not `success` alone.** Read
-   `action_summary.action` and `sub_action`; check `refused`, `status`, and
+   `action_summary.action` and `sub_action` when present; check `refused`, `status`, and
    `rollout_flag` even when `success` is true. `proceed` and `guide` continue;
    an **applied** `pause` stops ordinary governed writes for its named recovery.
    Under the default observation posture, a raw pause recommendation appears in
    `policy_evaluation` while the effective action remains `proceed` / `guide`.
    Follow
    `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
-   describe state, not outcomes.
+   describe state, not outcomes. A receipt-only check-in has no new decision;
+   its `success` acknowledges capture, not operational permission.
 3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
    not after every tool call. Use `store_finding` / `update_finding` for durable
    knowledge and `record_result` only for an outcome that actually occurred.
@@ -255,12 +258,29 @@ on the original call and reuse it with the same submitted content. The reply's
 a retry returns the original receipt without repeating assessment. Changed
 content conflicts. The same key under a new identity is a different scope.
 Current identity, lifecycle and cooldown gates still apply to retries. A
-receipt-only replay carries no fresh policy action or prediction. Do not infer
-operational permission from its `success: true`.
+receipt-only replay carries no fresh policy action or prediction. Its
+`assessment` is exactly `{status: "not_repeated", automatic_replay: false}`,
+without an assessor or completion claim. This describes the current delivery;
+the neutral checkpoint does not record the original assessor selection.
+Changing the operator's assessor setting between deliveries does not repeat
+assessment. Do not infer operational permission from its `success: true`.
+
+EISV remains the default assessor. An operator can set
+`UNITARES_CHECKIN_ASSESSOR=none` with `UNITARES_POLICY_ACTUATION=observe` to accept
+new check-ins without assessment. This is server configuration, not a caller
+parameter. A fresh accepted receipt then carries exactly `assessment={status:
+"not_requested", reason: "disabled_by_operator", automatic_replay: false}` and
+no assessor or completion claim. It supplies no decision, EISV metrics,
+prediction or `state_persistence`, even in full response mode. Invalid selector
+values or `none` with enforce posture refuse before acceptance. Identity,
+authorization, current lifecycle holds and cooldown still apply; disabling an
+assessor does not clear a pause. Receipt-only replies retain neutral
+`next_action` acknowledgement guidance.
 
 An acceptance `status: unconfirmed` may follow a committed record whose
 acknowledgement was lost. Without an explicit key, another call can create a
-new record. The checkpoint's separate `assessment.status` reports execution:
+new record. When an assessment was selected, the checkpoint's separate
+`assessment.status` reports execution:
 `completed` means execution returned, not atomic durability of every effect;
 `failed` may have partial effects. A crash can leave `started` ambiguous.
 Keyed retries never restart these deliveries, including those that never

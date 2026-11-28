@@ -725,6 +725,36 @@ that terminal record nor invents a waiver, ratification, or completed parity
 result. The new bounded authorization and its implementation review are
 separate records; the old rejection remains part of the design provenance.
 
+### 13.2 Bounded operator-selected zero-assessor check-ins, 2026-11-03
+
+Following the synchronous EISV adapter increment, the operator was given the
+next boundary: unplug EISV while the accountability record continues to work,
+and replied "proceed". This authorizes the bounded runtime selection below.
+It does not ratify every remaining Stage 3 or Stage 4 change or resolve the
+historical governed-review conditions recorded above.
+
+`UNITARES_CHECKIN_ASSESSOR=eisv|none` is an operator setting, absent by default
+(`eisv`). The `none` path retains authentication, identity, lifecycle and loop
+admission, then atomically records a neutral checkpoint, outbox event and
+identity activity. It returns an acceptance receipt with no assessor, metrics,
+prediction or policy verdict. It refuses an incompatible enforcement posture
+before accepting a new checkpoint. Request fields cannot select this mode.
+EISV remains synchronous and unchanged by default; retries in either mode
+recover receipts without repeating assessment or activity accounting.
+
+This is a runtime and response-contract change, not an observational extraction.
+The [operational contract](../../operations/checkin-refactor-characterization.md#operator-selected-check-in-assessor-2026-11-03-increment)
+states skipped effects, replay semantics, retention and remaining limits.
+Implementation requires independent actual-diff review, default-path regression
+coverage, zero-assessor public-handler coverage, and real database tests of
+atomic activity, rollback, concurrent keys and uncertain acknowledgements.
+
+This authorization does not enable the setting on the maintainer deployment,
+change enforcement defaults, uninstall EISV, introduce asynchronous consumers,
+migrate historical readers, or change scientific interpretation. The registered
+cutoff remains `2026-10-15T13:45:00Z`; the separate November 3 run-date amendment,
+archival reconciliation obligation and historical review record are preserved.
+
 ## 14. First implementation issue
 
 **Title:** Instrument-preservation harness for the check-in path: pin current

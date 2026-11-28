@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..base import IdentityRecord
+from src.checkpoints import CHECKPOINT_ACTIVITY_LIMIT, CheckpointActivity
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -29,6 +31,82 @@ class CheckpointIdentityRefused(ValueError):
 
 class IdentityMixin:
     """Identity CRUD operations."""
+
+    @staticmethod
+    def _checkpoint_activity(row) -> CheckpointActivity:
+        metadata = row["metadata"] or {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        timestamps = metadata.get("recent_update_timestamps") or []
+        decisions = metadata.get("recent_decisions") or []
+        if (
+            not isinstance(timestamps, list)
+            or not isinstance(decisions, list)
+            or len(timestamps) != len(decisions)
+            or not all(isinstance(value, str) for value in (*timestamps, *decisions))
+        ):
+            raise ValueError("durable checkpoint activity history is inconsistent")
+        count = int(metadata.get("total_updates") or 0)
+        neutral_count = int(metadata.get("neutral_updates") or 0)
+        if count < 0 or neutral_count < 0:
+            raise ValueError("durable checkpoint activity count is negative")
+        last_activity = row["last_activity_at"]
+        return CheckpointActivity(
+            total_updates=count,
+            last_update=last_activity.astimezone(timezone.utc).isoformat() if last_activity else None,
+            recent_update_timestamps=tuple(timestamps[-CHECKPOINT_ACTIVITY_LIMIT:]),
+            recent_decisions=tuple(decisions[-CHECKPOINT_ACTIVITY_LIMIT:]),
+            neutral_updates=neutral_count,
+        )
+
+    async def get_checkpoint_activity(self, agent_id: str) -> CheckpointActivity | None:
+        """Read durable activity before admission, including after a lost ACK."""
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT metadata, last_activity_at FROM core.identities WHERE agent_id = $1",
+                agent_id,
+            )
+            return self._checkpoint_activity(row) if row is not None else None
+
+    async def record_checkpoint_activity(
+        self, conn, agent_id: str, recorded_at: datetime,
+    ) -> CheckpointActivity:
+        """Append neutral activity in an already locked acceptance transaction.
+
+        The checkpoint owner holds this connection's transaction and the
+        lifecycle locks until commit. Failure here rolls back acceptance too;
+        replay never calls this method. Do not open another transaction or
+        derive these histories from a potentially stale process cache.
+        """
+        row = await conn.fetchrow(
+            "SELECT metadata, last_activity_at FROM core.identities WHERE agent_id = $1",
+            agent_id,
+        )
+        if row is None:
+            raise CheckpointIdentityRefused("durable_identity_missing")
+        previous = self._checkpoint_activity(row)
+        now = recorded_at.astimezone(timezone.utc).isoformat()
+        activity = CheckpointActivity(
+            total_updates=previous.total_updates,
+            last_update=now,
+            recent_update_timestamps=(previous.recent_update_timestamps + (now,))[-CHECKPOINT_ACTIVITY_LIMIT:],
+            recent_decisions=(previous.recent_decisions + ("not_assessed",))[-CHECKPOINT_ACTIVITY_LIMIT:],
+            neutral_updates=previous.neutral_updates + 1,
+        )
+        updated = await conn.fetchval(
+            "UPDATE core.identities SET metadata = metadata || $2::jsonb, "
+            "updated_at = $3, last_activity_at = $3 WHERE agent_id = $1 RETURNING identity_id",
+            agent_id,
+            json.dumps({
+                "neutral_updates": activity.neutral_updates,
+                "recent_update_timestamps": activity.recent_update_timestamps,
+                "recent_decisions": activity.recent_decisions,
+            }),
+            recorded_at,
+        )
+        if updated is None:
+            raise CheckpointIdentityRefused("durable_identity_missing")
+        return activity
 
     async def verify_checkpoint_identity_scope(
         self, conn, agent_id: str, identity_id: int,
