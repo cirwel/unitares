@@ -237,13 +237,14 @@ class TestThresholdRouteRemoved:
                         "unknown_threshold": 0.5,
                         "risk_approve_threshold": True,
                         "void_threshold_initial": float("nan"),
+                        "coherence_critical_threshold": float("inf"),
                     },
                 })
                 body = _parse(result)
                 data = body.get("data", body)
                 assert data["success"] is False
                 assert data["updated"] == []
-                assert len(data["errors"]) == 3
+                assert len(data["errors"]) == 4
                 assert data["persistence"] == "process_memory_only"
                 assert data["survives_restart"] is False
                 assert all(
@@ -251,9 +252,133 @@ class TestThresholdRouteRemoved:
                     for d in describe_thresholds().values()
                 )
 
-                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                def _reject_non_strict(constant: str):
+                    raise ValueError(f"Non-strict JSON constant emitted: {constant}")
+
+                rows = [
+                    json.loads(line, parse_constant=_reject_non_strict)
+                    for line in log_file.read_text().splitlines()
+                    if line.strip()
+                ]
                 assert [r["event_type"] for r in rows] == ["threshold_modification_attempt"]
                 assert rows[0]["confidence"] == 0.0
+                assert rows[0]["details"]["thresholds"]["void_threshold_initial"] == "nan"
+                assert rows[0]["details"]["thresholds"]["coherence_critical_threshold"] == "inf"
+        finally:
+            clear_overrides()
+
+    @pytest.mark.asyncio
+    async def test_admin_non_dict_thresholds_returns_invalid_param(self, tmp_path):
+        from src.audit_log import AuditLogger
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+             patch("src.audit_log.audit_logger", test_logger), \
+             patch.object(test_logger, "_schedule_postgres_write"):
+            from src.mcp_handlers.admin.config import handle_set_thresholds
+            result = await handle_set_thresholds({
+                "agent_id": "agent-1",
+                "thresholds": ["not", "a", "dict"],
+            })
+            body = _parse(result)
+            assert body.get("success") is not True
+            assert body.get("error_code") == "INVALID_PARAM"
+            assert not log_file.exists() or log_file.read_text().strip() == ""
+
+    @pytest.mark.asyncio
+    async def test_admin_partial_batch_logs_applied_override_and_errors(self, tmp_path):
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides, get_thresholds
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                result = await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {
+                        "void_threshold_initial": 0.25,
+                        "unknown_threshold": 0.5,
+                    },
+                })
+                body = _parse(result)
+                data = body.get("data", body)
+                assert data["success"] is False
+                assert data["updated"] == ["void_threshold_initial"]
+                assert len(data["errors"]) == 1
+                assert data["current_thresholds"]["void_threshold_initial"] == 0.25
+                assert get_thresholds()["void_threshold_initial"] == 0.25
+
+                rows = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+                assert [r["event_type"] for r in rows] == [
+                    "threshold_modification_attempt",
+                    "threshold_modification_success",
+                ]
+                assert rows[1]["details"]["updated"] == ["void_threshold_initial"]
+                assert len(rows[1]["details"]["errors"]) == 1
+        finally:
+            clear_overrides()
+
+    @pytest.mark.asyncio
+    async def test_threshold_audit_rows_ignored_by_dialectic_calibration(self, tmp_path):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from src.audit_log import AuditLogger
+        from src.runtime_config import clear_overrides
+        from src.mcp_handlers.dialectic.calibration import update_calibration_from_dialectic
+
+        server = make_mock_server()
+        meta = make_agent_meta(tags=["admin"], total_updates=1)
+        server.agent_metadata = {"agent-1": meta}
+        log_file = tmp_path / "audit_log.jsonl"
+        test_logger = AuditLogger(log_file=log_file)
+
+        clear_overrides()
+        try:
+            with patch("src.mcp_handlers.admin.config.mcp_server", server), \
+                 patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+                 patch("src.audit_log.audit_logger", test_logger), \
+                 patch.object(test_logger, "_schedule_postgres_write"):
+                from src.mcp_handlers.admin.config import handle_set_thresholds
+                await handle_set_thresholds({
+                    "agent_id": "agent-1",
+                    "thresholds": {"void_threshold_initial": 0.21},
+                })
+
+            fake_session = SimpleNamespace(
+                session_id="sess-cal-1",
+                dispute_type="verification",
+                paused_agent_id="agent-1",
+                reviewer_agent_id="reviewer-2",
+                discovery_id=None,
+                created_at=datetime.now(),
+            )
+            fake_resolution = SimpleNamespace(action="resume", timestamp=datetime.now())
+            fake_authorship = SimpleNamespace(is_invalid=False, recuses=lambda *_a, **_kw: False)
+            mock_cal = MagicMock()
+
+            with patch("src.mcp_handlers.dialectic.calibration.audit_logger", test_logger), \
+                 patch("src.mcp_handlers.dialectic.calibration.calibration_checker", mock_cal), \
+                 patch("src.mcp_handlers.dialectic.calibration.resolve_reviewed_work_authorship", return_value=fake_authorship):
+                updated = await update_calibration_from_dialectic(fake_session, fake_resolution)
+                assert updated is False
+                mock_cal.record_prediction.assert_not_called()
         finally:
             clear_overrides()
 

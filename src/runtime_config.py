@@ -104,6 +104,10 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
         name: rng for name, (_attr, rng) in OVERRIDABLE_THRESHOLDS.items()
     }
 
+    # Validate type, finiteness, and range into `candidates` before checking
+    # cross-key ordering so a rejected sibling in the same batch can never
+    # validate an invalid APPROVE < REVISE < REJECT ordering.
+    candidates: Dict[str, float] = {}
     for name, value in thresholds.items():
         if name not in valid_ranges:
             errors.append(f"Unknown threshold: {name}")
@@ -120,39 +124,32 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
                 errors.append(f"{name}={value} out of range [{min_val}, {max_val}]")
                 continue
 
-        # Additional logical validation: enforce APPROVE < REVISE < REJECT invariant.
-        # Reject is not writable (see comment at line 38) — always the class default.
-        if name in ("risk_approve_threshold", "risk_revise_threshold"):
-            raw_approve = thresholds.get(
-                "risk_approve_threshold",
-                _runtime_overrides.get("risk_approve_threshold", config.RISK_APPROVE_THRESHOLD),
-            )
-            raw_revise = thresholds.get(
-                "risk_revise_threshold",
-                _runtime_overrides.get("risk_revise_threshold", config.RISK_REVISE_THRESHOLD),
-            )
-            if (
-                isinstance(raw_approve, bool)
-                or not isinstance(raw_approve, (int, float))
-                or not math.isfinite(float(raw_approve))
-                or isinstance(raw_revise, bool)
-                or not isinstance(raw_revise, (int, float))
-                or not math.isfinite(float(raw_revise))
-            ):
-                errors.append("risk_approve_threshold and risk_revise_threshold must be finite numbers")
-                continue
-            effective_approve = float(raw_approve)
-            effective_revise = float(raw_revise)
-            effective_reject = config.RISK_REJECT_THRESHOLD
+        candidates[name] = numeric_value
 
-            if not (effective_approve < effective_revise < effective_reject):
-                errors.append(
-                    f"Ordering violated: APPROVE({effective_approve}) "
-                    f"< REVISE({effective_revise}) "
-                    f"< REJECT({effective_reject}) must hold"
-                )
-                continue
+    # Additional logical validation: enforce APPROVE < REVISE < REJECT invariant
+    # against accepted candidates merged over surviving overrides/defaults.
+    # Reject is not writable (see comment at line 33) — always the class default.
+    if "risk_approve_threshold" in candidates or "risk_revise_threshold" in candidates:
+        effective_approve = candidates.get(
+            "risk_approve_threshold",
+            _runtime_overrides.get("risk_approve_threshold", config.RISK_APPROVE_THRESHOLD),
+        )
+        effective_revise = candidates.get(
+            "risk_revise_threshold",
+            _runtime_overrides.get("risk_revise_threshold", config.RISK_REVISE_THRESHOLD),
+        )
+        effective_reject = config.RISK_REJECT_THRESHOLD
 
+        if not (effective_approve < effective_revise < effective_reject):
+            errors.append(
+                f"Ordering violated: APPROVE({effective_approve}) "
+                f"< REVISE({effective_revise}) "
+                f"< REJECT({effective_reject}) must hold"
+            )
+            candidates.pop("risk_approve_threshold", None)
+            candidates.pop("risk_revise_threshold", None)
+
+    for name, numeric_value in candidates.items():
         _runtime_overrides[name] = numeric_value
         updated.append(name)
     

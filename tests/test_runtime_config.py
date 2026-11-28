@@ -127,6 +127,50 @@ class TestSetThresholds:
         # Either ordering-violated or out-of-range, depending on RISK_REJECT_THRESHOLD value
         assert result["success"] is False
 
+    @pytest.mark.parametrize("validate", [True, False])
+    @pytest.mark.parametrize(
+        "bad_value",
+        [True, False, "0.2", None, float("nan"), float("inf"), float("-inf")],
+    )
+    def test_rejects_non_finite_and_non_numeric_values(self, bad_value, validate):
+        """Booleans, strings, None, NaN, and Infinity must be rejected even with validate=False."""
+        from config.governance_config import GovernanceConfig
+
+        result = set_thresholds({"risk_approve_threshold": bad_value}, validate=validate)
+        assert result["success"] is False
+        assert result["updated"] == []
+        assert any("finite number" in e for e in result["errors"])
+        assert (
+            get_effective_threshold("risk_approve_threshold")
+            == GovernanceConfig.RISK_APPROVE_THRESHOLD
+        )
+
+    @pytest.mark.parametrize(
+        "rejected_approve,validate",
+        [(-1, True), (1.5, True), ("bad", False), (True, False), (float("nan"), False)],
+    )
+    def test_rejected_sibling_cannot_validate_invalid_ordering(self, rejected_approve, validate):
+        """A rejected sibling in the same batch must not make an inverted revise override pass."""
+        setup = set_thresholds({
+            "risk_approve_threshold": 0.6,
+            "risk_revise_threshold": 0.7,
+        })
+        assert setup["success"] is True
+
+        result = set_thresholds(
+            {
+                "risk_approve_threshold": rejected_approve,
+                "risk_revise_threshold": 0.5,
+            },
+            validate=validate,
+        )
+        assert result["success"] is False
+        assert result["updated"] == []
+        assert any("Ordering violated" in e for e in result["errors"])
+        thresholds = get_thresholds()
+        assert thresholds["risk_approve_threshold"] == 0.6
+        assert thresholds["risk_revise_threshold"] == 0.7
+
 
 # ============================================================================
 # get_effective_threshold
