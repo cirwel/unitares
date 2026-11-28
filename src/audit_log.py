@@ -6,6 +6,7 @@ JSONL is the raw truth log. PostgreSQL provides queryable indexing.
 """
 
 import json
+import math
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Iterator, List, Optional
@@ -113,6 +114,17 @@ def gap_suppressed_sub_action_class(sub_action: Optional[str]) -> str:
 # Module-level so the test suite can redirect it (tests/conftest.py); the
 # env var does the same for subprocess-spawned servers.
 DEFAULT_LOG_FILE = Path(os.environ.get("UNITARES_AUDIT_LOG") or Path(__file__).parent.parent / "data" / "audit_log.jsonl")
+
+
+def _sanitize_strict_json(value):
+    """Replace non-finite floats so JSONL stays RFC 8259 strict JSON and Postgres jsonb succeeds."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {str(k): _sanitize_strict_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_strict_json(v) for v in value]
+    return value
 
 
 class AuditLogger:
@@ -808,9 +820,11 @@ class AuditLogger:
         """Record an administrative runtime threshold modification attempt or result.
 
         ``event_type`` is ``"threshold_modification_attempt"`` or
-        ``"threshold_modification_success"``. ``confidence=0.0`` keeps JSONL and
-        Postgres confidence-before-outcome readers from treating an operator
-        threshold write as an agent forecast.
+        ``"threshold_modification_success"``. Written to both JSONL and Postgres
+        (with non-finite floats sanitized so strict JSONL parsers and Postgres
+        ``jsonb`` inserts never drop a rejected ``NaN``/``Infinity`` attempt).
+        ``confidence=0.0`` keeps Postgres ``confidence > 0`` readers out, and
+        dialectic calibration filters JSONL entries to ``auto_attest``.
         """
         if event_type not in (
             "threshold_modification_attempt",
@@ -823,7 +837,7 @@ class AuditLogger:
             session_id=session_id,
             event_type=event_type,
             confidence=0.0,
-            details=dict(details or {}),
+            details=_sanitize_strict_json(dict(details or {})),
         )
         self._write_entry(entry)
 

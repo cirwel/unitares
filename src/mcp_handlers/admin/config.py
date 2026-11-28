@@ -92,8 +92,8 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
     #
     # audit.events previously had 0 threshold-modification rows because this
     # handler called nonexistent audit_logger.log() before set_thresholds ran
-    # (KG 2026-11-26T11:22:07.698340+00:00); the count-based route remained an
-    # unauthenticated privilege-escalation path regardless.
+    # (KG 2026-11-26T11:22:07.698340+00:00); the count-based route remained a
+    # latent privilege-escalation path regardless.
     is_admin = "admin" in meta.tags
 
     if not is_admin:
