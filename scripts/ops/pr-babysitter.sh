@@ -1181,6 +1181,7 @@ while read -r pr; do
   hand_notice=""
   opaque_stall=""
   verdict=""
+  unreadable_disarm_head=""
   # The queue owns arming. An arm it did not make is disarmed, whoever made
   # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
   # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
@@ -1206,8 +1207,11 @@ while read -r pr; do
     # $verdict set, which makes `review` a required check below.
     reason="$sens_reason"
     case "${verdict%%$'\t'*}" in
-      unreadable-manifest|unreadable-diff)
+      unreadable-manifest)
         hold_reason="a disarmed PR's sensitivity check could not run" ;;
+      unreadable-diff)
+        hold_reason="a disarmed PR's sensitivity check could not run"
+        unreadable_disarm_head=$(jq -r .headRefOid <<<"$pr") ;;
     esac
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
@@ -1256,6 +1260,7 @@ while read -r pr; do
     log "#$n armed but $reason; disarming so it stops holding the queue"
     if act gh pr merge "$n" -R "$REPO" --disable-auto; then
       disarmed="$disarmed$n "
+      [ -z "$unreadable_disarm_head" ] || record_unreadable "queue-$n" "$unreadable_disarm_head" || true
       [ -n "$hand_notice" ] && notify "$n" hand-armed "$(jq -r .headRefOid <<<"$pr")" "$hand_notice"
       if [ -n "$opaque_stall" ]; then
         head=$(jq -r .headRefOid <<<"$pr")

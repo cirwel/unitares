@@ -1675,16 +1675,45 @@ def test_unreadable_manifest_or_diff_posts_no_false_sensitive_notices_and_preser
 
 
 def test_an_armed_pr_whose_compare_fails_disarms_and_keeps_its_slot(tmp_path: Path) -> None:
+    t1 = _timeline(10)
+    t2 = _timeline(8)
     calls, out = _run(
         tmp_path,
-        [_pr(1, head="aaa", armed_min_ago=20), _pr(2, head="bbb")],
-        arms={1: 20},
-        timelines={1: _timeline(25), 2: _timeline(10)},
+        [_pr(1, head="aaa", armed_min_ago=5), _pr(2, head="bbb")],
+        arms={1: 5},
+        timelines={1: t1, 2: t2},
         compares={"aaa": None, "bbb": PLAIN},
         PR_QUEUE_NOTIFY="1",
     )
     assert calls == ["pr merge 1 -R o/r --disable-auto"]
     assert "a disarmed PR's sensitivity check could not run; nothing else armed this tick" in out
+
+    # Seed #1's existing approval pin (written when #1 originally entered the queue).
+    (tmp_path / "state" / "approvals").write_text(
+        f"1 aaa {t1[-1]['created_at']} fp1\n2 bbb {t2[-1]['created_at']} fp2\n"
+    )
+    # Tick 2: #1 is now queued at count 2 of 3 and still holds.
+    calls2, out2 = _run(
+        tmp_path,
+        [_pr(1, head="aaa"), _pr(2, head="bbb")],
+        timelines={1: t1, 2: t2},
+        compares={"aaa": None, "bbb": PLAIN},
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert calls2 == []
+    assert "#1 queued, but its diff could not be checked (2 of 3 on aaa); nothing armed this tick" in out2
+
+    # Tick 3 (the 3rd consecutive failing tick): notice posts on #1 and #2 arms.
+    calls3, _ = _run(
+        tmp_path,
+        [_pr(1, head="aaa"), _pr(2, head="bbb")],
+        timelines={1: t1, 2: t2},
+        compares={"aaa": None, "bbb": PLAIN},
+        PR_QUEUE_NOTIFY="1",
+    )
+    assert len(_notices(calls3)) == 1
+    assert "sensitive-unreadable aaa" in _notices(calls3)[0]
+    assert _arm(2, "bbb") in calls3
 
 
 def test_persistently_unreadable_manifest_fails_tick_without_spamming_prs(tmp_path: Path) -> None:
